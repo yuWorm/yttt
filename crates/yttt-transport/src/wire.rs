@@ -7,6 +7,41 @@ use yttt_protocol::{
     encode_message,
 };
 
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A timed-out write may have sent a partial frame; callers must discard the stream.
+pub async fn send_frame(
+    stream: &mut (impl AsyncWrite + Unpin),
+    frame: &[u8],
+) -> Result<(), WireError> {
+    let timed_out = || {
+        ProtocolCodecError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "protocol frame write made no progress for 30 seconds",
+        ))
+    };
+    let mut remaining = frame;
+    while !remaining.is_empty() {
+        let written = tokio::time::timeout(WRITE_TIMEOUT, stream.write(remaining))
+            .await
+            .map_err(|_| timed_out())?
+            .map_err(ProtocolCodecError::Io)?;
+        if written == 0 {
+            return Err(ProtocolCodecError::Io(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "protocol stream stopped accepting bytes",
+            ))
+            .into());
+        }
+        remaining = &remaining[written..];
+    }
+    tokio::time::timeout(WRITE_TIMEOUT, stream.flush())
+        .await
+        .map_err(|_| timed_out())?
+        .map_err(ProtocolCodecError::Io)?;
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
     #[error(transparent)]
@@ -36,12 +71,7 @@ async fn send<T: serde::Serialize>(
     message: &T,
 ) -> Result<(), WireError> {
     let frame = encode_message(kind, message)?;
-    stream
-        .write_all(&frame)
-        .await
-        .map_err(ProtocolCodecError::Io)?;
-    stream.flush().await.map_err(ProtocolCodecError::Io)?;
-    Ok(())
+    send_frame(stream, &frame).await
 }
 
 async fn send_bounded<T: serde::Serialize>(
@@ -57,12 +87,7 @@ async fn send_bounded<T: serde::Serialize>(
             max_bytes,
         });
     }
-    stream
-        .write_all(&frame)
-        .await
-        .map_err(ProtocolCodecError::Io)?;
-    stream.flush().await.map_err(ProtocolCodecError::Io)?;
-    Ok(())
+    send_frame(stream, &frame).await
 }
 
 async fn receive(

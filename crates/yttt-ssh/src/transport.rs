@@ -19,7 +19,7 @@ use russh::{
 };
 use russh_sftp::client::SftpSession;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
     project::{RemotePathBuf, RemoteRelativePathBuf},
@@ -46,6 +46,11 @@ const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
     "YTTT_AGENT_HOOK_SCOPE",
 ];
 const REMOTE_FORWARD_ADDRESS: &str = "127.0.0.1";
+const REMOTE_OPERATION_TIMEOUT: Duration = Duration::from_secs(110);
+const MAX_REMOTE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_REMOTE_OPERATIONS: usize = 16;
+const SSH_COMMAND_CAPACITY: usize = 64;
+const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 
 type ReverseForwardTargets = Arc<Mutex<HashMap<u32, SocketAddr>>>;
 
@@ -258,7 +263,8 @@ impl yttt_transport::TransportConnector for StreamLocalConnector {
 
 enum TransportServiceInner {
     Direct {
-        commands: mpsc::UnboundedSender<RuntimeCommand>,
+        commands: mpsc::Sender<RuntimeCommand>,
+        shutdown: watch::Sender<bool>,
         events: EventReceiver<TransportEvent>,
         thread: Mutex<Option<thread::JoinHandle<()>>>,
     },
@@ -303,7 +309,8 @@ impl TransportService {
             HostKeyStore::load(host_keys_path)
                 .map_err(|error| TransportError::HostKeyStore(error.to_string()))?,
         ));
-        let (commands, command_rx) = mpsc::unbounded_channel();
+        let (commands, command_rx) = mpsc::channel(SSH_COMMAND_CAPACITY);
+        let (shutdown, shutdown_rx) = watch::channel(false);
         let (events_tx, events) = async_channel::unbounded();
         let runtime_commands = commands.clone();
         let thread = thread::Builder::new()
@@ -319,12 +326,14 @@ impl TransportService {
                     events_tx,
                     host_keys,
                     credential_store,
+                    shutdown_rx,
                 ));
             })
             .map_err(|source| TransportError::RuntimeStart(source.to_string()))?;
         Ok(Self {
             inner: Arc::new(TransportServiceInner::Direct {
                 commands,
+                shutdown,
                 events,
                 thread: Mutex::new(Some(thread)),
             }),
@@ -397,12 +406,12 @@ impl TransportService {
         };
         let (reply, response) = oneshot::channel();
         commands
-            .send(RuntimeCommand::StreamLocal {
+            .try_send(RuntimeCommand::StreamLocal {
                 connection_id,
                 socket,
                 reply,
             })
-            .map_err(|_| TransportError::RuntimeStopped)?;
+            .map_err(command_queue_error)?;
         response.await.map_err(|_| TransportError::RuntimeStopped)?
     }
 
@@ -415,12 +424,12 @@ impl TransportService {
                 let (started_reply, started) = oneshot::channel();
                 let (completion_reply, completion) = oneshot::channel();
                 commands
-                    .send(RuntimeCommand::Connect {
+                    .try_send(RuntimeCommand::Connect {
                         request,
                         started_reply,
                         completion_reply,
                     })
-                    .map_err(|_| TransportError::RuntimeStopped)?;
+                    .map_err(command_queue_error)?;
                 let epoch = started.await.map_err(|_| TransportError::RuntimeStopped)?;
                 Ok(ConnectAttempt { epoch, completion })
             }
@@ -482,12 +491,12 @@ impl TransportService {
             TransportServiceInner::Direct { commands, .. } => {
                 let (reply, result) = oneshot::channel();
                 commands
-                    .send(RuntimeCommand::Disconnect {
+                    .try_send(RuntimeCommand::Disconnect {
                         connection_id,
                         expected_epoch,
                         reply,
                     })
-                    .map_err(|_| TransportError::RuntimeStopped)?;
+                    .map_err(command_queue_error)?;
                 result.await.map_err(|_| TransportError::RuntimeStopped)?
             }
             TransportServiceInner::Host { proxy, state, .. } => {
@@ -540,12 +549,12 @@ impl TransportService {
         let connection_id = request.connection_id.clone();
         let (session, endpoint) = RemoteTerminalSession::channel();
         commands
-            .send(RuntimeCommand::Terminal {
+            .try_send(RuntimeCommand::Terminal {
                 connection_id,
                 request,
                 endpoint,
             })
-            .map_err(|_| TransportError::RuntimeStopped)?;
+            .map_err(command_queue_error)?;
         Ok(session)
     }
 }
@@ -778,7 +787,7 @@ impl SftpProject {
             TransportServiceInner::Direct { commands, .. } => {
                 let (reply, result) = blocking_mpsc::channel();
                 commands
-                    .send(RuntimeCommand::Execute {
+                    .try_send(RuntimeCommand::Execute {
                         connection_id: self.connection_id.clone(),
                         request: RemoteCommandRequest {
                             cwd: self.root.clone(),
@@ -787,7 +796,7 @@ impl SftpProject {
                         },
                         reply,
                     })
-                    .map_err(|_| TransportError::RuntimeStopped)?;
+                    .map_err(command_queue_error)?;
                 result
                     .recv_timeout(Duration::from_secs(120))
                     .map_err(|error| match error {
@@ -905,7 +914,7 @@ impl SftpProject {
             TransportServiceInner::Direct { commands, .. } => {
                 let (reply, result) = blocking_mpsc::channel();
                 commands
-                    .send(RuntimeCommand::Sftp {
+                    .try_send(RuntimeCommand::Sftp {
                         connection_id: self.connection_id.clone(),
                         root: self.root.clone(),
                         operation,
@@ -1003,9 +1012,9 @@ impl Drop for TransportServiceInner {
     fn drop(&mut self) {
         match self {
             Self::Direct {
-                commands, thread, ..
+                shutdown, thread, ..
             } => {
-                let _ = commands.send(RuntimeCommand::Shutdown);
+                shutdown.send_replace(true);
                 if let Some(thread) = thread.get_mut().ok().and_then(|thread| thread.take()) {
                     let _ = thread.join();
                 }
@@ -1024,7 +1033,19 @@ impl Drop for TransportServiceInner {
 
 struct ConnectionSlot {
     epoch: ConnectionEpoch,
-    actor: Option<mpsc::UnboundedSender<ConnectionCommand>>,
+    actor: Option<ConnectionActor>,
+    connecting: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        if let Some(task) = self.connecting.take() {
+            task.abort();
+        }
+        if let Some(actor) = self.actor.take() {
+            let _ = actor.send(ConnectionCommand::Disconnect);
+        }
+    }
 }
 
 enum RuntimeCommand {
@@ -1036,7 +1057,7 @@ enum RuntimeCommand {
     ConnectCompleted {
         connection_id: ConnectionId,
         epoch: ConnectionEpoch,
-        outcome: Result<mpsc::UnboundedSender<ConnectionCommand>, TransportError>,
+        outcome: Result<ConnectionActor, TransportError>,
         reply: oneshot::Sender<Result<ConnectionEpoch, TransportError>>,
     },
     Disconnect {
@@ -1070,7 +1091,6 @@ enum RuntimeCommand {
         socket: String,
         reply: oneshot::Sender<Result<yttt_transport::TransportStream, TransportError>>,
     },
-    Shutdown,
 }
 
 enum ConnectionCommand {
@@ -1102,14 +1122,20 @@ struct AuthenticationRuntime {
 }
 
 async fn runtime_loop(
-    mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
-    runtime_commands: mpsc::UnboundedSender<RuntimeCommand>,
+    mut commands: mpsc::Receiver<RuntimeCommand>,
+    runtime_commands: mpsc::Sender<RuntimeCommand>,
     events: EventSender<TransportEvent>,
     host_keys: Arc<Mutex<HostKeyStore>>,
     credential_store: CredentialStore,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let mut slots = HashMap::<ConnectionId, ConnectionSlot>::new();
-    while let Some(command) = commands.recv().await {
+    loop {
+        let command = tokio::select! {
+            biased;
+            _ = shutdown.wait_for(|stopped| *stopped) => break,
+            command = commands.recv() => match command { Some(command) => command, None => break },
+        };
         match command {
             RuntimeCommand::Connect {
                 request,
@@ -1128,7 +1154,14 @@ async fn runtime_loop(
                 {
                     let _ = actor.send(ConnectionCommand::Disconnect);
                 }
-                slots.insert(connection_id.clone(), ConnectionSlot { epoch, actor: None });
+                slots.insert(
+                    connection_id.clone(),
+                    ConnectionSlot {
+                        epoch,
+                        actor: None,
+                        connecting: None,
+                    },
+                );
                 let _ = started_reply.send(epoch);
                 send_state(
                     &events,
@@ -1147,8 +1180,9 @@ async fn runtime_loop(
                     credential_store: credential_store.clone(),
                     events: events.clone(),
                 };
-                tokio::spawn(async move {
-                    let outcome = connect_one(
+                let slot_id = connection_id.clone();
+                let connecting = tokio::spawn(async move {
+                    let connect = connect_one(
                         connection_id.clone(),
                         epoch,
                         request.endpoint,
@@ -1156,15 +1190,20 @@ async fn runtime_loop(
                         host_keys,
                         runtime_commands.clone(),
                         authentication_runtime,
-                    )
-                    .await;
-                    let _ = runtime_commands.send(RuntimeCommand::ConnectCompleted {
-                        connection_id,
-                        epoch,
-                        outcome,
-                        reply: completion_reply,
-                    });
+                    );
+                    let outcome = tokio::time::timeout(Duration::from_secs(120), connect)
+                        .await
+                        .unwrap_or(Err(TransportError::RequestTimedOut));
+                    let _ = runtime_commands
+                        .send(RuntimeCommand::ConnectCompleted {
+                            connection_id,
+                            epoch,
+                            outcome,
+                            reply: completion_reply,
+                        })
+                        .await;
                 });
+                slots.get_mut(&slot_id).expect("connecting slot").connecting = Some(connecting);
             }
             RuntimeCommand::ConnectCompleted {
                 connection_id,
@@ -1182,6 +1221,11 @@ async fn runtime_loop(
                     let _ = reply.send(Err(TransportError::Superseded));
                     continue;
                 }
+                slots
+                    .get_mut(&connection_id)
+                    .expect("current slot")
+                    .connecting
+                    .take();
                 match outcome {
                     Ok(actor) => {
                         slots
@@ -1222,6 +1266,9 @@ async fn runtime_loop(
                     && expected_epoch.is_none_or(|epoch| slot.epoch == epoch)
                 {
                     slot.epoch = ConnectionEpoch(slot.epoch.0.saturating_add(1));
+                    if let Some(connecting) = slot.connecting.take() {
+                        connecting.abort();
+                    }
                     if let Some(actor) = slot.actor.take() {
                         let _ = actor.send(ConnectionCommand::Disconnect);
                     }
@@ -1339,14 +1386,6 @@ async fn runtime_loop(
                     let _ = reply.send(Err(TransportError::NotConnected));
                 }
             }
-            RuntimeCommand::Shutdown => {
-                for slot in slots.values_mut() {
-                    if let Some(actor) = slot.actor.take() {
-                        let _ = actor.send(ConnectionCommand::Disconnect);
-                    }
-                }
-                break;
-            }
         }
     }
 }
@@ -1357,9 +1396,9 @@ async fn connect_one(
     endpoint: SshEndpoint,
     authentication: Authentication,
     host_keys: Arc<Mutex<HostKeyStore>>,
-    runtime_commands: mpsc::UnboundedSender<RuntimeCommand>,
+    runtime_commands: mpsc::Sender<RuntimeCommand>,
     authentication_runtime: AuthenticationRuntime,
-) -> Result<mpsc::UnboundedSender<ConnectionCommand>, TransportError> {
+) -> Result<ConnectionActor, TransportError> {
     send_state(
         &authentication_runtime.events,
         &connection_id,
@@ -1420,7 +1459,9 @@ async fn connect_one(
     );
     sftp.set_timeout(60);
 
-    let (actor, actor_rx) = mpsc::unbounded_channel();
+    let (commands, actor_rx) = mpsc::channel(SSH_COMMAND_CAPACITY);
+    let (cancel, cancel_rx) = watch::channel(false);
+    let actor = ConnectionActor { commands, cancel };
     tokio::spawn(connection_loop(
         session,
         sftp,
@@ -1429,6 +1470,7 @@ async fn connect_one(
             connection_id,
             epoch,
             connection_commands: actor.clone(),
+            cancel: cancel_rx,
             reverse_forward_targets,
             runtime_commands,
         },
@@ -1618,23 +1660,49 @@ async fn authenticate_with_agent(
     Ok(false)
 }
 
+#[derive(Clone)]
+struct ConnectionActor {
+    commands: mpsc::Sender<ConnectionCommand>,
+    cancel: watch::Sender<bool>,
+}
+
+impl ConnectionActor {
+    fn send(
+        &self,
+        command: ConnectionCommand,
+    ) -> Result<(), Box<mpsc::error::SendError<ConnectionCommand>>> {
+        if matches!(command, ConnectionCommand::Disconnect) {
+            self.cancel.send_replace(true);
+            return Ok(());
+        }
+        self.commands
+            .try_send(command)
+            .map_err(|error| Box::new(mpsc::error::SendError(error.into_inner())))
+    }
+}
+
 struct ConnectionLoopContext {
+    cancel: watch::Receiver<bool>,
     connection_id: ConnectionId,
     epoch: ConnectionEpoch,
-    connection_commands: mpsc::UnboundedSender<ConnectionCommand>,
+    connection_commands: ConnectionActor,
     reverse_forward_targets: ReverseForwardTargets,
-    runtime_commands: mpsc::UnboundedSender<RuntimeCommand>,
+    runtime_commands: mpsc::Sender<RuntimeCommand>,
 }
 
 async fn connection_loop(
     session: client::Handle<HostKeyHandler>,
     sftp: Arc<SftpSession>,
-    mut commands: mpsc::UnboundedReceiver<ConnectionCommand>,
-    context: ConnectionLoopContext,
+    mut commands: mpsc::Receiver<ConnectionCommand>,
+    mut context: ConnectionLoopContext,
 ) {
     let mut session = Box::pin(session);
+    let operations = Arc::new(Semaphore::new(MAX_REMOTE_OPERATIONS));
+    let mut tasks = tokio::task::JoinSet::new();
     let error = loop {
         tokio::select! {
+            _ = tasks.join_next(), if !tasks.is_empty() => {},
+            _ = async { let _ = context.cancel.wait_for(|stopped| *stopped).await; } => break None,
             result = &mut session => break result.err().map(|error| error.to_string()),
             command = commands.recv() => match command {
                 Some(ConnectionCommand::Sftp {
@@ -1642,16 +1710,36 @@ async fn connection_loop(
                     operation,
                     reply,
                 }) => {
+                    let Ok(permit) = operations.clone().try_acquire_owned() else {
+                        let _ = reply.send(Err(SftpError::Protocol("SSH operation limit reached".into())));
+                        continue;
+                    };
                     let sftp = sftp.clone();
-                    tokio::spawn(async move {
-                        let _ = reply.send(crate::sftp::execute(&sftp, &root, operation).await);
+                    tasks.spawn(async move {
+                        let _permit = permit;
+                        let read_only = matches!(&operation, SftpOperation::ResolveHome | SftpOperation::ScanDirectory { .. }
+                            | SftpOperation::ReadFile { .. } | SftpOperation::ReadChunk { .. });
+                        let execute = crate::sftp::execute(&sftp, &root, operation);
+                        // Save/rename may span several SFTP operations; preserve their rollback path.
+                        let result = if read_only {
+                            tokio::time::timeout(REMOTE_OPERATION_TIMEOUT, execute).await.unwrap_or(Err(SftpError::TimedOut))
+                        } else { execute.await };
+                        let _ = reply.send(result);
                     });
                 }
                 Some(ConnectionCommand::Execute { request, reply }) => {
-                    match session.as_ref().get_ref().channel_open_session().await {
+                    let Ok(permit) = operations.clone().try_acquire_owned() else {
+                        let _ = reply.send(Err(TransportError::Connection("SSH operation limit reached".into())));
+                        continue;
+                    };
+                    match tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, session.as_ref().get_ref().channel_open_session())
+                        .await.unwrap_or(Err(russh::Error::ConnectionTimeout)) {
                         Ok(channel) => {
-                            tokio::spawn(async move {
-                                let _ = reply.send(run_remote_command(channel, request).await);
+                            tasks.spawn(async move {
+                                let _permit = permit;
+                                let result = tokio::time::timeout(REMOTE_OPERATION_TIMEOUT, run_remote_command(channel, request))
+                                    .await.unwrap_or(Err(TransportError::RequestTimedOut));
+                                let _ = reply.send(result);
                             });
                         }
                         Err(error) => {
@@ -1674,11 +1762,11 @@ async fn connection_loop(
                     match session.as_ref().get_ref().channel_open_session().await {
                         Ok(channel) => {
                             let connection_commands = context.connection_commands.clone();
-                            tokio::spawn(async move {
+                            tasks.spawn(async move {
                                 run_remote_terminal(channel, request, endpoint).await;
                                 if let Some(forward) = agent_hook_forward {
-                                    let _ = connection_commands
-                                        .send(ConnectionCommand::CancelReverseForward(forward));
+                                    let _ = connection_commands.commands
+                                        .send(ConnectionCommand::CancelReverseForward(forward)).await;
                                 }
                             });
                         }
@@ -1699,7 +1787,10 @@ async fn connection_loop(
                     }
                 }
                 Some(ConnectionCommand::StreamLocal { socket, reply }) => {
-                    let result = session.as_ref().get_ref().channel_open_direct_streamlocal(socket).await
+                    let result = tokio::time::timeout(CHANNEL_OPEN_TIMEOUT,
+                        session.as_ref().get_ref().channel_open_direct_streamlocal(socket)).await
+                        .map_err(|_| TransportError::RequestTimedOut)
+                        .and_then(|result| result.map_err(|error| TransportError::Connection(error.to_string())))
                         .map(|channel| Box::new(channel.into_stream()) as yttt_transport::TransportStream)
                         .map_err(|error| TransportError::Connection(error.to_string()));
                     let _ = reply.send(result);
@@ -1724,11 +1815,14 @@ async fn connection_loop(
             }
         }
     };
-    let _ = context.runtime_commands.send(RuntimeCommand::ActorExited {
-        connection_id: context.connection_id,
-        epoch: context.epoch,
-        error,
-    });
+    let _ = context
+        .runtime_commands
+        .send(RuntimeCommand::ActorExited {
+            connection_id: context.connection_id,
+            epoch: context.epoch,
+            error,
+        })
+        .await;
 }
 
 fn loopback_http_target(endpoint: &str) -> Option<SocketAddr> {
@@ -1815,8 +1909,10 @@ async fn run_remote_command(
     let mut exit_status = None;
     while let Some(message) = channel.wait().await {
         match message {
-            ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-            ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+            ChannelMsg::Data { data } => append_command_output(&mut stdout, stderr.len(), &data)?,
+            ChannelMsg::ExtendedData { data, .. } => {
+                append_command_output(&mut stderr, stdout.len(), &data)?
+            }
             ChannelMsg::ExitStatus {
                 exit_status: status,
             } => exit_status = i32::try_from(status).ok(),
@@ -1832,9 +1928,37 @@ async fn run_remote_command(
     })
 }
 
+fn append_command_output(
+    output: &mut Vec<u8>,
+    other_bytes: usize,
+    bytes: &[u8],
+) -> Result<(), TransportError> {
+    if output
+        .len()
+        .saturating_add(other_bytes)
+        .saturating_add(bytes.len())
+        > MAX_REMOTE_COMMAND_OUTPUT_BYTES
+    {
+        return Err(TransportError::Connection(
+            "remote command output exceeded 16 MiB".into(),
+        ));
+    }
+    output.extend_from_slice(bytes);
+    Ok(())
+}
+
 fn fail_remote_terminal(endpoint: RemoteTerminalEndpoint, message: &str) {
-    let _ = endpoint.output.send(terminal_error_output(message));
+    let _ = endpoint.output.try_send(terminal_error_output(message));
     finish_remote_terminal(&endpoint.state, None);
+}
+
+struct TerminalCompletion(Arc<Mutex<crate::terminal::RemoteTerminalState>>);
+impl Drop for TerminalCompletion {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.lock() {
+            state.finished = true;
+        }
+    }
 }
 
 async fn run_remote_terminal(
@@ -1843,10 +1967,12 @@ async fn run_remote_terminal(
     endpoint: RemoteTerminalEndpoint,
 ) {
     let RemoteTerminalEndpoint {
-        mut commands,
+        commands,
         output,
         state,
+        mut shutdown,
     } = endpoint;
+    let _completion = TerminalCompletion(state.clone());
     let initialized = async {
         channel
             .request_pty(
@@ -1888,7 +2014,7 @@ async fn run_remote_terminal(
     }
     .await;
     if let Err(error) = initialized {
-        let _ = output.send(terminal_error_output(&format!(
+        let _ = output.try_send(terminal_error_output(&format!(
             "failed to initialize remote terminal: {error}"
         )));
         finish_remote_terminal(&state, None);
@@ -1900,9 +2026,16 @@ async fn run_remote_terminal(
         tokio::select! {
             message = channel.wait() => match message {
                 Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                    if output.send(data.to_vec()).is_err() {
-                        let _ = channel.close().await;
-                        break;
+                    for chunk in data.chunks(crate::terminal::TERMINAL_CHUNK_BYTES) {
+                        let sent = tokio::select! {
+                            result = output.send_async(chunk.to_vec()) => result.is_ok(),
+                            _ = async { let _ = shutdown.wait_for(|stopped| *stopped).await; } => false,
+                        };
+                        if !sent {
+                            let _ = channel.close().await;
+                            finish_remote_terminal(&state, exit_code);
+                            return;
+                        }
                     }
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
@@ -1912,27 +2045,31 @@ async fn run_remote_terminal(
                 Some(ChannelMsg::Close) | None => break,
                 Some(_) => {}
             },
-            command = commands.recv() => match command {
-                Some(RemoteTerminalCommand::Write(bytes)) => {
+            _ = async { let _ = shutdown.wait_for(|stopped| *stopped).await; } => {
+                let _ = channel.close().await;
+                break;
+            }
+            command = commands.recv_async() => match command {
+                Ok(RemoteTerminalCommand::Write(bytes)) => {
                     if let Err(error) = channel.data_bytes(bytes).await {
-                        let _ = output.send(terminal_error_output(&format!(
+                        let _ = output.try_send(terminal_error_output(&format!(
                             "failed to write remote terminal input: {error}"
                         )));
                         break;
                     }
                 }
-                Some(RemoteTerminalCommand::Resize { cols, rows }) => {
+                Ok(RemoteTerminalCommand::Resize { cols, rows }) => {
                     if let Err(error) = channel
                         .window_change(u32::from(cols), u32::from(rows), 0, 0)
                         .await
                     {
-                        let _ = output.send(terminal_error_output(&format!(
+                        let _ = output.try_send(terminal_error_output(&format!(
                             "failed to resize remote terminal: {error}"
                         )));
                         break;
                     }
                 }
-                Some(RemoteTerminalCommand::Shutdown) | None => {
+                Err(_) => {
                     let _ = channel.eof().await;
                     let _ = channel.close().await;
                     break;
@@ -2092,12 +2229,21 @@ fn send_state(
     }));
 }
 
+fn command_queue_error<T>(error: mpsc::error::TrySendError<T>) -> TransportError {
+    match error {
+        mpsc::error::TrySendError::Full(_) => TransportError::Backpressure,
+        mpsc::error::TrySendError::Closed(_) => TransportError::RuntimeStopped,
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum TransportError {
     #[error("failed to start SSH runtime: {0}")]
     RuntimeStart(String),
     #[error("SSH runtime stopped")]
     RuntimeStopped,
+    #[error("SSH command queue is full; retry after pending operations complete")]
+    Backpressure,
     #[error("SSH connection is not connected")]
     NotConnected,
     #[error("SSH request timed out")]
@@ -2279,5 +2425,39 @@ mod tests {
                 ConnectionState::Failed,
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod output_limit_tests {
+    use super::*;
+
+    #[test]
+    fn command_output_budget_includes_both_streams() {
+        let mut output = vec![0; MAX_REMOTE_COMMAND_OUTPUT_BYTES - 2];
+        append_command_output(&mut output, 1, &[1]).unwrap();
+        assert!(append_command_output(&mut output, 1, &[2]).is_err());
+        assert_eq!(output.len(), MAX_REMOTE_COMMAND_OUTPUT_BYTES - 1);
+    }
+}
+
+#[cfg(test)]
+mod queue_limit_tests {
+    use super::*;
+
+    #[test]
+    fn actor_disconnect_bypasses_a_full_command_queue() {
+        let (commands, _requests) = mpsc::channel(1);
+        let (cancel, cancelled) = watch::channel(false);
+        let actor = ConnectionActor { commands, cancel };
+        let (reply, _response) = oneshot::channel();
+        actor
+            .send(ConnectionCommand::StreamLocal {
+                socket: "/test".into(),
+                reply,
+            })
+            .unwrap();
+        actor.send(ConnectionCommand::Disconnect).unwrap();
+        assert!(*cancelled.borrow());
     }
 }

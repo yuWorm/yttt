@@ -391,6 +391,7 @@ where
                     lifecycle.resource_changed();
                 }
                 agent_hooks.decay_stale_activity();
+                prune_inactive_sessions(&connection_context);
             }
             accepted = listener.accept() => {
                 let stream = accepted?;
@@ -677,14 +678,15 @@ impl RequestJournal {
 fn request_is_journalable(request: &Request) -> bool {
     // Credential and SSH connect messages carry secrets and must never enter
     // the replayable request journal, even when a later remote profile exists.
-    !matches!(
-        request,
-        Request::SshConnect(_)
-            | Request::CredentialAnswer { .. }
-            | Request::ProfileControl(_)
-            | Request::RemoteAccess(_)
-            | Request::TerminateMany { .. }
-    )
+    !recovery_request(request)
+        && !matches!(
+            request,
+            Request::SshConnect(_)
+                | Request::CredentialAnswer { .. }
+                | Request::ProfileControl(_)
+                | Request::RemoteAccess(_)
+                | Request::TerminateMany { .. }
+        )
 }
 
 fn authorize_ingress(
@@ -750,12 +752,55 @@ fn request_fingerprint(request: &Request) -> [u8; 32] {
     writer.0.finalize().into()
 }
 
+const MAX_CLIENT_SESSIONS: usize = 64;
+const MAX_IDLE_CLIENT_SESSIONS: usize = 16;
+const CLIENT_SESSION_RETENTION: Duration = Duration::from_secs(300);
+
 struct SessionBinding {
     authentication: yttt_transport::AuthenticatedSession,
     control_connected: bool,
+    connections: usize,
+    last_disconnected: std::time::Instant,
+}
+
+fn expired_sessions(
+    sessions: &HashMap<ClientInstanceId, SessionBinding>,
+    now: std::time::Instant,
+) -> Vec<ClientInstanceId> {
+    let mut idle = sessions
+        .iter()
+        .filter(|(_, binding)| binding.connections == 0)
+        .map(|(id, binding)| (id.clone(), binding.last_disconnected))
+        .collect::<Vec<_>>();
+    idle.sort_by_key(|(_, disconnected)| *disconnected);
+    let excess = idle.len().saturating_sub(MAX_IDLE_CLIENT_SESSIONS);
+    idle.into_iter()
+        .enumerate()
+        .filter_map(|(index, (id, disconnected))| {
+            (index < excess
+                || now.saturating_duration_since(disconnected) >= CLIENT_SESSION_RETENTION)
+                .then_some(id)
+        })
+        .collect()
+}
+
+fn prune_inactive_sessions(context: &ConnectionContext) {
+    let mut sessions = context.sessions.lock();
+    let expired = expired_sessions(&sessions, std::time::Instant::now());
+    if expired.is_empty() {
+        return;
+    }
+    let mut journals = context.request_journals.lock();
+    let mut attachments = context.client_attachments.lock();
+    for id in expired {
+        sessions.remove(&id);
+        journals.remove(&id);
+        attachments.remove(&id);
+    }
 }
 
 struct ControlConnectionGuard {
+    is_control: bool,
     sessions: Arc<Mutex<HashMap<ClientInstanceId, SessionBinding>>>,
     client_id: ClientInstanceId,
 }
@@ -763,7 +808,13 @@ struct ControlConnectionGuard {
 impl Drop for ControlConnectionGuard {
     fn drop(&mut self) {
         if let Some(binding) = self.sessions.lock().get_mut(&self.client_id) {
-            binding.control_connected = false;
+            if self.is_control {
+                binding.control_connected = false;
+            }
+            binding.connections = binding.connections.saturating_sub(1);
+            if binding.connections == 0 {
+                binding.last_disconnected = std::time::Instant::now();
+            }
         }
     }
 }
@@ -795,6 +846,7 @@ async fn serve_connection(
     } else {
         None
     };
+    prune_inactive_sessions(&context);
     let _control_connection = if !matches!(
         authenticated.channel,
         yttt_protocol::ConnectionChannel::Lifecycle
@@ -806,7 +858,7 @@ async fn serve_connection(
                 return Err(());
             }
         } else {
-            if sessions.len() >= 4096 {
+            if sessions.len() >= MAX_CLIENT_SESSIONS {
                 return Err(());
             }
             sessions.insert(
@@ -814,24 +866,27 @@ async fn serve_connection(
                 SessionBinding {
                     authentication: authenticated.session.clone(),
                     control_connected: false,
+                    connections: 0,
+                    last_disconnected: std::time::Instant::now(),
                 },
             );
         }
-        if authenticated.channel == yttt_protocol::ConnectionChannel::Control {
-            let binding = sessions
-                .get_mut(&authenticated.client_instance_id)
-                .expect("registered session");
+        let binding = sessions
+            .get_mut(&authenticated.client_instance_id)
+            .expect("registered session");
+        let is_control = authenticated.channel == yttt_protocol::ConnectionChannel::Control;
+        if is_control {
             if binding.control_connected {
                 return Err(());
             }
             binding.control_connected = true;
-            Some(ControlConnectionGuard {
-                sessions: context.sessions.clone(),
-                client_id: authenticated.client_instance_id.clone(),
-            })
-        } else {
-            None
         }
+        binding.connections += 1;
+        Some(ControlConnectionGuard {
+            is_control,
+            sessions: context.sessions.clone(),
+            client_id: authenticated.client_instance_id.clone(),
+        })
     } else {
         None
     };
@@ -982,67 +1037,108 @@ fn request_changes_resource_catalog(request: &Request) -> bool {
     }
 }
 
+fn recovery_request(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Ping { .. }
+            | Request::ListResources
+            | Request::RequestCheckpoint { .. }
+            | Request::ReadAgentSnapshots { .. }
+    )
+}
+
 async fn serve_control_connection(
-    mut stream: TransportStream,
+    stream: TransportStream,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
     request_journal: Arc<tokio::sync::Mutex<RequestJournal>>,
     context: &ConnectionContext,
 ) -> Result<(), ()> {
+    const MAX_QUEUED_REQUESTS: usize = 64;
     let mut stop = context.stop.clone();
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let mut queued = VecDeque::new();
+    let mut running = tokio::task::JoinSet::new();
     loop {
-        tokio::select! {
-            message = receive_control(&mut stream) => {
-                let message = message.map_err(|_| ())?;
-                let ControlMessage::Request(request) = message else {
-                    return Err(());
-                };
-                let resource_changed = request_changes_resource_catalog(&request.body);
-                let response = if interactive_lane_request(&request.body) {
-                    HostResponse {
-                        request_id: request.request_id,
-                        result: Err(ProtocolFailure::new(
-                            FailureCode::InvalidRequest,
-                            "terminal mutation must use the interactive channel",
-                            false,
-                        )),
-                    }
-                } else if request_uses_terminal_attachments(&request.body) {
-                    let mut attachments = attachments.lock().await;
-                    process_control_request(
-                        request,
-                        context,
-                        &client_id,
-                        &mut attachments,
-                        &request_journal,
-                    )
-                    .await
-                } else {
-                    let mut no_attachments = HashMap::new();
-                    process_control_request(
-                        request,
-                        context,
-                        &client_id,
-                        &mut no_attachments,
-                        &request_journal,
-                    )
-                    .await
-                };
-                let resource_changed = resource_changed && response.result.is_ok();
-                send_control(&mut stream, &ControlMessage::Response(response))
-                    .await
-                    .map_err(|_| ())?;
-                if resource_changed {
-                    context.lifecycle.resource_changed();
-                }
+        let incoming = receive_control(&mut reader);
+        tokio::pin!(incoming);
+        loop {
+            if running.is_empty()
+                && let Some(request) = queued.pop_front()
+            {
+                let context = context.clone();
+                let client_id = client_id.clone();
+                let attachments = attachments.clone();
+                let journal = request_journal.clone();
+                running.spawn(async move {
+                    dispatch_control_request(request, &client_id, &attachments, &journal, &context)
+                        .await
+                });
             }
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    return Ok(());
+            tokio::select! {
+                message = &mut incoming, if queued.len() < MAX_QUEUED_REQUESTS => {
+                    let ControlMessage::Request(request) = message.map_err(|_| ())? else { return Err(()); };
+                    if recovery_request(&request.body) {
+                        let (response, changed) = dispatch_control_request(request, &client_id, &attachments, &request_journal, context).await;
+                        send_control(&mut writer, &ControlMessage::Response(response)).await.map_err(|_| ())?;
+                        if changed { context.lifecycle.resource_changed(); }
+                    } else {
+                        queued.push_back(request);
+                    }
+                    break;
+                }
+                response = running.join_next(), if !running.is_empty() => {
+                    let (response, changed) = response.ok_or(())?.map_err(|_| ())?;
+                    send_control(&mut writer, &ControlMessage::Response(response)).await.map_err(|_| ())?;
+                    if changed { context.lifecycle.resource_changed(); }
+                }
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() { return Ok(()); }
                 }
             }
         }
     }
+}
+
+async fn dispatch_control_request(
+    request: ClientRequest,
+    client_id: &ClientInstanceId,
+    attachments: &SharedTerminalAttachments,
+    request_journal: &Arc<tokio::sync::Mutex<RequestJournal>>,
+    context: &ConnectionContext,
+) -> (HostResponse, bool) {
+    let resource_changed = request_changes_resource_catalog(&request.body);
+    let response = if interactive_lane_request(&request.body) {
+        HostResponse {
+            request_id: request.request_id,
+            result: Err(ProtocolFailure::new(
+                FailureCode::InvalidRequest,
+                "terminal mutation must use the interactive channel",
+                false,
+            )),
+        }
+    } else if request_uses_terminal_attachments(&request.body) {
+        let mut attachments = attachments.lock().await;
+        process_control_request(
+            request,
+            context,
+            client_id,
+            &mut attachments,
+            request_journal,
+        )
+        .await
+    } else {
+        process_control_request(
+            request,
+            context,
+            client_id,
+            &mut HashMap::new(),
+            request_journal,
+        )
+        .await
+    };
+    let changed = resource_changed && response.result.is_ok();
+    (response, changed)
 }
 
 async fn process_control_request(
@@ -1271,6 +1367,16 @@ async fn serve_terminal_interactive_connection(
                         false,
                     ),
                     TerminalInteractiveMessage::Request(request)
+                        if matches!(request.body, Request::Ping { .. }) => {
+                        let Request::Ping { sent_millis } = request.body else { unreachable!() };
+                        send_terminal_interactive(&mut writer, &TerminalInteractiveMessage::Response(
+                            HostResponse { request_id: request.request_id, result: Ok(Response::Pong {
+                                sent_millis, host_millis: now_millis(),
+                            }) },
+                        )).await.map_err(|_| ())?;
+                        continue;
+                    }
+                    TerminalInteractiveMessage::Request(request)
                         if interactive_lane_request(&request.body) => (request, true),
                     TerminalInteractiveMessage::Request(request) => {
                         let response = HostResponse {
@@ -1330,7 +1436,7 @@ async fn serve_terminal_interactive_connection(
 }
 
 async fn send_host_state_event(
-    stream: &mut TransportStream,
+    stream: &mut (impl tokio::io::AsyncWrite + Unpin),
     context: &ConnectionContext,
     body: ServerEvent,
 ) -> Result<(), ()> {
@@ -1346,11 +1452,14 @@ async fn send_host_state_event(
 }
 
 async fn serve_state_event_connection(
-    mut stream: TransportStream,
+    stream: TransportStream,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
     context: &ConnectionContext,
 ) -> Result<(), ()> {
+    use tokio::io::AsyncReadExt;
+    let (mut reader, mut stream) = tokio::io::split(stream);
+    let mut unexpected_input = [0];
     let mut ssh_events = context.ssh.subscribe();
     let mut agent_hook_events = context.agent_hooks.subscribe();
     let mut project_events = context.projects.subscribe();
@@ -1382,6 +1491,7 @@ async fn serve_state_event_connection(
     }
     loop {
         tokio::select! {
+            _ = reader.read(&mut unexpected_input) => return Ok(()),
             changed = profile_changes.changed() => {
                 changed.map_err(|_| ())?;
                 send_host_state_event(&mut stream, context,
@@ -1848,9 +1958,7 @@ async fn serve_terminal_data_connection(
         return Ok(());
     }
     let mut pending_frame = None::<PendingTerminalFrame>;
-    let mut frame_tick = tokio::time::interval(TERMINAL_FRAME_INTERVAL);
-    frame_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    frame_tick.tick().await;
+    let mut frame_deadline = tokio::time::Instant::now();
     loop {
         tokio::select! {
             event = terminal_events.recv() => {
@@ -1948,9 +2056,10 @@ async fn serve_terminal_data_connection(
                         .map_err(|_| ())?;
                 }
             }
-            _ = frame_tick.tick() => {
+            _ = tokio::time::sleep_until(frame_deadline), if pending_frame.is_some() => {
                 if let Some(pending) = pending_frame.take() {
                     pending.enqueue(&terminal, &output, host_sequence)?;
+                    frame_deadline = tokio::time::Instant::now() + TERMINAL_FRAME_INTERVAL;
                 }
             }
             _ = output_failure.changed() => return Err(()),
@@ -3255,5 +3364,41 @@ mod attachment_resync_tests {
         assert_eq!(attachment.unseen_output, 0);
         assert_eq!(attachment.lagged_events, 8);
         assert!(!attachment.pending_scroll_resync);
+    }
+}
+
+#[cfg(test)]
+mod session_retention_tests {
+    use super::*;
+
+    #[test]
+    fn session_churn_preserves_active_clients_and_recent_replay_window() {
+        let now = std::time::Instant::now();
+        let mut sessions = HashMap::new();
+        for index in 0..1000 {
+            sessions.insert(
+                ClientInstanceId::new(index.to_string()),
+                SessionBinding {
+                    authentication: yttt_transport::AuthenticatedSession {
+                        ingress: yttt_transport::IngressKind::LocalAdmin,
+                        credential_generation: 0,
+                        nonce: yttt_transport::new_session_nonce(),
+                    },
+                    control_connected: index == 0,
+                    connections: usize::from(index == 0),
+                    last_disconnected: now - Duration::from_millis(1000 - index),
+                },
+            );
+        }
+        for id in expired_sessions(&sessions, now) {
+            sessions.remove(&id);
+        }
+        assert_eq!(sessions.len(), MAX_IDLE_CLIENT_SESSIONS + 1);
+        assert!(sessions.contains_key(&ClientInstanceId::new("0")));
+        assert!(sessions.contains_key(&ClientInstanceId::new("999")));
+        for id in expired_sessions(&sessions, now + CLIENT_SESSION_RETENTION) {
+            sessions.remove(&id);
+        }
+        assert_eq!(sessions.len(), 1);
     }
 }

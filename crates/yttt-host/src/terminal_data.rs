@@ -8,7 +8,7 @@ use std::{
 
 use parking_lot::Mutex;
 use tokio::{
-    io::{AsyncWriteExt as _, split},
+    io::{AsyncReadExt, split},
     sync::{Notify, watch},
     task::JoinHandle,
 };
@@ -317,30 +317,34 @@ pub(crate) struct TerminalDataWriter {
 
 impl TerminalDataWriter {
     pub(crate) fn new(stream: TransportStream, diagnostics: Arc<QueueDiagnostics>) -> Self {
-        let (_, mut writer) = split(stream);
+        let (mut reader, mut writer) = split(stream);
         let queue = AttachmentOutputQueue::with_diagnostics(diagnostics);
         let writer_queue = queue.clone();
         let (failed_tx, failed) = watch::channel(false);
         let task = tokio::spawn(async move {
-            while let Some(frame) = writer_queue.next_frame().await {
-                let bytes = frame.bytes.len();
-                let write_started_at = std::time::Instant::now();
-                let is_resync = frame.is_resync;
-                let result = async {
-                    writer.write_all(&frame.bytes).await?;
-                    writer.flush().await
+            let write = async {
+                while let Some(frame) = writer_queue.next_frame().await {
+                    let bytes = frame.bytes.len();
+                    let write_started_at = std::time::Instant::now();
+                    let is_resync = frame.is_resync;
+                    let result = yttt_transport::send_frame(&mut writer, &frame.bytes).await;
+                    writer_queue.complete(bytes, is_resync);
+                    writer_queue
+                        .diagnostics
+                        .record_service(write_started_at.elapsed());
+                    if result.is_err() {
+                        writer_queue.close();
+                        return;
+                    }
                 }
-                .await;
-                writer_queue.complete(bytes, is_resync);
-                writer_queue
-                    .diagnostics
-                    .record_service(write_started_at.elapsed());
-                if result.is_err() {
-                    writer_queue.close();
-                    let _ = failed_tx.send(true);
-                    return;
-                }
+            };
+            let mut byte = [0];
+            tokio::select! {
+                _ = write => {},
+                _ = reader.read(&mut byte) => {},
             }
+            writer_queue.close();
+            let _ = failed_tx.send(true);
         });
         Self {
             queue,
@@ -486,5 +490,23 @@ mod tests {
         assert!(Arc::ptr_eq(&first_frame.bytes, &second_frame.bytes));
         assert_eq!(encode_count.load(Ordering::Acquire), 1);
         assert_eq!(host_sequence.load(Ordering::Acquire), 12);
+    }
+}
+
+#[cfg(test)]
+mod disconnect_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn idle_data_writer_notices_peer_disconnect() {
+        let (server, client) = tokio::io::duplex(1024);
+        let writer = TerminalDataWriter::new(Box::new(server), QueueDiagnostics::new("test", 1024));
+        let mut failed = writer.subscribe_failure();
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(1), failed.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(*failed.borrow());
     }
 }

@@ -20,5 +20,5 @@ pub use wire::{
     WireError, WireReceiveDiagnostics, receive_control, receive_control_observed,
     receive_desktop_shell, receive_handshake, receive_lifecycle, receive_state_event,
     receive_terminal_interactive, send_control, send_control_bounded, send_desktop_shell,
-    send_handshake, send_lifecycle, send_state_event, send_terminal_interactive,
+    send_frame, send_handshake, send_lifecycle, send_state_event, send_terminal_interactive,
 };

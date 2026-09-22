@@ -5,6 +5,7 @@ mod mirror;
 
 use std::{
     collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -18,7 +19,7 @@ pub use mirror::{MirrorApply, TerminalMirror, TerminalMirrorMetadata};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
     io::split,
-    sync::{broadcast, mpsc, oneshot, watch},
+    sync::{Semaphore, broadcast, mpsc, oneshot, watch},
 };
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
@@ -28,9 +29,10 @@ use yttt_protocol::{
     terminal::{TerminalInput, TerminalProcessState, TerminalStreamUpdate},
 };
 use yttt_transport::{
-    AuthToken, AuthenticatedHost, ClientIdentity, SharedConnector, TransportConnector,
-    TransportStream, client_handshake, receive_control, receive_control_observed,
-    receive_state_event, receive_terminal_interactive, send_control, send_terminal_interactive,
+    AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, SharedConnector,
+    TransportConnector, TransportStream, client_handshake, receive_control,
+    receive_control_observed, receive_state_event, receive_terminal_interactive, send_control,
+    send_terminal_interactive,
 };
 
 const COMMAND_CAPACITY: usize = 256;
@@ -40,6 +42,32 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONTROL_RESPONSE_GRACE: Duration = Duration::from_millis(100);
 const INITIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
+
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct ShutdownOnDrop(watch::Sender<bool>);
+impl Drop for ShutdownOnDrop {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
+}
+
+fn retry_delay(attempt: u32, identity: &ClientIdentity) -> Duration {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    identity.session_nonce.0.hash(&mut hash);
+    identity.terminal_session_id.hash(&mut hash);
+    attempt.hash(&mut hash);
+    let ceiling = (100_u64 << attempt.min(6)).min(5_000);
+    Duration::from_millis(ceiling / 2 + hash.finish() % (ceiling / 2 + 1))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -107,18 +135,19 @@ struct ClientCommand {
     body: Request,
     reply: Option<oneshot::Sender<Result<Response, ClientCoreError>>>,
     control: Option<yttt_protocol::session::ControlContext>,
+    deadline: tokio::time::Instant,
 }
 
 pub struct PendingClientRequest {
     response: oneshot::Receiver<Result<Response, ClientCoreError>>,
-    timeout: Duration,
+    deadline: tokio::time::Instant,
     stopped_session: Option<TerminalSessionId>,
     data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
 }
 
 impl PendingClientRequest {
     pub async fn wait(self) -> Result<Response, ClientCoreError> {
-        let response = tokio::time::timeout(self.timeout, self.response)
+        let response = tokio::time::timeout_at(self.deadline, self.response)
             .await
             .map_err(|_| ClientCoreError::RequestTimeout)?
             .map_err(|_| ClientCoreError::SupervisorStopped)??;
@@ -148,10 +177,12 @@ enum PendingRequest {
     User(oneshot::Sender<Result<Response, ClientCoreError>>),
     Checkpoint(TerminalSessionId),
     Catalog,
+    ReconnectCatalog,
     AgentSnapshots,
 }
 
 struct ClientSessionContext {
+    data_connects: Arc<Semaphore>,
     checkpoint_requests: mpsc::Sender<TerminalSessionId>,
     catalog_requests: mpsc::Sender<()>,
     events: broadcast::Sender<ClientEvent>,
@@ -183,7 +214,7 @@ impl ClientCore {
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let (state_tx, state_rx) = watch::channel(ConnectionState::Connecting);
         let data_channels = Arc::new(RwLock::new(HashMap::new()));
-        let (shutdown, shutdown_rx) = watch::channel(false);
+        let (shutdown, _) = watch::channel(false);
         let mirrors = Arc::new(RwLock::new(HashMap::new()));
         let known_sessions = Arc::new(RwLock::new(HashSet::new()));
         let catalog = Arc::new(RwLock::new(None));
@@ -209,7 +240,7 @@ impl ClientCore {
             agent_snapshots.clone(),
             next_request_id.clone(),
             diagnostics.clone(),
-            shutdown_rx,
+            shutdown.clone(),
             initial_tx,
             control.clone(),
         ));
@@ -334,7 +365,7 @@ impl ClientCore {
         self.enqueue_command(body, Some(reply))?;
         Ok(PendingClientRequest {
             response,
-            timeout,
+            deadline: tokio::time::Instant::now() + timeout,
             stopped_session,
             data_channels: self.inner.data_channels.clone(),
         })
@@ -366,8 +397,10 @@ impl ClientCore {
         } else {
             &self.inner.commands
         };
+        let deadline = tokio::time::Instant::now() + Self::request_timeout(&body);
         sender
             .try_send(ClientCommand {
+                deadline,
                 request_id,
                 body,
                 reply,
@@ -425,24 +458,48 @@ async fn run_supervisor(
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown_tx: watch::Sender<bool>,
     initial: oneshot::Sender<Result<(), String>>,
     profile_control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
 ) {
-    set_state(&state, &events, ConnectionState::Connecting);
-    let mut lanes = match establish_session_lanes(&connector, &identity, &token).await {
-        Ok(lanes) => lanes,
-        Err(error) => {
-            let message = error.message().to_string();
-            set_state(
-                &state,
-                &events,
-                ConnectionState::HostLost {
-                    message: message.clone(),
-                },
-            );
-            let _ = initial.send(Err(message));
-            return;
+    let _shutdown_guard = ShutdownOnDrop(shutdown_tx.clone());
+    let mut shutdown = shutdown_tx.subscribe();
+    let mut initial_attempt = 0;
+    let mut lanes = loop {
+        set_state(&state, &events, ConnectionState::Connecting);
+        diagnostics.record_connection_attempt();
+        let result = tokio::select! {
+            result = establish_session_lanes(&connector, &identity, &token) => result,
+            _ = shutdown.wait_for(|stopped| *stopped) => return,
+        };
+        match result {
+            Ok(lanes) => break lanes,
+            Err(ConnectFailure::Retry(message)) => {
+                initial_attempt += 1;
+                set_state(
+                    &state,
+                    &events,
+                    ConnectionState::Reconnecting {
+                        attempt: initial_attempt,
+                        message,
+                    },
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(retry_delay(initial_attempt, &identity)) => {},
+                    _ = shutdown.wait_for(|stopped| *stopped) => return,
+                }
+            }
+            Err(ConnectFailure::Fatal(message)) => {
+                set_state(
+                    &state,
+                    &events,
+                    ConnectionState::HostLost {
+                        message: message.clone(),
+                    },
+                );
+                let _ = initial.send(Err(message));
+                return;
+            }
         }
     };
     identity.host_epoch_hint = Some(lanes.host.host_epoch);
@@ -459,8 +516,10 @@ async fn run_supervisor(
     let deferred_terminal_events = Arc::new(Mutex::new(HashMap::new()));
     let (catalog_requests, mut catalog_rx) = mpsc::channel(1);
     let mut attempt = 0_u32;
+    let data_connects = Arc::new(Semaphore::new(4));
     loop {
         let session = ClientSessionContext {
+            data_connects: data_connects.clone(),
             checkpoint_requests: checkpoint_requests.clone(),
             catalog_requests: catalog_requests.clone(),
             events: events.clone(),
@@ -502,6 +561,7 @@ async fn run_supervisor(
                 result = &mut state_events => {
                     (false, result.map(|message| format!("state events: {message}")))
                 },
+                _ = shutdown.wait_for(|stopped| *stopped) => (true, None),
             };
             if control_exited {
                 lane_result
@@ -518,6 +578,7 @@ async fn run_supervisor(
             return;
         };
         attempt = attempt.saturating_add(1);
+        diagnostics.record_reconnect();
         *profile_control.write() = None;
         while let Ok(command) = commands.try_recv() {
             if let Some(reply) = command.reply {
@@ -537,7 +598,7 @@ async fn run_supervisor(
                 message: message.clone(),
             },
         );
-        let delay = Duration::from_millis((50_u64 << attempt.min(5)).min(1_000));
+        let delay = retry_delay(attempt, &identity);
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             changed = shutdown.changed() => {
@@ -549,8 +610,22 @@ async fn run_supervisor(
         }
         loop {
             set_state(&state, &events, ConnectionState::Connecting);
-            match establish_session_lanes(&connector, &identity, &token).await {
+            diagnostics.record_connection_attempt();
+            let result = tokio::select! {
+                result = establish_session_lanes(&connector, &identity, &token) => result,
+                _ = shutdown.wait_for(|stopped| *stopped) => {
+                    set_state(&state, &events, ConnectionState::Disconnected);
+                    return;
+                }
+            };
+            match result {
                 Ok(new_lanes) => {
+                    if identity.host_epoch_hint != Some(new_lanes.host.host_epoch) {
+                        mirrors.write().clear();
+                        for (_, desired) in data_channels.write().drain() {
+                            let _ = desired.send(false);
+                        }
+                    }
                     lanes = new_lanes;
                     identity.host_epoch_hint = Some(lanes.host.host_epoch);
                     *profile_control.write() = Some(lanes.control_status.clone());
@@ -572,7 +647,7 @@ async fn run_supervisor(
                         &events,
                         ConnectionState::Reconnecting { attempt, message },
                     );
-                    let delay = Duration::from_millis((50_u64 << attempt.min(5)).min(1_000));
+                    let delay = retry_delay(attempt, &identity);
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {}
                         changed = shutdown.changed() => {
@@ -615,8 +690,9 @@ async fn establish_session_lanes(
     )
     .await
     .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-    let status = receive_control(&mut control)
+    let status = tokio::time::timeout(REQUEST_TIMEOUT, receive_control(&mut control))
         .await
+        .map_err(|_| ConnectFailure::Retry("Host control status timed out".into()))?
         .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
     let ControlMessage::Response(HostResponse {
         result: Ok(Response::ProfileControl(control_status)),
@@ -654,13 +730,13 @@ async fn establish(
     identity: &ClientIdentity,
     token: &AuthToken,
 ) -> Result<(TransportStream, AuthenticatedHost), ConnectFailure> {
-    let mut stream = connector
-        .connect()
+    let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect())
         .await
+        .map_err(|_| ConnectFailure::Retry("Host transport connection timed out".into()))?
         .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
     let host = client_handshake(&mut stream, identity, token)
         .await
-        .map_err(|error| ConnectFailure::Fatal(error.to_string()))?;
+        .map_err(ConnectFailure::from)?;
     Ok((stream, host))
 }
 
@@ -682,7 +758,7 @@ async fn connected_control_session(
         &next_internal_request_id,
         Some(context.identity.client_instance_id.to_string()),
         Request::ListResources,
-        PendingRequest::Catalog,
+        PendingRequest::ReconnectCatalog,
     )
     .await
     .is_err()
@@ -713,7 +789,7 @@ async fn connected_control_session(
         return Some("failed to request Host Agent snapshots".to_string());
     }
     let (control_messages_tx, mut control_messages_rx) = mpsc::channel(COMMAND_CAPACITY);
-    let control_reader = tokio::spawn(async move {
+    let _control_reader = AbortOnDrop(tokio::spawn(async move {
         loop {
             let message = receive_control(&mut reader)
                 .await
@@ -723,19 +799,29 @@ async fn connected_control_session(
                 break;
             }
         }
-    });
+    }));
 
+    let mut cleanup = tokio::time::interval(Duration::from_secs(1));
+    cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let disconnected = 'connected: loop {
         tokio::select! {
-            command = commands.recv() => {
+            _ = cleanup.tick() => {
+                pending.retain(|_, request| !matches!(request, PendingRequest::User(reply) if reply.is_closed()));
+            }
+            command = commands.recv(), if pending.len() < COMMAND_CAPACITY => {
                 let Some(ClientCommand {
                     request_id,
                     body,
                     reply,
                     control,
+                    deadline,
                 }) = command else {
                     break None;
                 };
+                if deadline <= tokio::time::Instant::now() || reply.as_ref().is_some_and(|reply| reply.is_closed()) {
+                    if let Some(reply) = reply { let _ = reply.send(Err(ClientCoreError::RequestTimeout)); }
+                    continue;
+                }
                 let Some(request_id) = request_id else {
                     if let Some(reply) = reply {
                         let _ = reply.send(Err(ClientCoreError::Connection(
@@ -819,7 +905,7 @@ async fn connected_control_session(
                 if refresh.is_none() {
                     break None;
                 }
-                if pending.values().any(|request| matches!(request, PendingRequest::Catalog)) {
+                if pending.values().any(|request| matches!(request, PendingRequest::Catalog | PendingRequest::ReconnectCatalog)) {
                     continue;
                 }
                 if send_internal_request(
@@ -861,7 +947,6 @@ async fn connected_control_session(
             }
         }
     };
-    control_reader.abort();
     for (_, request) in pending {
         if let PendingRequest::User(reply) = request {
             let _ = reply.send(Err(ClientCoreError::NotConnected));
@@ -878,7 +963,7 @@ async fn connected_interactive_session(
     let mut shutdown = context.shutdown.clone();
     let (mut reader, mut writer) = split(stream);
     let (interactive_messages_tx, mut interactive_messages_rx) = mpsc::channel(COMMAND_CAPACITY);
-    let interactive_reader = tokio::spawn(async move {
+    let _interactive_reader = AbortOnDrop(tokio::spawn(async move {
         loop {
             let message = receive_terminal_interactive(&mut reader)
                 .await
@@ -888,19 +973,43 @@ async fn connected_interactive_session(
                 break;
             }
         }
-    });
+    }));
     let mut pending = HashMap::new();
+    let mut heartbeat = None::<(u64, tokio::time::Instant)>;
+    let mut heartbeat_tick = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let disconnected = loop {
         tokio::select! {
-            command = commands.recv() => {
+            _ = heartbeat_tick.tick() => {
+                pending.retain(|_, reply: &mut oneshot::Sender<Result<Response, ClientCoreError>>| !reply.is_closed());
+                if let Some((_, deadline)) = heartbeat {
+                    if tokio::time::Instant::now() >= deadline {
+                        break Some("Host heartbeat timed out".into());
+                    }
+                    continue;
+                }
+                let request_id = context.next_request_id.fetch_add(1, Ordering::Relaxed);
+                let message = TerminalInteractiveMessage::Request(ClientRequest::new(request_id,
+                    Request::Ping { sent_millis: request_id }));
+                if let Err(error) = send_terminal_interactive(&mut writer, &message).await {
+                    break Some(error.to_string());
+                }
+                heartbeat = Some((request_id, tokio::time::Instant::now() + HEARTBEAT_TIMEOUT));
+            }
+            command = commands.recv(), if pending.len() < COMMAND_CAPACITY => {
                 let Some(ClientCommand {
                     request_id,
                     body,
                     reply,
                     control,
+                    deadline,
                 }) = command else {
                     break None;
                 };
+                if deadline <= tokio::time::Instant::now() || reply.as_ref().is_some_and(|reply| reply.is_closed()) {
+                    if let Some(reply) = reply { let _ = reply.send(Err(ClientCoreError::RequestTimeout)); }
+                    continue;
+                }
                 let message = match (body, request_id) {
                     (Request::TerminalInput(input), None) => {
                         TerminalInteractiveMessage::Input { input, control }
@@ -950,6 +1059,18 @@ async fn connected_interactive_session(
                         "Host sent a non-response message on the interactive stream".to_string(),
                     );
                 };
+                if heartbeat.is_some_and(|(id, _)| id == response.request_id) {
+                    // Older Hosts reject Ping on this lane but still prove it is live.
+                    if !matches!(&response.result,
+                        Ok(Response::Pong { .. }) | Err(ProtocolFailure { code: yttt_protocol::FailureCode::InvalidRequest, .. })
+                    ) {
+                        break Some("Host rejected heartbeat".into());
+                    }
+                    if let Some((_, deadline)) = heartbeat.take() {
+                        context.diagnostics.record_heartbeat(tokio::time::Instant::now().saturating_duration_since(deadline - HEARTBEAT_TIMEOUT));
+                    }
+                    continue;
+                }
                 let Some(reply) = pending.remove(&response.request_id) else {
                     continue;
                 };
@@ -962,7 +1083,6 @@ async fn connected_interactive_session(
             }
         }
     };
-    interactive_reader.abort();
     for (_, reply) in pending {
         let _ = reply.send(Err(ClientCoreError::NotConnected));
     }
@@ -1044,6 +1164,7 @@ fn handle_response(
     let known_sessions = &context.known_sessions;
     let catalog = &context.catalog;
     let agent_snapshots = &context.agent_snapshots;
+    let reconnect = matches!(&pending, PendingRequest::ReconnectCatalog);
     match pending {
         PendingRequest::User(reply) => {
             match &result {
@@ -1053,13 +1174,12 @@ fn handle_response(
                 }
                 Ok(Response::TerminalAttached { lease, checkpoint }) => {
                     known_sessions.write().insert(lease.session_id.clone());
-                    mirrors.write().insert(
-                        lease.session_id.clone(),
-                        TerminalMirror::new(checkpoint.viewport.clone()),
-                    );
-                    let _ = events.send(ClientEvent::TerminalUpdated(Arc::new(
+                    apply_terminal_update(
                         TerminalStreamUpdate::Snapshot(checkpoint.viewport.clone()),
-                    )));
+                        mirrors,
+                        known_sessions,
+                        events,
+                    );
                     start_terminal_data_channel(lease.session_id.clone(), context);
                 }
                 Ok(Response::TerminalLease(lease)) => {
@@ -1067,14 +1187,12 @@ fn handle_response(
                     start_terminal_data_channel(lease.session_id.clone(), context);
                 }
                 Ok(Response::TerminalViewport(read)) | Ok(Response::TerminalScrolled(read)) => {
-                    let session_id = read.viewport.session_id.clone();
-                    known_sessions.write().insert(session_id.clone());
-                    mirrors
-                        .write()
-                        .insert(session_id, TerminalMirror::new(read.viewport.clone()));
-                    let _ = events.send(ClientEvent::TerminalUpdated(Arc::new(
+                    apply_terminal_update(
                         TerminalStreamUpdate::Snapshot(read.viewport.clone()),
-                    )));
+                        mirrors,
+                        known_sessions,
+                        events,
+                    );
                 }
                 Ok(Response::Resources(resources)) => {
                     catalog.write().replace(Arc::new(resources.clone()));
@@ -1088,13 +1206,15 @@ fn handle_response(
             Vec::new()
         }
         PendingRequest::Checkpoint(session_id) => {
-            if let Ok(Response::TerminalCheckpoint(checkpoint)) = result {
-                known_sessions.write().insert(session_id.clone());
-                let update = TerminalStreamUpdate::Snapshot(checkpoint.viewport.clone());
-                mirrors
-                    .write()
-                    .insert(session_id, TerminalMirror::new(checkpoint.viewport));
-                let _ = events.send(ClientEvent::TerminalUpdated(Arc::new(update)));
+            if let Ok(Response::TerminalCheckpoint(checkpoint)) = result
+                && checkpoint.viewport.session_id == session_id
+            {
+                apply_terminal_update(
+                    TerminalStreamUpdate::Snapshot(checkpoint.viewport),
+                    mirrors,
+                    known_sessions,
+                    events,
+                );
             }
             Vec::new()
         }
@@ -1104,7 +1224,7 @@ fn handle_response(
             }
             Vec::new()
         }
-        PendingRequest::Catalog => {
+        PendingRequest::Catalog | PendingRequest::ReconnectCatalog => {
             let Ok(Response::Resources(resources)) = result else {
                 return Vec::new();
             };
@@ -1133,14 +1253,17 @@ fn handle_response(
                     .terminals
                     .iter()
                     .filter(|placement| {
-                        mirrors.get(&placement.session_id).is_none_or(|mirror| {
-                            mirror.viewport().session_epoch != placement.session_epoch
-                        })
+                        reconnect
+                            || mirrors.get(&placement.session_id).is_none_or(|mirror| {
+                                mirror.viewport().session_epoch != placement.session_epoch
+                            })
                     })
                     .map(|placement| placement.session_id.clone())
                     .collect::<Vec<_>>()
             };
             for session_id in removed {
+                stop_terminal_data_channel(&context.data_channels, &session_id);
+                context.deferred_terminal_events.lock().remove(&session_id);
                 let _ = events.send(ClientEvent::TerminalUnavailable(session_id));
             }
             let _ = events.send(ClientEvent::ResourceCatalogUpdated(resources));
@@ -1151,6 +1274,7 @@ fn handle_response(
 
 fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSessionContext) {
     let connector = context.connector.clone();
+    let data_connects = context.data_connects.clone();
     let mut identity = context.identity.clone();
     let token = context.token.clone();
     let mirrors = context.mirrors.clone();
@@ -1163,11 +1287,13 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
     let mut channels = data_channels.write();
     if channels
         .get(&session_id)
-        .is_some_and(|desired| desired.send(true).is_ok())
+        .is_some_and(|desired| !desired.is_closed() && *desired.borrow())
     {
         return;
     }
-    channels.remove(&session_id);
+    if let Some(previous) = channels.remove(&session_id) {
+        let _ = previous.send(false);
+    }
     let (desired, mut desired_rx) = watch::channel(true);
     channels.insert(session_id.clone(), desired);
     drop(channels);
@@ -1181,28 +1307,23 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
             if *shutdown.borrow() {
                 break;
             }
-            while !*desired_rx.borrow() {
-                tokio::select! {
-                    changed = desired_rx.changed() => {
-                        if changed.is_err() {
-                            break 'worker;
-                        }
-                    }
-                    changed = shutdown.changed() => {
-                        if changed.is_err() || *shutdown.borrow() {
-                            break 'worker;
-                        }
-                    }
-                }
+            if !*desired_rx.borrow() {
+                break;
             }
-            let (mut stream, _) = match establish(&connector, &identity, &token).await {
-                Ok(connection) => {
-                    attempt = 0;
-                    connection
-                }
-                Err(_) => {
+            let result = tokio::select! {
+                result = async {
+                    let _permit = data_connects.acquire().await.expect("data connection semaphore remains open");
+                    establish(&connector, &identity, &token).await
+                } => result,
+                _ = desired_rx.wait_for(|desired| !*desired) => break,
+                _ = shutdown.wait_for(|stopped| *stopped) => break,
+            };
+            let (mut stream, _) = match result {
+                Ok(connection) => connection,
+                Err(ConnectFailure::Fatal(_)) => break,
+                Err(ConnectFailure::Retry(_)) => {
                     attempt = attempt.saturating_add(1);
-                    let delay = Duration::from_millis((50_u64 << attempt.min(5)).min(1_000));
+                    let delay = retry_delay(attempt, &identity);
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {}
                         changed = desired_rx.changed() => {
@@ -1226,20 +1347,17 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
                             Ok(result) => result,
                             Err(_) => break,
                         };
+                        attempt = 0;
                         diagnostics.record_ipc_read(observation);
                         let ControlMessage::Event(event) = message else {
                             break;
                         };
-                        let terminal_exited = match handle_terminal_data_event(
-                            event,
-                            &mirrors,
-                            &known_sessions,
-                            &events,
-                            &checkpoint_requests,
-                            &diagnostics,
-                        )
-                        .await
-                        {
+                        let result = tokio::select! {
+                            result = handle_terminal_data_event(event, &mirrors, &known_sessions, &events, &checkpoint_requests, &diagnostics) => result,
+                            _ = async { let _ = desired_rx.wait_for(|desired| !*desired).await; } => break 'worker,
+                            _ = async { let _ = shutdown.wait_for(|stopped| *stopped).await; } => break 'worker,
+                        };
+                        let terminal_exited = match result {
                             Ok(terminal_exited) => terminal_exited,
                             Err(()) => break 'worker,
                         };
@@ -1268,7 +1386,7 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
                 continue;
             }
             attempt = attempt.saturating_add(1);
-            let delay = Duration::from_millis((50_u64 << attempt.min(5)).min(1_000));
+            let delay = retry_delay(attempt, &identity);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 changed = desired_rx.changed() => {
@@ -1283,8 +1401,23 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
                 }
             }
         }
-        data_channels.write().remove(&session_id);
+        let mut channels = data_channels.write();
+        if channels
+            .get(&session_id)
+            .is_some_and(|sender| sender.subscribe().same_channel(&desired_rx))
+        {
+            channels.remove(&session_id);
+        }
     });
+}
+
+fn stop_terminal_data_channel(
+    channels: &RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>,
+    session_id: &TerminalSessionId,
+) {
+    if let Some(desired) = channels.write().remove(session_id) {
+        let _ = desired.send(false);
+    }
 }
 
 fn update_profile_control(
@@ -1332,6 +1465,15 @@ fn handle_event(
         }
         _ => return None,
     };
+    apply_terminal_update(update, mirrors, known_sessions, events)
+}
+
+fn apply_terminal_update(
+    update: TerminalStreamUpdate,
+    mirrors: &RwLock<HashMap<TerminalSessionId, TerminalMirror>>,
+    known_sessions: &RwLock<HashSet<TerminalSessionId>>,
+    events: &broadcast::Sender<ClientEvent>,
+) -> Option<TerminalSessionId> {
     let session_id = update.session_id().clone();
     known_sessions.write().insert(session_id.clone());
     let published_update = Arc::new(update);
@@ -1486,10 +1628,34 @@ enum ConnectFailure {
     Fatal(String),
 }
 
-impl ConnectFailure {
-    fn message(&self) -> &str {
-        match self {
-            Self::Retry(message) | Self::Fatal(message) => message,
+impl From<HandshakeError> for ConnectFailure {
+    fn from(error: HandshakeError) -> Self {
+        use yttt_protocol::RejectReason;
+        let retryable = match &error {
+            HandshakeError::Timeout => true,
+            HandshakeError::Wire(yttt_transport::WireError::Codec(
+                yttt_protocol::ProtocolCodecError::Io(_),
+            )) => true,
+            HandshakeError::Rejected(reason) => match reason {
+                RejectReason::StaleHostEpoch
+                | RejectReason::AlreadyConnected
+                | RejectReason::HostShuttingDown => true,
+                RejectReason::VersionMismatch { .. }
+                | RejectReason::BuildMismatch
+                | RejectReason::ProfileMismatch
+                | RejectReason::AuthenticationFailed
+                | RejectReason::InvalidMessage
+                | RejectReason::PermissionDenied => false,
+            },
+            HandshakeError::Wire(_)
+            | HandshakeError::UnexpectedMessage
+            | HandshakeError::IdentityMismatch
+            | HandshakeError::AuthenticationFailed => false,
+        };
+        if retryable {
+            Self::Retry(error.to_string())
+        } else {
+            Self::Fatal(error.to_string())
         }
     }
 }
@@ -1506,7 +1672,7 @@ pub enum ClientCoreError {
     NotConnected,
     #[error("Host request queue is backpressured")]
     Backpressure,
-    #[error("Host request timed out")]
+    #[error("Host request timed out; the remote operation may have completed")]
     RequestTimeout,
     #[error("Host rejected request: {0:?}")]
     Protocol(ProtocolFailure),
@@ -1554,3 +1720,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod recovery_tests;

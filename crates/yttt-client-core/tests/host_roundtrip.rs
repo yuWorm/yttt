@@ -727,6 +727,18 @@ async fn blocked_project_request_does_not_delay_terminal_input() {
     .await
     .expect("interactive input or a state event was delayed by a blocked project request");
 
+    let checkpoint = tokio::time::timeout(
+        Duration::from_millis(500),
+        client.request(Request::RequestCheckpoint {
+            session_id: session_id.clone(),
+            after_sequence: None,
+        }),
+    )
+    .await
+    .expect("terminal recovery must not wait behind a blocked Git request")
+    .unwrap();
+    assert!(matches!(checkpoint, Response::TerminalCheckpoint(_)));
+
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(5), blocked_git.wait())
             .await

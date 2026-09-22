@@ -158,7 +158,9 @@ control、terminal-interactive、state-event、lifecycle 和 desktop-shell；ter
 
 ### 5.2 request/response
 
-Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`ClientCore` 的 pending map 只在收到匹配 response 后完成请求；断线时所有未完成用户请求返回 `NotConnected`，不会假定执行成功并自动重放。
+Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`ClientCore` 每条请求通道最多保留 256 个在途请求，并回收已取消的等待者；尚未发送就过期的请求不会再执行。断线时未完成用户请求失败，不会假定执行成功并自动重放。请求超时只表示结果未确认，已经发送的操作仍可能完成。
+
+Host 的普通控制请求使用最多 64 项的等待队列并按顺序执行；Ping、资源目录、Agent 快照和终端 checkpoint 可以在慢文件／Git 请求期间完成。这些恢复查询不进入 mutation journal。每次读取的 frame future 保留到完整读取或连接关闭，不能因其他请求完成而取消半帧。
 
 这是 at-most-once Client 语义。调用方若在断线后重试有副作用操作，必须携带资源 ID、epoch/revision 或幂等键。
 
@@ -188,7 +190,7 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
 每个 Client 会话使用相互隔离的通道：
 
 - control：普通 request/response；耗时项目操作可等待，但不能阻塞其他通道。
-- terminal-interactive：输入、resize、scroll 及其同步诊断 response。
+- terminal-interactive：输入、resize、scroll、存活检测 Ping 及其 response。
 - terminal-data：每个已附加 terminal 一条连接，只承载该 session 的 snapshot/delta。
 - state-events：lease、exit、SSH、project、Agent snapshot 和 catalog invalidation。
 
@@ -499,8 +501,13 @@ Disconnected -> Connecting -> Ready
 
 恢复规则：
 
-- 临时 I/O 失败：保留 mirrors，指数退避 100 ms 到 1 s，持续尝试同一 endpoint。
-- 重连成功：更新 host epoch/connection sequence，立即请求 catalog。
+- 临时 I/O、握手超时、AlreadyConnected、StaleHostEpoch 或 HostShuttingDown：保留 mirrors，使用带抖动的指数退避，初次重试 100–200 ms，上限 5 s。主连接与 terminal-data 使用同一握手错误分类，永久错误停止重试。
+- 底层连接建立最多等待 30 s，应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
+- interactive 通道每 5 s 发送一次 Ping，15 s 内没有对应响应即触发重连；它不排在文件／Git 请求之后。旧 Host 返回 InvalidRequest 也可确认通道存活，无需更改协议版本。
+- terminal-data 最多并行建立 4 条连接；终端移出 catalog、凭据被永久拒绝或 Client 关闭时退出 worker。重复启用已有订阅不发送状态通知，不中断当前帧读取。
+- control/interactive reader 随所属连接 future 取消而退出；Host 的 state-events 和 terminal-data 在对端关闭时释放，即使当前没有输出。
+- Host 最多保留 64 个认证 Client 会话，包括最多 16 个闲置会话。闲置会话最多保留 5 分钟，保留窗口内可继续使用请求日志；活动会话不参与淘汰。
+- 重连成功：更新 host epoch/connection sequence，立即请求 catalog 并重新对账 checkpoint；Host epoch 变化时清除旧 mirror 与 data worker。补快照与 attach/viewport 响应统一检查 session epoch 和 sequence，旧快照不得覆盖较新的镜像；相同 sequence 仍允许主动切换历史视口。
 - Host 在断线期间仍存活：相同 terminal ID 通过 checkpoint/delta 继续。
 - Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，但保留 tab、pane 和编辑器布局，将缺失的运行中 pane 标记为 `Restoring`。控制 Client 自动重建 shell（不执行旧启动命令）并以 provider resume 恢复 Agent 会话；已启动的 lazy tab 也参与。其他命令保持停止，观察者不创建进程。
 - 工作区恢复／重连的 catalog reconciliation 同样将带有 Agent session 元数据的 `Exited` pane 标记为 `Restoring`，包括普通 shell 中启动的 Agent；按保存的 provider 恢复原会话，不重放 pane 原命令。无保存会话的已退出 pane 仍保持停止；普通进程退出事件不会触发自动重启。
@@ -526,7 +533,11 @@ Disconnected -> Connecting -> Ready
 
 SSH terminal 进入与本地 PTY 相同的 Host `HostedTerminal::from_io` 路径，复用同一 VTE、
 semantic snapshot/delta、16 ms terminal-data cadence、lease 和 checkpoint 语义；只有 Host 到
-远端 SSH server 的真实网络 RTT 不可消除。
+远端 SSH server 的真实网络 RTT 不可消除。terminal-data 的 16 ms 计时只在存在待发送更新时启动，空闲订阅不再周期唤醒。
+
+SSH runtime 与 connection command queue 各最多 64 项。SSH terminal 输入／输出各最多缓存 32 个 64 KiB 块，关闭使用独立信号，不受满队列阻塞。每连接最多并行 16 个 SFTP／远程命令操作；远程命令 stdout 与 stderr 合计上限 16 MiB。命令和只读 SFTP 操作总期限 110 s，写入／重命名保留已有逐操作超时及回滚过程，不在中间步骤强制取消。连接尝试总期限为 120 s。
+
+Client diagnostics 包含连接尝试次数、重连次数和心跳往返延迟；原有编解码、mirror merge 与 checkpoint resync 指标继续保留。
 
 Agent hook delivery 使用随机 `stream_id` 和单调 `sequence`。Host 响应
 `accepted_sequence/next_sequence`，缓存小范围乱序，重复 delivery 只确认而不重复应用；provider

@@ -1,10 +1,14 @@
 use std::{
     collections::BTreeMap,
     io::{self, Read, Write},
-    sync::{Arc, Mutex, mpsc as blocking_mpsc},
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::watch;
+
+pub(crate) const TERMINAL_CHUNK_BYTES: usize = 64 * 1024;
+const TERMINAL_QUEUE_CAPACITY: usize = 32;
 use yttt_core::model::{ids::ConnectionId, project::RemotePathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,22 +54,23 @@ pub struct RemoteTerminalIo {
 
 pub struct RemoteTerminalSession {
     io: Option<RemoteTerminalIo>,
-    commands: mpsc::UnboundedSender<RemoteTerminalCommand>,
+    commands: flume::Sender<RemoteTerminalCommand>,
     state: Arc<Mutex<RemoteTerminalState>>,
     closed: bool,
+    shutdown: watch::Sender<bool>,
 }
 
 #[derive(Clone)]
 pub struct RemoteTerminalResizeHandle {
-    commands: mpsc::UnboundedSender<RemoteTerminalCommand>,
+    commands: flume::Sender<RemoteTerminalCommand>,
 }
 
 pub struct RemoteTerminalWriter {
-    commands: mpsc::UnboundedSender<RemoteTerminalCommand>,
+    commands: flume::Sender<RemoteTerminalCommand>,
 }
 
 pub struct RemoteTerminalReader {
-    output: blocking_mpsc::Receiver<Vec<u8>>,
+    output: flume::Receiver<Vec<u8>>,
     pending: Vec<u8>,
     offset: usize,
 }
@@ -74,7 +79,6 @@ pub struct RemoteTerminalReader {
 pub(crate) enum RemoteTerminalCommand {
     Write(Vec<u8>),
     Resize { cols: u16, rows: u16 },
-    Shutdown,
 }
 
 #[derive(Debug, Default)]
@@ -84,15 +88,17 @@ pub(crate) struct RemoteTerminalState {
 }
 
 pub(crate) struct RemoteTerminalEndpoint {
-    pub commands: mpsc::UnboundedReceiver<RemoteTerminalCommand>,
-    pub output: blocking_mpsc::Sender<Vec<u8>>,
+    pub shutdown: watch::Receiver<bool>,
+    pub commands: flume::Receiver<RemoteTerminalCommand>,
+    pub output: flume::Sender<Vec<u8>>,
     pub state: Arc<Mutex<RemoteTerminalState>>,
 }
 
 impl RemoteTerminalSession {
     pub(crate) fn channel() -> (Self, RemoteTerminalEndpoint) {
-        let (commands_tx, commands_rx) = mpsc::unbounded_channel();
-        let (output_tx, output_rx) = blocking_mpsc::channel();
+        let (commands_tx, commands_rx) = flume::bounded(TERMINAL_QUEUE_CAPACITY);
+        let (output_tx, output_rx) = flume::bounded(TERMINAL_QUEUE_CAPACITY);
+        let (shutdown, shutdown_rx) = watch::channel(false);
         let state = Arc::new(Mutex::new(RemoteTerminalState::default()));
         (
             Self {
@@ -109,8 +115,10 @@ impl RemoteTerminalSession {
                 commands: commands_tx,
                 state: state.clone(),
                 closed: false,
+                shutdown,
             },
             RemoteTerminalEndpoint {
+                shutdown: shutdown_rx,
                 commands: commands_rx,
                 output: output_tx,
                 state,
@@ -130,7 +138,7 @@ impl RemoteTerminalSession {
 
     pub fn finish(mut self, terminate: bool) -> Option<i32> {
         if terminate {
-            let _ = self.commands.send(RemoteTerminalCommand::Shutdown);
+            self.shutdown.send_replace(true);
         }
         self.closed = true;
         self.state.lock().ok().and_then(|state| state.exit_code)
@@ -140,7 +148,7 @@ impl RemoteTerminalSession {
 impl Drop for RemoteTerminalSession {
     fn drop(&mut self) {
         if !self.closed {
-            let _ = self.commands.send(RemoteTerminalCommand::Shutdown);
+            self.shutdown.send_replace(true);
         }
     }
 }
@@ -151,8 +159,8 @@ impl RemoteTerminalResizeHandle {
             u16::try_from(cols).map_err(|_| "terminal column count exceeds u16".to_string())?;
         let rows = u16::try_from(rows).map_err(|_| "terminal row count exceeds u16".to_string())?;
         self.commands
-            .send(RemoteTerminalCommand::Resize { cols, rows })
-            .map_err(|_| "remote terminal is closed".to_string())
+            .try_send(RemoteTerminalCommand::Resize { cols, rows })
+            .map_err(|error| format!("remote terminal resize was not queued: {error}"))
     }
 }
 
@@ -161,10 +169,22 @@ impl Write for RemoteTerminalWriter {
         if buffer.is_empty() {
             return Ok(0);
         }
+        let count = buffer.len().min(TERMINAL_CHUNK_BYTES);
         self.commands
-            .send(RemoteTerminalCommand::Write(buffer.to_vec()))
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "remote terminal is closed"))?;
-        Ok(buffer.len())
+            .send_timeout(
+                RemoteTerminalCommand::Write(buffer[..count].to_vec()),
+                Duration::from_secs(30),
+            )
+            .map_err(|error| match error {
+                flume::SendTimeoutError::Timeout(_) => io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "remote terminal input is backpressured",
+                ),
+                flume::SendTimeoutError::Disconnected(_) => {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "remote terminal is closed")
+                }
+            })?;
+        Ok(count)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -309,7 +329,7 @@ mod tests {
 
     #[test]
     fn remote_terminal_io_bridges_blocking_reader_and_writer() {
-        let (mut session, mut endpoint) = RemoteTerminalSession::channel();
+        let (mut session, endpoint) = RemoteTerminalSession::channel();
         let mut io = session.take_io().unwrap();
         io.writer.write_all(b"hello").unwrap();
         match endpoint.commands.try_recv().unwrap() {
@@ -321,5 +341,48 @@ mod tests {
         let mut output = String::new();
         io.reader.read_to_string(&mut output).unwrap();
         assert_eq!(output, "world");
+    }
+}
+
+#[cfg(test)]
+mod backpressure_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_queues_are_bounded_and_shutdown_bypasses_backlog() {
+        let (session, endpoint) = RemoteTerminalSession::channel();
+        for _ in 0..TERMINAL_QUEUE_CAPACITY {
+            session
+                .commands
+                .try_send(RemoteTerminalCommand::Write(vec![0; TERMINAL_CHUNK_BYTES]))
+                .unwrap();
+            endpoint
+                .output
+                .try_send(vec![0; TERMINAL_CHUNK_BYTES])
+                .unwrap();
+        }
+        assert!(matches!(
+            session
+                .commands
+                .try_send(RemoteTerminalCommand::Resize { cols: 80, rows: 24 }),
+            Err(flume::TrySendError::Full(_))
+        ));
+        assert!(matches!(
+            endpoint.output.try_send(vec![0]),
+            Err(flume::TrySendError::Full(_))
+        ));
+        drop(session);
+        assert!(*endpoint.shutdown.borrow());
+    }
+
+    #[test]
+    fn large_terminal_writes_are_split_into_bounded_chunks() {
+        let (mut session, endpoint) = RemoteTerminalSession::channel();
+        let mut io = session.take_io().unwrap();
+        let written = io.writer.write(&vec![0; TERMINAL_CHUNK_BYTES * 2]).unwrap();
+        assert_eq!(written, TERMINAL_CHUNK_BYTES);
+        assert!(
+            matches!(endpoint.commands.try_recv().unwrap(), RemoteTerminalCommand::Write(bytes) if bytes.len() == written)
+        );
     }
 }

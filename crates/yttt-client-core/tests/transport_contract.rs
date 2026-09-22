@@ -738,3 +738,53 @@ async fn ssh_work_credential_cannot_administer_host_and_survives_tcp_disable() {
     work.shutdown().await;
     admin.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_recovers_when_the_first_handshake_connection_is_interrupted() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    #[derive(Clone)]
+    struct InterruptFirst {
+        inner: yttt_transport::MemoryConnector,
+        first: Arc<AtomicBool>,
+    }
+    impl TransportConnector for InterruptFirst {
+        fn connect(
+            &self,
+        ) -> yttt_transport::BoxFuture<
+            '_,
+            Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+        > {
+            Box::pin(async move {
+                if self.first.swap(false, Ordering::AcqRel) {
+                    let (client, peer) = tokio::io::duplex(1024);
+                    drop(peer);
+                    Ok(Box::new(client) as yttt_transport::TransportStream)
+                } else {
+                    self.inner.connect().await
+                }
+            })
+        }
+    }
+    let (listener, connector) = memory_pair();
+    let host = start_host(
+        listener,
+        InterruptFirst {
+            inner: connector,
+            first: Arc::new(AtomicBool::new(true)),
+        },
+    )
+    .await;
+    let client = connect_client(&host, "interrupted-handshake-client").await;
+    assert!(matches!(
+        client
+            .request(Request::Ping { sent_millis: 7 })
+            .await
+            .unwrap(),
+        Response::Pong { sent_millis: 7, .. }
+    ));
+    assert_eq!(client.diagnostics().connection_attempts, 2);
+    client.shutdown().await;
+}
