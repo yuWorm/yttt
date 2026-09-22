@@ -226,6 +226,7 @@ pub struct TerminalPaneView {
     terminal_config: TerminalConfig,
     theme: WorkbenchTheme,
     host_runtime: Option<Arc<DesktopHostRuntime>>,
+    control_writer: Option<HostTerminalWriter>,
     host_session_id: Option<TerminalSessionId>,
     host_epoch: Option<u64>,
     host_session_epoch: Option<u64>,
@@ -315,6 +316,7 @@ fn accepts_process_exit(
     active_generation == callback_generation && !exit_emitted
 }
 
+#[derive(Clone)]
 struct HostTerminalWriter {
     runtime: Arc<DesktopHostRuntime>,
     session_id: TerminalSessionId,
@@ -401,6 +403,63 @@ impl Write for HostTerminalWriter {
 }
 
 impl TerminalPaneView {
+    pub(crate) fn control_state(&self) -> String {
+        match &self.lifecycle {
+            PaneLifecycle::Idle => "idle",
+            PaneLifecycle::Starting => "starting",
+            PaneLifecycle::Reconciling { .. } => "reconciling",
+            PaneLifecycle::Running => "running",
+            PaneLifecycle::Stopping { .. } => "stopping",
+            PaneLifecycle::Exited { .. } => "exited",
+            PaneLifecycle::SpawnFailed { .. } => "failed",
+            PaneLifecycle::Lost { .. } => "lost",
+        }
+        .to_string()
+    }
+
+    pub(crate) fn control_input(
+        &self,
+        text: &str,
+        enter: bool,
+        raw: bool,
+        cx: &gpui::App,
+    ) -> Result<(flume::Receiver<Result<Response, ClientCoreError>>, usize), String> {
+        if self.lifecycle != PaneLifecycle::Running {
+            return Err("Terminal is not running; inspect panes list before sending input".into());
+        }
+        let writer = self
+            .control_writer
+            .as_ref()
+            .ok_or("Terminal has no Host input channel")?;
+        if !writer.runtime.shared_editing_enabled()
+            || writer.mutation_context.read().lease_epoch == 0
+        {
+            return Err("Terminal input control is unavailable".into());
+        }
+        let terminal = self.terminal.as_ref().ok_or("Terminal view is not ready")?;
+        let mut bytes = if raw {
+            text.as_bytes().to_vec()
+        } else {
+            terminal.read(cx).encode_paste(text)
+        };
+        if enter {
+            bytes.push(b'\r');
+        }
+        if bytes.is_empty() {
+            return Err("Input is empty".into());
+        }
+        let count = bytes.len();
+        let context = next_mutation_context(&writer.mutation_context, &writer.next_sequence, None);
+        let response = writer
+            .runtime
+            .request(Request::TerminalInput(TerminalInput {
+                session_id: writer.session_id.clone(),
+                context,
+                bytes,
+            }));
+        Ok((response, count))
+    }
+
     pub fn new(
         context: TerminalPaneContext,
         terminal_config: TerminalConfig,
@@ -476,6 +535,7 @@ impl TerminalPaneView {
             terminal_config,
             theme,
             host_runtime: None,
+            control_writer: None,
             host_session_id: None,
             host_epoch: None,
             host_session_epoch: None,
@@ -811,6 +871,7 @@ impl TerminalPaneView {
             mutation_context: mutation_context.clone(),
             next_sequence: next_mutation_sequence.clone(),
         };
+        self.control_writer = Some(writer.clone());
         let terminal_input_allowed = self.terminal_input_gate.shared_flag();
         let resize_runtime = host_runtime.clone();
         let resize_session_id = session_id.clone();

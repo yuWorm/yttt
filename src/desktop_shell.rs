@@ -16,6 +16,17 @@ use crate::{
     runtime::project::{path_to_platform, platform_path},
 };
 
+use yttt_protocol::desktop_control::{
+    DesktopControlError, DesktopControlErrorCode, DesktopControlRequest, DesktopControlResult,
+};
+
+pub struct DesktopControlCall {
+    pub request: DesktopControlRequest,
+    pub reply: flume::Sender<DesktopControlResult>,
+    pub deadline: std::time::Instant,
+}
+
+const DESKTOP_CONTROL_TIMEOUT: Duration = Duration::from_secs(15);
 const DESKTOP_COMMAND_QUEUE_CAPACITY: usize = 16;
 const DESKTOP_FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -33,6 +44,7 @@ pub enum DesktopShellClaim {
 pub struct DesktopShellRuntime {
     _runtime: tokio::runtime::Runtime,
     commands: flume::Receiver<DesktopShellCommand>,
+    controls: flume::Receiver<DesktopControlCall>,
 }
 
 impl DesktopShellRuntime {
@@ -50,11 +62,18 @@ impl DesktopShellRuntime {
         match runtime.block_on(LocalListener::bind(endpoint.clone())) {
             Ok(listener) => {
                 let (commands_tx, commands) = flume::bounded(DESKTOP_COMMAND_QUEUE_CAPACITY);
+                let (controls_tx, controls) = flume::bounded(DESKTOP_COMMAND_QUEUE_CAPACITY);
                 let profile_id = profile.id().clone();
-                runtime.spawn(serve_desktop_shell(listener, profile_id, commands_tx));
+                runtime.spawn(serve_desktop_shell(
+                    listener,
+                    profile_id,
+                    commands_tx,
+                    controls_tx,
+                ));
                 Ok(DesktopShellClaim::Owner(Arc::new(Self {
                     _runtime: runtime,
                     commands,
+                    controls,
                 })))
             }
             Err(TransportError::EndpointInUse) => {
@@ -66,6 +85,10 @@ impl DesktopShellRuntime {
         }
     }
 
+    pub fn controls(&self) -> flume::Receiver<DesktopControlCall> {
+        self.controls.clone()
+    }
+
     pub fn commands(&self) -> flume::Receiver<DesktopShellCommand> {
         self.commands.clone()
     }
@@ -75,6 +98,7 @@ async fn serve_desktop_shell(
     listener: LocalListener,
     profile_id: ProfileId,
     commands: flume::Sender<DesktopShellCommand>,
+    controls: flume::Sender<DesktopControlCall>,
 ) {
     loop {
         let Ok(mut stream) = listener.accept().await else {
@@ -82,6 +106,7 @@ async fn serve_desktop_shell(
         };
         let profile_id = profile_id.clone();
         let commands = commands.clone();
+        let controls = controls.clone();
         tokio::spawn(async move {
             let Ok(DesktopShellMessage::Request(request)) =
                 receive_desktop_shell(&mut stream).await
@@ -89,20 +114,67 @@ async fn serve_desktop_shell(
                 return;
             };
             let request_id = request.request_id;
-            let result = validate_desktop_request(request, &profile_id)
-                .and_then(|command| {
-                    commands
-                        .try_send(command)
-                        .map_err(|_| DesktopShellRejectReason::Busy)
+            let result = if request.protocol_version != DESKTOP_SHELL_PROTOCOL_VERSION {
+                DesktopShellResponse::Rejected(DesktopShellRejectReason::VersionMismatch {
+                    supported: DESKTOP_SHELL_PROTOCOL_VERSION,
                 })
-                .map_or_else(DesktopShellResponse::Rejected, |_| {
-                    DesktopShellResponse::Accepted
-                });
-            let _ = send_desktop_shell(
+            } else if request.profile_id != profile_id {
+                DesktopShellResponse::Rejected(DesktopShellRejectReason::ProfileMismatch)
+            } else if let DesktopShellRequest::Control(control) = request.body {
+                let (reply, response) = flume::bounded(1);
+                let call = DesktopControlCall {
+                    request: *control,
+                    reply,
+                    deadline: std::time::Instant::now() + DESKTOP_CONTROL_TIMEOUT,
+                };
+                let result = if controls.try_send(call).is_err() {
+                    Err(DesktopControlError::new(
+                        DesktopControlErrorCode::Busy,
+                        "Desktop control queue is full",
+                    ))
+                } else {
+                    match tokio::time::timeout(DESKTOP_CONTROL_TIMEOUT, response.recv_async()).await
+                    {
+                        Ok(Ok(result)) => result,
+                        _ => Err(DesktopControlError::new(
+                            DesktopControlErrorCode::OutcomeUnknown,
+                            "Desktop response timed out; inspect state before retrying a mutation",
+                        )),
+                    }
+                };
+                DesktopShellResponse::Control(Box::new(result))
+            } else {
+                validate_desktop_request(request, &profile_id)
+                    .and_then(|command| {
+                        commands
+                            .try_send(command)
+                            .map_err(|_| DesktopShellRejectReason::Busy)
+                    })
+                    .map_or_else(DesktopShellResponse::Rejected, |_| {
+                        DesktopShellResponse::Accepted
+                    })
+            };
+            if let Err(WireError::FrameTooLarge { .. }) = send_desktop_shell(
                 &mut stream,
                 &DesktopShellMessage::Response(DesktopShellResponseEnvelope { request_id, result }),
             )
-            .await;
+            .await
+            {
+                let result = DesktopShellResponse::Control(Box::new(Err(
+                    DesktopControlError::new(
+                        DesktopControlErrorCode::InvalidRequest,
+                        "Response exceeds 256 KiB; narrow the query with --window, --project, --tab or --pane",
+                    ),
+                )));
+                let _ = send_desktop_shell(
+                    &mut stream,
+                    &DesktopShellMessage::Response(DesktopShellResponseEnvelope {
+                        request_id,
+                        result,
+                    }),
+                )
+                .await;
+            }
         });
     }
 }
@@ -120,6 +192,7 @@ fn validate_desktop_request(
         return Err(DesktopShellRejectReason::ProfileMismatch);
     }
     match request.body {
+        DesktopShellRequest::Control(_) => Err(DesktopShellRejectReason::InvalidRequest),
         DesktopShellRequest::Activate => Ok(DesktopShellCommand::Activate),
         DesktopShellRequest::OpenWindow { project_paths } => {
             if project_paths.len() > MAX_DESKTOP_OPEN_PATHS {
@@ -185,6 +258,42 @@ async fn forward_desktop_request(
                 request_id: response_id,
                 result: DesktopShellResponse::Rejected(reason),
             }) if response_id == request_id => Err(DesktopShellError::Rejected(reason)),
+            _ => Err(DesktopShellError::UnexpectedMessage),
+        }
+    })
+    .await
+    .map_err(|_| DesktopShellError::Timeout)?
+}
+
+/// Sends one request to an already running desktop; mutations are never replayed.
+pub async fn control_desktop(
+    profile: &AppProfile,
+    request: DesktopControlRequest,
+) -> Result<DesktopControlResult, DesktopShellError> {
+    let endpoint =
+        LocalEndpoint::for_desktop_shell(profile.id().clone(), profile.paths().runtime.clone());
+    tokio::time::timeout(DESKTOP_CONTROL_TIMEOUT + Duration::from_secs(1), async {
+        let mut stream = connect(&endpoint).await?;
+        let request_id = desktop_request_id();
+        send_desktop_shell(
+            &mut stream,
+            &DesktopShellMessage::Request(DesktopShellRequestEnvelope {
+                protocol_version: DESKTOP_SHELL_PROTOCOL_VERSION,
+                profile_id: profile.id().clone(),
+                request_id,
+                body: DesktopShellRequest::Control(Box::new(request)),
+            }),
+        )
+        .await?;
+        match receive_desktop_shell(&mut stream).await? {
+            DesktopShellMessage::Response(DesktopShellResponseEnvelope {
+                request_id: id,
+                result,
+            }) if id == request_id => match result {
+                DesktopShellResponse::Control(result) => Ok(*result),
+                DesktopShellResponse::Rejected(reason) => Err(DesktopShellError::Rejected(reason)),
+                _ => Err(DesktopShellError::UnexpectedMessage),
+            },
             _ => Err(DesktopShellError::UnexpectedMessage),
         }
     })

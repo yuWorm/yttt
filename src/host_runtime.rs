@@ -588,6 +588,13 @@ impl DesktopHostRuntime {
         receiver
     }
 
+    pub fn terminal_snapshot(
+        &self,
+        session_id: &TerminalSessionId,
+    ) -> Option<yttt_protocol::terminal::SemanticViewport> {
+        self.client.terminal_snapshot(session_id)
+    }
+
     pub fn terminal_metadata(
         &self,
         session_id: &TerminalSessionId,

@@ -1,4 +1,5 @@
 pub mod assets;
+mod desktop_control;
 pub(crate) mod existing_host;
 pub mod platform;
 mod remote_connect;
@@ -41,6 +42,7 @@ use crate::{
         workbench::WorkbenchView,
     },
 };
+use desktop_control::start_desktop_control_listener;
 use yttt_protocol::{LifecycleRequest, LifecycleResponse};
 
 pub(crate) fn rebind_application_keybindings(
@@ -270,6 +272,7 @@ fn start_desktop_shell_listener(
     window_context: DesktopWindowContext,
     cx: &mut App,
 ) {
+    start_desktop_control_listener(desktop_shell.clone(), cx);
     let commands = desktop_shell.commands();
     cx.spawn(async move |cx| {
         let _desktop_shell = desktop_shell;

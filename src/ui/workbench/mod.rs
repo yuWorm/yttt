@@ -29,6 +29,7 @@ mod agent_process_monitor;
 mod agent_sessions;
 mod auxiliary_windows;
 mod bars;
+mod desktop_control;
 mod dialogs;
 mod document_lifecycle;
 mod file_finder;

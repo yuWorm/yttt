@@ -16,6 +16,13 @@ Project
 The sidebar shows only currently opened projects. Recent projects are reachable from the
 project palette, not shown by default.
 
+## CLI Control
+
+Use `yttt ctl` to list projects, terminal tabs, panes, and Agent status; create tabs
+and splits; manage panes; send terminal input; and read visible terminal contents.
+It controls an already running local desktop and supports `--json` for scripts.
+See [CLI Control](cli-control.md) for commands, targets, and result semantics.
+
 ## First Launch
 
 The first launch opens onboarding before the empty workspace. Choose the interface language and

@@ -403,6 +403,16 @@ fn run_installer_host_preflight(profile: AppProfile, report: PathBuf) -> i32 {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| arg == "ctl") {
+        #[cfg(windows)]
+        unsafe {
+            // The GUI executable needs its invoking terminal for CLI output.
+            windows_sys::Win32::System::Console::AttachConsole(
+                windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+            );
+        }
+        std::process::exit(yttt::cli::run(desktop_profile(), &args[2..]));
+    }
     if args
         .iter()
         .any(|argument| argument == OsStr::new("--remote-client"))

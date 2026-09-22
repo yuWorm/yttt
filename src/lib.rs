@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub use yttt_core::commands;
+pub mod cli;
 pub mod config;
 pub mod desktop_shell;
 pub mod desktop_tray;

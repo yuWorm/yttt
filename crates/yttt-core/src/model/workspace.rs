@@ -320,8 +320,20 @@ impl Workspace {
         &mut self,
         command: impl Into<String>,
     ) -> Result<String, WorkspaceError> {
+        let (tab_id, _) = next_tab_identity(&self.selected_project_mut()?.layout);
+        self.create_shell_tab_with_id(tab_id, command)
+    }
+
+    pub fn create_shell_tab_with_id(
+        &mut self,
+        tab_id: String,
+        command: impl Into<String>,
+    ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
-        let (tab_id, title) = next_tab_identity(&project.layout);
+        if project.layout.tab(&tab_id).is_some() {
+            return Err(crate::model::layout::LayoutError::DuplicateTabId(tab_id).into());
+        }
+        let (_, title) = next_tab_identity(&project.layout);
         let pane_id = "shell".to_string();
         let command = command.into();
 
@@ -363,8 +375,21 @@ impl Workspace {
         command: impl Into<String>,
         args: Vec<String>,
     ) -> Result<String, WorkspaceError> {
+        let (tab_id, _) = next_tab_identity(&self.selected_project_mut()?.layout);
+        self.create_agent_tab_with_id(tab_id, title, command, args)
+    }
+
+    pub fn create_agent_tab_with_id(
+        &mut self,
+        tab_id: String,
+        title: impl Into<String>,
+        command: impl Into<String>,
+        args: Vec<String>,
+    ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
-        let (tab_id, _) = next_tab_identity(&project.layout);
+        if project.layout.tab(&tab_id).is_some() {
+            return Err(crate::model::layout::LayoutError::DuplicateTabId(tab_id).into());
+        }
         let pane_id = "agent".to_string();
         let title = title.into();
 
@@ -518,6 +543,21 @@ impl Workspace {
         direction: SplitDirection,
     ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
+        let tab = project
+            .layout
+            .tab(&project.selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(project.selected_tab_id.clone()))?;
+        let pane_id = next_pane_id(&tab.layout);
+        self.split_focused_pane_with_id(direction, pane_id, String::new())
+    }
+
+    pub fn split_focused_pane_with_id(
+        &mut self,
+        direction: SplitDirection,
+        new_pane_id: String,
+        command: String,
+    ) -> Result<String, WorkspaceError> {
+        let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
         let tab_index = project
             .layout
@@ -535,11 +575,21 @@ impl Workspace {
             })
             .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
         let new_pane_number = pane_count(&project.layout.tabs[tab_index].layout) + 1;
-        let new_pane_id = next_pane_id(&project.layout.tabs[tab_index].layout);
+        if project.layout.tabs[tab_index]
+            .layout
+            .find_pane(&new_pane_id)
+            .is_some()
+        {
+            return Err(crate::model::layout::LayoutError::DuplicatePaneId {
+                tab_id: selected_tab_id,
+                pane_id: new_pane_id,
+            }
+            .into());
+        }
         let new_pane = PaneConfig {
             id: new_pane_id.clone(),
             title: format!("Pane {new_pane_number}"),
-            command: String::new(),
+            command,
             args: Vec::new(),
             execution_mode: TerminalExecutionMode::Shell,
             exit_behavior: ProcessExitBehavior::Close,

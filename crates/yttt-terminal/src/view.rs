@@ -1612,6 +1612,11 @@ impl TerminalView {
         Self::write_clipboard(ClipboardType::Clipboard, text, cx)
     }
 
+    /// Encodes text using the terminal's current bracketed-paste mode.
+    pub fn encode_paste(&self, text: &str) -> Vec<u8> {
+        paste(text, true, self.mode()).to_vec()
+    }
+
     fn paste_clipboard_to_terminal(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(text) =
             Self::clipboard_text(ClipboardType::Clipboard, cx).filter(|text| !text.is_empty())

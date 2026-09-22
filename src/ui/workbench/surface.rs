@@ -1556,7 +1556,10 @@ impl WorkbenchView {
             .find(|pane| pane.pane_id == context.pane.id)
     }
 
-    fn agent_launch_waits_for_initialization(&self, context: &TerminalPaneContext) -> bool {
+    pub(super) fn agent_launch_waits_for_initialization(
+        &self,
+        context: &TerminalPaneContext,
+    ) -> bool {
         if !self.terminal.start_processes
             || self.agent_manager.is_initialized()
             || (!self
@@ -1583,7 +1586,7 @@ impl WorkbenchView {
         })
     }
 
-    fn ensure_terminal_pane(
+    pub(super) fn ensure_terminal_pane(
         &mut self,
         mut context: TerminalPaneContext,
         window: &mut Window,

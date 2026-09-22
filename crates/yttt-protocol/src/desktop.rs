@@ -7,6 +7,7 @@ use crate::path::HostPath;
 pub enum DesktopShellRequest {
     Activate,
     OpenWindow { project_paths: Vec<HostPath> },
+    Control(Box<crate::desktop_control::DesktopControlRequest>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,7 @@ pub enum DesktopShellRejectReason {
 pub enum DesktopShellResponse {
     Accepted,
     Rejected(DesktopShellRejectReason),
+    Control(Box<crate::desktop_control::DesktopControlResult>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

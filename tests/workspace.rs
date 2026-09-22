@@ -686,3 +686,45 @@ fn single_tab_layout() -> yttt::model::layout::ProjectLayout {
     )
     .unwrap()
 }
+
+#[test]
+fn explicit_tab_and_pane_ids_reject_duplicates_without_changing_workspace() {
+    use yttt::model::layout::SplitDirection;
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(
+            local_project(PathBuf::from("/tmp/cli-id-test")),
+            sample_layout(),
+        )
+        .unwrap();
+    workspace
+        .create_shell_tab_with_id("cli-shell".into(), "printf shell")
+        .unwrap();
+    let before = workspace.persisted_state();
+    assert!(
+        workspace
+            .create_agent_tab_with_id("cli-shell".into(), "Agent", "codex", vec![])
+            .is_err()
+    );
+    assert_eq!(workspace.persisted_state(), before);
+    workspace
+        .split_focused_pane_with_id(
+            SplitDirection::Horizontal,
+            "cli-pane".into(),
+            "printf pane".into(),
+        )
+        .unwrap();
+    let before = workspace.persisted_state();
+    assert!(
+        workspace
+            .split_focused_pane_with_id(
+                SplitDirection::Vertical,
+                "cli-pane".into(),
+                "must not run".into()
+            )
+            .is_err()
+    );
+    assert_eq!(workspace.persisted_state(), before);
+    let restored = Workspace::restore_persisted_state(before.clone()).unwrap();
+    assert_eq!(restored.persisted_state(), before);
+}

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- 新增 `yttt ctl` 本地桌面控制：查询项目、终端标签页、pane 和 Agent 状态，创建
+  Shell／Agent 标签页、分屏和管理 pane，发送终端输入并读取当前内容；支持 JSON 输出、
+  明确的窗口目标与 Host 输入回执，不自动接管控制权或重放命令。
+- Add `yttt ctl` for a running local desktop: inspect projects, terminal tabs, panes, and Agent
+  state; create shell/Agent tabs; manage splits; send terminal input and read visible contents.
+  Includes JSON output, explicit window targets, and Host input acknowledgements without
+  automatic control takeover or command replay. Desktop shell protocol v3 requires a matching build.
+
 - 修复 Host 终端中链接无法点击的问题：从实际显示的网格识别普通 URL 和 OSC 8
   超链接，支持滚动历史和软换行；macOS 使用 Cmd＋点击，其他平台使用 Ctrl＋点击。
 - Fix link activation in Host-backed terminals by resolving URLs and OSC 8 hyperlinks

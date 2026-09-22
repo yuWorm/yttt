@@ -186,6 +186,13 @@ Incompatible busy Hosts refuse automatic upgrade rather than terminating work.
 Legacy recent SSH project entries are retained and launch the new remote Client; they are not
 automatically mixed into local workspace restoration. See [Usage](docs/usage.md#ssh-projects).
 
+## CLI Control
+
+Control a running local desktop with `yttt ctl`: list projects, terminal tabs, panes,
+and Agent status; create shell/Agent tabs; split, focus, rename, resize, and close
+panes; send terminal input and read its visible contents. Use `--json` for scripts.
+Run `yttt ctl --help` or see [CLI Control](docs/cli-control.md) for examples and scope.
+
 ## Run
 
 ```bash
