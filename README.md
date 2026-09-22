@@ -3,23 +3,23 @@
 `yttt` is a Rust desktop terminal workbench built with GPUI, `gpui-component`, and a
 project-owned `yttt-terminal` crate based on `alacritty_terminal`.
 
-## v0.3.1 / 版本 0.3.1
+## v0.3.5 / 版本 0.3.5
 
-[Downloads / 下载](https://github.com/yuWorm/yttt/releases/tag/v0.3.1) ·
-[Release notes / 双语更新日志](CHANGELOG.md#031---2026-09-16) ·
-[Changes since the last public release / 与上一公开版对比](https://github.com/yuWorm/yttt/compare/v1.0.0...v0.3.1)
+[Downloads / 下载](https://github.com/yuWorm/yttt/releases/tag/v0.3.5) ·
+[Release notes / 双语更新日志](CHANGELOG.md#035---2026-09-23) ·
+[Changes since the last public release / 与上一公开版对比](https://github.com/yuWorm/yttt/compare/v0.3.4...v0.3.5)
 
-**中文**：yttt 是以项目和终端为中心的桌面工作台。本版引入独立 Host、SSH／TLS 远程工作区、
-完整会话恢复、全局 Vim、统一 Agent 集成、按功能组织的设置、可配置标题／状态栏，以及新的 Zed
-风格界面和应用图标。详细功能、修复和迁移说明见双语更新日志。
+**中文**：本版新增 `yttt ctl` 桌面命令行控制、图片文件预览及默认应用打开文件，改善远端连接恢复、
+连接凭据保存、跨设备工作区同步和 Agent 状态，并修复 Windows 输入与标题栏拖动。
+桌面端、Host 和远端 Server 需同步升级；详细功能与升级说明见双语更新日志。
 
-**English:** this release adds an independent Host, SSH/TLS workspaces, complete session restoration,
-Global Vim, unified Agent integrations, feature-oriented settings, configurable window/status bars,
-and refined Zed styling with a new application icon.
+**English:** this release adds `yttt ctl` desktop control, image previews, and opening files in external
+applications. It improves remote recovery, remembered credentials, workspace synchronization, and Agent
+status, and fixes Windows input and titlebar dragging. Upgrade desktop, Host, and remote Server together.
 
-> **版本说明 / Versioning:** 开发分支在已发布的 v1.0.0 之后回到了 pre-1.0 路线，0.3.1 是新版本。
-> 旧版 1.0.0 用户请手动下载安装；按 SemVer 比较的更新检查不会将 0.3.1 视为升级。
-> Development returned to pre-1.0 versioning after the public v1.0.0 release. Version 0.3.1 is newer
+> **版本说明 / Versioning:** 开发分支在已发布的 v1.0.0 之后回到了 pre-1.0 路线，0.3.5 是新版本。
+> 旧版 1.0.0 用户请手动下载安装；按 SemVer 比较的更新检查不会将 0.3.5 视为升级。
+> Development returned to pre-1.0 versioning after the public v1.0.0 release. Version 0.3.5 is newer
 > work, but 1.0.0 users must install it manually rather than rely on SemVer update detection.
 
 ### Install / 安装
@@ -28,12 +28,12 @@ Download the package for your platform from the release page:
 
 | Platform / 平台 | Package / 安装包 |
 | --- | --- |
-| macOS Apple Silicon | `yttt-0.3.1-macos-aarch64.dmg` |
-| Windows x86_64 | `yttt-0.3.1-windows-x86_64-setup.exe` |
-| Linux x86_64 | `yttt-0.3.1-linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `yttt-0.3.5-macos-aarch64.dmg` |
+| Windows x86_64 | `yttt-0.3.5-windows-x86_64-setup.exe` |
+| Linux x86_64 | `yttt-0.3.5-linux-x86_64.tar.gz` |
 
 Open the DMG and copy yttt to Applications, run the Windows installer, or extract the Linux
-archive and launch `yttt-0.3.1-linux-x86_64/bin/yttt`. 校验下载文件时使用 Release 附带的 `SHA256SUMS`。
+archive and launch `yttt-0.3.5-linux-x86_64/bin/yttt`. 校验下载文件时使用 Release 附带的 `SHA256SUMS`。
 Verify downloads against the supplied `SHA256SUMS`. macOS packages are ad-hoc signed, not
 Developer ID signed or notarized. 无界面 `yttt-server` 另提供 Linux/macOS 的 x86_64 和 aarch64
 构建；桌面 SSH 连接可部署对应 Server。Headless Server builds cover Linux/macOS x86_64 and aarch64.
