@@ -722,7 +722,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::ConnectionAddressInvalid => "Enter host:port or [IPv6]:port, not a URL.",
         UiTextKey::ConnectionRemember => "Remember credentials",
-        UiTextKey::ConnectionRemembered => "Remember: OS keychain",
+        UiTextKey::ConnectionRemembered => "Remember: system credential store",
         UiTextKey::RemoteConnections => "Remote connections",
         UiTextKey::RemoteAdd => "Add connection",
         UiTextKey::RemoteAddSsh => "SSH connection",

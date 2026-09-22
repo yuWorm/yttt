@@ -614,7 +614,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::ConnectionAddressInvalid => "请输入主机:端口或 [IPv6]:端口，不要填写 URL。",
         UiTextKey::ConnectionRemember => "记住凭据",
-        UiTextKey::ConnectionRemembered => "已选择保存到系统钥匙串",
+        UiTextKey::ConnectionRemembered => "已选择记住凭据（系统安全存储）",
         UiTextKey::RemoteConnections => "远程连接",
         UiTextKey::RemoteAdd => "添加连接",
         UiTextKey::RemoteAddSsh => "SSH 连接",

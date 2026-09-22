@@ -1,3 +1,7 @@
+mod credentials;
+
+use credentials::ConnectionCredentialStore;
+
 use crate::{
     config::profile::AppProfile,
     remote_launch::{
@@ -302,7 +306,7 @@ impl ExistingHostForm {
         if self.busy || self.editor_open() {
             return;
         }
-        self.begin_full_editor(None, String::new(), String::new(), false, window, cx);
+        self.begin_full_editor(None, String::new(), String::new(), true, window, cx);
         self.info.update(cx, |input, cx| input.focus(window, cx));
     }
 
@@ -339,7 +343,7 @@ impl ExistingHostForm {
         let credential_id = record.credential_id.clone();
         let task_record = record.clone();
         let task = cx.background_spawn(async move {
-            let store = yttt_ssh::CredentialStore::new(format!(
+            let store = ConnectionCredentialStore::new(format!(
                 "{}.existing-host",
                 profile.credential_namespace()
             ));
@@ -410,7 +414,7 @@ impl ExistingHostForm {
         let task_record = record.clone();
         let task = cx.background_spawn(async move {
             validate_connection_address(&task_record.address).map_err(|error| error.to_string())?;
-            let store = yttt_ssh::CredentialStore::new(format!(
+            let store = ConnectionCredentialStore::new(format!(
                 "{}.existing-host",
                 profile.credential_namespace()
             ));
@@ -456,6 +460,8 @@ impl ExistingHostForm {
                         view.busy = false;
                         view.error = error;
                         view.editor = Editor::Credentials { target: record };
+                        view.remember = true;
+                        view.remember_changed = false;
                         view.info.update(cx, |input, cx| {
                             input.set_value("", window, cx);
                             input.focus(window, cx);
@@ -501,7 +507,7 @@ impl ExistingHostForm {
             else {
                 return Err("Saved connection was removed before it could be deleted.".into());
             };
-            let store = yttt_ssh::CredentialStore::new(format!(
+            let store = ConnectionCredentialStore::new(format!(
                 "{}.existing-host",
                 profile.credential_namespace()
             ));
@@ -668,7 +674,7 @@ impl ExistingHostForm {
                 credential_id: editing.clone().unwrap_or_else(CredentialId::random),
             };
             let credential_persistence = if self.remember {
-                CredentialPersistence::Save(payload)
+                CredentialPersistence::Save(Zeroizing::new(payload.trim().to_string()))
             } else if editing.is_some() {
                 CredentialPersistence::Delete
             } else {
@@ -684,7 +690,7 @@ impl ExistingHostForm {
         let text = self.text;
         let task = cx.background_spawn(async move {
             let mut records = read_connections(&profile)?;
-            let store = yttt_ssh::CredentialStore::new(format!(
+            let store = ConnectionCredentialStore::new(format!(
                 "{}.existing-host",
                 profile.credential_namespace()
             ));
@@ -782,16 +788,55 @@ impl ExistingHostForm {
         let generation = self.next_operation_generation();
         self.busy = true;
         self.error = None;
-        self.start_remote_client(
-            target.address,
-            connection_info,
-            generation,
-            LaunchSource::Credentials {
-                credential_id: target.credential_id,
-            },
-            window,
-            cx,
-        );
+        let profile = self.profile.clone();
+        let remember = self.remember;
+        let credential_id = target.credential_id.clone();
+        let text = self.text;
+        let task = cx.background_spawn(async move {
+            if remember {
+                let store = ConnectionCredentialStore::new(format!(
+                    "{}.existing-host",
+                    profile.credential_namespace()
+                ));
+                store
+                    .save(&credential_id, payload.trim())
+                    .map_err(|error| {
+                        format!(
+                            "{}: {error}",
+                            text.get(UiTextKey::RemoteCredentialStoreFailed)
+                        )
+                    })?;
+            }
+            Ok::<_, String>(())
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                let source = LaunchSource::Credentials {
+                    credential_id: target.credential_id,
+                };
+                if !view.launch_is_current(generation, &source) {
+                    return;
+                }
+                match result {
+                    Ok(()) => view.start_remote_client(
+                        target.address,
+                        connection_info,
+                        generation,
+                        source,
+                        window,
+                        cx,
+                    ),
+                    Err(error) => {
+                        view.busy = false;
+                        view.error = Some(error);
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     fn start_remote_client(
@@ -1091,6 +1136,25 @@ impl ExistingHostForm {
                         yttt_input(&self.info, YtttInputKind::Settings, theme, style)
                             .disabled(self.busy),
                     )
+                    .child(
+                        yttt_button(
+                            "existing-host-credentials-remember",
+                            self.text.get(if self.remember {
+                                UiTextKey::ConnectionRemembered
+                            } else {
+                                UiTextKey::ConnectionRemember
+                            }),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            style,
+                            cx,
+                        )
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.remember = !view.remember;
+                            cx.notify();
+                        })),
+                    )
                     .children(error.map(|error| div().text_sm().child(error))),
             )
             .child(
@@ -1189,6 +1253,12 @@ mod tests {
         let form = slot.borrow_mut().take().unwrap();
         cx.run_until_parked();
         form.update_in(cx, |form, window, cx| form.new_connection(window, cx));
+        form.read_with(cx, |form, _| {
+            assert!(
+                form.remember,
+                "new connections must remember credentials by default"
+            );
+        });
         let code =
             ConnectionCode::encode("remote.example:43123".into(), connection_info()).unwrap();
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(code));
