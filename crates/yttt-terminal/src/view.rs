@@ -67,8 +67,8 @@ use crate::pty::{ExitReason, PtyEvent, PtyIoDriver, PtyIoHandle, PtyIoOperation}
 #[cfg(any(test, debug_assertions))]
 use crate::render::TerminalDiagnosticsSnapshot;
 use crate::render::{
-    RenderOverlayState, TerminalLineHeightBasis, TerminalRenderCache, TerminalRenderOptions,
-    TerminalRenderSnapshot, TerminalRenderer,
+    RenderOverlayState, TerminalCellWidth, TerminalLineHeightBasis, TerminalRenderCache,
+    TerminalRenderOptions, TerminalRenderSnapshot, TerminalRenderer,
 };
 use crate::semantic_selection::SemanticSelection;
 use crate::terminal::{TerminalScrollbarMetrics, TerminalState};
@@ -2094,6 +2094,9 @@ impl TerminalView {
     }
 
     fn hyperlink_at_point(&self, point: AlacPoint) -> Option<TerminalLinkHit> {
+        if self.semantic_input.available {
+            return self.semantic_hyperlink_at_point(point);
+        }
         self.state.with_term(|term| {
             if point.line < term.topmost_line()
                 || point.line > term.bottommost_line()
@@ -2145,6 +2148,86 @@ impl TerminalView {
                     Some(TerminalLinkHit { range, uri })
                 })
         })
+    }
+
+    fn semantic_hyperlink_at_point(&self, point: AlacPoint) -> Option<TerminalLinkHit> {
+        if let Some((range, uri)) = self
+            .visible_hyperlink_spans()
+            .into_iter()
+            .find(|(range, _)| range.contains(&point))
+        {
+            return Some(TerminalLinkHit { range, uri });
+        }
+
+        // Host-backed terminals do not populate the local Alacritty grid. Search
+        // the displayed cells, retaining their coordinates across soft wraps.
+        let semantic = self.semantic_viewport.lock();
+        let viewport = semantic.viewport.as_ref()?;
+        let cache = self.render_cache.lock();
+        let frame = cache.frame()?;
+        let row_index = frame.rows.iter().position(|row| row.line == point.line)?;
+        let wraps = |index: usize| {
+            viewport.rows.iter().any(|row| {
+                Some(row.line_id) == frame.rows[index].semantic_line_id
+                    && row.spans.iter().any(|span| {
+                        span.style.flags & yttt_terminal_core::semantic::STYLE_WRAPLINE != 0
+                    })
+            })
+        };
+        let mut first = row_index;
+        while first > 0
+            && frame.rows[first - 1].line + 1 == frame.rows[first].line
+            && wraps(first - 1)
+        {
+            first -= 1;
+        }
+        let mut last = row_index;
+        while last + 1 < frame.rows.len()
+            && frame.rows[last].line + 1 == frame.rows[last + 1].line
+            && wraps(last)
+        {
+            last += 1;
+        }
+        let mut text = String::new();
+        let mut cells = Vec::new();
+        for row in &frame.rows[first..=last] {
+            for cell in &row.cells {
+                if matches!(
+                    cell.width,
+                    TerminalCellWidth::Spacer | TerminalCellWidth::LeadingSpacer
+                ) {
+                    continue;
+                }
+                let start = text.len();
+                if cell.text.is_empty() {
+                    text.push(' ');
+                } else {
+                    text.extend(cell.text.iter().copied());
+                }
+                let mut end = cell.point;
+                if cell.width == TerminalCellWidth::Wide {
+                    end.column.0 += 1;
+                }
+                cells.push((start, text.len(), cell.point, end));
+            }
+        }
+        self.config
+            .hints
+            .iter()
+            .filter(|config| config.action == TerminalHintAction::Open)
+            .filter_map(|config| config.regex.as_deref())
+            .find_map(|pattern| {
+                let regex = regex::Regex::new(pattern).ok()?;
+                regex.find_iter(&text).find_map(|matched| {
+                    let start = cells.iter().find(|cell| cell.1 > matched.start())?.2;
+                    let end = cells.iter().rev().find(|cell| cell.0 < matched.end())?.3;
+                    let range = start..=end;
+                    range.contains(&point).then(|| TerminalLinkHit {
+                        range,
+                        uri: matched.as_str().to_string(),
+                    })
+                })
+            })
     }
 
     fn point_and_side_for_position(&self, position: Point<Pixels>) -> Option<(AlacPoint, Side)> {
@@ -5798,6 +5881,91 @@ mod tests {
         assert_eq!(cx.opened_url(), None);
         cx.simulate_click(link_position, Modifiers::secondary_key());
         assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/path"));
+    }
+
+    #[gpui::test]
+    fn semantic_links_open_from_the_visible_host_grid(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(io::sink(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            let mut viewport = semantic_viewport(1);
+            viewport.history_size = 10;
+            viewport.display_offset = 3;
+            viewport.rows = vec![
+                semantic_row(1, 0, "visit https://example.com/path"),
+                semantic_row(2, 1, "documentation"),
+            ];
+            viewport.rows[1].spans[0].hyperlink = Some("https://example.com/docs".into());
+            terminal.set_semantic_viewport(viewport, cx);
+        });
+        cx.run_until_parked();
+        for (row, expected) in [
+            (0, "https://example.com/path"),
+            (1, "https://example.com/docs"),
+        ] {
+            let position = cx.read(|cx| {
+                let viewport = terminal.read(cx).viewport.lock().unwrap();
+                point(
+                    viewport.origin.x + viewport.cell_width * 10.5,
+                    viewport.origin.y + viewport.cell_height * (row as f32 + 0.5),
+                )
+            });
+            cx.simulate_mouse_move(position, None, Modifiers::none());
+            cx.read(|cx| {
+                assert_eq!(
+                    terminal
+                        .read(cx)
+                        .hovered_link
+                        .as_ref()
+                        .map(|link| link.uri.as_str()),
+                    Some(expected),
+                );
+            });
+            cx.simulate_click(position, Modifiers::secondary_key());
+            assert_eq!(cx.opened_url().as_deref(), Some(expected));
+        }
+    }
+
+    #[gpui::test]
+    fn semantic_url_click_tracks_wide_cells_and_soft_wraps(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(io::sink(), TerminalConfig::default(), cx)
+        });
+        let mut viewport = semantic_viewport(1);
+        viewport.geometry.cols = 24;
+        viewport.rows = vec![
+            semantic_row(1, 0, "界 https://example.test/"),
+            semantic_row(2, 1, "path"),
+        ];
+        viewport.rows[0].spans[0].width = 24;
+        viewport.rows[0].spans[0].style.flags |= yttt_terminal_core::semantic::STYLE_WRAPLINE;
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_semantic_viewport(viewport.clone(), cx);
+        });
+        cx.run_until_parked();
+        let position = cx.read(|cx| {
+            let viewport = terminal.read(cx).viewport.lock().unwrap();
+            point(
+                viewport.origin.x + viewport.cell_width * 2.5,
+                viewport.origin.y + viewport.cell_height * 1.5,
+            )
+        });
+        cx.simulate_click(position, Modifiers::secondary_key());
+        assert_eq!(
+            cx.opened_url().as_deref(),
+            Some("https://example.test/path")
+        );
+
+        // A hard line break must not extend the URL into unrelated output.
+        viewport.sequence += 1;
+        viewport.rows[0].spans[0].style.flags = 0;
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_semantic_viewport(viewport, cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_mouse_move(position, None, Modifiers::none());
+        cx.read(|cx| assert!(terminal.read(cx).hovered_link.is_none()));
     }
 
     #[gpui::test]

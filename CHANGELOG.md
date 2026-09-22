@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修复 Host 终端中链接无法点击的问题：从实际显示的网格识别普通 URL 和 OSC 8
+  超链接，支持滚动历史和软换行；macOS 使用 Cmd＋点击，其他平台使用 Ctrl＋点击。
+- Fix link activation in Host-backed terminals by resolving URLs and OSC 8 hyperlinks
+  from the displayed grid, including scrolled history and soft-wrapped URLs.
+
 - 修复重启恢复工作区时 OMP 历史会话已丢失却仍反复 resume 的问题：Host 确认会话
   不存在后，在原标签页自动启动新 OMP；存活终端仍只重连，查询错误不触发新建。
 - Start a fresh OMP conversation during workspace restoration when the Host confirms that

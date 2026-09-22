@@ -105,6 +105,13 @@ YTTT_FORCE_ONBOARDING=1 cargo run
 not clear the persisted completion marker; every normal launch remains forced only while the
 environment variable is enabled.
 
+## Terminal Links
+
+Hold `Cmd` on macOS or `Ctrl` on other platforms and click a terminal link to open it
+in the local system's default application. A normal click remains available for text
+selection. Both plain URLs and OSC 8 hyperlinks work in Host-backed panes, including
+scrolled history and URLs continued across soft-wrapped rows.
+
 ## Terminal Images
 
 Terminal panes support **Sixel and Kitty graphics**, including Host-owned sessions.
