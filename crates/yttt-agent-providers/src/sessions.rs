@@ -424,6 +424,39 @@ struct GrokSessionInfo {
     cwd: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrokSessionKind {
+    Root,
+    Subagent,
+}
+
+pub fn grok_session_kind(transcript: &Path, session_id: &str) -> Option<GrokSessionKind> {
+    const MAX_SUMMARY_BYTES: u64 = 1024 * 1024;
+    let path = transcript.parent()?.join("summary.json");
+    let metadata = fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_SUMMARY_BYTES {
+        return None;
+    }
+    let mut source = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(MAX_SUMMARY_BYTES + 1)
+        .read_to_end(&mut source)
+        .ok()?;
+    if source.len() as u64 > MAX_SUMMARY_BYTES {
+        return None;
+    }
+    let summary: Value = serde_json::from_slice(&source).ok()?;
+    if summary.get("info")?.get("id")?.as_str()? != session_id {
+        return None;
+    }
+    match summary.get("session_kind") {
+        None | Some(Value::Null) => Some(GrokSessionKind::Root),
+        Some(Value::String(kind)) if kind == "subagent" => Some(GrokSessionKind::Subagent),
+        _ => None,
+    }
+}
+
 fn scan_grok(
     sessions_root: &Path,
     project_path: &Path,
@@ -750,6 +783,42 @@ fn system_time_millis(time: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grok_session_kind_requires_matching_bounded_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let transcript = temp.path().join("updates.jsonl");
+        let summary = temp.path().join("summary.json");
+        assert_eq!(grok_session_kind(&transcript, "root"), None);
+        for (kind, expected) in [
+            (Value::Null, Some(GrokSessionKind::Root)),
+            (
+                Value::String("subagent".into()),
+                Some(GrokSessionKind::Subagent),
+            ),
+            (Value::String("unknown".into()), None),
+        ] {
+            fs::write(
+                &summary,
+                serde_json::to_vec(&serde_json::json!({
+                    "info":{"id":"root"}, "session_kind":kind,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(grok_session_kind(&transcript, "root"), expected);
+            assert_eq!(grok_session_kind(&transcript, "other"), None);
+        }
+        fs::write(&summary, br#"{"info":{"id":"root"}}"#).unwrap();
+        assert_eq!(
+            grok_session_kind(&transcript, "root"),
+            Some(GrokSessionKind::Root)
+        );
+        fs::write(&summary, "{").unwrap();
+        assert_eq!(grok_session_kind(&transcript, "root"), None);
+        fs::write(&summary, vec![b' '; 1024 * 1024 + 1]).unwrap();
+        assert_eq!(grok_session_kind(&transcript, "root"), None);
+    }
 
     #[test]
     fn omp_session_lookup_distinguishes_missing_history_from_scan_errors() {

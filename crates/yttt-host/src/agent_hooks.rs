@@ -20,7 +20,10 @@ use yttt_agent_core::{
     AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentEventKind, AgentExitReason, AgentInstanceId,
     AgentProcessExit, AgentProcessState, AgentProvider, AgentReducer, ProviderId,
 };
-use yttt_agent_providers::{CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, builtin_providers};
+use yttt_agent_providers::{
+    CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, builtin_providers,
+    sessions::{GrokSessionKind, grok_session_kind},
+};
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
     agent::{
@@ -42,6 +45,7 @@ const AGENT_PROCESS_MISSED_SAMPLES_BEFORE_EXIT: u8 = 2;
 const MAX_PENDING_DELIVERIES: usize = 256;
 const MAX_RETIRED_DELIVERY_STREAMS: usize = 4;
 const MAX_SCRIPT_DELIVERY_IDS: usize = 256;
+const MAX_CHILD_SESSION_IDS: usize = 256;
 const CONNECTION_WORKERS: usize = 4;
 const CONNECTION_QUEUE_CAPACITY: usize = 64;
 const TOKEN_HEADER: &str = "x-yttt-agent-hook-token";
@@ -77,6 +81,7 @@ struct AgentRecord {
     reducer: AgentReducer,
     delivery: Option<AgentDeliveryState>,
     provider_session_id: Option<String>,
+    child_session_ids: VecDeque<String>,
     script_delivery_ids: VecDeque<String>,
     terminal_exited: bool,
 }
@@ -91,6 +96,10 @@ struct AgentProcessObservation {
 enum AgentProcessAction {
     Start {
         terminal_session_id: TerminalSessionId,
+        scope: AgentHookScope,
+        provider_id: ProviderId,
+    },
+    Refresh {
         scope: AgentHookScope,
         provider_id: ProviderId,
     },
@@ -126,6 +135,7 @@ struct HookApplication {
     events: Vec<AgentEventKind>,
     session_id: Option<String>,
     explicit_child_session: bool,
+    verified_root_session: bool,
 }
 
 struct AgentState {
@@ -356,6 +366,10 @@ impl HostAgentHookRuntime {
                             });
                         } else if let Some(observation) = observations.get_mut(session_id) {
                             observation.missed_samples = 0;
+                            actions.push(AgentProcessAction::Refresh {
+                                scope: scope.clone(),
+                                provider_id: process.provider_id.clone(),
+                            });
                         }
                     }
                     None => {
@@ -386,6 +400,7 @@ impl HostAgentHookRuntime {
         }
         let now = now_millis();
         let mut updates = Vec::new();
+        let terminal_exits = self.state.terminal_exits.lock();
         let mut records = self.state.records.lock();
         for action in actions {
             match action {
@@ -394,6 +409,9 @@ impl HostAgentHookRuntime {
                     scope,
                     provider_id,
                 } => {
+                    if terminal_exits.contains_key(&scope) {
+                        continue;
+                    }
                     let address = AgentAddress::from(&scope);
                     let should_replace = records.get(&address).is_none_or(|record| {
                         record.scope != scope
@@ -434,6 +452,7 @@ impl HostAgentHookRuntime {
                             reducer,
                             delivery: None,
                             provider_session_id: None,
+                            child_session_ids: VecDeque::new(),
                             script_delivery_ids,
                             terminal_exited: false,
                         },
@@ -441,6 +460,24 @@ impl HostAgentHookRuntime {
                     let record = records
                         .get_mut(&address)
                         .expect("detected Agent record was inserted");
+                    updates.push(snapshot_update(self.state.host_epoch, record));
+                }
+                AgentProcessAction::Refresh { scope, provider_id } => {
+                    if terminal_exits.contains_key(&scope) {
+                        continue;
+                    }
+                    let Some(record) = records.get_mut(&AgentAddress::from(&scope)) else {
+                        continue;
+                    };
+                    if record.scope != scope
+                        || record.terminal_exited
+                        || record.reducer.snapshot().provider_id != provider_id
+                        || record.reducer.snapshot().process_state != AgentProcessState::Exited
+                    {
+                        continue;
+                    }
+                    record.reducer.process_starting(scope.generation, now);
+                    record.reducer.process_started(scope.generation, now);
                     updates.push(snapshot_update(self.state.host_epoch, record));
                 }
                 AgentProcessAction::Finish {
@@ -469,6 +506,7 @@ impl HostAgentHookRuntime {
             }
         }
         drop(records);
+        drop(terminal_exits);
         for update in updates {
             let _ = self.state.events.send(update);
         }
@@ -700,10 +738,29 @@ fn ingest_request(
             payload: &request.payload,
         })
         .map_err(|_| HttpRequestError::Invalid)?;
+    let session_id = hook_session_id(&request.payload, &normalized);
+    let grok_kind = if request.source == GROK_PROVIDER_ID
+        && normalized.iter().any(|event| {
+            matches!(
+                event,
+                AgentEventKind::SessionStarted { .. } | AgentEventKind::TurnStarted { .. }
+            )
+        }) {
+        payload_string(&request.payload, &["transcriptPath", "transcript_path"])
+            .zip(session_id.as_deref())
+            .and_then(|(path, id)| grok_session_kind(std::path::Path::new(&path), id))
+    } else {
+        None
+    };
     let application = HookApplication {
         provider_id: provider.descriptor().id,
-        session_id: hook_session_id(&request.payload, &normalized),
-        explicit_child_session: payload_has_parent_session(&request.payload),
+        session_id,
+        explicit_child_session: payload_has_parent_session(&request.payload)
+            || (request.source == GROK_PROVIDER_ID
+                && (payload_string(&request.payload, &["subagentType", "subagent_type"])
+                    .is_some()
+                    || grok_kind == Some(GrokSessionKind::Subagent))),
+        verified_root_session: grok_kind == Some(GrokSessionKind::Root),
         events: normalized,
     };
     let address = AgentAddress::from(&request.scope);
@@ -747,10 +804,10 @@ fn ingest_request(
         let record = records
             .get_mut(&address)
             .expect("Agent record was inserted");
-        if let Some(delivery_id) = request.script_delivery_id {
-            if !remember_script_delivery(record, delivery_id) {
-                return Ok(HookIngestOutcome::Unsequenced);
-            }
+        if let Some(delivery_id) = request.script_delivery_id
+            && !remember_script_delivery(record, delivery_id)
+        {
+            return Ok(HookIngestOutcome::Unsequenced);
         }
         let (applications, outcome, new_stream_id) = if let Some(delivery) = request.delivery {
             let delivery = queue_delivery(&mut record.delivery, delivery, application)?;
@@ -824,6 +881,7 @@ fn new_hook_record(
         reducer,
         delivery: None,
         provider_session_id: None,
+        child_session_ids: VecDeque::new(),
         script_delivery_ids: VecDeque::new(),
         terminal_exited: terminal_exit.is_some(),
     }
@@ -904,23 +962,37 @@ fn apply_hook_application(
     let root_session_started = application
         .events
         .iter()
-        .any(|event| matches!(event, AgentEventKind::SessionStarted { .. }));
+        .any(|event| matches!(event, AgentEventKind::SessionStarted { .. }))
+        || (application.verified_root_session
+            && application
+                .events
+                .iter()
+                .any(|event| matches!(event, AgentEventKind::TurnStarted { .. })));
     let contains_root_event = application
         .events
         .iter()
         .any(|event| !is_child_event(event));
-    if application.explicit_child_session && contains_root_event {
-        return HookApplicationOutcome::Ignored;
+    if contains_root_event {
+        let known_child = application
+            .session_id
+            .as_ref()
+            .is_some_and(|id| record.child_session_ids.contains(id));
+        if application.explicit_child_session || known_child {
+            if let Some(id) = &application.session_id {
+                remember_child_session(record, id);
+            }
+            return HookApplicationOutcome::Ignored;
+        }
     }
-    if !root_session_started && contains_root_event {
-        if let (Some(root_session_id), Some(event_session_id)) = (
+    if !root_session_started
+        && contains_root_event
+        && let (Some(root_session_id), Some(event_session_id)) = (
             record.provider_session_id.as_deref(),
             application.session_id.as_deref(),
-        ) {
-            if root_session_id != event_session_id {
-                return HookApplicationOutcome::Ignored;
-            }
-        }
+        )
+        && root_session_id != event_session_id
+    {
+        return HookApplicationOutcome::Ignored;
     }
     if record.terminal_exited {
         return HookApplicationOutcome::Applied(false);
@@ -948,6 +1020,15 @@ fn apply_hook_application(
                 .as_deref()
                 .is_some_and(|current| current != session_id)
         });
+        // Older Grok/Groky versions also emit SessionStart for children without a parent ID.
+        if session_switched
+            && !process_exited
+            && current_provider_id.as_str() == GROK_PROVIDER_ID
+            && application.provider_id == current_provider_id
+            && !application.verified_root_session
+        {
+            return HookApplicationOutcome::Ignored;
+        }
         if process_exited || current_provider_id != application.provider_id || session_switched {
             restart_hook_record(record, application.provider_id.clone(), terminal_exit, now);
         }
@@ -956,6 +1037,15 @@ fn apply_hook_application(
         }
     } else if contains_root_event && record.provider_session_id.is_none() {
         record.provider_session_id = application.session_id.clone();
+    }
+    for event in &application.events {
+        match event {
+            AgentEventKind::ChildStarted { child } => remember_child_session(record, &child.id),
+            AgentEventKind::ChildFinished { child_id, .. } => {
+                remember_child_session(record, child_id)
+            }
+            _ => {}
+        }
     }
     HookApplicationOutcome::Applied(
         application
@@ -967,12 +1057,27 @@ fn apply_hook_application(
     )
 }
 
+fn remember_child_session(record: &mut AgentRecord, session_id: &str) {
+    if record.provider_session_id.as_deref() == Some(session_id)
+        || record.child_session_ids.iter().any(|id| id == session_id)
+    {
+        return;
+    }
+    if record.child_session_ids.len() >= MAX_CHILD_SESSION_IDS {
+        record.child_session_ids.pop_front();
+    }
+    record.child_session_ids.push_back(session_id.to_string());
+}
+
 fn restart_hook_record(
     record: &mut AgentRecord,
     provider_id: ProviderId,
     terminal_exit: Option<AgentProcessExit>,
     now: u64,
 ) {
+    if record.reducer.snapshot().provider_id != provider_id {
+        record.child_session_ids.clear();
+    }
     let mut reducer = AgentReducer::new(AgentInstanceId::random(), provider_id, now);
     reducer.process_starting(record.scope.generation, now);
     reducer.process_started(record.scope.generation, now);
@@ -1133,9 +1238,11 @@ fn remember_ignored_stream(state: &mut AgentDeliveryState, stream_id: String) {
         return;
     }
     let active_stream = state.stream_id == stream_id;
-    let accepted_sequence = active_stream
-        .then_some(state.accepted_sequence)
-        .unwrap_or(1);
+    let accepted_sequence = if active_stream {
+        state.accepted_sequence
+    } else {
+        1
+    };
     if state.ignored.len() >= MAX_RETIRED_DELIVERY_STREAMS {
         state.ignored.remove(0);
     }
@@ -2109,6 +2216,265 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
         assert!(response.contains("\"acceptedSequence\":1"), "{response}");
         drop(stalled);
+    }
+
+    fn grok_session_payload(directory: &std::path::Path, id: &str, child: bool) -> Value {
+        let directory = directory.join(id);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": { "id": id, "cwd": "/tmp/project" },
+                "session_kind": if child { Some("subagent") } else { None },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        serde_json::json!({"sessionId": id, "transcriptPath": directory.join("updates.jsonl")})
+    }
+
+    #[test]
+    fn grok_session_metadata_isolates_children_and_allows_root_switches() {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("grok-switch", "grok-switch");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let root = grok_session_payload(temp.path(), "root", false);
+        let child = grok_session_payload(temp.path(), "child", true);
+        for (event, payload) in [
+            ("session_start", child.clone()),
+            ("session_start", root.clone()),
+            ("user_prompt_submit", root.clone()),
+            ("session_start", child.clone()),
+            ("session_end", session_payload("child")),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "grok", event, payload),
+            )
+            .unwrap();
+        }
+        let active = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(active.session.unwrap().session_id.as_deref(), Some("root"));
+        assert_eq!(active.process_state, AgentProcessState::Running);
+        assert_eq!(active.turn_state, yttt_agent_core::AgentTurnState::Working);
+
+        let resumed = grok_session_payload(temp.path(), "resumed", false);
+        for (event, payload) in [
+            ("session_start", resumed.clone()),
+            ("user_prompt_submit", resumed.clone()),
+            ("session_end", root),
+            ("session_start", child),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "grok", event, payload),
+            )
+            .unwrap();
+        }
+        let active = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(
+            active.session.unwrap().session_id.as_deref(),
+            Some("resumed")
+        );
+        assert_eq!(active.process_state, AgentProcessState::Running);
+
+        // A new session can publish SessionStart before its transcript exists.
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "grok", "session_start", session_payload("new-root")),
+        )
+        .unwrap();
+        let new_root = grok_session_payload(temp.path(), "new-root", false);
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "grok", "user_prompt_submit", new_root),
+        )
+        .unwrap();
+        let active = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(
+            active.session.unwrap().session_id.as_deref(),
+            Some("new-root")
+        );
+        assert_eq!(active.process_state, AgentProcessState::Running);
+        assert_eq!(active.turn_state, yttt_agent_core::AgentTurnState::Working);
+    }
+
+    #[test]
+    fn grok_known_child_cannot_restart_an_ended_root() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("grok-late-child", "grok-late-child");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        for (event, payload) in [
+            ("session_start", session_payload("root")),
+            (
+                "subagent_start",
+                serde_json::json!({"sessionId":"root", "subagentId":"child"}),
+            ),
+            ("session_end", session_payload("root")),
+            ("session_start", session_payload("child")),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "grok", event, payload),
+            )
+            .unwrap();
+        }
+        let exited = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(exited.session.unwrap().session_id.as_deref(), Some("root"));
+        assert_eq!(exited.process_state, AgentProcessState::Exited);
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "grok",
+                "session_start",
+                session_payload("next-root"),
+            ),
+        )
+        .unwrap();
+        let restarted = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(
+            restarted.session.unwrap().session_id.as_deref(),
+            Some("next-root")
+        );
+        assert_eq!(restarted.process_state, AgentProcessState::Running);
+    }
+
+    #[test]
+    fn grok_child_start_without_parent_cannot_replace_the_active_root() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("grok-child", "grok-child");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        for (event, session) in [
+            ("session_start", "root"),
+            ("user_prompt_submit", "root"),
+            ("session_start", "child"),
+            ("session_end", "child"),
+            ("user_prompt_submit", "root"),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "grok", event, session_payload(session)),
+            )
+            .unwrap();
+        }
+        let snapshot = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(
+            snapshot.session.unwrap().session_id.as_deref(),
+            Some("root")
+        );
+        assert_eq!(snapshot.process_state, AgentProcessState::Running);
+        assert_eq!(
+            snapshot.turn_state,
+            yttt_agent_core::AgentTurnState::Working
+        );
+    }
+
+    #[test]
+    fn grok_native_subagent_hooks_preserve_root_ownership() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("grok-native-child", "grok-native-child");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        for (event, payload) in [
+            ("session_start", session_payload("root")),
+            (
+                "subagent_start",
+                serde_json::json!({
+                    "sessionId": "root", "subagentId": "child", "subagentType": "explore"
+                }),
+            ),
+            ("session_start", session_payload("child")),
+            (
+                "session_end",
+                serde_json::json!({
+                    "sessionId": "root", "subagentType": "explore"
+                }),
+            ),
+            (
+                "subagent_stop",
+                serde_json::json!({
+                    "sessionId": "root", "subagentId": "child", "subagentType": "explore"
+                }),
+            ),
+            ("session_start", session_payload("child")),
+            ("session_end", session_payload("child")),
+            ("user_prompt_submit", session_payload("root")),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "grok", event, payload),
+            )
+            .unwrap();
+        }
+        let snapshot = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(
+            snapshot.session.unwrap().session_id.as_deref(),
+            Some("root")
+        );
+        assert_eq!(snapshot.process_state, AgentProcessState::Running);
+        assert!(snapshot.children.is_empty());
+        assert_eq!(
+            snapshot.turn_state,
+            yttt_agent_core::AgentTurnState::Working
+        );
+    }
+
+    #[test]
+    fn process_scan_recovers_hook_exit_without_a_pid_change() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("live-process", "live-process");
+        let session_id = terminal.session_id.clone();
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let roots = vec![(session_id.clone(), 10)];
+        let detected = HashMap::from([(
+            session_id,
+            DetectedAgentProcess {
+                pid: 20,
+                provider_id: ProviderId::from_static("grok"),
+            },
+        )]);
+        runtime.reconcile_process_scan(&roots, &detected);
+        for event in ["session_start", "user_prompt_submit", "session_end"] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "grok", event, session_payload("root")),
+            )
+            .unwrap();
+        }
+        let exited = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(exited.snapshot.process_state, AgentProcessState::Exited);
+        runtime.reconcile_process_scan(&roots, &detected);
+        let recovered = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(recovered.snapshot.process_state, AgentProcessState::Running);
+        assert_eq!(recovered.snapshot.process_exit, None);
+        assert_eq!(
+            recovered.snapshot.session.unwrap().session_id.as_deref(),
+            Some("root")
+        );
+        assert!(recovered.sequence > exited.sequence);
+        runtime.reconcile_process_scan(&roots, &detected);
+        assert_eq!(runtime.snapshots_after(&[])[0].sequence, recovered.sequence);
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "grok",
+                "user_prompt_submit",
+                session_payload("root"),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.view_state(),
+            AgentViewState::Working
+        );
+        runtime.terminal_exited(&terminal.session_id, Some(0));
+        runtime.reconcile_process_scan(&roots, &detected);
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.process_state,
+            AgentProcessState::Exited
+        );
     }
 
     #[test]

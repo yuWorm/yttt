@@ -344,12 +344,31 @@ fn waiting_events(payload: &Value, reason: WaitingReason) -> Vec<AgentEventKind>
 }
 
 fn child_started(payload: &Value) -> Result<Vec<AgentEventKind>, ProviderError> {
-    let id = string_field(payload, &["agent_id", "agentId", "child_id", "childId"])
-        .ok_or_else(|| ProviderError::InvalidPayload("child id is required".to_string()))?;
+    let id = string_field(
+        payload,
+        &[
+            "agent_id",
+            "agentId",
+            "child_id",
+            "childId",
+            "subagentId",
+            "subagent_id",
+        ],
+    )
+    .ok_or_else(|| ProviderError::InvalidPayload("child id is required".to_string()))?;
     Ok(vec![AgentEventKind::ChildStarted {
         child: ChildAgentDescriptor {
             id,
-            name: string_field(payload, &["agent_type", "agentType", "name"]),
+            name: string_field(
+                payload,
+                &[
+                    "agent_type",
+                    "agentType",
+                    "subagentType",
+                    "subagent_type",
+                    "name",
+                ],
+            ),
             task: string_field(payload, &["description", "task", "prompt"])
                 .and_then(|task| AgentTask::new(task, AgentTaskSource::External)),
         },
@@ -357,8 +376,18 @@ fn child_started(payload: &Value) -> Result<Vec<AgentEventKind>, ProviderError> 
 }
 
 fn child_finished(payload: &Value) -> Result<Vec<AgentEventKind>, ProviderError> {
-    let id = string_field(payload, &["agent_id", "agentId", "child_id", "childId"])
-        .ok_or_else(|| ProviderError::InvalidPayload("child id is required".to_string()))?;
+    let id = string_field(
+        payload,
+        &[
+            "agent_id",
+            "agentId",
+            "child_id",
+            "childId",
+            "subagentId",
+            "subagent_id",
+        ],
+    )
+    .ok_or_else(|| ProviderError::InvalidPayload("child id is required".to_string()))?;
     Ok(vec![AgentEventKind::ChildFinished {
         child_id: id,
         outcome: if bool_field(payload, &["is_interrupt", "interrupted"]) == Some(true) {
@@ -567,6 +596,32 @@ mod tests {
                 failed: true,
             }]
         );
+    }
+
+    #[test]
+    fn grok_subagent_fields_support_native_and_snake_case_payloads() {
+        for payload in [
+            json!({"sessionId":"root", "subagentId":"child", "subagentType":"explore"}),
+            json!({"session_id":"root", "subagent_id":"child", "subagent_type":"explore"}),
+        ] {
+            let started = GrokProvider
+                .normalize_hook(ProviderHookEvent {
+                    name: "subagent_start",
+                    payload: &payload,
+                })
+                .unwrap();
+            assert!(matches!(&started[0], AgentEventKind::ChildStarted { child }
+                if child.id == "child" && child.name.as_deref() == Some("explore")));
+            let stopped = GrokProvider
+                .normalize_hook(ProviderHookEvent {
+                    name: "subagent_stop",
+                    payload: &payload,
+                })
+                .unwrap();
+            assert!(
+                matches!(&stopped[0], AgentEventKind::ChildFinished { child_id, .. } if child_id == "child")
+            );
+        }
     }
 
     #[test]

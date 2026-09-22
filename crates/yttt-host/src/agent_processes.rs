@@ -136,11 +136,11 @@ fn classify_agent_process(
     process_name: &OsStr,
     command: &[OsString],
 ) -> Option<ProviderId> {
-    if let Some(provider_id) = provider_for_executable(providers, &process_name.to_string_lossy()) {
-        return Some(provider_id);
-    }
-
-    let executable = command.first()?.to_string_lossy();
+    // sysinfo can retain the pre-exec name on macOS; cmd is refreshed every scan.
+    let Some(executable) = command.first().filter(|argument| !argument.is_empty()) else {
+        return provider_for_executable(providers, &process_name.to_string_lossy());
+    };
+    let executable = executable.to_string_lossy();
     if let Some(provider_id) = provider_for_executable(providers, &executable) {
         return Some(provider_id);
     }
@@ -219,10 +219,11 @@ fn provider_by_id(providers: &[Arc<dyn AgentProvider>], provider_id: &str) -> Op
 }
 
 fn blocks_agent_process_discovery(process_name: &OsStr, command: &[OsString]) -> bool {
-    is_yttt_executable(&process_name.to_string_lossy())
-        || command
-            .first()
-            .is_some_and(|executable| is_yttt_executable(&executable.to_string_lossy()))
+    let executable = command
+        .first()
+        .filter(|argument| !argument.is_empty())
+        .map_or(process_name, |argument| argument.as_os_str());
+    is_yttt_executable(&executable.to_string_lossy())
 }
 
 fn detect_agent_processes_by_root(
@@ -313,12 +314,15 @@ mod tests {
     }
 
     #[test]
-    fn classifies_grok_and_script_backed_agents() {
+    fn classifies_grok_aliases_and_script_backed_agents() {
         let providers = builtin_providers();
-        assert_eq!(
-            classify_agent_process(&providers, OsStr::new("grok"), &[]),
-            Some(ProviderId::from_static("grok"))
-        );
+        for command in ["grok", "groky"] {
+            assert_eq!(
+                classify_agent_process(&providers, OsStr::new(command), &[]),
+                Some(ProviderId::from_static("grok")),
+                "{command} must use the shared Grok provider"
+            );
+        }
         assert_eq!(
             classify_agent_process(
                 &providers,
@@ -330,6 +334,44 @@ mod tests {
             ),
             Some(ProviderId::from_static("omp"))
         );
+    }
+
+    #[test]
+    fn current_command_overrides_a_cached_pre_exec_name() {
+        let providers = builtin_providers();
+        let shell = vec![OsString::from("/bin/sh"), OsString::from("-i")];
+        assert!(!blocks_agent_process_discovery(OsStr::new("yttt"), &shell));
+        for command in ["grok", "groky"] {
+            assert_eq!(
+                classify_agent_process(&providers, OsStr::new(command), &shell),
+                None,
+                "cached {command} name must not override the shell"
+            );
+            let executable = vec![OsString::from(format!("/usr/local/bin/{command}"))];
+            assert_eq!(
+                classify_agent_process(&providers, OsStr::new("fish"), &executable),
+                Some(ProviderId::from_static("grok")),
+                "{command} must use the shared Grok provider"
+            );
+        }
+        assert!(blocks_agent_process_discovery(
+            OsStr::new("fish"),
+            &[OsString::from("/tmp/yttt")]
+        ));
+        assert!(blocks_agent_process_discovery(OsStr::new("yttt"), &[]));
+        let processes = vec![
+            AgentProcessRecord {
+                pid: 1,
+                parent_pid: None,
+                provider_id: classify_agent_process(&providers, OsStr::new("yttt"), &shell),
+                blocks_descendant_discovery: blocks_agent_process_discovery(
+                    OsStr::new("yttt"),
+                    &shell,
+                ),
+            },
+            record(2, Some(1), Some("grok"), false),
+        ];
+        assert_eq!(detect_agent_processes_by_root(&[1], &processes)[&1].pid, 2);
     }
 
     #[test]
@@ -351,42 +393,136 @@ mod tests {
         );
         assert!(!detected.contains_key(&4));
     }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_scan_follows_exec_after_caching_a_yttt_process() {
+        use std::{
+            io::Write as _,
+            os::unix::process::CommandExt as _,
+            process::{Command, Stdio},
+            thread,
+            time::Instant,
+        };
+
+        const CHILD: &str = "YTTT_EXEC_SCAN_CHILD";
+        if let Some(executable) = std::env::var_os(CHILD) {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).unwrap();
+            let error = Command::new("/bin/sh")
+                .args(["-c", "\"$1\" 30 & wait", "shell"])
+                .arg(executable)
+                .exec();
+            panic!("exec test shell: {error}");
+        }
+        for command in ["grok", "groky"] {
+            let temp = tempfile::tempdir().unwrap();
+            let launcher = temp.path().join("yttt");
+            let executable = temp.path().join(command);
+            std::fs::copy(std::env::current_exe().unwrap(), &launcher).unwrap();
+            std::os::unix::fs::symlink("/bin/sleep", &executable).unwrap();
+            let mut child = Command::new(&launcher)
+                .args([
+                    "--exact",
+                    "agent_processes::tests::system_scan_follows_exec_after_caching_a_yttt_process",
+                    "--nocapture",
+                ])
+                .env(CHILD, &executable)
+                .process_group(0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            let session_id = TerminalSessionId::new("exec-scan");
+            let roots = vec![(session_id.clone(), child.id())];
+            let mut scanner = AgentProcessScanner::new();
+            scanner.scan(&roots);
+            let cached_name = scanner
+                .system
+                .process(sysinfo::Pid::from_u32(child.id()))
+                .unwrap()
+                .name()
+                .to_owned();
+            child.stdin.as_mut().unwrap().write_all(b"go\n").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut detected = None;
+            while Instant::now() < deadline {
+                detected = scanner.scan(&roots).remove(&session_id);
+                if detected.is_some() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let observed = scanner
+                .system
+                .processes()
+                .iter()
+                .filter(|(pid, process)| {
+                    pid.as_u32() == child.id()
+                        || process
+                            .parent()
+                            .is_some_and(|parent| parent.as_u32() == child.id())
+                })
+                .map(|(pid, process)| {
+                    (
+                        pid.as_u32(),
+                        process.name().to_owned(),
+                        process.cmd().to_vec(),
+                        process.parent(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let _ = rustix::process::kill_process_group(
+                rustix::process::Pid::from_raw(child.id() as i32).unwrap(),
+                rustix::process::Signal::KILL,
+            );
+            let _ = child.wait();
+            assert_eq!(cached_name, OsStr::new("yttt"));
+            assert_eq!(
+                detected.map(|process| process.provider_id),
+                Some(ProviderId::from_static("grok")),
+                "observed processes: {observed:?}"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
-    fn system_scan_detects_a_grok_executable() {
+    fn system_scan_detects_grok_and_groky_executables() {
         use std::{os::unix::fs::symlink, process::Command, thread};
 
-        let temp = tempfile::tempdir().unwrap();
-        let executable = temp.path().join("grok");
-        symlink("/bin/sleep", &executable).unwrap();
-        let mut child = Command::new(&executable).arg("5").spawn().unwrap();
-        let session_id = TerminalSessionId::new("grok-scan");
-        let roots = vec![(session_id.clone(), child.id())];
-        let mut scanner = AgentProcessScanner::new();
+        for command in ["grok", "groky"] {
+            let temp = tempfile::tempdir().unwrap();
+            let executable = temp.path().join(command);
+            symlink("/bin/sleep", &executable).unwrap();
+            let mut child = Command::new(&executable).arg("5").spawn().unwrap();
+            let session_id = TerminalSessionId::new("grok-scan");
+            let roots = vec![(session_id.clone(), child.id())];
+            let mut scanner = AgentProcessScanner::new();
 
-        let mut detected = None;
-        for _ in 0..50 {
-            detected = scanner.scan(&roots).remove(&session_id);
-            if detected.is_some() {
-                break;
+            let mut detected = None;
+            for _ in 0..50 {
+                detected = scanner.scan(&roots).remove(&session_id);
+                if detected.is_some() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
             }
-            thread::sleep(Duration::from_millis(20));
-        }
 
-        let _ = child.kill();
-        let _ = child.wait();
-        assert_eq!(
-            detected,
-            Some(DetectedAgentProcess {
-                pid: roots[0].1,
-                provider_id: ProviderId::from_static("grok"),
-            })
-        );
+            let _ = child.kill();
+            let _ = child.wait();
+            assert_eq!(
+                detected,
+                Some(DetectedAgentProcess {
+                    pid: roots[0].1,
+                    provider_id: ProviderId::from_static("grok"),
+                })
+            );
+        }
     }
 
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn monitor_ends_a_manual_grok_run_while_the_shell_stays_alive() {
+    async fn monitor_ends_grok_and_groky_runs_while_the_shell_stays_alive() {
         use std::os::unix::fs::symlink;
 
         use yttt_core::model::ids::ProjectId;
@@ -395,70 +531,74 @@ mod tests {
             terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec},
         };
 
-        let temp = tempfile::tempdir().unwrap();
-        let executable = temp.path().join("grok");
-        symlink("/bin/sleep", &executable).unwrap();
-        let runtime = HostRuntime::new();
-        let agent_hooks = HostAgentHookRuntime::start(7).unwrap();
-        let session_id = TerminalSessionId::new("manual-grok");
-        let mut spec = TerminalSpawnSpec {
-            session_id,
-            project_id: ProjectId::new("project"),
-            cwd: ProjectRelativePath::root(),
-            execution: TerminalExecutionSpec::Shell {
-                program: "/bin/sh".to_string(),
-                args: vec!["-i".to_string()],
-                initial_command: Some(format!("{} 30", executable.display())),
-            },
-            geometry: TerminalGeometry {
-                cols: 80,
-                rows: 24,
-                cell_width: 8,
-                cell_height: 16,
-            },
-            geometry_epoch: 1,
-            query_palette: Vec::new(),
-            palette_revision: 1,
-            scrollback_limit: 100,
-            environment: Vec::new(),
-            removed_environment: Vec::new(),
-        };
-        agent_hooks.secure_terminal_environment(&mut spec);
-        let terminal = runtime.spawn(spec).unwrap();
-        let mut updates = agent_hooks.subscribe();
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let monitor = tokio::spawn(run(runtime, agent_hooks, stop_rx));
+        for command in ["grok", "groky"] {
+            let temp = tempfile::tempdir().unwrap();
+            let executable = temp.path().join(command);
+            symlink("/bin/sleep", &executable).unwrap();
+            let runtime = HostRuntime::new();
+            let agent_hooks = HostAgentHookRuntime::start(7).unwrap();
+            let session_id = TerminalSessionId::new("manual-grok");
+            let mut spec = TerminalSpawnSpec {
+                session_id,
+                project_id: ProjectId::new("project"),
+                cwd: ProjectRelativePath::root(),
+                execution: TerminalExecutionSpec::Shell {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-i".to_string()],
+                    initial_command: Some(format!("{} 30", executable.display())),
+                },
+                geometry: TerminalGeometry {
+                    cols: 80,
+                    rows: 24,
+                    cell_width: 8,
+                    cell_height: 16,
+                },
+                geometry_epoch: 1,
+                query_palette: Vec::new(),
+                palette_revision: 1,
+                scrollback_limit: 100,
+                environment: Vec::new(),
+                removed_environment: Vec::new(),
+            };
+            agent_hooks.secure_terminal_environment(&mut spec);
+            let terminal = runtime.spawn(spec).unwrap();
+            let mut updates = agent_hooks.subscribe();
+            let (stop_tx, stop_rx) = watch::channel(false);
+            let monitor = tokio::spawn(run(runtime, agent_hooks, stop_rx));
 
-        let started = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let update = updates.recv().await.unwrap();
-                if update.snapshot.provider_id.as_str() == "grok"
-                    && update.snapshot.process_state == yttt_agent_core::AgentProcessState::Running
-                {
-                    return update;
+            let started = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let update = updates.recv().await.unwrap();
+                    if update.snapshot.provider_id.as_str() == "grok"
+                        && update.snapshot.process_state
+                            == yttt_agent_core::AgentProcessState::Running
+                    {
+                        return update;
+                    }
                 }
-            }
-        })
-        .await
-        .expect("manual Grok process was not detected");
-        terminal.input(vec![0x03]).unwrap();
-        let exited = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let update = updates.recv().await.unwrap();
-                if update.snapshot.instance_id == started.snapshot.instance_id
-                    && update.snapshot.process_state == yttt_agent_core::AgentProcessState::Exited
-                {
-                    return update;
+            })
+            .await
+            .expect("manual Grok process was not detected");
+            terminal.input(vec![0x03]).unwrap();
+            let exited = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let update = updates.recv().await.unwrap();
+                    if update.snapshot.instance_id == started.snapshot.instance_id
+                        && update.snapshot.process_state
+                            == yttt_agent_core::AgentProcessState::Exited
+                    {
+                        return update;
+                    }
                 }
-            }
-        })
-        .await
-        .expect("manual Grok process exit was not detected");
+            })
+            .await
+            .expect("manual Grok process exit was not detected");
 
-        assert!(exited.sequence > started.sequence);
-        assert!(!terminal.is_exited());
-        let _ = stop_tx.send(true);
-        monitor.await.unwrap();
-        terminal.terminate().unwrap();
+            assert!(exited.sequence > started.sequence);
+            assert!(!terminal.is_exited());
+            let _ = stop_tx.send(true);
+            monitor.await.unwrap();
+            terminal.terminate().unwrap();
+        }
     }
 }
