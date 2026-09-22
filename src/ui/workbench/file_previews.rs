@@ -42,7 +42,7 @@ impl WorkbenchView {
         }
         let services = self.project.services.get(&id.project_id)?;
         let download = services.requires_download();
-        let text = self.ui_text.clone();
+        let text = self.ui_text;
         let preview = cx.new(|cx| FilePreview::new(relative_path, text, download, cx));
         let subscription = cx.subscribe_in(&preview, window, Self::on_file_preview_event);
         self.project.project_editor_runtime.insert_preview(
@@ -144,7 +144,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.project.project_editor_runtime.preview_id(&preview) else {
+        let Some(id) = self.project.project_editor_runtime.preview_id(preview) else {
             return;
         };
         let relative_path = preview.read(cx).relative_path.clone();
