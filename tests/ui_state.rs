@@ -1179,9 +1179,14 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
         .debug_bounds("project-panel-page-files")
         .expect("project panel should render the Files page");
 
+    let tabbar_border = cx
+        .debug_bounds("project-tabbar-border-1")
+        .expect("work area should render its tab bar border");
+
     assert_eq!(tabs.origin.y, panel.origin.y);
     assert_eq!(page.origin.y, tabs.origin.y + tabs.size.height);
-    assert!(tabs.size.height < gpui::px(36.0));
+    assert_eq!(tabs.origin.y, tabbar_border.origin.y);
+    assert_eq!(tabs.bottom(), tabbar_border.bottom());
     assert!((strip.center().x - tabs.center().x).abs() <= gpui::px(0.5));
     assert!(files.origin.x < sessions.origin.x);
     assert!(sessions.origin.x < search.origin.x);
@@ -1189,6 +1194,30 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
     assert!(git.origin.x < terminal.origin.x);
     assert!(cx.debug_bounds("project-file-panel-new").is_none());
     assert!(cx.debug_bounds("project-file-panel-refresh").is_none());
+
+    for width in [960.0, 1600.0] {
+        cx.simulate_resize(size(px(width), px(720.0)));
+        for (tab, page) in [
+            (
+                "project-panel-tab-agent-sessions",
+                "project-panel-page-agent-sessions",
+            ),
+            ("project-panel-tab-files", "project-panel-page-files"),
+        ] {
+            let button = cx.debug_bounds(tab).unwrap();
+            cx.simulate_click(button.center(), gpui::Modifiers::none());
+            cx.run_until_parked();
+            cx.refresh().unwrap();
+
+            let tabs = cx.debug_bounds("project-panel-tabs").unwrap();
+            let tabbar_border = cx.debug_bounds("project-tabbar-border-1").unwrap();
+            let page = cx
+                .debug_bounds(page)
+                .expect("clicked panel page should render");
+            assert_eq!(tabs.bottom(), tabbar_border.bottom());
+            assert_eq!(page.origin.y, tabs.bottom());
+        }
+    }
 }
 
 #[gpui::test]

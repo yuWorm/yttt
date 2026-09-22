@@ -876,7 +876,7 @@ impl WorkbenchView {
                         .items_center()
                         .justify_center()
                         .w_full()
-                        .h(ui_style.icon_buttons.toolbar_size)
+                        .h(ui_style.rows.tab_height)
                         .flex_none()
                         .border_b(ui_style.border.hairline)
                         .border_color(theme.border_variant)
