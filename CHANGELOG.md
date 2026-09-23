@@ -2,72 +2,110 @@
 
 ## Unreleased
 
-- 新增 `yttt ctl` 本地桌面控制：查询项目、终端标签页、pane 和 Agent 状态，创建
-  Shell／Agent 标签页、分屏和管理 pane，发送终端输入并读取当前内容；支持 JSON 输出、
-  明确的窗口目标与 Host 输入回执，不自动接管控制权或重放命令。
-- Add `yttt ctl` for a running local desktop: inspect projects, terminal tabs, panes, and Agent
-  state; create shell/Agent tabs; manage splits; send terminal input and read visible contents.
-  Includes JSON output, explicit window targets, and Host input acknowledgements without
-  automatic control takeover or command replay. Desktop shell protocol v3 requires a matching build.
+## 0.3.5 - 2026-09-23
 
-- 修复 Host 终端中链接无法点击的问题：从实际显示的网格识别普通 URL 和 OSC 8
-  超链接，支持滚动历史和软换行；macOS 使用 Cmd＋点击，其他平台使用 Ctrl＋点击。
-- Fix link activation in Host-backed terminals by resolving URLs and OSC 8 hyperlinks
-  from the displayed grid, including scrolled history and soft-wrapped URLs.
+### 中文
 
-- 修复重启恢复工作区时 OMP 历史会话已丢失却仍反复 resume 的问题：Host 确认会话
-  不存在后，在原标签页自动启动新 OMP；存活终端仍只重连，查询错误不触发新建。
-- Start a fresh OMP conversation during workspace restoration when the Host confirms that
-  saved history is missing. Preserve live terminals and do not treat lookup errors as absence.
-  Resource protocol v13 requires matching desktop and Host updates.
+本版以 [v0.3.4](https://github.com/yuWorm/yttt/releases/tag/v0.3.4) 为基线，新增桌面命令行控制与图片预览，
+重点改善远端连接恢复、跨设备工作区同步和 Agent 状态准确性。
 
-- 修复本机恢复控制后远端新增标签页未同步、需要手动新增标签页才刷新的问题：
-  即使界面错过中间的控制权切换，也会按控制权版本重新同步工作区；未发布的本地编辑仍保留。
-- Resync workspace tabs when reclaiming control, even if the UI missed the intervening handoff.
-  Unpublished local edits remain protected instead of being overwritten by the Host snapshot.
+#### 新增与改进
 
-- 新增图片文件标签页预览：适应窗口、原始尺寸、缩放和平移，支持 GIF/WebP 动画，
-  SVG 可在源码与预览之间切换。未支持格式和预览失败页保留默认应用打开入口。
-- 文件树右键菜单支持使用系统默认应用打开任意文件；远端文件分块下载为本地临时副本，
-  外部修改不会自动回写。资源协议升级至 v12，桌面端与 Host 需同步更新。
-- Preview images in file tabs with fit/actual-size controls, zoom, pan, GIF/WebP animation,
-  and SVG source/preview switching. Unsupported files and preview errors retain an external-open action.
-- Open files with their system default application from the project tree. Remote files stream into
-  local temporary copies; external edits are not uploaded. Resource protocol v12 requires matching
-  desktop and Host updates.
+- **桌面命令行控制**：新增 `yttt ctl`，可查询运行中的本地桌面的项目、终端标签页、分屏 pane 和 Agent
+  状态，创建 Shell／Agent 标签页、管理分屏、发送终端输入及读取当前内容。支持 JSON 输出、明确的窗口
+  目标和 Host 输入回执；不会自动接管控制权或重放命令。用法见 [CLI 文档](https://github.com/yuWorm/yttt/blob/v0.3.5/docs/cli-control.md)。
+- **图片文件预览**：文件标签页支持适应窗口、原始尺寸、缩放和平移，支持 GIF／WebP 动画；SVG 可在源码
+  与预览之间切换。未支持格式和预览失败时仍可使用默认应用打开。
+- **使用默认应用打开文件**：文件树右键菜单支持打开本地或远端文件；远端文件分块下载为本地临时副本，
+  外部应用中的修改不会自动回写远端。
 
-- 只读观察端按本地可用空间等比缩小远端终端网格，保持底行、光标和选择坐标可见且一致，
-  不改变控制端 PTY 尺寸；历史滚动使用当前快照的几何版本，避免远端调整尺寸后滚动失效。
-- 修复 Windows 空 IME 预编辑状态吞掉后续按键并隐藏光标的问题。远端输入被临时拒绝后，
-  后续输入仍可恢复；被拒绝的输入不会自动重放，也不会因此重启进程。
-- 连接远端时恢复 Host 已有窗口和项目，不再受本机“恢复上次会话”启动偏好限制；
-  本地启动和显式新建空窗口的行为不变。
-- Fit the authoritative terminal grid within read-only observers without resizing the controlling
-  PTY; keep cursor/selection coordinates aligned and use current geometry epochs for history scrolling.
-- Clear empty IME preedit state so Windows keys and cursors recover. Remote write rejections no
-  longer permanently stop later input; rejected input is not replayed and the process is not restarted.
-- Restore existing Host windows and projects on remote connection regardless of the local startup
-  restore preference. Local startup and explicitly empty windows keep their existing behavior.
-- 修复 OMP 全局／显式扩展重复加载及进程内子任务共用终端状态通道的问题：
-  每个通道仅由主会话上报生命周期，避免子任务结束清除主 Agent 状态或抢占状态流。
-  更新后需让新启动的 OMP 加载新版扩展；已运行的会话不会自动替换扩展代码。
-- Fix OMP status reporting when ambient/explicit extension copies or in-process
-  task sessions share a terminal transport. Only the root reporter owns its lifecycle
-  stream, preventing child shutdown from clearing the root agent and competing streams
-  from blocking updates. Existing OMP processes must be restarted to load the new extension.
-- 修复 OpenCode 子会话事件覆盖主会话状态，并处理已有运行中会话的附着、真实会话切换
-  与异步发现结果晚到；Pi 按终端通道隔离重复扩展及子会话，保留重载、恢复和 OSC 上报。
-- Host 在按序应用事件时校验会话归属；无关子会话流不会挤掉主会话流，脚本重试可去重。
-  Pi/OpenCode 的临时投递失败保留队首重试；命令型 hook 最多尝试三次并报告最终失败。
-- 超过 30 分钟无更新的活动状态显示为未知（`stale`），不再误报空闲或完成。
-  请在任务结束后更新 Host、重新初始化托管 hook，再启动 Agent 以加载新版适配器。
-- Isolate OpenCode child events and late discovery from the selected root session; preserve
-  Pi duplicate-load protection across reload, resume, and OSC delivery. Host validates session
-  ownership at ordered application time and deduplicates command-hook retries.
-- Keep transient Pi/OpenCode delivery failures at the queue head; command hooks make at most
-  three attempts and report terminal failures. After 30 minutes without an update, active
-  status becomes unknown (`stale`), not idle or completed. Update the Host and provision hooks
-  before starting new Agent processes; do not interrupt active work just to reload adapters.
+#### 修复
+
+- **远端连接与恢复**：补充交互通道心跳、握手超时和带抖动的重连退避；慢文件／Git 操作不再阻塞恢复
+  查询。重连后重新同步终端快照，拒绝旧快照覆盖较新内容，并限制在途请求、SSH 队列和并行数据连接，
+  减少连接异常时的资源积压；空闲终端数据订阅不再周期唤醒。断线或超时不会自动重放用户操作。
+- **记住远端连接凭据**：改善跨平台凭据保存，长连接码分块存入系统凭据库，兼容 Windows 单项长度限制；
+  保存失败时保留旧凭据，不回退为明文存储。
+- **工作区与控制权同步**：连接远端时恢复 Host 已有窗口和项目，不再受本机“恢复上次会话”偏好限制。
+  取回控制权时，即使界面错过中间切换也会同步远端新增标签页，同时保留尚未发布的本地编辑。
+- **终端显示与输入**：只读观察端按可用空间等比缩小远端网格，保持光标和选择坐标一致，不改变控制端
+  终端尺寸；修复调整尺寸后的历史滚动。修复 Windows 空 IME 预编辑状态吞键和隐藏光标，以及临时拒绝
+  远端输入后无法继续输入的问题；被拒绝的输入不会重放或导致进程重启。
+- **终端链接**：从实际显示的 Host 网格识别普通 URL 和 OSC 8 超链接，支持滚动历史与软换行。
+  macOS 使用 Cmd＋点击，其他平台使用 Ctrl＋点击。
+- **Agent 状态**：隔离 OMP、Pi、OpenCode 及 Grok／Groky 的子会话和重复扩展，避免子任务结束清除主
+  会话状态。改善运行中会话附着、会话切换和进程检测；Host 校验事件归属并去重重试，Pi／OpenCode
+  临时投递失败保留队首重试，命令型 hook 最多尝试三次。活动状态超过 30 分钟未更新时标为未知
+  （`stale`），不再误报空闲或完成。
+- **OMP 会话恢复**：Host 确认保存的历史已丢失时，在原标签页启动新会话；存活终端只重连，查询错误
+  不会被当作历史不存在。
+- **窗口细节**：恢复 Windows 原生标题栏拖动，并统一项目面板与标签栏边框。
+
+#### 升级说明
+
+- **桌面端、Host 与远端 Server 需同步升级**：资源协议由 v0.3.4 的 v11 升至 **v13**，桌面控制协议为
+  **v3**，`yttt ctl` 也需使用匹配构建。请先保存工作、妥善结束任务，再更新并重启旧 Host。
+- Agent 适配器更新需要重新初始化托管 hook，并在之后启动 Agent；已运行的 OMP 等进程不会自动加载新
+  扩展，无需仅为重载而打断进行中的任务。
+- 桌面安装包提供 macOS arm64、Windows x86_64 和 Linux x86_64；无界面 Server 提供 Linux／macOS
+  的 x86_64 与 arm64，同时提供更新清单与 SHA-256 校验和。macOS 包仍为 ad-hoc 签名，未做公证。
+- 早期 v1.0.0 用户仍需手动下载安装；项目已回到 pre-1.0 版本序列，SemVer 更新检查不会将 0.3.5 视为
+  1.0.0 的升级。
+
+### English
+
+Compared with [v0.3.4](https://github.com/yuWorm/yttt/releases/tag/v0.3.4), this release adds desktop
+CLI control and image previews, and improves remote recovery, workspace synchronization, and Agent status.
+
+#### Added and improved
+
+- **Desktop CLI control:** `yttt ctl` inspects projects, terminal tabs, split panes, and Agent state in a
+  running local desktop. Create shell/Agent tabs, manage splits, send input, and read visible contents.
+  Includes JSON output, explicit window targets, and Host input acknowledgements, without automatic
+  control takeover or command replay. See the [CLI guide](https://github.com/yuWorm/yttt/blob/v0.3.5/docs/cli-control.md).
+- **Image previews:** file tabs offer fit/actual size, zoom, pan, GIF/WebP animation, and SVG source/preview
+  switching. Unsupported formats and preview errors retain an external-open action.
+- **Open files externally:** use the project tree context menu to open local or remote files with their
+  default application. Remote files stream into temporary local copies; external edits are not uploaded.
+
+#### Fixed
+
+- **Remote recovery:** add interactive-channel heartbeats, handshake deadlines, and jittered reconnect
+  backoff. Slow file/Git operations no longer block recovery queries. Reconcile terminal snapshots after
+  reconnect and reject older snapshots; bound pending requests, SSH queues, and concurrent data connections.
+  Idle terminal-data subscriptions no longer wake periodically. Disconnects and timeouts do not replay operations.
+- **Remembered credentials:** store long connection codes in chunks in the OS credential store, including
+  Windows with its per-item size limit. Failed replacements preserve previous credentials, without plaintext fallback.
+- **Workspace synchronization:** restore existing Host windows and projects on remote connection regardless
+  of local startup preferences. Reclaiming control refreshes remote tabs even after a missed handoff, while
+  protecting unpublished local edits.
+- **Terminal interaction:** fit remote grids into read-only observers without resizing the controlling terminal;
+  keep cursor/selection coordinates aligned and history scrolling working after geometry changes. Clear empty
+  Windows IME preedit state so keys and cursors recover. Temporary input rejection no longer blocks later input;
+  rejected input is not replayed and processes are not restarted.
+- **Terminal links:** resolve URLs and OSC 8 hyperlinks from displayed Host grids, including scrollback and
+  soft-wrapped URLs. Use Cmd-click on macOS and Ctrl-click elsewhere.
+- **Agent status:** isolate child sessions and duplicate adapters for OMP, Pi, OpenCode, and Grok/Groky;
+  child shutdown no longer clears the main session. Improve attachment, session switching, and process detection.
+  Host validates event ownership and deduplicates retries; Pi/OpenCode retain failed deliveries at the queue head,
+  and command hooks try at most three times. Active status without an update for 30 minutes becomes unknown
+  (`stale`), rather than idle or completed.
+- **OMP restoration:** start a fresh conversation in the original tab only when the Host confirms saved history
+  is missing. Live terminals reconnect; lookup errors are not treated as absent history.
+- **Window details:** restore native Windows titlebar dragging and align project-panel/tab-bar borders.
+
+#### Upgrade notes
+
+- **Upgrade desktop, Host, and remote Server together:** resource protocol moves from v0.3.4's v11 to **v13**;
+  desktop control protocol is **v3**, and `yttt ctl` requires a matching build. Save work and finish active tasks
+  before updating and restarting an old Host.
+- Provision managed hooks again and start new Agent processes to load updated adapters. Existing OMP and
+  similar processes do not reload extension code automatically; do not interrupt active work just to reload it.
+- Desktop packages cover macOS arm64, Windows x86_64, and Linux x86_64. Headless Server binaries cover
+  Linux/macOS x86_64 and arm64, alongside an update manifest and SHA-256 checksums. macOS packages remain
+  ad-hoc signed and are not notarized.
+- Early v1.0.0 users must install manually: development returned to pre-1.0 versioning, so SemVer update
+  detection does not consider 0.3.5 newer than 1.0.0.
 
 ## 0.3.4 - 2026-09-20
 

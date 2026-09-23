@@ -3,39 +3,38 @@
 </h1>
 
 <p align="center">
-  <a href="https://github.com/yuWorm/yttt/releases/tag/v0.3.4"><img src="assets/app-icon/png/32.png" width="24" alt="yttt app icon"></a>
+  <a href="https://github.com/yuWorm/yttt/releases/tag/v0.3.5"><img src="assets/app-icon/png/32.png" width="24" alt="yttt app icon"></a>
   &nbsp; macOS · Windows · Linux &nbsp; | &nbsp; Rust · GPUI
 </p>
 
 <p align="center"><strong>一个项目优先、终端优先的 Agent 工作台。</strong><br>
 Projects, terminals, files, and Agent sessions in one desktop workbench.</p>
 
-<p align="center"><a href="https://github.com/yuWorm/yttt/releases/tag/v0.3.4"><strong>下载 yttt / Download yttt</strong></a></p>
+<p align="center"><a href="https://github.com/yuWorm/yttt/releases/tag/v0.3.5"><strong>下载 yttt / Download yttt</strong></a></p>
 
 <p align="center">
   <img src="docs/images/readme-workbench.png" width="1200" alt="yttt workbench with five sample projects and multiple simulated Agent sessions">
 </p>
 <p align="center"><sub>最大化窗口实拍，终端文字为合成演示内容；项目与 Agent 状态为模拟数据，未运行真实 Agent。 / Maximized app capture with composited demo terminal text; projects and Agent states are simulated, with no Agent CLIs running.</sub></p>
 
-## v0.3.4 / 版本 0.3.4
+## v0.3.5 / 版本 0.3.5
 
-[Downloads / 下载](https://github.com/yuWorm/yttt/releases/tag/v0.3.4) ·
-[Release notes / 双语更新日志](CHANGELOG.md#034---2026-09-20) ·
-[Changes since the last public release / 与上一公开版对比](https://github.com/yuWorm/yttt/compare/v0.3.2...v0.3.4)
+[Downloads / 下载](https://github.com/yuWorm/yttt/releases/tag/v0.3.5) ·
+[Release notes / 双语更新日志](CHANGELOG.md#035---2026-09-23) ·
+[Changes since the last public release / 与上一公开版对比](https://github.com/yuWorm/yttt/compare/v0.3.4...v0.3.5)
 
-**中文**：yttt 将多个项目的终端、文件、布局与 Agent 状态集中在一个桌面工作台，
-支持本地及 SSH/TLS 远程工作区、会话恢复、全局 Vim 和可配置界面。
-v0.3.4 改进终端图像、会话重连、内置字体与托盘体验；完整变更及升级注意事项见更新日志。
+**中文**：本版新增 `yttt ctl` 桌面命令行控制、图片文件预览及默认应用打开文件，改善远端连接恢复、
+连接凭据保存、跨设备工作区同步和 Agent 状态，并修复 Windows 输入与标题栏拖动。
+桌面端、Host 和远端 Server 需同步升级；详细功能与升级说明见双语更新日志。
 
-**English:** yttt is a Rust desktop workbench for projects, terminals, files, layouts,
-and Agent sessions. It supports local and SSH/TLS remote workspaces, session restoration,
-Global Vim, and configurable UI. v0.3.4 improves terminal graphics, reconnects, bundled
-fonts, and the tray; see the bilingual release notes for details and upgrade guidance.
+**English:** this release adds `yttt ctl` desktop control, image previews, and opening files in external
+applications. It improves remote recovery, remembered credentials, workspace synchronization, and Agent
+status, and fixes Windows input and titlebar dragging. Upgrade desktop, Host, and remote Server together.
 
-> **版本说明 / Versioning:** 开发分支在已发布的 v1.0.0 之后回到了 pre-1.0 路线。
-> 旧版 1.0.0 用户请手动下载安装 v0.3.4；按 SemVer 比较的更新检查不会将其视为升级。
-> Development returned to pre-1.0 versioning after public v1.0.0. Users of 1.0.0 must
-> install v0.3.4 manually; a SemVer-based updater will not treat it as an upgrade.
+> **版本说明 / Versioning:** 开发分支在已发布的 v1.0.0 之后回到了 pre-1.0 路线，0.3.5 是新版本。
+> 旧版 1.0.0 用户请手动下载安装；按 SemVer 比较的更新检查不会将 0.3.5 视为升级。
+> Development returned to pre-1.0 versioning after the public v1.0.0 release. Version 0.3.5 is newer
+> work, but 1.0.0 users must install it manually rather than rely on SemVer update detection.
 
 ### Install / 安装
 
@@ -43,12 +42,12 @@ Download the package for your platform from the release page:
 
 | Platform / 平台 | Package / 安装包 |
 | --- | --- |
-| macOS Apple Silicon | `yttt-0.3.4-macos-aarch64.dmg` |
-| Windows x86_64 | `yttt-0.3.4-windows-x86_64-setup.exe` |
-| Linux x86_64 | `yttt-0.3.4-linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `yttt-0.3.5-macos-aarch64.dmg` |
+| Windows x86_64 | `yttt-0.3.5-windows-x86_64-setup.exe` |
+| Linux x86_64 | `yttt-0.3.5-linux-x86_64.tar.gz` |
 
 Open the DMG and copy yttt to Applications, run the Windows installer, or extract the Linux
-archive and launch `yttt-0.3.4-linux-x86_64/bin/yttt`. 校验下载文件时使用 Release 附带的 `SHA256SUMS`。
+archive and launch `yttt-0.3.5-linux-x86_64/bin/yttt`. 校验下载文件时使用 Release 附带的 `SHA256SUMS`。
 Verify downloads against the supplied `SHA256SUMS`. macOS packages are ad-hoc signed, not
 Developer ID signed or notarized. 无界面 `yttt-server` 另提供 Linux/macOS 的 x86_64 和 aarch64
 构建；桌面 SSH 连接可部署对应 Server。Headless Server builds cover Linux/macOS x86_64 and aarch64.
