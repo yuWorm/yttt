@@ -18,7 +18,10 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_virtual_list,
 };
-use yttt_agent_core::{AgentSnapshot, AgentViewState};
+use yttt_agent_core::{
+    AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTask, AgentTaskSource, AgentTurnState,
+    AgentViewState, ProviderId,
+};
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{ServerEvent, project::ProjectChange};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
@@ -2995,6 +2998,110 @@ impl WorkbenchView {
         root.project_file_watching_enabled = false;
         root
     }
+    /// A synthetic workspace for the README screenshot; no real Agent CLIs are launched.
+    pub fn readme_fixture(config_paths: AppConfigPaths) -> Self {
+        let mut workspace = Workspace::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_millis() as u64;
+        let projects = [
+            ("atlas", "Atlas", "Build API routes", "Review migrations"),
+            (
+                "design-system",
+                "Design System",
+                "Polish components",
+                "Audit accessibility",
+            ),
+            (
+                "gateway",
+                "Gateway",
+                "Harden auth flow",
+                "Check integration",
+            ),
+            ("studio", "Studio", "Refine onboarding", "Update docs"),
+            (
+                "yttt",
+                "yttt",
+                "Improve Agent sidebar",
+                "Review terminal layout",
+            ),
+        ];
+
+        for (slug, name, codex_task, claude_task) in projects {
+            let path = std::env::temp_dir().join("yttt-readme-showcase").join(slug);
+            std::fs::create_dir_all(path.join("src")).expect("README fixture project directory");
+            std::fs::write(
+                path.join("README.md"),
+                format!("# {name}\n\nSample project for the yttt README.\n"),
+            )
+            .expect("README fixture project file");
+            std::fs::write(path.join("src/main.rs"), "fn main() {}\n")
+                .expect("README fixture source file");
+            let layout = readme_fixture_layout(name);
+            let id = workspace
+                .open_project(
+                    ProjectDescriptor::new(
+                        ProjectId::from_legacy_location(&path.display().to_string()),
+                        ProjectLocation::local(path),
+                    ),
+                    layout,
+                )
+                .expect("README fixture layout should be valid");
+            for (tab_id, pane_id, provider, task, turn) in [
+                (
+                    "codex",
+                    "codex",
+                    "codex",
+                    codex_task,
+                    AgentTurnState::Working,
+                ),
+                (
+                    "claude",
+                    "claude",
+                    "claude",
+                    claude_task,
+                    match slug {
+                        "design-system" => AgentTurnState::Completed,
+                        "gateway" | "studio" => AgentTurnState::Working,
+                        _ => AgentTurnState::Waiting,
+                    },
+                ),
+            ] {
+                workspace
+                    .record_agent_snapshot(
+                        &id,
+                        tab_id,
+                        pane_id,
+                        AgentSnapshot {
+                            instance_id: AgentInstanceId::new(format!("{slug}-{provider}"))
+                                .unwrap(),
+                            provider_id: ProviderId::from_static(provider),
+                            generation: 1,
+                            process_state: AgentProcessState::Running,
+                            turn_state: turn,
+                            waiting_reason: None,
+                            waiting_message: None,
+                            task: AgentTask::new(task, AgentTaskSource::External),
+                            current_action: None,
+                            last_action_failed: false,
+                            children: Vec::new(),
+                            session: None,
+                            process_exit: None,
+                            state_started_at: now,
+                            updated_at: now,
+                        },
+                    )
+                    .expect("README fixture agent pane");
+            }
+        }
+
+        let mut root = Self::with_workspace_and_config_paths(workspace, config_paths, false);
+        root.terminal.start_processes = false;
+        root.project_file_watching_enabled = false;
+        root
+    }
+
     pub fn dev_fixture_for_test() -> Self {
         let mut root = Self::dev_fixture();
         root.terminal.start_processes = false;
@@ -4017,6 +4124,37 @@ fn dev_fixture_layout() -> ProjectLayout {
     "#,
     )
     .expect("static dev fixture TOML should parse")
+}
+
+fn readme_fixture_layout(name: &str) -> ProjectLayout {
+    toml::from_str(&format!(
+        r#"
+        [project]
+        name = "{name}"
+        default_tab = "workspace"
+
+        [[tabs]]
+        id = "workspace"
+        title = "Workspace"
+        [tabs.layout]
+        type = "split"
+        direction = "horizontal"
+        ratio = 0.5
+        left = {{ type = "pane", id = "left", title = "Terminal", command = "" }}
+        right = {{ type = "pane", id = "right", title = "Terminal", command = "" }}
+
+        [[tabs]]
+        id = "codex"
+        title = "Codex"
+        layout = {{ type = "pane", id = "codex", title = "Codex", command = "", kind = "agent" }}
+
+        [[tabs]]
+        id = "claude"
+        title = "Claude Code"
+        layout = {{ type = "pane", id = "claude", title = "Claude Code", command = "", kind = "agent" }}
+        "#
+    ))
+    .expect("static README fixture TOML should parse")
 }
 
 fn agent_exit_fixture_layout() -> ProjectLayout {

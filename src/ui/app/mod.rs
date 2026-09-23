@@ -69,7 +69,10 @@ pub fn run(
     let startup_mode = startup_mode_from_fixture(std::env::var("YTTT_DEV_FIXTURE").ok().as_deref());
     let terminal_performance_mode =
         cfg!(feature = "perf-metrics") && std::env::var_os("YTTT_TERMINAL_PERF_OUTPUT").is_some();
-    let host_runtime = if startup_mode == StartupMode::Normal {
+    let host_runtime = if matches!(
+        startup_mode,
+        StartupMode::Normal | StartupMode::ReadmeFixture
+    ) {
         HostRuntimeGlobal::start(profile.clone())
     } else {
         HostRuntimeGlobal::disabled()
@@ -368,83 +371,81 @@ fn open_workbench_window(
         .is_some_and(|runtime| runtime.pending_workspace_count() > 0 || runtime.is_remote());
     let should_check_for_updates =
         startup_mode == StartupMode::Normal && !crate::config::storage::is_remote();
-    cx.open_window(
-        workbench_window_options(bounds, window_context.app_settings.window.effect),
-        move |window, cx| {
-            let view = cx.new(|_| {
-                let force_onboarding =
-                    force_onboarding_from_env(std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref());
-                let view = match startup_mode {
-                    StartupMode::DevFixture => WorkbenchView::dev_fixture(),
-                    StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
-                    StartupMode::Normal => match intent {
-                        WindowIntent::OpenProjects(paths) => WorkbenchView::from_project_paths(
-                            config_paths.clone(),
-                            force_onboarding,
-                            paths,
-                        ),
-                        WindowIntent::Empty => WorkbenchView::from_project_paths(
+    let mut options = workbench_window_options(bounds, window_context.app_settings.window.effect);
+    if startup_mode == StartupMode::ReadmeFixture {
+        options.window_bounds = Some(WindowBounds::Maximized(bounds));
+    }
+    cx.open_window(options, move |window, cx| {
+        let view = cx.new(|_| {
+            let force_onboarding =
+                force_onboarding_from_env(std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref());
+            let view = match startup_mode {
+                StartupMode::DevFixture => WorkbenchView::dev_fixture(),
+                StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
+                StartupMode::ReadmeFixture => WorkbenchView::readme_fixture(config_paths.clone()),
+                StartupMode::Normal => match intent {
+                    WindowIntent::OpenProjects(paths) => WorkbenchView::from_project_paths(
+                        config_paths.clone(),
+                        force_onboarding,
+                        paths,
+                    ),
+                    WindowIntent::Empty => WorkbenchView::from_project_paths(
+                        config_paths.clone(),
+                        force_onboarding,
+                        Vec::new(),
+                    ),
+                    WindowIntent::Restore if !restore_existing => {
+                        WorkbenchView::from_project_paths(
                             config_paths.clone(),
                             force_onboarding,
                             Vec::new(),
-                        ),
-                        WindowIntent::Restore if !restore_existing => {
-                            WorkbenchView::from_project_paths(
-                                config_paths.clone(),
-                                force_onboarding,
-                                Vec::new(),
-                            )
-                        }
-                        WindowIntent::Restore if has_host_snapshot => {
-                            WorkbenchView::from_project_paths(
-                                config_paths.clone(),
-                                false,
-                                Vec::new(),
-                            )
-                        }
-                        WindowIntent::Restore => {
-                            WorkbenchView::from_startup(config_paths.clone(), force_onboarding)
-                        }
-                    },
-                };
-                let view = match login_startup.clone() {
-                    Some(manager) => view.with_login_startup(manager),
-                    None => view,
-                };
-                view.with_appearance_state(appearance)
-            });
-            workbenches.borrow_mut().push(view.downgrade());
-            let host_runtime = cx.global::<HostRuntimeGlobal>().clone();
-            view.update(cx, |view, _cx| {
-                view.set_host_runtime_status(&host_runtime);
-            });
-            view.update(cx, |view, cx| {
-                view.start_workspace_persistence(restore_existing, window, cx)
-            });
-            view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
-            if should_check_for_updates {
-                view.update(cx, |view, cx| view.start_update_check(window, cx));
-            }
-            if cx.has_global::<DesktopTrayGlobal>() {
-                let mut previous_locale = view.read(cx).ui_text().locale();
-                cx.global_mut::<DesktopTrayGlobal>().text = view.read(cx).ui_text();
-                cx.observe(&view, move |view, cx| {
-                    let text = view.read(cx).ui_text();
-                    if text.locale() != previous_locale {
-                        previous_locale = text.locale();
-                        cx.global_mut::<DesktopTrayGlobal>().text = text;
+                        )
                     }
-                })
-                .detach();
-            }
-            register_workbench_keybinding_interceptor(cx, &view);
-            register_workbench_focus_restore(window, cx, &view);
-            register_workbench_close_guard(window, cx, &view);
-            cx.activate(true);
-            window.activate_window();
-            cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
-        },
-    )?;
+                    WindowIntent::Restore if has_host_snapshot => {
+                        WorkbenchView::from_project_paths(config_paths.clone(), false, Vec::new())
+                    }
+                    WindowIntent::Restore => {
+                        WorkbenchView::from_startup(config_paths.clone(), force_onboarding)
+                    }
+                },
+            };
+            let view = match login_startup.clone() {
+                Some(manager) => view.with_login_startup(manager),
+                None => view,
+            };
+            view.with_appearance_state(appearance)
+        });
+        workbenches.borrow_mut().push(view.downgrade());
+        let host_runtime = cx.global::<HostRuntimeGlobal>().clone();
+        view.update(cx, |view, _cx| {
+            view.set_host_runtime_status(&host_runtime);
+        });
+        view.update(cx, |view, cx| {
+            view.start_workspace_persistence(restore_existing, window, cx)
+        });
+        view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
+        if should_check_for_updates {
+            view.update(cx, |view, cx| view.start_update_check(window, cx));
+        }
+        if cx.has_global::<DesktopTrayGlobal>() {
+            let mut previous_locale = view.read(cx).ui_text().locale();
+            cx.global_mut::<DesktopTrayGlobal>().text = view.read(cx).ui_text();
+            cx.observe(&view, move |view, cx| {
+                let text = view.read(cx).ui_text();
+                if text.locale() != previous_locale {
+                    previous_locale = text.locale();
+                    cx.global_mut::<DesktopTrayGlobal>().text = text;
+                }
+            })
+            .detach();
+        }
+        register_workbench_keybinding_interceptor(cx, &view);
+        register_workbench_focus_restore(window, cx, &view);
+        register_workbench_close_guard(window, cx, &view);
+        cx.activate(true);
+        window.activate_window();
+        cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
+    })?;
     Ok(())
 }
 
