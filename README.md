@@ -1,363 +1,127 @@
 <h1 align="center">
-  <img src="assets/app-icon/source/yttt-logo.svg" width="300" alt="yttt logo">
+  <img src="assets/app-icon/png/128.png" alt="yttt app icon" width="64" valign="middle"> yttt
 </h1>
 
-<p align="center">
-  <a href="https://github.com/yuWorm/yttt/releases/tag/v0.3.5"><img src="assets/app-icon/png/32.png" width="24" alt="yttt app icon"></a>
-  &nbsp; macOS · Windows · Linux &nbsp; | &nbsp; Rust · GPUI
-</p>
+<p align="center">macOS · Windows · Linux</p>
 
-<p align="center"><strong>一个项目优先、终端优先的 Agent 工作台。</strong><br>
-Projects, terminals, files, and Agent sessions in one desktop workbench.</p>
-
-<p align="center"><a href="https://github.com/yuWorm/yttt/releases/tag/v0.3.5"><strong>下载 yttt / Download yttt</strong></a></p>
+<p align="center"><sub><a href="README.zh-CN.md">中文</a> · <a href="README.md">English</a></sub></p>
 
 <p align="center">
-  <img src="docs/images/readme-workbench.png" width="1200" alt="yttt workbench with five sample projects and multiple simulated Agent sessions">
+  <strong>A project-first, terminal-first workbench for CLI agents.</strong><br>
+  Keep projects, terminals, files, and Agent sessions together.
 </p>
-<p align="center"><sub>最大化窗口实拍，终端文字为合成演示内容；项目与 Agent 状态为模拟数据，未运行真实 Agent。 / Maximized app capture with composited demo terminal text; projects and Agent states are simulated, with no Agent CLIs running.</sub></p>
 
-## v0.3.5 / 版本 0.3.5
+<h3 align="center"><a href="https://github.com/yuWorm/yttt/releases">Download yttt</a></h3>
 
-[Downloads / 下载](https://github.com/yuWorm/yttt/releases/tag/v0.3.5) ·
-[Release notes / 双语更新日志](CHANGELOG.md#035---2026-09-23) ·
-[Changes since the last public release / 与上一公开版对比](https://github.com/yuWorm/yttt/compare/v0.3.4...v0.3.5)
+<p align="center">
+  <img src="docs/images/readme-workbench.png" alt="yttt maximized workbench with five demo projects, Agent states, and split terminals" width="960">
+</p>
+<p align="center"><sub>Maximized app capture. Projects and Agent states are simulated; terminal text is composited demo content. No Agent CLI was launched.</sub></p>
 
-**中文**：本版新增 `yttt ctl` 桌面命令行控制、图片文件预览及默认应用打开文件，改善远端连接恢复、
-连接凭据保存、跨设备工作区同步和 Agent 状态，并修复 Windows 输入与标题栏拖动。
-桌面端、Host 和远端 Server 需同步升级；详细功能与升级说明见双语更新日志。
+## Features
 
-**English:** this release adds `yttt ctl` desktop control, image previews, and opening files in external
-applications. It improves remote recovery, remembered credentials, workspace synchronization, and Agent
-status, and fixes Windows input and titlebar dragging. Upgrade desktop, Host, and remote Server together.
+<table>
+<tr>
+<td width="50%" valign="top">
+<h3>Projects &amp; Agents</h3>
+<p>Switch projects without losing each project's tabs, layout, or Agent status.</p>
+<a href="docs/usage.md#product-model">Guide →</a>
+</td>
+<td width="50%" valign="top">
+<h3>Split Terminals</h3>
+<p>Split terminals inside tabs and keep multiple CLI workflows in view.</p>
+<a href="docs/usage.md#first-launch">Guide →</a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<h3>Files &amp; Editor</h3>
+<p>Browse project files, edit text, and preview images alongside terminals.</p>
+<a href="docs/usage.md#project-files-and-editor">Guide →</a>
+</td>
+<td width="50%" valign="top">
+<h3>Local &amp; Remote Workspaces</h3>
+<p>Connect to an existing desktop Host or open projects through SSH, with resources owned by their Host.</p>
+<a href="docs/usage.md#connect-to-an-existing-desktop-host">Desktop Host →</a> · <a href="docs/usage.md#ssh-projects">SSH →</a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<h3>Keys &amp; Appearance</h3>
+<p>Customize shortcuts, Global Vim, themes, and bars without mixing device and Host settings.</p>
+<a href="docs/usage.md#keybindings">Keybindings →</a> · <a href="docs/usage.md#configuration-targets">Settings →</a>
+</td>
+<td width="50%" valign="top">
+<h3>Desktop CLI</h3>
+<p>Use <code>yttt ctl</code> to inspect projects and Agent status, and manage tabs, panes, and terminal input.</p>
+<a href="docs/cli-control.md">CLI guide →</a>
+</td>
+</tr>
+</table>
 
-> **版本说明 / Versioning:** 开发分支在已发布的 v1.0.0 之后回到了 pre-1.0 路线，0.3.5 是新版本。
-> 旧版 1.0.0 用户请手动下载安装；按 SemVer 比较的更新检查不会将 0.3.5 视为升级。
-> Development returned to pre-1.0 versioning after the public v1.0.0 release. Version 0.3.5 is newer
-> work, but 1.0.0 users must install it manually rather than rely on SemVer update detection.
+## Agent workflows
 
-### Install / 安装
+Run the CLI agents you already use in terminal panes. yttt can show supported Agent lifecycle
+status in the project sidebar; a terminal command and an Agent-status integration are distinct.
+See [Agent status](docs/usage.md#agent-status).
 
-Download the package for your platform from the release page:
+## Download
 
-| Platform / 平台 | Package / 安装包 |
-| --- | --- |
-| macOS Apple Silicon | `yttt-0.3.5-macos-aarch64.dmg` |
-| Windows x86_64 | `yttt-0.3.5-windows-x86_64-setup.exe` |
-| Linux x86_64 | `yttt-0.3.5-linux-x86_64.tar.gz` |
+Get the desktop package for your platform from [GitHub Releases](https://github.com/yuWorm/yttt/releases):
 
-Open the DMG and copy yttt to Applications, run the Windows installer, or extract the Linux
-archive and launch `yttt-0.3.5-linux-x86_64/bin/yttt`. 校验下载文件时使用 Release 附带的 `SHA256SUMS`。
-Verify downloads against the supplied `SHA256SUMS`. macOS packages are ad-hoc signed, not
-Developer ID signed or notarized. 无界面 `yttt-server` 另提供 Linux/macOS 的 x86_64 和 aarch64
-构建；桌面 SSH 连接可部署对应 Server。Headless Server builds cover Linux/macOS x86_64 and aarch64.
+- **macOS Apple Silicon:** download the `.dmg` and drag yttt to Applications.
+- **Windows x86_64:** run the `.exe` installer.
+- **Linux x86_64:** extract the `.tar.gz` and run `bin/yttt` inside it.
 
-## Workbench
+Check the supplied SHA-256 sums. macOS packages are ad-hoc signed, not notarized.
+Keep desktop, Host, and remote Server on matching versions.
 
-The product direction is project-first and terminal-first, with lightweight project-file
-editing built into the same workbench:
+<details>
+<summary>Upgrading from the old 1.0.0 release</summary>
 
-- Open local projects, connect to an existing desktop Host, or deploy an independent Host through SSH.
-- Work in unified terminal and file tabs.
-- Browse project files from a lazy tree on the right.
-- Edit and save UTF-8 text files without leaving the terminal workflow.
-- Keep terminals, files, shared configuration, published drafts, and Agent tasks on their owning Host.
-- Split panes inside a tab.
-- Save personal layouts in the active environment.
-- Export shareable project layouts explicitly.
-- Track process-level agent CLI exits for tools such as Codex and Claude Code.
+Development returned to pre-1.0 versioning after v1.0.0. Install a newer pre-1.0 release manually;
+a SemVer-based updater will not treat it as an upgrade from 1.0.0.
 
-The desktop is a client of a profile-isolated headless Host that owns terminal, project, SSH, and
-Agent resources. Closing the last window keeps the native tray/menu-bar control plane available
-without terminating those resources; the tray can reopen windows, show resource counts, manage
-the Host lifecycle, and confirm the consequences of quitting. Desktop-owned Hosts stop with the desktop;
-explicitly started independent Hosts can outlive it. Environments without a tray can use the
-equivalent `--host-status`, `--start-host`, `--stop-host`, `--restart-host`, and
-`--force-stop-host` commands. Login startup is opt-in under **Settings → Permissions → Background
-Host**, with per-user registration on macOS, Windows, and Linux. See
-[Usage](docs/usage.md#desktop-and-host-lifecycle).
+</details>
 
-With **Restore last session** enabled (the default for new preferences), local and remote
-workspaces restore terminal/file tabs, splits and active items. Surviving Host processes reattach;
-after a cold restart, shells start clean and saved Agent sessions use their provider's resume
-command. Arbitrary commands and old prompts are never replayed. A failed Agent resume retains
-the original session. See [Session restoration](docs/usage.md#first-launch).
+## Get started
 
-## Project Files and Editor
+Open the app, choose a language and terminal font, then open a local project. Add terminal or
+Agent tabs, split a tab into panes, and open project files from the right-hand tree. For remote
+access and session restoration, follow the [usage guide](docs/usage.md).
 
-Each project keeps its own terminal/file tabs, active work item, file-tree expansion state,
-tree visibility, and tree width. Switching projects preserves those sessions. The folder
-button fixed at the end of the tab bar toggles the right project tree and shows an active
-state while the tree is open.
+To drive an already-running desktop from a script, start with `yttt ctl --help` or the
+[CLI examples](docs/cli-control.md).
 
-The left project sidebar and right file tree can both be resized by dragging their inner
-edges. File tabs provide language-aware highlighting, structural breadcrumbs, gutter folding,
-and in-file search alongside manual save, focus-change autosave, delayed autosave,
-external-change conflicts, and dirty file/project/window close protection. See
-[Usage](docs/usage.md) for commands, settings, and detailed behavior.
+## Documentation
 
-Supported source highlighting includes Bash, C, C#, C++, Fish, GDScript, Go, Java,
-JavaScript, Kotlin, Lua, PHP, PowerShell, Python, Ruby, Rust, Scala, Swift, TypeScript, XML,
-and Zig.
-Breadcrumbs follow the cursor through enclosing declarations; select one to move to that
-declaration. Fold multiline structures from the line-number gutter—the header and closing line
-remain visible while only the body hides. Open in-file search with the **Find** toolbar control,
-`⌘F` on macOS, or `Ctrl+F` elsewhere.
+- [Usage guide](docs/usage.md) — UI, remote access, session restoration, and settings.
+- [CLI control](docs/cli-control.md) — desktop commands and examples.
+- [Host/Client architecture](docs/host-client-architecture.md) — process and resource ownership.
+- [Changelog](CHANGELOG.md) — releases and upgrade notes (English and Chinese).
 
-### Editor Smoke Check
+## Develop
 
-- In a supported multiline source file, move into a nested declaration and select its breadcrumb;
-  the path must update and the click must move the cursor to the declaration.
-- Fold and unfold a multiline structural region in the line-number gutter; its header and closing
-  line must remain visible.
-- Open Find with the **Find** toolbar control, `⌘F` on macOS, and `Ctrl+F` elsewhere; confirm
-  next and previous navigate highlighted matches.
-
-## Keybindings and Vim Quick Start
-
-Open **Settings → Keybindings** to search commands, record one or more shortcut sequences,
-change the Vim leader key, and save. Changes take effect immediately. Search Settings for
-**Vim mode** and choose **Global** for one modal keymap across editors, terminals, project trees,
-settings, panes, tabs, and palettes; choose **Editor only** to keep Vim behavior inside project
-editors, or **Disabled** to turn it off.
-
-For a minimal manual configuration, edit `<local-profile-config>/device/keybindings.toml`:
-
-```toml
-schema_version = 6
-leader = "space"
-
-[[bindings]]
-keys = "<leader> f"
-command = "file.find"
-context = "Workspace"
-
-[[bindings]]
-keys = "<leader> p"
-command = "command_palette.open"
-context = "Workspace"
-```
-
-`<leader>` expands to the configured leader key. User entries are sparse overrides layered over
-the defaults; set `unbind = true` on an entry to remove its exact default assignment. The status
-bar shows the current Vim mode and pending multi-key sequence. In the focused **Projects** list,
-`j/k` and `gg/G` select opened projects. In the focused project tree, `j/k`, `h/l`, `gg/G`,
-Enter/`o`, `a/A`, `r/d`, `y/x/p`, `z`, `H/R`, `/`, and `q` provide configurable
-neo-tree-style navigation and file operations. `Ctrl-W h/j/k/l` traverses the Projects list,
-work-area panes and groups, and the right project tree. See [Usage](docs/usage.md#keybindings) for
-config paths and command IDs. In Global Vim Terminal mode, `Escape` and `Ctrl-[` remain process
-input; use `Ctrl-\ Ctrl-N` to return to Normal mode.
-
-## Connect to an Existing Desktop
-
-On computer A, open **Remote services → Remote access to this computer**. The listener is off
-by default and initially binds only `127.0.0.1:43123`. Enable it, copy its connection code and
-forward that TCP port with your preferred tunnel. On B, open **Remote services → Remote
-connections → Add connection → Network Host** (or run **Connect to existing yttt**). Paste A's
-code, adjust the address to B's forwarded endpoint, then choose **Save and connect**. This path
-uses TLS 1.3 and reuses A's desktop Host; it neither needs SSH login on A nor deploys `yttt-server`.
-
-The remote Client opens separately from B's local workspace. It restores A's saved work windows
-and drafts, and reads and writes A's original configuration and project files. Control belongs
-to one Client session for the entire profile, not one terminal or window. Normal takeover asks
-all of the previous Client's windows to publish before transferring input and write authority.
-After five seconds, force takeover requires a separate confirmation and uses only confirmed state.
-
-Connection information grants work access: share it privately. Optional remembered credentials
-use the OS keychain with no plaintext fallback. Disable access or reset credentials on A to
-disconnect all TCP channels without terminating existing tasks. Quitting A's desktop-owned Host
-does terminate them; use an explicitly started independent Host when desktop-independent lifetime
-is required. See [Usage](docs/usage.md#connect-to-an-existing-desktop-host).
-
-## SSH Projects
-
-Use **Open SSH Project** from the command palette, empty-workbench action, or project sidebar
-menu. The picker lists saved connections and provides **New connection** for quick setup; a first
-connection needs only its endpoint, authentication, and optional starting root. SSH agent,
-private-key (including a non-persisted passphrase), and password authentication are supported.
-Unknown host keys require an explicit trust decision. yttt stores remembered host keys in its own
-`ssh-host-keys.toml` and never reads or updates OpenSSH's `~/.ssh/known_hosts`. When a saved key
-changes, the confirmation shows both fingerprints and only replaces the saved key after explicit
-approval. Remembered passwords use the operating-system credential store; `ssh-connections.toml`
-contains only endpoint and credential-binding metadata.
-If a saved password is missing or rejected, the project picker asks for it again and lets you
-choose whether to replace the saved credential before retrying.
-Manage saved SSH and network Host endpoints together under **Remote services → Remote connections**.
-
-After authentication, yttt opens a separate remote Client window, visibly labeled with its SSH
-endpoint. It deploys the headless `yttt-server` for Linux/macOS on x86_64 or aarch64 and connects
-through SSH to a private Unix socket—no public application port is needed. The remote folder
-picker, project files, Git, terminals, Agent hooks/history, execution settings and layouts all
-belong to that Host. Appearance, keybindings and other Device preferences remain local and are
-not copied to the remote environment.
-
-The Host retains the workspace and unsaved editor drafts. Another Client can explicitly take
-control and restore them; the previous controller can no longer mutate remote state. Closing the
-remote Client leaves Host-owned processes running. After a Host or machine restart, the controlling
-Client restores tabs/layout and published drafts, recreates clean shells and resumes saved Agent
-sessions. Other command processes remain stopped until explicitly started; observers do not spawn them.
-Incompatible busy Hosts refuse automatic upgrade rather than terminating work.
-Legacy recent SSH project entries are retained and launch the new remote Client; they are not
-automatically mixed into local workspace restoration. See [Usage](docs/usage.md#ssh-projects).
-
-## CLI Control
-
-Control a running local desktop with `yttt ctl`: list projects, terminal tabs, panes,
-and Agent status; create shell/Agent tabs; split, focus, rename, resize, and close
-panes; send terminal input and read its visible contents. Use `--json` for scripts.
-Run `yttt ctl --help` or see [CLI Control](docs/cli-control.md) for examples and scope.
-
-## Run
+Build and launch from source with Rust:
 
 ```bash
 cargo run
-```
-
-Open one or more projects on startup with positional paths or `--project`:
-
-```bash
 cargo run -- /path/to/project
-cargo run -- --project /path/to/project
-YTTT_OPEN_PROJECT=/path/to/project cargo run
 ```
 
-Developer fixtures:
+On macOS, `scripts/run-dev-app.sh` creates a development `.app` bundle for GPUI UI checks.
+Use `scripts/run-dev-app.sh --fixture readme` to open five **simulated** projects for the
+screenshot above; it does not launch Agent CLIs.
 
-```bash
-YTTT_DEV_FIXTURE=1 cargo run
-YTTT_DEV_FIXTURE=agent-exit cargo run
-```
+<details>
+<summary>Release maintenance</summary>
 
-For GPUI smoke testing on macOS, use the dev app wrapper. It creates
-`target/dev-app/yttt.app` with a stable bundle id so local UI tools can identify the
-window more reliably than the naked debug binary:
+Build packages on their native platforms with `scripts/build-macos-dmg.sh`,
+`scripts/build-windows-installer.ps1`, and `scripts/build-linux-tar.sh`. Prepare a release
+with `python3 scripts/prepare_release.py <version>` (or `--repair-current` when repairing
+an existing version section), then run `python3 scripts/test_release_tools.py`.
+Review the manifest, lockfile, changelog, and README before tagging; wait for the required
+validation workflow on the release commit. The tag workflow validates that exact tag before
+building and publishing packages, Server binaries, update metadata, and checksums.
 
-```bash
-scripts/run-dev-app.sh --fixture dev
-scripts/run-dev-app.sh --fixture agent
-scripts/run-dev-app.sh --fixture readme # five demo projects and simulated Agent states; no Agent CLIs
-```
-
-Build release packages on their native platforms:
-
-```bash
-# macOS: target/macos/yttt.dmg
-scripts/build-macos-dmg.sh
-
-# Windows: target/windows/yttt-setup.exe (requires Inno Setup 6)
-pwsh scripts/build-windows-installer.ps1
-
-# Linux: target/linux/yttt-<version>-linux-<architecture>.tar.gz
-scripts/build-linux-tar.sh
-```
-
-Prepare and validate a release before creating its tag:
-
-```bash
-# Normal version bump.
-python3 scripts/prepare_release.py <version>
-
-# Use this instead when Cargo already has <version> and CHANGELOG contains
-# an older section with that version.
-python3 scripts/prepare_release.py <version> --repair-current
-
-python3 scripts/test_release_tools.py
-```
-
-Review `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and `README.md`, then commit and push them. Wait for
-`Validation / Required validation` to pass on the release commit before creating and pushing the
-annotated `v<version>` tag. The release workflow checks out and validates that exact tag again
-before any native packaging job starts. It rejects non-empty `Unreleased` notes, a mismatched
-version section, and an existing GitHub Release instead of replacing published assets.
-
-The workflow publishes the DMG, Inno Setup installer, Linux tarball, headless Server binaries for
-Linux/macOS x86_64 and aarch64, `update.json`, and SHA-256 checksums. GitHub Release notes and
-the update manifest use the same bilingual version section from `CHANGELOG.md`. The macOS package
-is ad-hoc signed; Developer ID signing and notarization still require release credentials.
-
-## Key Paths
-
-Project layout:
-
-```text
-<project>/.yttt/layout.toml
-```
-
-`$XDG_CONFIG_HOME/yttt` overrides the platform default when set. Otherwise the config root is
-`~/Library/Application Support/yttt` on macOS, `%APPDATA%\yttt` on Windows, and
-`~/.config/yttt` on Linux. Existing macOS and Windows `~/.config/yttt` data is moved to the
-native location on first launch when the native location does not already exist. `./.yttt` is
-used only when no platform user directory is available.
-
-Settings opens in an independent native window and is organized by **feature**, with search across
-localized labels, English names and configuration keys. Controls identify their **Local preferences**,
-**Environment**, or **Project** destination, effective source, apply timing and read-only reasons.
-Appearance, keybindings, Vim, notifications and other UI preferences live in
-`<local-profile-config>/device`, even while observing a remote Host. Host execution defaults remain
-in its original profile's `settings.toml`; Project overrides support editor tab size and language
-selection, with an explicit restore-environment-default action. Failed candidates and unpublished
-drafts remain recoverable. See [Configuration Targets](docs/usage.md#configuration-targets).
-
-Shareable Window Bar and Status Bar layout:
-
-```text
-<local-profile-config>/device/bars.toml
-```
-
-Open **Settings → Appearance → Window & status bars → Edit bars TOML** for the searchable
-component catalog, live draft previews and Recommended / Minimal / Development / Agent presets.
-Existing explicit layouts stay unchanged until saved. Spacing uses `[Space: N]` (1–256), not
-the earlier `[Space]` or `[Space*N]` forms. Performance sampling is shared and always on; templates
-only choose which metrics to display. See [Bars TOML](docs/usage.md#bars-toml).
-
-Global default layout:
-
-```text
-<app-config>/default-layout.toml
-```
-
-SSH connections:
-
-```text
-<app-config>/ssh-connections.toml
-```
-
-SSH host keys:
-
-```text
-<app-config>/ssh-host-keys.toml
-```
-
-Personal project layout:
-
-```text
-<app-config>/projects/<encoded-project-path>/layout.toml
-```
-
-Projects without `.yttt/layout.toml` dynamically inherit the global default. The project layout
-may omit `project.name`, in which case the project directory name is used. Personal project files
-use strict `version = 1` plus `mode = "patch" | "replace"`; unversioned legacy files are rejected
-with a visible warning.
-
-## More Docs
-
-- [Usage](docs/usage.md)
-- [Changelog / 双语发布日志](CHANGELOG.md)
-- [Host/Client architecture](docs/host-client-architecture.md)
-
-## Current Limits
-
-- Manual GPUI visual verification is still required for several phase gates.
-- Real terminal input/output and resize should be smoke-tested in the launched app.
-- Pointer split resize has code support, but still needs real GPUI smoke verification.
-- Agent status uses bounded provider hook and process metadata; terminal output parsing is intentionally not implemented.
-- Optional native notifications depend on OS authorization and desktop notification-service availability.
-- Project editing accepts UTF-8 text files up to 6 MiB; binary and invalid UTF-8 files are
-  rejected.
-- Continuous filesystem watching is local-only; remote documents are checked when their tree is
-  refreshed.
-- Copy/move paste operations involving an SSH project are not supported. Create, rename, and
-  delete are supported for local and SSH project trees.
-- SSH terminal and command startup currently requires a POSIX-compatible remote login shell.
-- Client/Host resource protocol compatibility is required (currently version 8); busy incompatible
-  Hosts refuse automatic replacement rather than terminate running work.
+</details>
