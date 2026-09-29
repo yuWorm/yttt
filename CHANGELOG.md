@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.6 - 2026-09-29
+
 - 修复关闭默认终端标签页后工作区无法恢复的问题：删除标签页时同步更新默认引用，
   自动修复历史快照中的失效默认引用；无效快照显示恢复失败和手动重试入口，不再无限加载。
 - Keep default terminal tab references valid after tab removal and repair stale defaults in saved

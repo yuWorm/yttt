@@ -368,7 +368,7 @@ impl WorkbenchView {
 
     pub(super) fn workspace_restore_failure_message(&self) -> Option<&str> {
         self.workspace_restore_failed()
-            .then(|| self.workspace_persistence.last_error.as_deref())
+            .then_some(self.workspace_persistence.last_error.as_deref())
             .flatten()
     }
     pub(crate) fn retain_pending_settings_recovery(
