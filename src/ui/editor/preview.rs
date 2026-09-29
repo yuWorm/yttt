@@ -105,24 +105,26 @@ pub fn decode_preview(bytes: Vec<u8>, svg: bool) -> anyhow::Result<DecodedPrevie
         let rejected_reference = Arc::new(AtomicBool::new(false));
         let data_rejected = rejected_reference.clone();
         let string_rejected = rejected_reference.clone();
-        let mut options = resvg::usvg::Options::default();
-        // Never resolve a remote SVG's references against the client's filesystem.
-        options.image_href_resolver = resvg::usvg::ImageHrefResolver {
-            resolve_data: Box::new(move |_, _, _| {
-                data_rejected.store(true, Ordering::Relaxed);
-                None
-            }),
-            resolve_string: Box::new(move |_, _| {
-                string_rejected.store(true, Ordering::Relaxed);
-                None
-            }),
-        };
         static FONTS: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
             let mut fonts = resvg::usvg::fontdb::Database::new();
             fonts.load_system_fonts();
             Arc::new(fonts)
         });
-        options.fontdb = FONTS.clone();
+        let options = resvg::usvg::Options {
+            // Never resolve a remote SVG's references against the client's filesystem.
+            image_href_resolver: resvg::usvg::ImageHrefResolver {
+                resolve_data: Box::new(move |_, _, _| {
+                    data_rejected.store(true, Ordering::Relaxed);
+                    None
+                }),
+                resolve_string: Box::new(move |_, _| {
+                    string_rejected.store(true, Ordering::Relaxed);
+                    None
+                }),
+            },
+            fontdb: FONTS.clone(),
+            ..Default::default()
+        };
         let tree = resvg::usvg::Tree::from_data(&bytes, &options)?;
         anyhow::ensure!(
             !rejected_reference.load(Ordering::Relaxed),
@@ -234,7 +236,7 @@ impl FilePreview {
     ) -> Self {
         cx.on_release(|this, cx| {
             if let Some(decoded) = this.decoded.take() {
-                let _ = cx.drop_image(decoded.image, None);
+                cx.drop_image(decoded.image, None);
             }
         })
         .detach();
@@ -255,7 +257,7 @@ impl FilePreview {
 
     pub fn complete(&mut self, result: Result<DecodedPreview, String>, cx: &mut Context<Self>) {
         if let Some(previous) = self.decoded.take() {
-            let _ = cx.drop_image(previous.image, None);
+            cx.drop_image(previous.image, None);
         }
         self.loading = false;
         self.error = None;
@@ -281,8 +283,7 @@ impl FilePreview {
             self.decoded.as_ref().map_or(1.0, |image| {
                 (f32::from(self.bounds.size.width) / image.width as f32)
                     .min(f32::from(self.bounds.size.height) / image.height as f32)
-                    .min(1.0)
-                    .max(0.001)
+                    .clamp(0.001, 1.0)
             })
         })
     }

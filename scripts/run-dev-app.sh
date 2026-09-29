@@ -8,7 +8,7 @@ print_bundle_path=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-dev-app.sh [--fixture dev|agent|none] [--no-build] [--no-open] [--print-bundle-path]
+Usage: scripts/run-dev-app.sh [--fixture dev|agent|readme|none] [--no-build] [--no-open] [--print-bundle-path]
 
 Creates target/dev-app/yttt.app with a stable macOS bundle id for GPUI smoke testing.
 EOF
@@ -61,6 +61,10 @@ export SHELL="$repo_root/$bundle_rel/Contents/MacOS/yttt-fixture-shell"'
     fixture_env='export YTTT_DEV_FIXTURE=agent-exit
 export SHELL="$repo_root/$bundle_rel/Contents/MacOS/yttt-fixture-shell"'
     ;;
+  readme)
+    fixture_env='export YTTT_DEV_FIXTURE=readme
+export SHELL="$repo_root/$bundle_rel/Contents/MacOS/yttt-fixture-shell"'
+    ;;
   none|"")
     fixture_env='unset YTTT_DEV_FIXTURE'
     ;;
@@ -74,6 +78,10 @@ esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bundle_rel="target/dev-app/yttt.app"
 bundle_dir="$repo_root/$bundle_rel"
+profile_root_default="$repo_root/target/dev-app/profile"
+if [[ "$fixture" == "readme" ]]; then
+  profile_root_default="/tmp/yttt-readme-showcase"
+fi
 contents_dir="$bundle_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
@@ -160,7 +168,7 @@ set -euo pipefail
 repo_root="$repo_root"
 bundle_rel="$bundle_rel"
 cd "\$repo_root"
-export YTTT_PROFILE_ROOT="\$repo_root/target/dev-app/profile"
+export YTTT_PROFILE_ROOT="\${YTTT_PROFILE_ROOT:-$profile_root_default}"
 $fixture_env
 exec "\$repo_root/$bundle_rel/Contents/MacOS/yttt-bin"
 EOF
