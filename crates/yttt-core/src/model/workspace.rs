@@ -443,6 +443,7 @@ impl Workspace {
         project
             .tab_states
             .retain(|tab| tab.tab_id != removed_tab.id);
+        repair_default_tab_after_removal(&mut project.layout);
 
         let next_index = tab_index.min(project.layout.tabs.len().saturating_sub(1));
         let next_tab_id = project.layout.tabs[next_index].id.clone();
@@ -496,6 +497,7 @@ impl Workspace {
         project
             .tab_states
             .retain(|tab| !removed.contains(&tab.tab_id));
+        repair_default_tab_after_removal(&mut project.layout);
 
         if selected_removed {
             if project.layout.tabs.is_empty() {
@@ -712,6 +714,7 @@ impl Workspace {
         project
             .tab_states
             .retain(|tab| tab.tab_id != removed_tab_id);
+        repair_default_tab_after_removal(&mut project.layout);
 
         if project.layout.tabs.is_empty() {
             project.selected_tab_id.clear();
@@ -1232,6 +1235,17 @@ fn default_tab_id(layout: &ProjectLayout) -> Option<String> {
         .default_tab
         .clone()
         .or_else(|| layout.tabs.first().map(|tab| tab.id.clone()))
+}
+
+fn repair_default_tab_after_removal(layout: &mut ProjectLayout) {
+    if layout
+        .project
+        .default_tab
+        .as_ref()
+        .is_some_and(|default_tab| layout.tab(default_tab).is_none())
+    {
+        layout.project.default_tab = layout.tabs.first().map(|tab| tab.id.clone());
+    }
 }
 
 fn normalized_title(title: &str) -> Result<String, WorkspaceError> {

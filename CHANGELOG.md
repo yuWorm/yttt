@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修复关闭默认终端标签页后工作区无法恢复的问题：删除标签页时同步更新默认引用，
+  自动修复历史快照中的失效默认引用；无效快照显示恢复失败和手动重试入口，不再无限加载。
+- Keep default terminal tab references valid after tab removal and repair stale defaults in saved
+  workspaces. Invalid snapshots now show a recovery failure with explicit retry instead of loading forever.
+
 - 新增 `yttt ctl` 本地桌面控制：查询项目、终端标签页、pane 和 Agent 状态，创建
   Shell／Agent 标签页、分屏和管理 pane，发送终端输入并读取当前内容；支持 JSON 输出、
   明确的窗口目标与 Host 输入回执，不自动接管控制权或重放命令。
