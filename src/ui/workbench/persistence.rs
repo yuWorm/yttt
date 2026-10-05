@@ -828,6 +828,9 @@ impl WorkbenchView {
                     }
                     Ok(None) => {
                         root.workspace_persistence.mode = root.restored_workspace_mode();
+                        // An unchanged revision still confirms that the Host read recovered.
+                        // A stale error would otherwise cancel the next control handoff.
+                        root.clear_workspace_persistence_error();
                     }
                     Ok(Some(prepared))
                         if !mutation_belongs_to_current_host(
@@ -2755,6 +2758,84 @@ mod tests {
             "stale local changes must not be published over the remote snapshot"
         );
     }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn recovered_observer_can_handoff_unchanged_workspace_again(cx: &mut gpui::TestAppContext) {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        use yttt_protocol::{Request, Response, session::ProfileControlRequest};
+
+        cx.update(gpui_component::init);
+        cx.background_executor.allow_parking();
+        cx.skip_drawing();
+        let host = RecoveryHost::start();
+        let local = host.client("handoff-local");
+        let paths = AppConfigPaths::from_config_dir(host.root.path().join("ui-config"));
+        let (view, cx) =
+            cx.add_window_view(|_, _| WorkbenchView::with_config_paths_for_test(paths));
+        view.update_in(cx, |root, window, cx| {
+            root.terminal.host_runtime = Some(local.clone());
+            root.start_workspace_persistence(true, window, cx);
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !local.sharing_ready() {
+            view.update_in(cx, |root, window, cx| {
+                root.tick_workspace_persistence(window, cx)
+            });
+            cx.run_until_parked();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "initial publication timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let remote = host.client("handoff-remote");
+        for (round, next) in [&remote, &local, &remote].into_iter().enumerate() {
+            next.request_blocking_typed(Request::ProfileControl(
+                ProfileControlRequest::RequestControl,
+            ))
+            .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                view.update_in(cx, |root, window, cx| {
+                    root.tick_workspace_persistence(window, cx)
+                });
+                cx.run_until_parked();
+                let Response::ProfileControl(status) = next
+                    .request_blocking_typed(Request::ProfileControl(ProfileControlRequest::Status))
+                    .unwrap()
+                else {
+                    panic!("expected profile control status")
+                };
+                if next.is_controller() {
+                    break;
+                }
+                assert!(
+                    status.transfer.is_some(),
+                    "profile transfer was cancelled; the previous Client retains its work: {:?}",
+                    view.read_with(cx, |root, _| (
+                        root.workspace_persistence.mode,
+                        root.workspace_persistence.last_error.clone(),
+                    ))
+                );
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "handoff timed out: {status:?}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if round == 0 {
+                // A transient observer read failed; subsequent real Host reads succeed
+                // without changing the saved workspace revision.
+                view.update(cx, |root, _| {
+                    root.set_workspace_persistence_error(
+                        "Remote workspace control is unavailable: client is not connected".into(),
+                    );
+                });
+            }
+        }
+    }
+
     #[gpui::test]
     fn cold_workspace_restore_preserves_mixed_tabs_and_file_contents(
         cx: &mut gpui::TestAppContext,

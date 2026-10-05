@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修复远程工作区恢复连接后，历史读取错误仍导致下一次控制权交接取消的问题：
+  即使工作区版本未变化，成功重新读取后也会清除旧错误；真正未保存的工作区和设置仍阻止交接。
+- Clear stale workspace-read errors after successful recovery, including unchanged revisions,
+  so later control handoffs are not cancelled by an already-resolved connection failure.
+
 - 新增 `yttt ctl` 本地桌面控制：查询项目、终端标签页、pane 和 Agent 状态，创建
   Shell／Agent 标签页、分屏和管理 pane，发送终端输入并读取当前内容；支持 JSON 输出、
   明确的窗口目标与 Host 输入回执，不自动接管控制权或重放命令。

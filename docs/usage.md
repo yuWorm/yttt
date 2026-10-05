@@ -306,6 +306,9 @@ change Device preferences but cannot write Host or Project settings. One authent
 session controls the entire profile across all its windows. During normal handoff the old Client
 freezes shared editing and terminal input, publishes all windows, then relinquishes control.
 A workspace or settings save failure cancels handoff.
+After a successful workspace read, a resolved read error no longer blocks later handoffs, even
+when the saved revision is unchanged. Pending edits and settings-save failures still require
+successful publication before normal handoff.
 The five-second deadline never automatically grants control: **Force takeover** explicitly chooses
 the last durable state. The former controller remains an observer; reconnecting does not replay
 old mutations or automatically regain input authority.
