@@ -52,6 +52,7 @@ enum WorkspacePersistenceMode {
     Active,
     Observer,
     ControlLost,
+    RestoreFailed,
 }
 
 struct PendingWorkspaceCommit {
@@ -150,7 +151,7 @@ impl RemoteWorkspaceSnapshot {
         if value.as_object().is_some_and(|object| object.is_empty()) {
             return Ok(Self::empty());
         }
-        let snapshot: Self = serde_json::from_value(value)
+        let mut snapshot: Self = serde_json::from_value(value)
             .map_err(|error| format!("remote workspace snapshot is invalid: {error}"))?;
         if snapshot.schema_version != REMOTE_WORKSPACE_SCHEMA_VERSION {
             return Err(format!(
@@ -158,6 +159,7 @@ impl RemoteWorkspaceSnapshot {
                 snapshot.schema_version
             ));
         }
+        repair_legacy_default_tabs(&mut snapshot.workspace);
         let workspace = Workspace::restore_persisted_state(snapshot.workspace.clone())
             .map_err(|error| format!("remote workspace core state is invalid: {error}"))?;
         let mut project_roots = HashMap::new();
@@ -223,6 +225,22 @@ impl RemoteWorkspaceSnapshot {
     }
 }
 
+fn repair_legacy_default_tabs(workspace: &mut WorkspaceState) {
+    for project in &mut workspace.opened_projects {
+        let Some(default_tab) = project.layout.project.default_tab.as_ref() else {
+            continue;
+        };
+        if project.layout.tab(default_tab).is_some() {
+            continue;
+        }
+        project.layout.project.default_tab = project
+            .layout
+            .tab(&project.selected_tab_id)
+            .map(|tab| tab.id.clone())
+            .or_else(|| project.layout.tabs.first().map(|tab| tab.id.clone()));
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RemoteDocumentSnapshot {
     project_id: ProjectId,
@@ -266,6 +284,23 @@ struct PreparedRemoteRestore {
     services: HashMap<ProjectId, ProjectServices>,
     available_terminal_sessions: HashSet<String>,
     losses: Vec<RemoteResourceLoss>,
+}
+
+#[derive(Debug)]
+enum RemoteWorkspaceOpenError {
+    ControlConflict(String),
+    InvalidSnapshot(String),
+    Retryable(String),
+}
+
+impl RemoteWorkspaceOpenError {
+    fn from_request(error: String) -> Self {
+        if is_workspace_control_conflict(&error) {
+            Self::ControlConflict(error)
+        } else {
+            Self::Retryable(error)
+        }
+    }
 }
 
 impl WorkbenchView {
@@ -325,6 +360,16 @@ impl WorkbenchView {
                 | WorkspacePersistenceMode::Loading
                 | WorkspacePersistenceMode::Restoring
         )
+    }
+
+    pub(super) fn workspace_restore_failed(&self) -> bool {
+        self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed
+    }
+
+    pub(super) fn workspace_restore_failure_message(&self) -> Option<&str> {
+        self.workspace_restore_failed()
+            .then_some(self.workspace_persistence.last_error.as_deref())
+            .flatten()
     }
     pub(crate) fn retain_pending_settings_recovery(
         &mut self,
@@ -416,7 +461,9 @@ impl WorkbenchView {
         } else {
             "本地".to_string()
         };
-        let state = if self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost {
+        let state = if self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed {
+            " · 恢复失败"
+        } else if self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost {
             " · 未同步，编辑已保留"
         } else if self.workspace_persistence.recoverable_draft_path.is_some() {
             self.ui_text
@@ -568,6 +615,38 @@ impl WorkbenchView {
         self.request_workspace_control_and_open(runtime, workspace_id, window, cx);
     }
 
+    pub(super) fn retry_failed_workspace_restore(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_persistence.mode != WorkspacePersistenceMode::RestoreFailed {
+            return;
+        }
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            self.set_workspace_persistence_error(
+                "Cannot retry workspace restore because the Host is unavailable".to_string(),
+            );
+            return;
+        };
+        let Some(workspace_id) = self
+            .workspace_persistence
+            .view
+            .as_ref()
+            .map(|view| view.id().clone())
+        else {
+            self.set_workspace_persistence_error(
+                "Cannot retry workspace restore because its Host workspace identity is unavailable"
+                    .to_string(),
+            );
+            return;
+        };
+        self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+        self.clear_workspace_persistence_error();
+        self.request_workspace_control_and_open(runtime, workspace_id, window, cx);
+        cx.notify();
+    }
+
     fn start_workspace_persistence_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_persistence.tick_task.is_some() {
             return;
@@ -590,6 +669,9 @@ impl WorkbenchView {
     }
 
     fn tick_workspace_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed {
+            return;
+        }
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
             self.workspace_persistence.pending_commit = None;
@@ -776,23 +858,22 @@ impl WorkbenchView {
         let local_import = !runtime.is_remote();
         let runtime_for_open = runtime.clone();
         let open_task = cx.background_spawn(async move {
-            acquire_control_and_open(&runtime_for_open, request_workspace_id.clone()).and_then(
-                |(server_snapshot, revision)| {
-                    if known_revision == Some(revision)
-                        && known_epoch == remote_host_epoch(&runtime_for_open)
-                    {
-                        Ok(None)
-                    } else {
-                        prepare_remote_restore(
-                            &runtime_for_open,
-                            &request_workspace_id,
-                            server_snapshot,
-                            revision,
-                        )
-                        .map(Some)
-                    }
-                },
-            )
+            let (server_snapshot, revision) =
+                acquire_control_and_open(&runtime_for_open, request_workspace_id.clone())
+                    .map_err(RemoteWorkspaceOpenError::from_request)?;
+            if known_revision == Some(revision)
+                && known_epoch == remote_host_epoch(&runtime_for_open)
+            {
+                Ok(None)
+            } else {
+                prepare_remote_restore(
+                    &runtime_for_open,
+                    &request_workspace_id,
+                    server_snapshot,
+                    revision,
+                )
+                .map(Some)
+            }
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = open_task.await;
@@ -899,7 +980,7 @@ impl WorkbenchView {
                             cx,
                         );
                     }
-                    Err(error) if is_workspace_control_conflict(&error) => {
+                    Err(RemoteWorkspaceOpenError::ControlConflict(error)) => {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
                         if preserve_local {
                             root.preserve_unpublished_workspace_drafts(
@@ -914,7 +995,10 @@ impl WorkbenchView {
                             ));
                         }
                     }
-                    Err(error) => {
+                    Err(RemoteWorkspaceOpenError::InvalidSnapshot(error)) => {
+                        root.set_remote_workspace_restore_failure(error);
+                    }
+                    Err(RemoteWorkspaceOpenError::Retryable(error)) => {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
                         root.workspace_persistence.pending_commit = None;
                         root.set_workspace_persistence_error(format!(
@@ -938,8 +1022,7 @@ impl WorkbenchView {
             match Workspace::restore_persisted_state(prepared.snapshot.workspace.clone()) {
                 Ok(workspace) => workspace,
                 Err(error) => {
-                    self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
-                    self.set_workspace_persistence_error(format!(
+                    self.set_remote_workspace_restore_failure(format!(
                         "Remote workspace state could not be restored: {error}"
                     ));
                     return;
@@ -970,8 +1053,7 @@ impl WorkbenchView {
             .workspace_mut()
             .restore_snapshot(prepared.snapshot.editor.clone(), &terminal_ids)
         {
-            self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
-            self.set_workspace_persistence_error(format!(
+            self.set_remote_workspace_restore_failure(format!(
                 "Remote editor layout could not be restored: {error}"
             ));
             return;
@@ -2105,6 +2187,18 @@ impl WorkbenchView {
         }
     }
 
+    fn set_remote_workspace_restore_failure(&mut self, error: String) {
+        self.workspace_persistence.mode = WorkspacePersistenceMode::RestoreFailed;
+        self.workspace_persistence.pending_commit = None;
+        let message = format!(
+            "Remote workspace snapshot is invalid and cannot be restored: {error}. Repair or reset the saved workspace state on the Host, then retry."
+        );
+        self.set_workspace_persistence_error(message.clone());
+        if let Some(view) = &self.workspace_persistence.view {
+            view.published(None, None, Some(message));
+        }
+    }
+
     fn set_workspace_resource_loss(&mut self, message: String) {
         if self.workspace_persistence.resource_loss_message.as_deref() == Some(message.as_str()) {
             return;
@@ -2311,14 +2405,18 @@ fn prepare_remote_restore(
     workspace_id: &WorkspaceId,
     server_snapshot: serde_json::Value,
     revision: u64,
-) -> Result<PreparedRemoteRestore, String> {
-    let mut snapshot = RemoteWorkspaceSnapshot::from_value(server_snapshot.clone())?;
+) -> Result<PreparedRemoteRestore, RemoteWorkspaceOpenError> {
+    let mut snapshot = RemoteWorkspaceSnapshot::from_value(server_snapshot.clone())
+        .map_err(RemoteWorkspaceOpenError::InvalidSnapshot)?;
     for document in &mut snapshot.documents {
         if let Some(reference) = document.draft_ref.as_ref() {
-            match runtime.workspace_request(WorkspaceRequest::GetDraft {
-                workspace_id: workspace_id.clone(),
-                reference: reference.clone(),
-            })? {
+            match runtime
+                .workspace_request(WorkspaceRequest::GetDraft {
+                    workspace_id: workspace_id.clone(),
+                    reference: reference.clone(),
+                })
+                .map_err(RemoteWorkspaceOpenError::from_request)?
+            {
                 WorkspaceResponse::Draft {
                     reference: received,
                     content,
@@ -2326,20 +2424,37 @@ fn prepare_remote_restore(
                     document.draft = Some(DraftContentRevision {
                         revision: reference.revision,
                         base: reference.base.clone(),
-                        content: String::from_utf8(content).map_err(|error| error.to_string())?,
+                        content: String::from_utf8(content).map_err(|error| {
+                            RemoteWorkspaceOpenError::InvalidSnapshot(format!(
+                                "Host returned non-text content for restored draft: {error}"
+                            ))
+                        })?,
                     });
                 }
-                _ => return Err("Host returned an unexpected draft body".to_string()),
+                _ => {
+                    return Err(RemoteWorkspaceOpenError::InvalidSnapshot(
+                        "Host returned an unexpected draft body".to_string(),
+                    ));
+                }
             }
         }
     }
-    let mut workspace = Workspace::restore_persisted_state(snapshot.workspace.clone())
-        .map_err(|error| format!("remote workspace core state is invalid: {error}"))?;
-    let host_epoch = remote_host_epoch(runtime)
-        .ok_or_else(|| "Remote Host is not ready for resource reconciliation".to_string())?;
-    let catalog = runtime
-        .resource_catalog()
-        .ok_or_else(|| "Remote Host resource catalog is unavailable".to_string())?;
+    let mut workspace =
+        Workspace::restore_persisted_state(snapshot.workspace.clone()).map_err(|error| {
+            RemoteWorkspaceOpenError::InvalidSnapshot(format!(
+                "remote workspace core state is invalid: {error}"
+            ))
+        })?;
+    let host_epoch = remote_host_epoch(runtime).ok_or_else(|| {
+        RemoteWorkspaceOpenError::Retryable(
+            "Remote Host is not ready for resource reconciliation".to_string(),
+        )
+    })?;
+    let catalog = runtime.resource_catalog().ok_or_else(|| {
+        RemoteWorkspaceOpenError::Retryable(
+            "Remote Host resource catalog is unavailable".to_string(),
+        )
+    })?;
     let available_terminal_sessions = catalog
         .terminals
         .iter()
@@ -2381,22 +2496,24 @@ fn prepare_remote_restore(
     let mut services = HashMap::new();
     for project in &snapshot.workspace.opened_projects {
         let ProjectLocation::Local { path } = &project.location else {
-            return Err(format!(
+            return Err(RemoteWorkspaceOpenError::InvalidSnapshot(format!(
                 "remote workspace project {} uses a legacy SSH location",
                 project.id.as_str()
-            ));
+            )));
         };
         let service = ProjectServices::host(runtime.clone(), project.id.clone(), path.clone())
             .map_err(|error| {
-                format!(
+                RemoteWorkspaceOpenError::Retryable(format!(
                     "Remote Host project registration failed for {}: {error}",
                     path.display()
-                )
+                ))
             })?;
         services.insert(project.id.clone(), service);
     }
     Ok(PreparedRemoteRestore {
         snapshot,
+        // Keep the remote source snapshot as the baseline. If legacy repair changed it,
+        // the repaired local snapshot remains dirty and is committed on the next tick.
         server_snapshot,
         revision,
         host_epoch,
@@ -2837,7 +2954,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn cold_workspace_restore_preserves_mixed_tabs_and_file_contents(
+    fn cold_workspace_restore_repairs_stale_default_tab_and_preserves_mixed_tabs_and_file_contents(
         cx: &mut gpui::TestAppContext,
     ) {
         use crate::ui::editor::{WorkAreaDropEdge, WorkAreaDropPlacement, WorkItemId};
@@ -2868,7 +2985,7 @@ mod tests {
         let source = cx.new(|_| {
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone())
         });
-        let (server_snapshot, expected_area, document_id) = source.update(cx, |root, cx| {
+        let (mut server_snapshot, expected_area, document_id) = source.update(cx, |root, cx| {
             let session = root
                 .project
                 .project_editor_runtime
@@ -2893,6 +3010,8 @@ mod tests {
                 document,
             )
         });
+        server_snapshot["workspace"]["opened_projects"][0]["layout"]["project"]["default_tab"] =
+            serde_json::json!("removed-tab");
         let mut snapshot = RemoteWorkspaceSnapshot::from_value(server_snapshot.clone()).unwrap();
         let mut restored = Workspace::restore_persisted_state(snapshot.workspace).unwrap();
         let losses = restored.reconcile_host_resources(&HashSet::new());
@@ -2953,10 +3072,108 @@ mod tests {
                     .project(&project_id)
                     .unwrap()
                     .layout
+                    .project
+                    .default_tab
+                    .as_deref(),
+                Some("dev")
+            );
+            assert_eq!(
+                root.workspace
+                    .project(&project_id)
+                    .unwrap()
+                    .layout
                     .tabs
                     .len(),
                 2
             );
+        });
+    }
+
+    #[gpui::test]
+    fn legacy_snapshot_repairs_stale_default_tab_without_losing_editor_state(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let temp = tempfile::tempdir().unwrap();
+        let project_path = temp.path().join("project");
+        fs::create_dir(&project_path).unwrap();
+        let project_path = project_path.canonicalize().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let mut workspace = Workspace::new();
+        let project_id = workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::new("legacy-default-project"),
+                    ProjectLocation::local(project_path.clone()),
+                ),
+                dev_fixture_layout(),
+            )
+            .unwrap();
+        let source =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        let (mut legacy, document_id) = source.update(cx, |root, cx| {
+            let document = root
+                .project
+                .project_editor_runtime
+                .workspace_mut()
+                .session_mut(&project_id)
+                .unwrap()
+                .open_file(project_path.join("note.txt"));
+            (
+                root.build_remote_workspace_snapshot(cx).unwrap().0,
+                document,
+            )
+        });
+        let editor = legacy["editor"].clone();
+        let documents = legacy["documents"].clone();
+        legacy["workspace"]["opened_projects"][0]["layout"]["project"]["default_tab"] =
+            serde_json::json!("removed-tab");
+
+        let repaired = RemoteWorkspaceSnapshot::from_value(legacy.clone()).unwrap();
+        let project = &repaired.workspace.opened_projects[0];
+        assert_eq!(project.layout.project.default_tab.as_deref(), Some("dev"));
+        assert_eq!(
+            project
+                .layout
+                .tabs
+                .iter()
+                .map(|tab| tab.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dev", "agent"]
+        );
+        assert!(repaired.editor.contains_document(&document_id));
+        let encoded_repaired = serde_json::to_value(&repaired).unwrap();
+        assert_eq!(encoded_repaired["editor"], editor);
+        assert_eq!(encoded_repaired["documents"], documents);
+
+        source.update(cx, |root, cx| {
+            root.workspace_persistence.last_committed_snapshot = Some(legacy);
+            assert!(
+                root.has_unpublished_workspace_snapshot(cx),
+                "the repaired default tab must be published back to the Host"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn invalid_remote_snapshot_stops_automatic_restore_retries(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let mut invalid = serde_json::to_value(RemoteWorkspaceSnapshot::empty()).unwrap();
+        invalid["workspace"]["selected_project_id"] = serde_json::json!("missing-project");
+        let error = RemoteWorkspaceSnapshot::from_value(invalid).unwrap_err();
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let (root, cx) =
+            cx.add_window_view(|_, _| WorkbenchView::with_config_paths_for_test(paths));
+
+        root.update_in(cx, |root, window, cx| {
+            root.set_remote_workspace_restore_failure(error);
+            root.tick_workspace_persistence(window, cx);
+            assert_eq!(
+                root.workspace_persistence.mode,
+                WorkspacePersistenceMode::RestoreFailed
+            );
+            assert!(!root.workspace_is_loading());
         });
     }
 

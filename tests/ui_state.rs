@@ -1140,10 +1140,19 @@ fn double_clicking_project_row_toggles_agent_list(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(local_project(project_path), sample_layout())
+        .unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -1197,6 +1206,8 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
 
     for width in [960.0, 1600.0] {
         cx.simulate_resize(size(px(width), px(720.0)));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
         for (tab, page) in [
             (
                 "project-panel-tab-agent-sessions",
@@ -1211,9 +1222,9 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
 
             let tabs = cx.debug_bounds("project-panel-tabs").unwrap();
             let tabbar_border = cx.debug_bounds("project-tabbar-border-1").unwrap();
-            let page = cx
-                .debug_bounds(page)
-                .expect("clicked panel page should render");
+            let page = cx.debug_bounds(page).unwrap_or_else(|| {
+                panic!("clicked {tab} at {button:?} should render {page} after resizing to {width}")
+            });
             assert_eq!(tabs.bottom(), tabbar_border.bottom());
             assert_eq!(page.origin.y, tabs.bottom());
         }

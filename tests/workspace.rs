@@ -299,6 +299,50 @@ fn close_selected_tab_selects_adjacent_tab() {
     assert_eq!(project.selected_tab_id, "dev");
     assert!(project.layout.tab("agent").is_none());
     assert!(project.tab_state("agent").is_none());
+    assert_eq!(project.layout.project.default_tab.as_deref(), Some("dev"));
+    assert!(Workspace::restore_persisted_state(workspace.persisted_state()).is_ok());
+}
+
+#[test]
+fn closing_default_tab_reassigns_default_tab_for_persisted_state() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+        .unwrap();
+    workspace.select_tab("dev").unwrap();
+
+    workspace.close_selected_tab().unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(project.layout.project.default_tab.as_deref(), Some("agent"));
+    let restored = Workspace::restore_persisted_state(workspace.persisted_state()).unwrap();
+    assert_eq!(
+        restored
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .project
+            .default_tab
+            .as_deref(),
+        Some("agent")
+    );
+}
+
+#[test]
+fn restoring_state_rejects_missing_default_tab() {
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+        .unwrap();
+    let mut state = workspace.persisted_state();
+    state.opened_projects[0].layout.project.default_tab = Some("missing".to_string());
+
+    assert_eq!(
+        Workspace::restore_persisted_state(state).unwrap_err(),
+        yttt::model::workspace::WorkspaceRestoreError::InvalidLayout(
+            yttt::model::layout::LayoutError::MissingDefaultTab("missing".to_string())
+        )
+    );
 }
 
 #[test]
@@ -320,6 +364,20 @@ fn close_selected_tab_rejects_last_tab() {
 }
 
 #[test]
+fn bulk_closing_default_tab_reassigns_default_tab_for_persisted_state() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+        .unwrap();
+
+    workspace.close_tabs(&["dev".to_string()]).unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(project.layout.project.default_tab.as_deref(), Some("agent"));
+    assert!(Workspace::restore_persisted_state(workspace.persisted_state()).is_ok());
+}
+
+#[test]
 fn bulk_tab_close_can_leave_a_project_without_terminal_tabs() {
     let mut workspace = Workspace::new();
     let project_id = workspace
@@ -335,6 +393,8 @@ fn bulk_tab_close_can_leave_a_project_without_terminal_tabs() {
     assert!(project.layout.tabs.is_empty());
     assert!(project.tab_states.is_empty());
     assert!(project.selected_tab_id.is_empty());
+    assert!(project.layout.project.default_tab.is_none());
+    assert!(Workspace::restore_persisted_state(workspace.persisted_state()).is_ok());
     assert!(workspace.create_shell_tab().is_ok());
 }
 
@@ -404,10 +464,12 @@ fn process_exit_closes_exact_pane_without_changing_project_selection() {
 }
 
 #[test]
-fn process_exit_closes_single_pane_tab() {
+fn process_exit_closes_default_single_pane_tab() {
     let mut workspace = Workspace::new();
+    let mut layout = sample_layout();
+    layout.project.default_tab = Some("agent".to_string());
     let project_id = workspace
-        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), layout)
         .unwrap();
     workspace.select_tab("agent").unwrap();
 
@@ -420,6 +482,8 @@ fn process_exit_closes_single_pane_tab() {
     assert!(project.layout.tab("agent").is_none());
     assert!(project.tab_state("agent").is_none());
     assert_eq!(project.selected_tab_id, "dev");
+    assert_eq!(project.layout.project.default_tab.as_deref(), Some("dev"));
+    assert!(Workspace::restore_persisted_state(workspace.persisted_state()).is_ok());
 }
 
 #[test]
@@ -442,6 +506,8 @@ fn process_exit_keeps_project_open_when_last_tab_closes() {
     assert!(project.layout.tabs.is_empty());
     assert!(project.tab_states.is_empty());
     assert_eq!(project.selected_tab_id, "");
+    assert!(project.layout.project.default_tab.is_none());
+    assert!(Workspace::restore_persisted_state(workspace.persisted_state()).is_ok());
 }
 
 #[test]

@@ -77,6 +77,39 @@ impl Render for WorkbenchView {
                 .items_center()
                 .justify_center()
                 .child("正在恢复工作区…")
+        } else if self.workspace_restore_failed() {
+            let error = self
+                .workspace_restore_failure_message()
+                .map(str::to_owned)
+                .unwrap_or_else(|| "The saved workspace state could not be restored.".to_string());
+            div()
+                .flex()
+                .flex_1()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(appearance.style.spacing.md)
+                .px(appearance.style.spacing.xl)
+                .child(div().text_lg().child("Workspace restore failed"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(appearance.ui.text_muted)
+                        .child(error),
+                )
+                .child(
+                    yttt_button(
+                        "retry-workspace-restore",
+                        self.ui_text.get(UiTextKey::Retry),
+                        YtttButtonVariant::Secondary,
+                        appearance.ui,
+                        appearance.style,
+                        cx,
+                    )
+                    .on_click(cx.listener(|root, _, window, cx| {
+                        root.retry_failed_workspace_restore(window, cx)
+                    })),
+                )
         } else if let Some(onboarding) = self.onboarding.as_ref() {
             let command_palette_keybinding =
                 self.display_keybinding_for_command(CommandId::CommandPaletteOpen);

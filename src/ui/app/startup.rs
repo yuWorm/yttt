@@ -11,12 +11,14 @@ pub enum StartupMode {
     Normal,
     DevFixture,
     AgentExitFixture,
+    ReadmeFixture,
 }
 
 pub fn startup_mode_from_fixture(value: Option<&str>) -> StartupMode {
     match value {
         Some("1") => StartupMode::DevFixture,
         Some("agent-exit") => StartupMode::AgentExitFixture,
+        Some("readme") => StartupMode::ReadmeFixture,
         _ => StartupMode::Normal,
     }
 }
