@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.7 - 2026-10-05
+
 - 修复远程工作区恢复连接后，历史读取错误仍导致下一次控制权交接取消的问题：
   即使工作区版本未变化，成功重新读取后也会清除旧错误；真正未保存的工作区和设置仍阻止交接。
 - Clear stale workspace-read errors after successful recovery, including unchanged revisions,
