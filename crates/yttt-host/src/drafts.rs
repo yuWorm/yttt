@@ -138,6 +138,21 @@ impl DraftObjects {
             Err(error) => Err(error),
         }
     }
+
+    pub fn remove_workspace(&self, workspace: &WorkspaceId) -> io::Result<()> {
+        let directory = self.directory(workspace);
+        match fs::symlink_metadata(&directory) {
+            Ok(_) => {
+                check_directory(&directory)?;
+                fs::remove_dir_all(directory)?;
+                #[cfg(unix)]
+                fs::File::open(&self.root)?.sync_all()?;
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 fn digest_name(digest: &[u8; 32]) -> String {

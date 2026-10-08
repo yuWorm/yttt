@@ -46,6 +46,7 @@ pub struct WorkspaceService {
 struct ServiceState {
     workspaces: HashMap<WorkspaceId, WorkspaceRecord>,
     next_temporary_file: u64,
+    history_initialized: bool,
 }
 
 #[derive(Clone)]
@@ -55,6 +56,7 @@ struct WorkspaceRecord {
     drafts: Vec<DraftRef>,
     name: String,
     saved_millis: u64,
+    restore_on_startup: bool,
     completed_operations: VecDeque<CompletedOperation>,
 }
 
@@ -71,6 +73,8 @@ struct PersistedWorkspaceRecord {
     name: String,
     #[serde(default)]
     saved_millis: u64,
+    #[serde(default = "legacy_restore_on_startup")]
+    restore_on_startup: bool,
     #[serde(default)]
     completed_operations: VecDeque<CompletedOperation>,
 }
@@ -82,6 +86,10 @@ struct CompletedOperation {
     resulting_revision: u64,
 }
 
+fn legacy_restore_on_startup() -> bool {
+    false
+}
+
 impl WorkspaceRecord {
     fn empty() -> Self {
         Self {
@@ -90,6 +98,7 @@ impl WorkspaceRecord {
             drafts: Vec::new(),
             name: String::new(),
             saved_millis: 0,
+            restore_on_startup: true,
             completed_operations: VecDeque::new(),
         }
     }
@@ -103,6 +112,7 @@ impl WorkspaceRecord {
             drafts: self.drafts.clone(),
             name: self.name.clone(),
             saved_millis: self.saved_millis,
+            restore_on_startup: self.restore_on_startup,
             completed_operations: self.completed_operations.clone(),
         }
     }
@@ -124,6 +134,7 @@ impl WorkspaceRecord {
             drafts: persisted.drafts,
             name: persisted.name,
             saved_millis: persisted.saved_millis,
+            restore_on_startup: persisted.restore_on_startup,
             completed_operations: persisted.completed_operations,
         })
     }
@@ -163,6 +174,8 @@ impl WorkspaceService {
 
         let drafts = crate::drafts::DraftObjects::new(&state_root)?;
         let mut workspaces = HashMap::new();
+        let history_marker = state_root.join("workspace-history-initialized");
+        let mut history_initialized = history_marker.try_exists()?;
         for entry in fs::read_dir(&workspace_root)? {
             let entry = entry?;
             let path = entry.path();
@@ -199,6 +212,17 @@ impl WorkspaceService {
                 atomic_write(&path, &migrated, random_temporary_file())?;
             }
             let record = WorkspaceRecord::from_persisted(persisted)?;
+            if !history_initialized {
+                atomic_write(&history_marker, b"1", random_temporary_file())?;
+                history_initialized = true;
+            }
+            if !record.restore_on_startup && workspace_is_empty(&record) {
+                fs::remove_file(&path)?;
+                #[cfg(unix)]
+                File::open(&workspace_root)?.sync_all()?;
+                drafts.remove_workspace(&workspace_id)?;
+                continue;
+            }
             drafts.recover(&workspace_id, &record.drafts)?;
             if workspaces.insert(workspace_id, record).is_some() {
                 return Err(invalid_state("duplicate workspace state identifier"));
@@ -219,6 +243,7 @@ impl WorkspaceService {
             state: Mutex::new(ServiceState {
                 workspaces,
                 next_temporary_file: 0,
+                history_initialized,
             }),
         })
     }
@@ -334,6 +359,7 @@ impl WorkspaceService {
                     &self.environment_id,
                     &self.config_root,
                     &self.project_config,
+                    state.history_initialized || !state.workspaces.is_empty(),
                 )?
                 .home
                 .to_path()
@@ -346,6 +372,7 @@ impl WorkspaceService {
                 &self.environment_id,
                 &self.config_root,
                 &self.project_config,
+                state.history_initialized || !state.workspaces.is_empty(),
             )
             .map(WorkspaceResponse::Environment),
             WorkspaceRequest::Browse {
@@ -454,6 +481,65 @@ impl WorkspaceService {
                 expected_revision,
             } => self.delete_config(&relative_path, expected_revision),
             WorkspaceRequest::Open { workspace_id } => Ok(self.open(&state, workspace_id)),
+            WorkspaceRequest::OpenExisting { workspace_id } => {
+                if !state.workspaces.contains_key(&workspace_id) {
+                    return Err(failure(
+                        FailureCode::NotFound,
+                        "saved workspace no longer exists",
+                        false,
+                    ));
+                }
+                Ok(self.open(&state, workspace_id))
+            }
+            WorkspaceRequest::SetRestoreOnStartup {
+                workspace_id,
+                expected_revision,
+                restore,
+            } => {
+                if !restore && !state.workspaces.contains_key(&workspace_id) {
+                    return Ok(WorkspaceResponse::Forgotten { workspace_id });
+                }
+                let mut record = state
+                    .workspaces
+                    .get(&workspace_id)
+                    .cloned()
+                    .ok_or_else(|| failure(FailureCode::NotFound, "workspace not found", false))?;
+                require_revision(&record, expected_revision)?;
+                if record.restore_on_startup == restore {
+                    return Ok(WorkspaceResponse::Registered(workspace_summary(
+                        &workspace_id,
+                        &record,
+                    )));
+                }
+                record.restore_on_startup = restore;
+                if !restore && workspace_is_empty(&record) {
+                    self.forget_workspace(&mut state, &workspace_id)?;
+                    return Ok(WorkspaceResponse::Forgotten { workspace_id });
+                }
+                self.persist_workspace(&mut state, &workspace_id, &record)?;
+                let summary = workspace_summary(&workspace_id, &record);
+                state.workspaces.insert(workspace_id, record);
+                Ok(WorkspaceResponse::Registered(summary))
+            }
+            WorkspaceRequest::Forget {
+                workspace_id,
+                expected_revision,
+            } => {
+                let record = state
+                    .workspaces
+                    .get(&workspace_id)
+                    .ok_or_else(|| failure(FailureCode::NotFound, "workspace not found", false))?;
+                require_revision(record, expected_revision)?;
+                if record.restore_on_startup {
+                    return Err(failure(
+                        FailureCode::Conflict,
+                        "close the workspace before deleting its history",
+                        false,
+                    ));
+                }
+                self.forget_workspace(&mut state, &workspace_id)?;
+                Ok(WorkspaceResponse::Forgotten { workspace_id })
+            }
             WorkspaceRequest::List => {
                 let mut entries = state
                     .workspaces
@@ -633,6 +719,32 @@ impl WorkspaceService {
             ));
         }
         Ok(WorkspaceRecord::empty())
+    }
+
+    fn forget_workspace(
+        &self,
+        state: &mut ServiceState,
+        workspace_id: &WorkspaceId,
+    ) -> Result<(), ProtocolFailure> {
+        if !state.history_initialized {
+            atomic_write(
+                &self.state_root.join("workspace-history-initialized"),
+                b"1",
+                random_temporary_file(),
+            )
+            .map_err(|error| {
+                filesystem_failure("preserve workspace history initialization", error)
+            })?;
+            state.history_initialized = true;
+        }
+        fs::remove_file(self.workspace_path(workspace_id))
+            .map_err(|error| filesystem_failure("delete workspace", error))?;
+        state.workspaces.remove(workspace_id);
+        sync_config_parent(&self.workspace_path(workspace_id))?;
+        self.drafts
+            .remove_workspace(workspace_id)
+            .map_err(|error| filesystem_failure("delete workspace drafts", error))?;
+        Ok(())
     }
 
     fn persist_workspace(
@@ -1021,6 +1133,7 @@ fn environment(
     environment_id: &str,
     config_root: &Path,
     project_config: &WorkspaceProjectConfig,
+    workspace_history_initialized: bool,
 ) -> Result<WorkspaceEnvironment, ProtocolFailure> {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)
@@ -1062,6 +1175,7 @@ fn environment(
         home,
         platform: std::env::consts::OS.to_string(),
         shell,
+        workspace_history_initialized,
     })
 }
 
@@ -1164,7 +1278,27 @@ fn workspace_summary(id: &WorkspaceId, record: &WorkspaceRecord) -> WorkspaceSum
         },
         revision: record.revision,
         saved_millis: record.saved_millis,
+        restore_on_startup: record.restore_on_startup,
     }
+}
+
+fn workspace_is_empty(record: &WorkspaceRecord) -> bool {
+    if !record.drafts.is_empty() {
+        return false;
+    }
+    let value = record.snapshot.as_value();
+    value.as_object().is_some_and(|object| object.is_empty())
+        || (value
+            .get("workspace")
+            .and_then(|value| {
+                serde_json::from_value::<yttt_core::model::workspace::WorkspaceState>(value.clone())
+                    .ok()
+            })
+            .is_some_and(|workspace| workspace.opened_projects.is_empty())
+            && value
+                .get("documents")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(Vec::is_empty))
 }
 
 fn migrate_inline_drafts(
@@ -1600,6 +1734,162 @@ mod tests {
                 service.verify_revisions(revisions)
             })
             .unwrap();
+    }
+
+    #[test]
+    fn closing_retains_history_but_removes_startup_membership() {
+        let root = tempdir().unwrap();
+        let host = service(root.path());
+        let owner = client("owner");
+        acquire(&host, &owner);
+        host.handle(
+            &owner,
+            WorkspaceRequest::Commit {
+                workspace_id: workspace(),
+                expected_revision: 0,
+                operation_id: WorkspaceOperationId::new("layout").unwrap(),
+                snapshot: snapshot("saved layout"),
+                drafts: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            host.handle(
+                &owner,
+                WorkspaceRequest::Forget {
+                    workspace_id: workspace(),
+                    expected_revision: 1,
+                }
+            )
+            .unwrap_err()
+            .code,
+            FailureCode::Conflict
+        );
+        host.handle(
+            &owner,
+            WorkspaceRequest::SetRestoreOnStartup {
+                workspace_id: workspace(),
+                expected_revision: 1,
+                restore: false,
+            },
+        )
+        .unwrap();
+        drop(host);
+        let host = service(root.path());
+        acquire(&host, &owner);
+        let WorkspaceResponse::Workspaces(index) =
+            host.handle(&owner, WorkspaceRequest::List).unwrap()
+        else {
+            panic!("index")
+        };
+        assert_eq!(index.len(), 1);
+        assert!(!index[0].restore_on_startup);
+        let WorkspaceResponse::Opened {
+            snapshot: saved,
+            revision,
+            ..
+        } = host
+            .handle(
+                &owner,
+                WorkspaceRequest::Open {
+                    workspace_id: workspace(),
+                },
+            )
+            .unwrap()
+        else {
+            panic!("snapshot")
+        };
+        assert_eq!(saved, snapshot("saved layout"));
+        assert_eq!(revision, 1);
+        assert_eq!(
+            host.handle(
+                &owner,
+                WorkspaceRequest::Forget {
+                    workspace_id: workspace(),
+                    expected_revision: 0,
+                }
+            )
+            .unwrap_err()
+            .code,
+            FailureCode::Conflict
+        );
+        host.handle(
+            &owner,
+            WorkspaceRequest::Forget {
+                workspace_id: workspace(),
+                expected_revision: 1,
+            },
+        )
+        .unwrap();
+        drop(host);
+        let host = service(root.path());
+        assert_eq!(
+            host.handle(&owner, WorkspaceRequest::List).unwrap(),
+            WorkspaceResponse::Workspaces(vec![])
+        );
+        assert_eq!(
+            host.handle(
+                &owner,
+                WorkspaceRequest::OpenExisting {
+                    workspace_id: workspace(),
+                }
+            )
+            .unwrap_err()
+            .code,
+            FailureCode::NotFound
+        );
+    }
+
+    #[test]
+    fn closing_empty_windows_does_not_exhaust_workspace_capacity() {
+        let root = tempdir().unwrap();
+        let host = service(root.path());
+        let owner = client("owner");
+        let WorkspaceResponse::Environment(environment) =
+            host.handle(&owner, WorkspaceRequest::Environment).unwrap()
+        else {
+            panic!("environment")
+        };
+        assert!(!environment.workspace_history_initialized);
+        acquire(&host, &owner);
+        for index in 0..=super::MAX_WORKSPACES {
+            let id = WorkspaceId::new(format!("empty-{index}")).unwrap();
+            host.handle(
+                &owner,
+                WorkspaceRequest::Register {
+                    workspace_id: id.clone(),
+                    name: format!("Window {index}"),
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                host.handle(
+                    &owner,
+                    WorkspaceRequest::SetRestoreOnStartup {
+                        workspace_id: id.clone(),
+                        expected_revision: 0,
+                        restore: false,
+                    }
+                )
+                .unwrap(),
+                WorkspaceResponse::Forgotten { workspace_id: id }
+            );
+        }
+        assert_eq!(
+            host.handle(&owner, WorkspaceRequest::List).unwrap(),
+            WorkspaceResponse::Workspaces(vec![])
+        );
+        drop(host);
+        let host = service(root.path());
+        let WorkspaceResponse::Environment(environment) =
+            host.handle(&owner, WorkspaceRequest::Environment).unwrap()
+        else {
+            panic!("environment")
+        };
+        assert!(
+            environment.workspace_history_initialized,
+            "closing all windows must not reimport legacy state"
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub mod login_startup;
 pub mod palette;
 pub mod remote_host;
 pub mod remote_launch;
+mod remote_restore;
 pub mod runtime;
 pub mod session_coordinator;
 pub mod ui;

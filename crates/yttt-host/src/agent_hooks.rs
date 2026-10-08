@@ -4,7 +4,7 @@ use std::{
     net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -152,7 +152,6 @@ struct AgentState {
 pub struct HostAgentHookRuntime {
     endpoint: Arc<str>,
     state: Arc<AgentState>,
-    next_resource_epoch: AtomicU64,
     shutdown: Arc<AtomicBool>,
     accept_thread: Option<JoinHandle<()>>,
     worker_threads: Vec<JoinHandle<()>>,
@@ -206,14 +205,17 @@ impl HostAgentHookRuntime {
         Ok(Arc::new(Self {
             endpoint,
             state,
-            next_resource_epoch: AtomicU64::new(1),
             shutdown,
             accept_thread: Some(accept_thread),
             worker_threads,
         }))
     }
 
-    pub fn secure_terminal_environment(&self, spec: &mut TerminalSpawnSpec) -> AgentHookScope {
+    pub fn secure_terminal_environment(
+        &self,
+        spec: &mut TerminalSpawnSpec,
+        session_epoch: u64,
+    ) -> AgentHookScope {
         spec.environment
             .retain(|(name, _)| !ENVIRONMENT_VARIABLES.contains(&name.as_str()));
         spec.removed_environment
@@ -223,7 +225,7 @@ impl HostAgentHookRuntime {
             project_id: spec.project_id.to_string(),
             tab_id: spec.session_id.as_str().to_string(),
             pane_id: spec.session_id.as_str().to_string(),
-            generation: self.next_resource_epoch.fetch_add(1, Ordering::Relaxed),
+            generation: session_epoch,
         };
         let encoded_scope = serde_json::to_vec(&scope)
             .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
@@ -263,8 +265,18 @@ impl HostAgentHookRuntime {
             .retain(|_, observation| observation.scope != *scope);
     }
 
-    pub fn terminal_exited(&self, session_id: &TerminalSessionId, code: Option<i32>) {
-        self.state.process_observations.lock().remove(session_id);
+    pub fn terminal_exited(
+        &self,
+        session_id: &TerminalSessionId,
+        session_epoch: u64,
+        code: Option<i32>,
+    ) {
+        self.state
+            .process_observations
+            .lock()
+            .retain(|id, observation| {
+                id != session_id || observation.scope.generation != session_epoch
+            });
         let now = now_millis();
         let exit = AgentProcessExit {
             code,
@@ -279,17 +291,18 @@ impl HostAgentHookRuntime {
             .bindings
             .lock()
             .iter()
-            .filter(|(_, bound_session_id)| *bound_session_id == session_id)
+            .filter(|(scope, bound_session_id)| {
+                *bound_session_id == session_id && scope.generation == session_epoch
+            })
             .map(|(scope, _)| scope.clone())
             .collect::<Vec<_>>();
         let mut terminal_exits = self.state.terminal_exits.lock();
         terminal_exits.extend(exited_scopes.into_iter().map(|scope| (scope, exit)));
         let mut updates = Vec::new();
         let mut records = self.state.records.lock();
-        for record in records
-            .values_mut()
-            .filter(|record| &record.terminal_session_id == session_id)
-        {
+        for record in records.values_mut().filter(|record| {
+            &record.terminal_session_id == session_id && record.scope.generation == session_epoch
+        }) {
             record.terminal_exited = true;
             if record
                 .reducer
@@ -1598,9 +1611,9 @@ mod tests {
     fn host_replaces_forged_hook_environment_and_scopes_each_terminal() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut first = spec("first", "first");
-        let first_scope = runtime.secure_terminal_environment(&mut first);
+        let first_scope = runtime.secure_terminal_environment(&mut first, 1);
         let mut second = spec("second", "second");
-        let second_scope = runtime.secure_terminal_environment(&mut second);
+        let second_scope = runtime.secure_terminal_environment(&mut second, 1);
 
         assert_ne!(first_scope, second_scope);
         assert!(first.removed_environment.is_empty());
@@ -1733,7 +1746,7 @@ mod tests {
     fn native_grok_snake_case_hooks_supersede_imported_claude_compatibility_hooks() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-provider", "grok-provider");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let mut updates = runtime.subscribe();
         let session = serde_json::json!({
             "hookEventName": "session_start",
@@ -1801,7 +1814,7 @@ mod tests {
     fn a_new_agent_session_replaces_an_exited_session_in_the_same_shell() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("sequential-agent", "sequential-agent");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let mut updates = runtime.subscribe();
 
         ingest_request(
@@ -1835,7 +1848,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("process-scan", "process-scan");
         let session_id = terminal.session_id.clone();
-        runtime.secure_terminal_environment(&mut terminal);
+        runtime.secure_terminal_environment(&mut terminal, 1);
         let roots = vec![(session_id.clone(), 10)];
         let mut updates = runtime.subscribe();
 
@@ -1880,7 +1893,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("process-script-retry", "process-script-retry");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let roots = vec![(session_id.clone(), 10)];
 
         ingest_request(
@@ -1949,7 +1962,7 @@ mod tests {
     fn sequenced_hooks_buffer_gaps_and_ignore_retries() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("ordered", "ordered");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let mut updates = runtime.subscribe();
 
         let pending = ingest_request(
@@ -2018,7 +2031,7 @@ mod tests {
     fn initial_stream_with_a_valid_root_batch_is_not_discarded_for_later_foreign_events() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("mixed-initial-stream", "mixed-initial-stream");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         let pending = ingest_request(
             &runtime.state,
@@ -2088,7 +2101,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("final-exit", "final-exit");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let mut updates = runtime.subscribe();
 
         ingest_request(
@@ -2097,7 +2110,7 @@ mod tests {
         )
         .unwrap();
         let _ = updates.try_recv().unwrap();
-        runtime.terminal_exited(&session_id, Some(0));
+        runtime.terminal_exited(&session_id, 1, Some(0));
         let completed = updates.try_recv().unwrap();
         assert_eq!(completed.snapshot.view_state(), AgentViewState::Completed);
 
@@ -2127,10 +2140,10 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("pre-hook-exit", "pre-hook-exit");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let mut updates = runtime.subscribe();
 
-        runtime.terminal_exited(&session_id, Some(0));
+        runtime.terminal_exited(&session_id, 1, Some(0));
         let late = ingest_request(
             &runtime.state,
             sequenced_request(&scope, 1, "agent_start", Value::Null),
@@ -2153,7 +2166,7 @@ mod tests {
         );
 
         let mut restarted = spec("pre-hook-exit", "pre-hook-exit");
-        let restarted_scope = runtime.secure_terminal_environment(&mut restarted);
+        let restarted_scope = runtime.secure_terminal_environment(&mut restarted, 2);
         assert!(restarted_scope.generation > scope.generation);
         assert!(
             runtime.snapshots_after(&[]).is_empty(),
@@ -2171,10 +2184,36 @@ mod tests {
     }
 
     #[test]
+    fn late_terminal_exit_does_not_stop_a_reopened_agent() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("reopened-agent", "reopened-agent");
+        let old_scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let new_scope = runtime.secure_terminal_environment(&mut terminal, 2);
+        assert!(new_scope.generation > old_scope.generation);
+        ingest_request(
+            &runtime.state,
+            sequenced_request(&new_scope, 1, "agent_start", Value::Null),
+        )
+        .unwrap();
+
+        runtime.terminal_exited(&terminal.session_id, old_scope.generation, Some(0));
+
+        let current = runtime.snapshots_after(&[]).pop().unwrap();
+        assert_eq!(current.scope, new_scope);
+        assert_eq!(current.snapshot.process_state, AgentProcessState::Running);
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+        runtime.terminal_exited(&terminal.session_id, new_scope.generation, Some(0));
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.process_state,
+            AgentProcessState::Exited
+        );
+    }
+
+    #[test]
     fn stalled_hook_connection_does_not_block_another_delivery() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("concurrent", "concurrent");
-        runtime.secure_terminal_environment(&mut terminal);
+        runtime.secure_terminal_environment(&mut terminal, 1);
         let endpoint = runtime.endpoint.strip_prefix("http://").unwrap();
         let stalled = TcpStream::connect(endpoint).unwrap();
         thread::sleep(Duration::from_millis(25));
@@ -2238,7 +2277,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-switch", "grok-switch");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let root = grok_session_payload(temp.path(), "root", false);
         let child = grok_session_payload(temp.path(), "child", true);
         for (event, payload) in [
@@ -2304,7 +2343,7 @@ mod tests {
     fn grok_known_child_cannot_restart_an_ended_root() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-late-child", "grok-late-child");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         for (event, payload) in [
             ("session_start", session_payload("root")),
             (
@@ -2345,7 +2384,7 @@ mod tests {
     fn grok_child_start_without_parent_cannot_replace_the_active_root() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-child", "grok-child");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         for (event, session) in [
             ("session_start", "root"),
             ("user_prompt_submit", "root"),
@@ -2375,7 +2414,7 @@ mod tests {
     fn grok_native_subagent_hooks_preserve_root_ownership() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-native-child", "grok-native-child");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         for (event, payload) in [
             ("session_start", session_payload("root")),
             (
@@ -2425,7 +2464,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("live-process", "live-process");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
         let roots = vec![(session_id.clone(), 10)];
         let detected = HashMap::from([(
             session_id,
@@ -2469,7 +2508,7 @@ mod tests {
             runtime.snapshots_after(&[])[0].snapshot.view_state(),
             AgentViewState::Working
         );
-        runtime.terminal_exited(&terminal.session_id, Some(0));
+        runtime.terminal_exited(&terminal.session_id, 1, Some(0));
         runtime.reconcile_process_scan(&roots, &detected);
         assert_eq!(
             runtime.snapshots_after(&[])[0].snapshot.process_state,
@@ -2481,7 +2520,7 @@ mod tests {
     fn foreign_child_lifecycle_and_activity_do_not_mutate_the_root_session() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("root-ownership", "root-ownership");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         ingest_request(
             &runtime.state,
@@ -2554,7 +2593,7 @@ mod tests {
     fn foreign_idle_does_not_complete_an_active_root_session() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("foreign-idle", "foreign-idle");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         ingest_request(
             &runtime.state,
@@ -2606,7 +2645,7 @@ mod tests {
     fn root_session_switch_and_resume_update_ownership() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("session-switch", "session-switch");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         for (event, session_id) in [
             ("session_start", "first-session"),
@@ -2638,7 +2677,7 @@ mod tests {
     fn sequenced_events_are_gated_after_a_reordered_session_switch() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("ordered-switch", "ordered-switch");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         ingest_request(
             &runtime.state,
@@ -2700,7 +2739,7 @@ mod tests {
     fn ignored_sequenced_foreign_events_still_advance_acknowledgement() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("sequenced-foreign", "sequenced-foreign");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         for (sequence, event) in [(1, "session_start"), (2, "agent_start")] {
             ingest_request(
@@ -2735,7 +2774,7 @@ mod tests {
     fn ignored_child_stream_does_not_retire_the_active_root_stream() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("isolated-streams", "isolated-streams");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         for (sequence, event) in [(1, "session_start"), (2, "agent_start")] {
             ingest_request(
@@ -2832,7 +2871,7 @@ mod tests {
     fn idless_legacy_hooks_and_explicit_subagent_events_remain_supported() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("legacy-hooks", "legacy-hooks");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         for event in ["session_start", "agent_start", "agent_end"] {
             ingest_request(
@@ -2892,7 +2931,7 @@ mod tests {
     fn duplicate_script_delivery_survives_same_scope_lifecycle_restart() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("script-retry", "script-retry");
-        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
 
         ingest_request(
             &runtime.state,

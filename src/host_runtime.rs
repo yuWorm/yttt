@@ -95,6 +95,7 @@ pub struct DesktopHostRuntime {
     next_terminal_request_id: AtomicU64,
     storage: Arc<crate::host_storage::HostStorage>,
     coordinator: Arc<crate::session_coordinator::SessionCoordinator>,
+    pending_startup_archival: Mutex<Vec<yttt_protocol::workspace::WorkspaceId>>,
 }
 
 enum DesktopHostLifecycle {
@@ -220,6 +221,7 @@ impl DesktopHostRuntime {
             next_terminal_request_id: AtomicU64::new(1),
             storage,
             coordinator,
+            pending_startup_archival: Mutex::new(Vec::new()),
         }))
     }
 
@@ -263,6 +265,7 @@ impl DesktopHostRuntime {
             next_terminal_request_id: AtomicU64::new(1),
             storage,
             coordinator,
+            pending_startup_archival: Mutex::new(Vec::new()),
         }))
     }
 
@@ -342,6 +345,71 @@ impl DesktopHostRuntime {
         restore_existing: bool,
     ) -> Result<crate::session_coordinator::WorkspaceViewLease, String> {
         self.coordinator.claim(None, restore_existing)
+    }
+
+    pub(crate) fn claim_history_workspace(
+        &self,
+        id: yttt_protocol::workspace::WorkspaceId,
+    ) -> Result<crate::session_coordinator::WorkspaceViewLease, String> {
+        self.coordinator.claim(Some(id), false)
+    }
+
+    pub(crate) fn workspace_has_view(&self, id: &yttt_protocol::workspace::WorkspaceId) -> bool {
+        self.coordinator.is_open(id)
+    }
+
+    pub(crate) fn has_workspace_history(&self) -> bool {
+        use crate::config::storage::ConfigStorage as _;
+        self.storage.environment().workspace_history_initialized
+            || self.coordinator.has_workspace_history()
+    }
+
+    pub(crate) fn archive_unclaimed_workspaces(&self) -> Result<(), String> {
+        use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
+        let WorkspaceResponse::Workspaces(entries) =
+            self.workspace_request(WorkspaceRequest::List)?
+        else {
+            return Err("Host did not return its workspace index".into());
+        };
+        *self.pending_startup_archival.lock() = entries
+            .into_iter()
+            .filter(|entry| {
+                entry.restore_on_startup && !self.coordinator.is_open(&entry.workspace_id)
+            })
+            .map(|entry| entry.workspace_id)
+            .collect();
+        self.finish_pending_startup_archival()
+    }
+
+    pub(crate) fn finish_pending_startup_archival(&self) -> Result<(), String> {
+        use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
+        let mut pending = self.pending_startup_archival.lock();
+        if pending.is_empty() || !self.is_controller() {
+            return Ok(());
+        }
+        let WorkspaceResponse::Workspaces(entries) =
+            self.workspace_request(WorkspaceRequest::List)?
+        else {
+            return Err("Host did not return its workspace index".into());
+        };
+        for entry in entries {
+            if entry.restore_on_startup
+                && pending.contains(&entry.workspace_id)
+                && !self.coordinator.is_open(&entry.workspace_id)
+            {
+                self.workspace_request(WorkspaceRequest::SetRestoreOnStartup {
+                    workspace_id: entry.workspace_id.clone(),
+                    expected_revision: entry.revision,
+                    restore: false,
+                })?;
+                self.coordinator
+                    .remove_pending_workspace(&entry.workspace_id);
+            }
+        }
+        for id in pending.drain(..) {
+            self.coordinator.remove_pending_workspace(&id);
+        }
+        Ok(())
     }
 
     pub fn sharing_ready(&self) -> bool {

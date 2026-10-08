@@ -15,6 +15,75 @@ enum Target {
 }
 
 impl WorkbenchView {
+    pub(crate) fn remote_restore_ready(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.ensure_existing_hosts(window, cx);
+        let (hosts_busy, hosts_error) = self
+            .auxiliary_windows
+            .existing_host
+            .as_ref()
+            .map(|hosts| {
+                let hosts = hosts.read(cx);
+                (hosts.busy(), hosts.error().is_some())
+            })
+            .unwrap_or_default();
+        if self.remote_connection_editor_open(cx) || self.ssh.error.is_some() || hosts_error {
+            self.ssh.manager_open = true;
+            self.auxiliary_windows
+                .request(AuxiliaryWindowKind::RemoteServices);
+            cx.notify();
+        }
+        !self.remote_connection_editor_open(cx) && self.ssh.connecting.is_none() && !hosts_busy
+    }
+
+    pub(crate) fn restore_remote_target(
+        &mut self,
+        target: crate::remote_restore::SavedRemoteTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let exists = match &target {
+            crate::remote_restore::SavedRemoteTarget::Ssh { connection_id } => self
+                .ssh
+                .connections
+                .connections
+                .iter()
+                .any(|record| &record.id == connection_id),
+            crate::remote_restore::SavedRemoteTarget::Host { credential_id } => self
+                .auxiliary_windows
+                .existing_host
+                .as_ref()
+                .is_some_and(|hosts| {
+                    hosts
+                        .read(cx)
+                        .records()
+                        .iter()
+                        .any(|record| &record.credential_id == credential_id)
+                }),
+        };
+        if !exists {
+            if let Some(profile) = self.config_paths.profile()
+                && let Err(error) = crate::remote_restore::forget_if_idle(profile, target)
+            {
+                self.ssh.error = Some(error.to_string());
+                cx.notify();
+            }
+            return;
+        }
+        let target = match target {
+            crate::remote_restore::SavedRemoteTarget::Ssh { connection_id } => {
+                Target::Ssh(connection_id)
+            }
+            crate::remote_restore::SavedRemoteTarget::Host { credential_id } => {
+                Target::Host(credential_id)
+            }
+        };
+        self.connect_remote_record(target, window, cx);
+    }
+
     fn ensure_existing_hosts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.auxiliary_windows.existing_host.is_none()
             && let Some(profile) = self.config_paths.profile().cloned()
@@ -58,6 +127,21 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.ssh.credentials_only
+            && self.ssh.connecting.is_none()
+            && let Some(form) = &self.ssh.form
+            && let Some(profile) = self.config_paths.profile()
+            && let Err(error) = crate::remote_restore::forget_if_idle(
+                profile,
+                crate::remote_restore::SavedRemoteTarget::Ssh {
+                    connection_id: form.connection_id.clone(),
+                },
+            )
+        {
+            self.ssh.error = Some(error.to_string());
+            cx.notify();
+            return;
+        }
         self.close_ssh_connection_editor();
         if let Some(hosts) = self.auxiliary_windows.existing_host.clone() {
             hosts.update(cx, |hosts, cx| hosts.dismiss_editor(window, cx));

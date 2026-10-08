@@ -161,6 +161,13 @@ pub struct WorkspaceSummary {
     pub name: String,
     pub revision: u64,
     pub saved_millis: u64,
+    /// Closed workspaces remain history, not startup windows.
+    #[serde(default = "default_restore_on_startup")]
+    pub restore_on_startup: bool,
+}
+
+fn default_restore_on_startup() -> bool {
+    false
 }
 
 impl DraftRef {
@@ -292,6 +299,8 @@ pub struct WorkspaceEnvironment {
     pub platform: String,
     pub shell: Option<String>,
     pub shell_candidates: Vec<String>,
+    #[serde(default)]
+    pub workspace_history_initialized: bool,
 }
 
 /// A remote workspace request served by the Host's single workspace writer.
@@ -392,6 +401,21 @@ pub enum WorkspaceRequest {
     OmpSessionExists {
         session_id: String,
     },
+    /// Changes only startup membership; the saved layout and drafts remain intact.
+    SetRestoreOnStartup {
+        workspace_id: WorkspaceId,
+        expected_revision: u64,
+        restore: bool,
+    },
+    /// Explicitly deletes a closed workspace and its draft bodies.
+    Forget {
+        workspace_id: WorkspaceId,
+        expected_revision: u64,
+    },
+    /// Reads a known workspace without manufacturing an empty missing record.
+    OpenExisting {
+        workspace_id: WorkspaceId,
+    },
 }
 
 impl WorkspaceRequest {
@@ -407,6 +431,7 @@ impl WorkspaceRequest {
                 | Self::ReadProjectConfig { .. }
                 | Self::ListConfig { .. }
                 | Self::Open { .. }
+                | Self::OpenExisting { .. }
                 | Self::GetDraft { .. }
         )
     }
@@ -455,6 +480,9 @@ pub enum WorkspaceResponse {
         content: Vec<u8>,
     },
     OmpSessionExists(bool),
+    Forgotten {
+        workspace_id: WorkspaceId,
+    },
 }
 
 /// Validation failures raised while constructing strongly validated workspace wire values.

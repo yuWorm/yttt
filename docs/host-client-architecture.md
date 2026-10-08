@@ -225,6 +225,8 @@ delta 和按需 checkpoint 同步。
 
 `AgentSnapshotUpdate.terminal_session_id` 是 Agent 状态关联当前客户端布局的唯一资源键。Client 必须先用它找到当前 terminal pane，再取得本地 `project_id/tab_id/pane_id`；Hook scope 中的 `tab_id` / `pane_id` 不是客户端布局键。若 pane 尚未恢复，Client 保留该 session 的最新 snapshot，待 placement 出现后再应用。
 Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epoch, generation, sequence)` 合并最新值，不能让有界事件队列在 UI 暂停消费时静默丢失最终状态。Agent 进程存活但尚无权威 snapshot 只表示状态未知，UI 显示 `Stale`，不能推断为 `Working`。
+Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须同时匹配 session ID 和 epoch。
+旧 PTY 延迟退出不能结束已经重开的 Agent，失败的 spawn 也只清理自身预备 hook scope。
 
 连接成功或重连成功后，`ClientCore` 第一项内部请求是 `ListResources`。此后 Host 只发送
 `ResourceCatalogChanged` invalidation；Client 合并重复通知并异步刷新一次 catalog。
@@ -243,7 +245,9 @@ Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epo
 ### 6.1 多窗口发布与控制交接
 
 同一 Desktop Client 的 `SessionCoordinator` 为每个逻辑窗口分配独占的 `WorkspaceId` 视图。
-本机和远程使用同一环境绑定、工作区恢复与发布逻辑；关闭窗口仅 detach，不删除持久索引。
+本机和远程使用同一环境绑定、工作区恢复与发布逻辑。窗口显式关闭在发布或确认丢弃后以 CAS
+清除 `restore_on_startup`；非空记录保留为历史，空记录自动回收。应用退出保留尚未关闭窗口的成员资格。
+历史窗口必须通过 `OpenExisting` 读取，删除后不能因旧列表或重试隐式注册成空窗口。
 正常交接冻结所有窗口编辑及输入，等待在途设置与草稿提交，聚合所有 Ready revision 后由 Host
 核验。五秒超时只转为需要强制确认；取消或保存失败保留原 owner 和未发布编辑。
 强制确认只恢复最后持久版本；旧 Client 重连仍是观察者，不能重放排队 mutation。
@@ -262,8 +266,17 @@ Windows 分隔符会在回传时重新拆为协议 segments，不附加本机盘
 
 每个 workspace 有原子 CAS manifest（最大 1 MiB）和独立不可变草稿正文。正文每份最大 6 MiB，
 每 workspace 最大 64 MiB；先持久化正文，再提交引用它的 manifest，最后确认幂等操作结果。
-启动只回收未引用正文。旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。
-自动恢复开关同时约束本机和远程启动；手动恢复使用同一 Host 快照入口，而非重新打开最近项目列表。
+启动回收未引用正文和已关闭的空记录；非空历史只由显式 `Forget` 删除。旧记录缺省不进入自动恢复集合。
+持久 `workspace-history-initialized` 标记防止清空窗口后重新导入 legacy 状态；尚未初始化的 Host 仍可迁移旧数据。
+旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。
+本机自动恢复只消费 `restore_on_startup` 集合；关闭自动恢复或显式项目启动先归档未打开的旧成员。
+观察者启动记录待归档的旧 ID，获得控制后在注册新窗口前完成；不会以观察者身份写入 Host。
+显式远程连接读取 Host 当前窗口，不被本机的空白启动偏好屏蔽。历史恢复另开独占视图，不覆盖当前窗口。
+Device 远程 Client registry 仅保存 SSH connection ID 或 Host credential ID，用进程锁避免重复启动；
+连接凭据每次从安全存储重新解析。Host-key challenge listener 属于 Client 应用而非初始连接窗口。
+ControlLost 冻结 mutation，显式选择 Host/local 快照前保留完整 Device recovery；本地发布候选不依赖
+Host 快照可成功解析，但必须获取新的 CAS baseline。提交确认必须匹配当前 Host epoch 和控制上下文。
+提交发送前也核验已安装的控制上下文；错过完整交接后，即使 revision 未变也必须重新对账资源。
 PTY 丢失不删除 terminal/file tab、分组或布局。Client 只重建干净 shell 或恢复 Agent 会话，不重放任意命令。
 
 独立 `yttt-server` 的 descriptor 只导出 SSH `work.sock`/工作 token。status、stop-if-idle、

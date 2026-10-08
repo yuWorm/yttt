@@ -583,6 +583,8 @@ pub enum UiTextKey {
     RemoteConnecting,
     RemoteConnectionName,
     RemoteCredentialsRequired,
+    RemoteRepairSshAgent,
+    RemotePassphraseTemporary,
     RemoteConnectTitle,
     RemoteConnectPreparing,
     RemoteConnectFailed,

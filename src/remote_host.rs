@@ -99,10 +99,12 @@ impl ConnectionCredentials {
             });
         let authentication = match connection.auth {
             SshAuthPreference::Agent => Authentication::Agent,
-            SshAuthPreference::Password if self.password.is_some() => Authentication::Password {
-                secret: self.password.clone().unwrap(),
-                save_as: self.save_password_as.clone(),
-            },
+            SshAuthPreference::Password | SshAuthPreference::Auto if self.password.is_some() => {
+                Authentication::Password {
+                    secret: self.password.clone().unwrap(),
+                    save_as: self.save_password_as.clone(),
+                }
+            }
             SshAuthPreference::Password if credential.is_some() => {
                 Authentication::StoredPassword(credential.unwrap())
             }

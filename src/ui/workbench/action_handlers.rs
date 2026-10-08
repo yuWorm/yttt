@@ -2,10 +2,11 @@ use super::*;
 
 impl WorkbenchView {
     pub(super) fn shared_mutation_allowed(&self) -> bool {
-        self.terminal.host_runtime.as_ref().map_or(
-            cfg!(test) || self.local_project_services_for_test,
-            |runtime| runtime.shared_editing_enabled(),
-        )
+        self.workspace_allows_mutation()
+            && self.terminal.host_runtime.as_ref().map_or(
+                cfg!(test) || self.local_project_services_for_test,
+                |runtime| runtime.shared_editing_enabled(),
+            )
     }
 
     pub(super) fn require_shared_mutation_control(&mut self) -> bool {
@@ -30,17 +31,6 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .terminal
-            .host_runtime
-            .as_ref()
-            .is_some_and(|runtime| runtime.is_remote())
-        {
-            if self.flush_workspace_persistence_on_close(window, cx) {
-                window.remove_window();
-            }
-            return;
-        }
         crate::ui::app::confirm_desktop_quit(false, window, cx);
     }
 

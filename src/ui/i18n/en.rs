@@ -735,6 +735,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteConnecting => "Connecting…",
         UiTextKey::RemoteConnectionName => "Connection name",
         UiTextKey::RemoteCredentialsRequired => "Credentials required",
+        UiTextKey::RemoteRepairSshAgent => {
+            "Unlock your SSH agent and load the saved connection's key, then retry. This authentication mode does not use a password."
+        }
+        UiTextKey::RemotePassphraseTemporary => {
+            "The key passphrase is used only by this Client and is not saved."
+        }
         UiTextKey::RemoteConnectTitle => "Connect to remote workspace",
         UiTextKey::RemoteConnectPreparing => "Preparing connection…",
         UiTextKey::RemoteConnectFailed => "Unable to connect",

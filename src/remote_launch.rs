@@ -19,6 +19,8 @@ use crate::{
     },
 };
 
+pub use crate::remote_restore::SavedRemoteTarget;
+
 const MAX_REMOTE_LAUNCH_BYTES: usize = 128 * 1024;
 
 /// A clipboard code contains credentials. Base64 is transport encoding, not encryption.
@@ -197,6 +199,8 @@ pub struct RemoteLaunch {
     pub local_profile: AppProfile,
     pub appearance: RemoteAppearance,
     pub target: RemoteTarget,
+    #[serde(default)]
+    pub saved_target: Option<SavedRemoteTarget>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

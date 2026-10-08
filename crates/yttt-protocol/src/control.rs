@@ -236,6 +236,7 @@ impl Request {
                 | WorkspaceRequest::AgentSessions { .. }
                 | WorkspaceRequest::OmpSessionExists { .. }
                 | WorkspaceRequest::Open { .. }
+                | WorkspaceRequest::OpenExisting { .. }
                 | WorkspaceRequest::GetDraft { .. } => Capability::WorkspaceRead,
                 _ => Capability::WorkspaceMutate,
             }),

@@ -44,7 +44,7 @@ pub use project::{
 
 pub const PROTOCOL_MAGIC: [u8; 4] = *b"YTTT";
 pub const FRAME_FORMAT_VERSION: u16 = 1;
-pub const RESOURCE_PROTOCOL_VERSION: u16 = 13;
+pub const RESOURCE_PROTOCOL_VERSION: u16 = 14;
 pub const LIFECYCLE_PROTOCOL_VERSION: u16 = 3;
 pub const DESKTOP_SHELL_PROTOCOL_VERSION: u16 = 3;
 pub const MAX_DESKTOP_SHELL_FRAME_BYTES: usize = 256 * 1024;

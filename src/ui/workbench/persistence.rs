@@ -55,6 +55,12 @@ enum WorkspacePersistenceMode {
     RestoreFailed,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceRecoveryChoice {
+    ReloadHost,
+    PublishLocal,
+}
+
 struct PendingWorkspaceCommit {
     expected_revision: u64,
     operation_id: WorkspaceOperationId,
@@ -78,6 +84,9 @@ pub(super) struct WorkspacePersistenceState {
     host_epoch: Option<u64>,
     // The UI can miss an entire handoff while suspended; ownership alone is insufficient.
     control_context: Option<ControlContext>,
+    recovery_choice: Option<WorkspaceRecoveryChoice>,
+    recovery_candidate: Option<serde_json::Value>,
+    require_existing_workspace: bool,
     initial_project: Option<PathBuf>,
     pub(super) startup_projects: Vec<PathBuf>,
     pub(super) available_terminal_sessions: HashSet<String>,
@@ -89,7 +98,10 @@ pub(super) struct WorkspacePersistenceState {
     pending_document_restores: usize,
     pending_editor_snapshot: Option<ProjectEditorWorkspaceSnapshot>,
     close_flush_requested: bool,
+    discard_close_requested: bool,
     close_prompt_open: bool,
+    closing: bool,
+    host_close_confirmed: bool,
     last_error: Option<String>,
     resource_loss_message: Option<String>,
     recoverable_draft_path: Option<PathBuf>,
@@ -108,6 +120,9 @@ impl Default for WorkspacePersistenceState {
             revision: None,
             host_epoch: None,
             control_context: None,
+            recovery_choice: None,
+            recovery_candidate: None,
+            require_existing_workspace: false,
             initial_project: None,
             startup_projects: Vec::new(),
             available_terminal_sessions: HashSet::new(),
@@ -124,7 +139,10 @@ impl Default for WorkspacePersistenceState {
             pending_settings_recovery: None,
             recovered_settings_recovery: None,
             close_flush_requested: false,
+            discard_close_requested: false,
             close_prompt_open: false,
+            closing: false,
+            host_close_confirmed: false,
         }
     }
 }
@@ -305,52 +323,27 @@ impl RemoteWorkspaceOpenError {
 
 impl WorkbenchView {
     pub fn has_restorable_workspace(&self) -> bool {
-        self.terminal
-            .host_runtime
-            .as_ref()
-            .is_some_and(|runtime| runtime.pending_workspace_count() > 0)
+        self.terminal.host_runtime.is_some()
+    }
+
+    pub(crate) fn set_workspace_view(
+        &mut self,
+        view: crate::session_coordinator::WorkspaceViewLease,
+    ) {
+        self.workspace_persistence.view = Some(view);
+        self.workspace_persistence.require_existing_workspace = true;
     }
 
     pub(crate) fn restore_last_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.workspace.opened_projects().is_empty() || self.workspace_is_loading() {
-            return;
-        }
-        let Some(runtime) = self.terminal.host_runtime.clone() else {
-            return;
-        };
-        if runtime.pending_workspace_count() == 0 {
-            return;
-        }
-        if self.workspace_persistence.commit_in_flight
-            || self.workspace_persistence.control_request_in_flight
-            || self.settings_save_pending()
-            || self.has_failed_settings_save()
-            || self.has_unpublished_workspace_snapshot(cx)
-        {
-            self.set_workspace_persistence_error(
-                "Wait for pending changes to be saved before restoring another workspace".into(),
-            );
-            return;
-        }
-        // Claim before releasing the empty view, so it cannot claim itself.
-        let view = match runtime.claim_workspace_view(true) {
-            Ok(view) => view,
-            Err(error) => {
-                self.set_workspace_persistence_error(error);
-                return;
-            }
-        };
-        let workspace_id = view.id().clone();
-        self.workspace_persistence = WorkspacePersistenceState {
-            view: Some(view),
-            mode: WorkspacePersistenceMode::AwaitingControl,
-            ..WorkspacePersistenceState::default()
-        };
-        self.onboarding = None;
-        self.discover_recoverable_workspace_draft(&runtime, &workspace_id);
-        self.start_workspace_persistence_tick(window, cx);
-        self.request_workspace_control_and_open(runtime, workspace_id, window, cx);
-        cx.notify();
+        self.open_workspace_history(window, cx);
+    }
+
+    pub(super) fn workspace_allows_mutation(&self) -> bool {
+        !self.workspace_persistence.closing
+            && matches!(
+                self.workspace_persistence.mode,
+                WorkspacePersistenceMode::Inactive | WorkspacePersistenceMode::Active
+            )
     }
 
     pub(super) fn workspace_is_loading(&self) -> bool {
@@ -509,6 +502,21 @@ impl WorkbenchView {
                 ),
             );
         }
+        if !observer && self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost {
+            banner = banner.child(
+                yttt_button(
+                    "resolve-workspace-recovery",
+                    "恢复工作区…",
+                    YtttButtonVariant::Secondary,
+                    appearance.ui,
+                    appearance.style,
+                    cx,
+                )
+                .on_click(
+                    cx.listener(|root, _, window, cx| root.resolve_workspace_recovery(window, cx)),
+                ),
+            );
+        }
         if self.workspace_persistence.recoverable_draft_path.is_some() {
             banner = banner.child(
                 yttt_button(
@@ -523,8 +531,347 @@ impl WorkbenchView {
                     root.restore_recoverable_workspace_drafts(window, cx)
                 })),
             );
+            banner = banner.child(
+                yttt_button(
+                    "recover-full-workspace",
+                    "恢复完整工作区…",
+                    YtttButtonVariant::Secondary,
+                    appearance.ui,
+                    appearance.style,
+                    cx,
+                )
+                .on_click(cx.listener(|root, _, window, cx| {
+                    root.restore_full_workspace_recovery(window, cx)
+                })),
+            );
         }
+        banner = banner.child(
+            yttt_button(
+                "workspace-history",
+                "工作区历史…",
+                YtttButtonVariant::Ghost,
+                appearance.ui,
+                appearance.style,
+                cx,
+            )
+            .on_click(cx.listener(|root, _, window, cx| root.open_workspace_history(window, cx))),
+        );
         banner
+    }
+
+    fn resolve_workspace_recovery(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_persistence.control_request_in_flight
+            || self.workspace_persistence.commit_in_flight
+        {
+            return;
+        }
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "恢复工作区",
+            Some("重新对账不会覆盖冲突。使用 Host 快照会替换当前布局，本地恢复副本仍保留。保留本地并发布会替换 Host 上此工作区的布局和草稿；不会重放终端命令。"),
+            &["取消", "重新对账", "使用 Host 快照", "保留本地并发布"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = match answer.await {
+                Ok(1) => None,
+                Ok(2) => Some(WorkspaceRecoveryChoice::ReloadHost),
+                Ok(3) => Some(WorkspaceRecoveryChoice::PublishLocal),
+                _ => return,
+            };
+            let _ = this.update_in(cx, |root, window, cx| {
+                let Some(runtime) = root.terminal.host_runtime.clone() else {
+                    return;
+                };
+                if !runtime.shared_editing_enabled()
+                    || root.workspace_persistence.mode != WorkspacePersistenceMode::ControlLost
+                    || root.workspace_persistence.control_request_in_flight
+                    || root.workspace_persistence.commit_in_flight
+                {
+                    return;
+                }
+                let Some(workspace_id) = root
+                    .workspace_persistence
+                    .view
+                    .as_ref()
+                    .map(|view| view.id().clone())
+                else {
+                    return;
+                };
+                let preserved = root.preserve_unpublished_workspace_drafts(
+                    &runtime,
+                    &workspace_id,
+                    "Workspace recovery requested",
+                    cx,
+                );
+                if choice == Some(WorkspaceRecoveryChoice::ReloadHost) && !preserved {
+                    return;
+                }
+                root.workspace_persistence.recovery_candidate = None;
+                root.workspace_persistence.recovery_choice = choice;
+                root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+                root.request_workspace_control_and_open(runtime, workspace_id, window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn restore_full_workspace_recovery(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(gpui::PromptLevel::Warning, "恢复完整工作区？",
+            Some("使用本机保留的布局、文件标签和草稿替换此 Host 工作区。当前更改必须先完成发布；终端命令不会重放。"),
+            &["取消", "恢复并发布"], cx);
+        cx.spawn_in(window, async move |this, cx| {
+            if !matches!(answer.await, Ok(1)) {
+                return;
+            }
+            let _ = this.update_in(cx, |root, window, cx| {
+                let result = (|| {
+                    let runtime = root
+                        .terminal
+                        .host_runtime
+                        .as_ref()
+                        .ok_or("Host is unavailable")?;
+                    let workspace_id = root
+                        .workspace_persistence
+                        .view
+                        .as_ref()
+                        .ok_or("Workspace is unavailable")?
+                        .id();
+                    let scope = recoverable_workspace_scope(runtime, workspace_id)?;
+                    let path = root
+                        .workspace_persistence
+                        .recoverable_draft_path
+                        .as_ref()
+                        .ok_or("No saved recovery workspace")?;
+                    let draft = load_recoverable_workspace_draft(path)?;
+                    root.restore_saved_workspace(draft, scope, window, cx)
+                })();
+                if let Err(error) = result {
+                    root.set_workspace_persistence_error(error);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn restore_saved_workspace(
+        &mut self,
+        draft: RecoverableWorkspaceDraft,
+        scope: RecoverableWorkspaceScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.workspace_persistence.commit_in_flight
+            || self.workspace_persistence.control_request_in_flight
+        {
+            return Err(
+                "Wait for the current workspace operation before restoring saved recovery".into(),
+            );
+        }
+        let current = self.build_remote_workspace_snapshot(cx);
+        let unpublished = self
+            .workspace_persistence
+            .pending_settings_recovery
+            .is_some()
+            || current.as_ref().map_or(true, |(snapshot, _)| {
+                self.workspace_persistence.last_committed_snapshot.as_ref() != Some(snapshot)
+            });
+        let replaces_failed_restore = self.workspace_persistence.mode
+            == WorkspacePersistenceMode::RestoreFailed
+            && (self.workspace_persistence.revision.is_none()
+                || current
+                    .as_ref()
+                    .is_ok_and(|(snapshot, _)| *snapshot == draft.snapshot))
+            && (self
+                .workspace_persistence
+                .pending_settings_recovery
+                .is_none()
+                || self.workspace_persistence.pending_settings_recovery == draft.pending_settings);
+        if unpublished && !replaces_failed_restore {
+            return Err(
+                "Publish or reconcile current changes before restoring a saved full workspace"
+                    .into(),
+            );
+        }
+        let runtime = self
+            .terminal
+            .host_runtime
+            .clone()
+            .filter(|runtime| runtime.shared_editing_enabled())
+            .ok_or("Workspace control is unavailable")?;
+        let workspace_id = self
+            .workspace_persistence
+            .view
+            .as_ref()
+            .ok_or("Workspace is unavailable")?
+            .id()
+            .clone();
+        if draft.scope != scope {
+            return Err("Saved recovery belongs to a different Host workspace".into());
+        }
+        let candidate = materialize_recovery_snapshot(
+            draft.snapshot,
+            draft
+                .drafts
+                .into_iter()
+                .map(|body| (body.reference, Arc::new(body.content)))
+                .collect(),
+        )?;
+        self.workspace_persistence.recovery_candidate = Some(candidate);
+        self.workspace_persistence.recovered_settings_recovery = draft.pending_settings;
+        self.workspace_persistence.recovery_choice = Some(WorkspaceRecoveryChoice::PublishLocal);
+        self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+        self.request_workspace_control_and_open(runtime, workspace_id, window, cx);
+        Ok(())
+    }
+
+    fn open_workspace_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::WindowExt as _;
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return;
+        };
+        let task = cx.background_spawn({
+            let runtime = runtime.clone();
+            async move { runtime.workspace_request(WorkspaceRequest::List) }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                let entries = match result {
+                    Ok(WorkspaceResponse::Workspaces(mut entries)) => {
+                        entries.retain(|entry| !runtime.workspace_has_view(&entry.workspace_id));
+                        entries.sort_by_key(|entry| std::cmp::Reverse(entry.saved_millis));
+                        entries
+                    }
+                    result => {
+                        root.set_workspace_persistence_error(format!(
+                            "Cannot load workspace history: {result:?}"
+                        ));
+                        cx.notify();
+                        return;
+                    }
+                };
+                let owner = cx.entity().downgrade();
+                let appearance = root.theme_runtime();
+                window.open_dialog(cx, move |dialog, _, cx| {
+                    let mut list = div()
+                        .id("workspace-history-list")
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .max_h(px(400.0))
+                        .overflow_y_scroll();
+                    if entries.is_empty() {
+                        list = list.child("没有已关闭的工作区");
+                    }
+                    for (index, entry) in entries.iter().enumerate() {
+                        let id = entry.workspace_id.clone();
+                        let error_owner = owner.clone();
+                        let mut row = div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().child(entry.name.clone()))
+                            .child(
+                                yttt_button(
+                                    ("history-open", index),
+                                    "打开",
+                                    YtttButtonVariant::Secondary,
+                                    appearance.ui,
+                                    appearance.style,
+                                    cx,
+                                )
+                                .on_click(move |_, window, cx| {
+                                    match crate::ui::app::open_history_workspace(id.clone(), cx) {
+                                        Ok(()) => window.close_dialog(cx),
+                                        Err(error) => {
+                                            let _ = error_owner.update(cx, |root, cx| {
+                                                root.set_workspace_persistence_error(
+                                                    error.to_string(),
+                                                );
+                                                cx.notify();
+                                            });
+                                        }
+                                    }
+                                }),
+                            );
+                        if !entry.restore_on_startup && runtime.is_controller() {
+                            let entry = entry.clone();
+                            let owner = owner.clone();
+                            row = row.child(
+                                yttt_button(
+                                    ("history-forget", index),
+                                    "删除历史…",
+                                    YtttButtonVariant::Ghost,
+                                    appearance.ui,
+                                    appearance.style,
+                                    cx,
+                                )
+                                .on_click(move |_, window, cx| {
+                                    let _ = owner.update(cx, |root, cx| {
+                                        root.forget_workspace_history(entry.clone(), window, cx);
+                                    });
+                                }),
+                            );
+                        }
+                        list = list.child(row);
+                    }
+                    dialog.title("工作区历史").child(list)
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn forget_workspace_history(
+        &mut self,
+        entry: yttt_protocol::workspace::WorkspaceSummary,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_component::WindowExt as _;
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return;
+        };
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "删除工作区历史？",
+            Some("此操作删除保存的布局和未保存草稿，不删除项目文件或 Agent 历史。"),
+            &["取消", "删除"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if !matches!(answer.await, Ok(1)) {
+                return;
+            }
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    if runtime.workspace_has_view(&entry.workspace_id) {
+                        return Err("Workspace is open in this Client".to_string());
+                    }
+                    runtime.workspace_request(WorkspaceRequest::Forget {
+                        workspace_id: entry.workspace_id,
+                        expected_revision: entry.revision,
+                    })
+                })
+                .await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                match result {
+                    Ok(WorkspaceResponse::Forgotten { .. }) => {
+                        window.close_dialog(cx);
+                        root.open_workspace_history(window, cx);
+                    }
+                    result => root.set_workspace_persistence_error(format!(
+                        "Cannot delete workspace history: {result:?}"
+                    )),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn request_profile_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -585,6 +932,8 @@ impl WorkbenchView {
             return;
         };
         if self.workspace_persistence.view.is_none() {
+            self.workspace_persistence.require_existing_workspace =
+                restore_existing && runtime.pending_workspace_count() > 0;
             match runtime.claim_workspace_view(restore_existing) {
                 Ok(view) => self.workspace_persistence.view = Some(view),
                 Err(error) => {
@@ -669,6 +1018,9 @@ impl WorkbenchView {
     }
 
     fn tick_workspace_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_persistence.closing {
+            return;
+        }
         if self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed {
             return;
         }
@@ -693,7 +1045,7 @@ impl WorkbenchView {
             if self.workspace_persistence.mode == WorkspacePersistenceMode::Active
                 && self.has_unpublished_workspace_snapshot(cx)
             {
-                self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
                 self.preserve_unpublished_workspace_drafts(
                     &runtime,
                     &workspace_id,
@@ -838,17 +1190,43 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.workspace_persistence.control_request_in_flight
-            || self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost
-        {
+        if self.workspace_persistence.control_request_in_flight {
             return;
         }
         let known_revision = self.workspace_persistence.revision;
         let known_epoch = self.workspace_persistence.host_epoch;
+        let known_control_context = self.workspace_persistence.control_context;
         let requested_control_context = runtime.control_status().map(|status| status.context);
+        let recovery_choice = self.workspace_persistence.recovery_choice;
+        let require_existing = self.workspace_persistence.require_existing_workspace
+            || known_revision.is_some_and(|revision| revision > 0);
+        let local_candidate = if recovery_choice == Some(WorkspaceRecoveryChoice::PublishLocal) {
+            let candidate = self
+                .workspace_persistence
+                .recovery_candidate
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    self.build_remote_workspace_snapshot(cx)
+                        .and_then(|(snapshot, bodies)| {
+                            materialize_recovery_snapshot(snapshot, bodies)
+                        })
+                });
+            match candidate {
+                Ok(candidate) => Some(candidate),
+                Err(error) => {
+                    self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                    self.set_workspace_persistence_error(error);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let preserve_local = self.workspace_persistence.mode != WorkspacePersistenceMode::Observer
             && known_revision.is_some()
-            && self.has_unpublished_workspace_snapshot(cx);
+            && self.has_unpublished_workspace_snapshot(cx)
+            && recovery_choice != Some(WorkspaceRecoveryChoice::ReloadHost);
         self.workspace_persistence.control_request_in_flight = true;
         // Polling an observer snapshot must not replace an already usable view with a loader.
         if known_revision.is_none() {
@@ -858,11 +1236,25 @@ impl WorkbenchView {
         let local_import = !runtime.is_remote();
         let runtime_for_open = runtime.clone();
         let open_task = cx.background_spawn(async move {
-            let (server_snapshot, revision) =
-                acquire_control_and_open(&runtime_for_open, request_workspace_id.clone())
-                    .map_err(RemoteWorkspaceOpenError::from_request)?;
+            let (server_snapshot, revision) = acquire_control_and_open(
+                &runtime_for_open,
+                request_workspace_id.clone(),
+                require_existing,
+            )?;
+            if let Some(candidate) = local_candidate {
+                let mut prepared = prepare_remote_restore(
+                    &runtime_for_open,
+                    &request_workspace_id,
+                    candidate,
+                    revision,
+                )?;
+                prepared.server_snapshot = server_snapshot;
+                return Ok(Some(prepared));
+            }
             if known_revision == Some(revision)
                 && known_epoch == remote_host_epoch(&runtime_for_open)
+                && known_control_context == requested_control_context
+                && recovery_choice.is_none()
             {
                 Ok(None)
             } else {
@@ -879,6 +1271,10 @@ impl WorkbenchView {
             let result = open_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
                 root.workspace_persistence.control_request_in_flight = false;
+                if root.workspace_persistence.discard_close_requested {
+                    root.close_published_workspace(window, cx);
+                    return;
+                }
                 if result.is_ok() {
                     let current_control_context = root
                         .terminal
@@ -926,6 +1322,16 @@ impl WorkbenchView {
                         root.workspace_persistence.pending_commit = None;
                     }
                     Ok(Some(prepared))
+                        if recovery_choice == Some(WorkspaceRecoveryChoice::PublishLocal) =>
+                    {
+                        root.install_remote_workspace_restore(prepared, window, cx);
+                        if root.workspace_persistence.mode != WorkspacePersistenceMode::RestoreFailed {
+                            root.workspace_persistence.recovery_choice = None;
+                            root.workspace_persistence.recovery_candidate = None;
+                            root.restore_recovered_settings_draft();
+                        }
+                    }
+                    Ok(Some(prepared))
                         if preserve_local && known_epoch != Some(prepared.host_epoch) =>
                     {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
@@ -948,9 +1354,13 @@ impl WorkbenchView {
                         root.clear_workspace_persistence_error();
                     }
                     Ok(Some(prepared))
-                        if root.workspace_persistence.revision.is_none() || !preserve_local =>
+                        if root.workspace_persistence.revision.is_none() || !preserve_local
+                            || root.build_remote_workspace_snapshot(cx).is_ok_and(|snapshot| {
+                                snapshot.0 == prepared.server_snapshot
+                            }) =>
                     {
                         root.install_remote_workspace_restore(prepared, window, cx);
+                        root.workspace_persistence.recovery_choice = None;
                     }
                     Ok(Some(prepared))
                         if root.workspace_persistence.revision == Some(prepared.revision) =>
@@ -1006,6 +1416,7 @@ impl WorkbenchView {
                         ));
                     }
                 }
+                root.finish_workspace_persistence_close_if_ready(window, cx);
                 cx.notify();
             });
         })
@@ -1335,6 +1746,15 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !matches!(
+            self.workspace_persistence.mode,
+            WorkspacePersistenceMode::Active | WorkspacePersistenceMode::Observer
+        ) {
+            self.set_workspace_persistence_error(
+                "Reconcile the Host workspace before recovering Device-private drafts".to_string(),
+            );
+            return;
+        }
         let Some(path) = self.workspace_persistence.recoverable_draft_path.clone() else {
             return;
         };
@@ -1527,14 +1947,14 @@ impl WorkbenchView {
         workspace_id: &WorkspaceId,
         reason: &str,
         cx: &Context<Self>,
-    ) {
+    ) -> bool {
         let (snapshot, drafts) = match self.build_workspace_snapshot(cx, None) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.set_workspace_persistence_error(format!(
                     "{reason}; unpublished edits remain open, but their local recovery snapshot could not be prepared: {error}"
                 ));
-                return;
+                return false;
             }
         };
         let path = match recoverable_workspace_draft_path(&self.config_paths, runtime, workspace_id)
@@ -1544,13 +1964,13 @@ impl WorkbenchView {
                 self.set_workspace_persistence_error(format!(
                     "{reason}; unpublished edits remain open, but Device-private recovery storage is unavailable"
                 ));
-                return;
+                return false;
             }
             Err(error) => {
                 self.set_workspace_persistence_error(format!(
                     "{reason}; unpublished edits remain open, but Device-private recovery storage could not be located: {error}"
                 ));
-                return;
+                return false;
             }
         };
         let scope = match recoverable_workspace_scope(runtime, workspace_id) {
@@ -1559,7 +1979,7 @@ impl WorkbenchView {
                 self.set_workspace_persistence_error(format!(
                     "{reason}; unpublished edits remain open, but Device-private recovery storage could not be scoped: {error}"
                 ));
-                return;
+                return false;
             }
         };
         let draft = RecoverableWorkspaceDraft {
@@ -1582,11 +2002,13 @@ impl WorkbenchView {
                 self.set_workspace_persistence_error(format!(
                     "{reason}; unpublished edits were saved to Device-private recovery storage and will not replace the Host workspace automatically"
                 ));
+                true
             }
             Err(error) => {
                 self.set_workspace_persistence_error(format!(
                     "{reason}; unpublished edits remain open, but Device-private recovery storage failed: {error}"
                 ));
+                false
             }
         }
     }
@@ -1682,10 +2104,17 @@ impl WorkbenchView {
         );
         cx.spawn_in(window, async move |this, cx| {
             let answer = answer.await;
-            let _ = this.update_in(cx, |root, window, _| {
+            let _ = this.update_in(cx, |root, window, cx| {
                 root.workspace_persistence.close_prompt_open = false;
                 if matches!(answer, Ok(1)) {
-                    window.remove_window();
+                    if root.terminal.host_runtime.as_ref().is_some_and(|runtime| {
+                        runtime.is_controller() && remote_host_epoch(runtime).is_some()
+                    }) {
+                        root.workspace_persistence.discard_close_requested = true;
+                        root.close_published_workspace(window, cx);
+                    } else if root.record_closed_window(cx) {
+                        window.remove_window();
+                    }
                 }
             });
         })
@@ -1697,6 +2126,12 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.workspace_persistence.host_close_confirmed {
+            if self.record_closed_window(cx) {
+                window.remove_window();
+            }
+            return false;
+        }
         if self.settings_save_pending() || self.has_failed_settings_save() {
             self.set_workspace_persistence_error(
                 "Settings are still pending or failed to save; keep this window open to retry or copy the draft"
@@ -1706,7 +2141,7 @@ impl WorkbenchView {
             return false;
         }
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Inactive {
-            return true;
+            return self.request_window_close(cx) && self.record_closed_window(cx);
         }
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.set_workspace_persistence_error(
@@ -1716,7 +2151,7 @@ impl WorkbenchView {
             return false;
         };
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Observer {
-            return true;
+            return self.record_closed_window(cx);
         }
         if self.workspace_persistence.mode != WorkspacePersistenceMode::Active {
             self.set_workspace_persistence_error(
@@ -1738,7 +2173,8 @@ impl WorkbenchView {
             && self.workspace_persistence.pending_commit.is_none()
             && self.workspace_persistence.last_committed_snapshot.as_ref() == Some(&current.0)
         {
-            return true;
+            self.close_published_workspace(window, cx);
+            return false;
         }
         let Some(workspace_id) = self
             .workspace_persistence
@@ -1765,6 +2201,10 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.workspace_persistence.discard_close_requested {
+            self.close_published_workspace(window, cx);
+            return;
+        }
         if !self.workspace_persistence.close_flush_requested
             || self.workspace_persistence.commit_in_flight
         {
@@ -1790,7 +2230,7 @@ impl WorkbenchView {
             && self.workspace_persistence.last_committed_snapshot.as_ref() == Some(&current.0)
         {
             self.workspace_persistence.close_flush_requested = false;
-            window.remove_window();
+            self.close_published_workspace(window, cx);
             return;
         }
         let Some(runtime) = self.terminal.host_runtime.clone() else {
@@ -1807,6 +2247,90 @@ impl WorkbenchView {
             return;
         };
         self.commit_remote_workspace_if_changed(runtime, workspace_id, window, cx);
+    }
+
+    fn close_published_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_persistence.control_request_in_flight
+            || self.workspace_persistence.commit_in_flight
+        {
+            if self.workspace_persistence.discard_close_requested {
+                self.workspace_persistence.closing = true;
+            }
+            return;
+        }
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return;
+        };
+        let Some(view) = &self.workspace_persistence.view else {
+            return;
+        };
+        let workspace_id = view.id().clone();
+        let discard = self.workspace_persistence.discard_close_requested;
+        let revision = self.workspace_persistence.revision;
+        self.workspace_persistence.control_request_in_flight = true;
+        self.workspace_persistence.closing = true;
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            let expected_revision = if discard {
+                let WorkspaceResponse::Workspaces(entries) =
+                    runtime.workspace_request(WorkspaceRequest::List)?
+                else {
+                    return Err("Host did not return its workspace index".into());
+                };
+                let Some(entry) = entries
+                    .into_iter()
+                    .find(|entry| entry.workspace_id == workspace_id)
+                else {
+                    return Ok(WorkspaceResponse::Forgotten { workspace_id });
+                };
+                entry.revision
+            } else {
+                revision.ok_or_else(|| "Workspace revision is unavailable".to_string())?
+            };
+            runtime.workspace_request(WorkspaceRequest::SetRestoreOnStartup {
+                workspace_id,
+                expected_revision,
+                restore: false,
+            })
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                root.workspace_persistence.control_request_in_flight = false;
+                match result {
+                    Ok(WorkspaceResponse::Registered(_) | WorkspaceResponse::Forgotten { .. }) => {
+                        root.workspace_persistence.host_close_confirmed = true;
+                        if root.record_closed_window(cx) {
+                            window.remove_window();
+                        }
+                    }
+                    result => {
+                        root.workspace_persistence.closing = false;
+                        root.workspace_persistence.discard_close_requested = false;
+                        root.set_workspace_persistence_error(format!(
+                            "Cannot close saved workspace: {result:?}"
+                        ));
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn record_closed_window(&mut self, cx: &mut Context<Self>) -> bool {
+        if cx.has_global::<crate::remote_restore::RemoteRestoreGlobal>()
+            && let Err(error) = cx
+                .global_mut::<crate::remote_restore::RemoteRestoreGlobal>()
+                .close_window()
+        {
+            self.set_workspace_persistence_error(format!(
+                "Cannot update remote Client restore state: {error}"
+            ));
+            cx.notify();
+            return false;
+        }
+        true
     }
 
     fn commit_remote_workspace_if_changed(
@@ -1828,9 +2352,22 @@ impl WorkbenchView {
             self.workspace_persistence.pending_commit = None;
             return;
         };
+        let request_control_context = runtime.control_status().map(|status| status.context);
         if self.workspace_persistence.host_epoch != Some(request_host_epoch) {
             self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
             self.workspace_persistence.pending_commit = None;
+            return;
+        }
+        if self.workspace_persistence.control_context != request_control_context {
+            self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+            self.workspace_persistence.pending_commit = None;
+            self.preserve_unpublished_workspace_drafts(
+                &runtime,
+                &workspace_id,
+                "Workspace control changed before local edits were published",
+                cx,
+            );
+            cx.notify();
             return;
         }
         let pending = if let Some(pending) = self.workspace_persistence.pending_commit.as_ref() {
@@ -1947,31 +2484,30 @@ impl WorkbenchView {
                         .terminal
                         .host_runtime
                         .as_ref()
-                        .is_some_and(|runtime| runtime.is_controller());
+                        .is_some_and(|runtime| {
+                            runtime.is_controller()
+                                && runtime.control_status().map(|status| status.context)
+                                    == request_control_context
+                        });
                 if !response_is_current {
                     root.workspace_persistence.pending_commit = None;
-                    let forced_loss = root.workspace_persistence.mode
-                        == WorkspacePersistenceMode::Active
-                        && root
-                            .terminal
-                            .host_runtime
-                            .as_ref()
-                            .is_some_and(|runtime| !runtime.is_controller());
-                    if forced_loss {
-                        root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                    if remote_host_epoch(&runtime).is_none() {
+                        root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
                         root.preserve_unpublished_workspace_drafts(
-                            &runtime,
-                            &workspace_id,
-                            "Host control was forced to another Client while publishing",
-                            cx,
+                            &runtime, &workspace_id,
+                            "Connection interrupted while publishing; waiting to reconcile", cx,
                         );
-                    } else if root.workspace_persistence.mode != WorkspacePersistenceMode::ControlLost {
+                    } else if !matches!(
+                        root.workspace_persistence.mode,
+                        WorkspacePersistenceMode::AwaitingControl
+                            | WorkspacePersistenceMode::Loading
+                            | WorkspacePersistenceMode::Restoring
+                            | WorkspacePersistenceMode::ControlLost
+                    ) {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
                         root.preserve_unpublished_workspace_drafts(
-                            &runtime,
-                            &workspace_id,
-                            "Ignored a stale workspace publication response; local edits were not replayed",
-                            cx,
+                            &runtime, &workspace_id,
+                            "Ignored a stale workspace publication response; local edits were not replayed", cx,
                         );
                     }
                 } else {
@@ -2015,7 +2551,7 @@ impl WorkbenchView {
                             );
                         }
                         Err(error) if is_remote_connection_error(&error) => {
-                            root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                            root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
                             root.workspace_persistence.pending_commit = None;
                             root.preserve_unpublished_workspace_drafts(
                                 &runtime,
@@ -2389,15 +2925,99 @@ fn mutation_belongs_to_current_host(
 fn acquire_control_and_open(
     runtime: &Arc<crate::host_runtime::DesktopHostRuntime>,
     workspace_id: WorkspaceId,
-) -> Result<(serde_json::Value, u64), String> {
-    match runtime.workspace_request(WorkspaceRequest::Open { workspace_id })? {
+    require_existing: bool,
+) -> Result<(serde_json::Value, u64), RemoteWorkspaceOpenError> {
+    runtime
+        .finish_pending_startup_archival()
+        .map_err(RemoteWorkspaceOpenError::from_request)?;
+    if runtime.is_controller() && !require_existing {
+        runtime
+            .workspace_request(WorkspaceRequest::Register {
+                workspace_id: workspace_id.clone(),
+                name: workspace_id.as_str().to_string(),
+            })
+            .map_err(RemoteWorkspaceOpenError::from_request)?;
+    }
+    let request = if require_existing || runtime.is_controller() {
+        WorkspaceRequest::OpenExisting {
+            workspace_id: workspace_id.clone(),
+        }
+    } else {
+        WorkspaceRequest::Open {
+            workspace_id: workspace_id.clone(),
+        }
+    };
+    let response = runtime.request_blocking_typed(yttt_protocol::Request::Workspace(request))
+        .map_err(|error| match &error {
+            yttt_client_core::ClientCoreError::Protocol(failure)
+                if failure.code == yttt_protocol::FailureCode::NotFound =>
+                    RemoteWorkspaceOpenError::InvalidSnapshot("The saved workspace was deleted; choose another history entry or open a new window".into()),
+            _ => RemoteWorkspaceOpenError::from_request(error.to_string()),
+        })?;
+    let yttt_protocol::Response::Workspace(response) = response else {
+        return Err(RemoteWorkspaceOpenError::Retryable(
+            "Host returned an unexpected workspace response".into(),
+        ));
+    };
+    match response {
         WorkspaceResponse::Opened {
             snapshot, revision, ..
-        } => Ok((snapshot.into_value(), revision)),
-        response => Err(format!(
+        } => {
+            if runtime.is_controller() {
+                runtime
+                    .workspace_request(WorkspaceRequest::SetRestoreOnStartup {
+                        workspace_id,
+                        expected_revision: revision,
+                        restore: true,
+                    })
+                    .map_err(RemoteWorkspaceOpenError::from_request)?;
+            }
+            Ok((snapshot.into_value(), revision))
+        }
+        response => Err(RemoteWorkspaceOpenError::Retryable(format!(
             "Remote Host returned an unexpected workspace open response: {response:?}"
-        )),
+        ))),
     }
+}
+
+fn materialize_recovery_snapshot(
+    mut snapshot: serde_json::Value,
+    bodies: Vec<DraftUpload>,
+) -> Result<serde_json::Value, String> {
+    RemoteWorkspaceSnapshot::from_value(snapshot.clone())?;
+    if let Some(documents) = snapshot
+        .get_mut("documents")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for document in documents {
+            let Some(reference) = document.get("draft_ref").filter(|value| !value.is_null()) else {
+                continue;
+            };
+            let reference: DraftRef =
+                serde_json::from_value(reference.clone()).map_err(|error| error.to_string())?;
+            let content = bodies
+                .iter()
+                .find(|(body, _)| body == &reference)
+                .map(|(_, content)| content)
+                .ok_or("Saved recovery draft body is missing")?;
+            let digest: [u8; 32] = Sha256::digest(content.as_slice()).into();
+            if digest != reference.content_sha256 || content.len() as u64 != reference.bytes {
+                return Err("Saved recovery draft body does not match its manifest".into());
+            }
+            let draft = DraftContentRevision {
+                revision: reference.revision,
+                base: reference.base,
+                content: String::from_utf8(content.as_ref().clone())
+                    .map_err(|error| error.to_string())?,
+            };
+            document["draft"] = serde_json::to_value(draft).map_err(|error| error.to_string())?;
+            document
+                .as_object_mut()
+                .ok_or("Invalid recovery document")?
+                .remove("draft_ref");
+        }
+    }
+    Ok(snapshot)
 }
 
 fn prepare_remote_restore(
@@ -2628,6 +3248,440 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
+    #[test]
+    fn observer_defers_startup_archival_until_control_and_deleted_history_stays_deleted() {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        use yttt_protocol::{Request, session::ProfileControlRequest};
+        let host = RecoveryHost::start();
+        let owner = host.client("owner");
+        let old = WorkspaceId::new("previous-startup").unwrap();
+        owner
+            .workspace_request(WorkspaceRequest::Register {
+                workspace_id: old.clone(),
+                name: "old".into(),
+            })
+            .unwrap();
+        owner
+            .workspace_request(WorkspaceRequest::Commit {
+                workspace_id: old.clone(),
+                expected_revision: 0,
+                operation_id: WorkspaceOperationId::new("old-layout").unwrap(),
+                snapshot: WorkspaceSnapshot::new(serde_json::json!({"history": "retain"})).unwrap(),
+                drafts: Vec::new(),
+            })
+            .unwrap();
+        let observer = host.client("new-startup");
+        observer.archive_unclaimed_workspaces().unwrap();
+        let WorkspaceResponse::Workspaces(before) =
+            owner.workspace_request(WorkspaceRequest::List).unwrap()
+        else {
+            panic!("index")
+        };
+        assert!(
+            before[0].restore_on_startup,
+            "observer must not archive shared state"
+        );
+        let fresh = observer.claim_workspace_view(false).unwrap();
+        owner
+            .request_blocking_typed(Request::ProfileControl(ProfileControlRequest::Release))
+            .unwrap();
+        observer
+            .request_blocking_typed(Request::ProfileControl(
+                ProfileControlRequest::RequestControl,
+            ))
+            .unwrap();
+        acquire_control_and_open(&observer, fresh.id().clone(), false).unwrap();
+        let WorkspaceResponse::Workspaces(after) =
+            observer.workspace_request(WorkspaceRequest::List).unwrap()
+        else {
+            panic!("index")
+        };
+        assert!(
+            !after
+                .iter()
+                .find(|entry| entry.workspace_id == old)
+                .unwrap()
+                .restore_on_startup
+        );
+        assert!(
+            after
+                .iter()
+                .find(|entry| &entry.workspace_id == fresh.id())
+                .unwrap()
+                .restore_on_startup
+        );
+        observer
+            .workspace_request(WorkspaceRequest::Forget {
+                workspace_id: old.clone(),
+                expected_revision: 1,
+            })
+            .unwrap();
+        assert!(
+            matches!(
+                acquire_control_and_open(&observer, old, true),
+                Err(RemoteWorkspaceOpenError::InvalidSnapshot(_))
+            ),
+            "deleted history must not auto-retry or register a blank replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn discard_close_waits_for_initial_open_without_a_cached_revision(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        cx.update(gpui_component::init);
+        cx.background_executor.allow_parking();
+        cx.skip_drawing();
+        let host = RecoveryHost::start();
+        let runtime = host.client("discard-loading");
+        let lease = runtime.claim_workspace_view(false).unwrap();
+        let id = lease.id().clone();
+        runtime
+            .workspace_request(WorkspaceRequest::Register {
+                workspace_id: id.clone(),
+                name: "invalid".into(),
+            })
+            .unwrap();
+        runtime
+            .workspace_request(WorkspaceRequest::Commit {
+                workspace_id: id.clone(),
+                expected_revision: 0,
+                operation_id: WorkspaceOperationId::new("invalid").unwrap(),
+                snapshot: WorkspaceSnapshot::new(serde_json::json!({"schema_version": 999}))
+                    .unwrap(),
+                drafts: Vec::new(),
+            })
+            .unwrap();
+        let paths = AppConfigPaths::from_config_dir(host.root.path().join("ui-config"));
+        let (view, cx) =
+            cx.add_window_view(|_, _| WorkbenchView::with_config_paths_for_test(paths));
+        view.update_in(cx, |root, window, cx| {
+            root.terminal.host_runtime = Some(runtime.clone());
+            root.workspace_persistence.view = Some(lease);
+            root.request_workspace_control_and_open(runtime.clone(), id.clone(), window, cx);
+            assert!(root.workspace_persistence.revision.is_none());
+            assert!(!root.flush_workspace_persistence_on_close(window, cx));
+        });
+        cx.simulate_prompt_answer("Close without saving");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            let WorkspaceResponse::Workspaces(index) =
+                runtime.workspace_request(WorkspaceRequest::List).unwrap()
+            else {
+                panic!("index")
+            };
+            let entry = index.iter().find(|entry| entry.workspace_id == id).unwrap();
+            if !entry.restore_on_startup {
+                assert_eq!(
+                    entry.revision, 1,
+                    "discard must not replace the saved snapshot"
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "discard close retained startup membership"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn explicit_reconciliation_publishes_layout_then_archives_on_close(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        exercise_layout_recovery(cx, LayoutRecovery::Reconcile);
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn explicit_local_recovery_replaces_a_malformed_host_snapshot(cx: &mut gpui::TestAppContext) {
+        exercise_layout_recovery(cx, LayoutRecovery::PublishLocal);
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn saved_full_recovery_survives_cold_failure_and_stale_discard_close(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        exercise_layout_recovery(cx, LayoutRecovery::SavedAfterColdFailure);
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn saved_full_recovery_survives_failed_host_reload(cx: &mut gpui::TestAppContext) {
+        exercise_layout_recovery(cx, LayoutRecovery::SavedAfterFailedReload);
+    }
+
+    #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    enum LayoutRecovery {
+        Reconcile,
+        PublishLocal,
+        SavedAfterColdFailure,
+        SavedAfterFailedReload,
+    }
+
+    #[cfg(unix)]
+    fn exercise_layout_recovery(cx: &mut gpui::TestAppContext, recovery: LayoutRecovery) {
+        let replace_malformed_host = !matches!(recovery, LayoutRecovery::Reconcile);
+        let from_saved = matches!(
+            recovery,
+            LayoutRecovery::SavedAfterColdFailure | LayoutRecovery::SavedAfterFailedReload
+        );
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        cx.update(gpui_component::init);
+        cx.background_executor.allow_parking();
+        cx.skip_drawing();
+        let host = RecoveryHost::start();
+        let runtime = host.client("layout-recovery");
+        let lease = runtime.claim_workspace_view(false).unwrap();
+        let workspace_id = lease.id().clone();
+        let paths = AppConfigPaths::from_config_dir(host.root.path().join("ui-config"));
+        let mut workspace = Workspace::new();
+        let project_id = workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::new("layout-recovery"),
+                    ProjectLocation::local(host.root.path().to_path_buf()),
+                ),
+                dev_fixture_layout(),
+            )
+            .unwrap();
+        let (view, cx) = cx.add_window_view(|_, _| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths)
+        });
+        let initial = view.update(cx, |root, cx| {
+            root.reconcile_project_work_area(&project_id);
+            root.build_remote_workspace_snapshot(cx).unwrap().0
+        });
+        runtime
+            .workspace_request(WorkspaceRequest::Register {
+                workspace_id: workspace_id.clone(),
+                name: "layout recovery".into(),
+            })
+            .unwrap();
+        runtime
+            .workspace_request(WorkspaceRequest::Commit {
+                workspace_id: workspace_id.clone(),
+                expected_revision: 0,
+                operation_id: WorkspaceOperationId::new("initial").unwrap(),
+                snapshot: WorkspaceSnapshot::new(initial.clone()).unwrap(),
+                drafts: Vec::new(),
+            })
+            .unwrap();
+        if replace_malformed_host {
+            runtime
+                .workspace_request(WorkspaceRequest::Commit {
+                    workspace_id: workspace_id.clone(),
+                    expected_revision: 1,
+                    operation_id: WorkspaceOperationId::new("malformed").unwrap(),
+                    snapshot: WorkspaceSnapshot::new(serde_json::json!({"schema_version": 999}))
+                        .unwrap(),
+                    drafts: Vec::new(),
+                })
+                .unwrap();
+        }
+        let added = view.update_in(cx, |root, window, cx| {
+            root.terminal.host_runtime = Some(runtime.clone());
+            root.workspace_persistence.view = Some(lease);
+            root.workspace_persistence.revision = Some(1);
+            root.workspace_persistence.host_epoch = remote_host_epoch(&runtime);
+            root.workspace_persistence.control_context =
+                runtime.control_status().map(|s| s.context);
+            root.workspace_persistence.last_committed_snapshot = Some(initial);
+            let added = root.workspace.create_shell_tab().unwrap();
+            root.reconcile_project_work_area(&project_id);
+            root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+            if replace_malformed_host {
+                root.workspace_persistence.recovery_choice =
+                    Some(WorkspaceRecoveryChoice::PublishLocal);
+            }
+            if from_saved {
+                let draft = RecoverableWorkspaceDraft {
+                    schema_version: RECOVERABLE_WORKSPACE_DRAFT_SCHEMA_VERSION,
+                    scope: RecoverableWorkspaceScope {
+                        profile_id: "isolated-device".into(),
+                        environment_id: runtime
+                            .remote_environment()
+                            .unwrap()
+                            .environment_id
+                            .clone(),
+                        workspace_id: workspace_id.clone(),
+                    },
+                    host_epoch: remote_host_epoch(&runtime),
+                    snapshot: root.build_remote_workspace_snapshot(cx).unwrap().0,
+                    drafts: Vec::new(),
+                    pending_settings: None,
+                };
+                save_recoverable_workspace_draft(&host.root.path().join("recovery.json"), &draft)
+                    .unwrap();
+                if matches!(recovery, LayoutRecovery::SavedAfterColdFailure) {
+                    root.workspace = Workspace::new();
+                    root.workspace_persistence.revision = None;
+                    root.workspace_persistence.last_committed_snapshot = None;
+                    root.workspace_persistence.recovery_choice = None;
+                } else {
+                    root.workspace_persistence.recovery_choice =
+                        Some(WorkspaceRecoveryChoice::ReloadHost);
+                }
+            }
+            root.request_workspace_control_and_open(
+                runtime.clone(),
+                workspace_id.clone(),
+                window,
+                cx,
+            );
+            added
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if from_saved
+                && view.read_with(cx, |root, _| {
+                    root.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed
+                })
+            {
+                let draft =
+                    load_recoverable_workspace_draft(&host.root.path().join("recovery.json"))
+                        .unwrap();
+                view.update_in(cx, |root, window, cx| {
+                    if matches!(recovery, LayoutRecovery::SavedAfterColdFailure) {
+                        assert!(root.workspace_persistence.revision.is_none());
+                        assert!(root.workspace.opened_projects().is_empty());
+                    } else {
+                        assert_eq!(root.workspace_persistence.revision, Some(1));
+                        assert_eq!(
+                            root.build_remote_workspace_snapshot(cx).unwrap().0,
+                            draft.snapshot
+                        );
+                        let original = root.workspace.persisted_state();
+                        let newer_tab = root.workspace.create_shell_tab().unwrap();
+                        assert!(
+                            root.restore_saved_workspace(
+                                draft.clone(),
+                                draft.scope.clone(),
+                                window,
+                                cx
+                            )
+                            .is_err(),
+                            "saved recovery must not overwrite newer local changes"
+                        );
+                        assert!(
+                            root.workspace
+                                .project(&project_id)
+                                .unwrap()
+                                .layout
+                                .tab(&newer_tab)
+                                .is_some()
+                        );
+                        root.workspace = Workspace::restore_persisted_state(original).unwrap();
+                    }
+                    root.restore_saved_workspace(draft.clone(), draft.scope, window, cx)
+                        .unwrap();
+                });
+            }
+            if view.read_with(cx, |root, _| {
+                root.workspace_persistence.mode == WorkspacePersistenceMode::Active
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "layout-only recovery remained blocked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        view.update_in(cx, |root, window, cx| {
+            assert!(
+                root.workspace
+                    .project(&project_id)
+                    .unwrap()
+                    .layout
+                    .tab(&added)
+                    .is_some()
+            );
+            root.tick_workspace_persistence(window, cx);
+        });
+        loop {
+            cx.run_until_parked();
+            if view.read_with(cx, |root, _| {
+                root.workspace_persistence.revision
+                    == Some(if replace_malformed_host { 3 } else { 2 })
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "recovered layout was not published"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let WorkspaceResponse::Opened { snapshot, .. } = runtime
+            .workspace_request(WorkspaceRequest::Open {
+                workspace_id: workspace_id.clone(),
+            })
+            .unwrap()
+        else {
+            panic!("workspace missing")
+        };
+        let saved = RemoteWorkspaceSnapshot::from_value(snapshot.into_value()).unwrap();
+        assert!(
+            saved.workspace.opened_projects[0]
+                .layout
+                .tab(&added)
+                .is_some()
+        );
+        if matches!(recovery, LayoutRecovery::SavedAfterColdFailure) {
+            runtime
+                .workspace_request(WorkspaceRequest::Commit {
+                    workspace_id: workspace_id.clone(),
+                    expected_revision: 3,
+                    operation_id: WorkspaceOperationId::new("intervening-edit").unwrap(),
+                    snapshot: WorkspaceSnapshot::new(serde_json::to_value(saved).unwrap()).unwrap(),
+                    drafts: Vec::new(),
+                })
+                .unwrap();
+            view.update(cx, |root, _| {
+                root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost
+            });
+        }
+        view.update_in(cx, |root, window, cx| {
+            assert!(!root.flush_workspace_persistence_on_close(window, cx));
+            assert!(
+                !root.shared_mutation_allowed(),
+                "closing must freeze shared edits"
+            );
+        });
+        if matches!(recovery, LayoutRecovery::SavedAfterColdFailure) {
+            cx.simulate_prompt_answer("Close without saving");
+        }
+        loop {
+            cx.run_until_parked();
+            let WorkspaceResponse::Workspaces(index) =
+                runtime.workspace_request(WorkspaceRequest::List).unwrap()
+            else {
+                panic!("workspace index")
+            };
+            if index
+                .iter()
+                .any(|entry| entry.workspace_id == workspace_id && !entry.restore_on_startup)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "window closure did not archive its saved layout"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
     #[gpui::test]
     fn cold_restore_starts_fresh_when_host_confirms_omp_history_missing(
         cx: &mut gpui::TestAppContext,
@@ -2849,12 +3903,15 @@ mod tests {
         let local_tab = target.update(cx, |root, _| {
             let tab = root.workspace.create_shell_tab().unwrap();
             root.reconcile_project_work_area(&project_id);
+            root.workspace
+                .mark_pane_running(&project_id, &tab, "shell")
+                .unwrap();
             tab
         });
         transfer(&local, &remote);
         transfer(&remote, &local);
         target.update_in(cx, |root, window, cx| {
-            root.tick_workspace_persistence(window, cx);
+            assert!(!root.flush_workspace_persistence_on_close(window, cx));
             assert_eq!(
                 root.workspace_persistence.mode,
                 WorkspacePersistenceMode::ControlLost
@@ -2869,11 +3926,51 @@ mod tests {
                     .any(|tab| tab.id == local_tab)
             );
         });
-        let (_, revision) = acquire_control_and_open(&local, workspace_id.clone()).unwrap();
+        cx.simulate_prompt_answer("Keep window open");
+        cx.run_until_parked();
+        let (_, revision) = acquire_control_and_open(&local, workspace_id.clone(), true).unwrap();
         assert_eq!(
             revision, 2,
             "stale local changes must not be published over the remote snapshot"
         );
+        target.update_in(cx, |root, window, cx| {
+            root.request_workspace_control_and_open(
+                local.clone(),
+                workspace_id.clone(),
+                window,
+                cx,
+            );
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if target.read_with(cx, |root, _| {
+                root.workspace_persistence.mode == WorkspacePersistenceMode::Active
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "missed handoff reconciliation timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        target.read_with(cx, |root, _| {
+            let pane = &root
+                .workspace
+                .project(&project_id)
+                .unwrap()
+                .tab_states
+                .iter()
+                .find(|tab| tab.tab_id == local_tab)
+                .unwrap()
+                .pane_states[0];
+            assert_eq!(
+                pane.process_state,
+                crate::model::workspace::PaneProcessState::Restoring,
+                "unchanged workspace revision must still reconcile resources after a missed handoff"
+            );
+        });
     }
 
     #[cfg(unix)]

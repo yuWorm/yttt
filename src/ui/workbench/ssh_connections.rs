@@ -984,6 +984,9 @@ impl WorkbenchView {
         let launch = crate::remote_launch::RemoteLaunch {
             local_profile,
             appearance,
+            saved_target: Some(crate::remote_launch::SavedRemoteTarget::Ssh {
+                connection_id: connection_id.clone(),
+            }),
             target: crate::remote_launch::RemoteTarget::SshServer {
                 connection,
                 password,
@@ -1100,6 +1103,16 @@ impl WorkbenchView {
             self.close_ssh_connection_editor();
         }
         self.ssh.error = None;
+        if let Some(profile) = self.config_paths.profile()
+            && let Err(error) = crate::remote_restore::forget(
+                profile,
+                &crate::remote_restore::SavedRemoteTarget::Ssh {
+                    connection_id: connection_id.clone(),
+                },
+            )
+        {
+            self.ssh.error = Some(format!("Cannot remove remote restore entry: {error}"));
+        }
         self.ssh.statuses.remove(&connection_id);
         cx.notify();
         let disconnect_id = connection_id.clone();

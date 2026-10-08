@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{cell::Cell, collections::VecDeque, rc::Rc};
 
 use crate::ui::{
     i18n::{UiText, UiTextKey},
@@ -44,13 +44,25 @@ pub(super) fn open(
 
         let on_close = view.downgrade();
         window.on_window_should_close(cx, move |_window, cx| {
-            let _ = on_close.update(cx, |view, _| view.cancel());
+            let _ = on_close.update(cx, |view, cx| view.cancel(cx));
             true
         });
 
         cx.new(|cx| ComponentRoot::new(view, window, cx))
     })?;
     Ok(())
+}
+
+fn replacement_is_password(connection: &crate::config::ssh::SshConnectionConfig) -> bool {
+    use crate::config::ssh::{CredentialKind, SshAuthPreference};
+    connection.auth == SshAuthPreference::Password
+        || (connection.auth == SshAuthPreference::Auto
+            && connection
+                .credential
+                .as_ref()
+                .map_or(connection.identity_file.is_none(), |credential| {
+                    credential.kind == CredentialKind::LoginPassword
+                }))
 }
 
 struct RemoteConnectView {
@@ -66,6 +78,10 @@ struct RemoteConnectView {
     prompts: VecDeque<ConnectPrompt>,
     connecting: bool,
     cancelled: bool,
+    connected: Rc<Cell<bool>>,
+    replacement_credentials: Option<gpui::Entity<gpui_component::input::InputState>>,
+    remember_replacement: bool,
+    event_sender: Option<flume::Sender<RemoteConnectEvent>>,
 }
 
 enum ConnectPrompt {
@@ -115,6 +131,10 @@ impl RemoteConnectView {
             prompts: VecDeque::new(),
             connecting: false,
             cancelled: false,
+            connected: Rc::new(Cell::new(false)),
+            replacement_credentials: None,
+            remember_replacement: false,
+            event_sender: None,
         }
     }
 
@@ -122,28 +142,82 @@ impl RemoteConnectView {
         if self.connecting || self.cancelled || self.on_ready.is_none() {
             return;
         }
+        let mut host_credential = None;
+        if let Some(input) = &self.replacement_credentials {
+            let secret = zeroize::Zeroizing::new(input.read(cx).value().to_string());
+            if !secret.is_empty() {
+                match &mut self.launch.target {
+                    crate::remote_launch::RemoteTarget::ExistingHost {
+                        connection_info, ..
+                    } => match crate::remote_launch::ConnectionCode::decode(&secret) {
+                        Ok(code)
+                            if code.connection_info.environment_id
+                                == connection_info.environment_id
+                                && code.connection_info.profile_id
+                                    == connection_info.profile_id =>
+                        {
+                            *connection_info = code.connection_info;
+                            if self.remember_replacement
+                                && let Some(crate::remote_launch::SavedRemoteTarget::Host {
+                                    credential_id,
+                                }) = &self.launch.saved_target
+                            {
+                                host_credential = Some((credential_id.clone(), secret.clone()));
+                            }
+                        }
+                        _ => {
+                            self.error = Some(self.text.get(UiTextKey::RemoteWrongHostCode).into());
+                            cx.notify();
+                            return;
+                        }
+                    },
+                    crate::remote_launch::RemoteTarget::SshServer {
+                        connection,
+                        password,
+                        passphrase,
+                        save_password_as,
+                    } => {
+                        if replacement_is_password(connection) {
+                            *password = Some(secret.to_string());
+                            *save_password_as = self.remember_replacement.then(|| {
+                                connection
+                                    .credential
+                                    .as_ref()
+                                    .map(|credential| credential.id.clone())
+                                    .unwrap_or_else(|| {
+                                        yttt_core::model::ids::CredentialId::new(
+                                            uuid::Uuid::new_v4().to_string(),
+                                        )
+                                    })
+                            });
+                        } else {
+                            *passphrase = Some(secret.to_string());
+                        }
+                    }
+                }
+                input.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+        }
 
         self.connecting = true;
         self.error = None;
         self.status = UiTextKey::RemoteConnecting;
         self.status_detail = None;
         let (events, receiver) = flume::unbounded();
+        self.event_sender = Some(events.clone());
         let launch = self.launch.clone();
-        let connect = cx
-            .background_executor()
-            .spawn(async move { crate::remote_host::connect(launch, events) });
-
-        cx.spawn_in(window, async move |this, cx| {
-            while let Ok(event) = receiver.recv_async().await {
-                if this
-                    .update_in(cx, |view, _window, cx| view.handle_event(event, cx))
-                    .is_err()
-                {
-                    break;
-                }
+        let connect = cx.background_executor().spawn(async move {
+            if let Some((credential_id, secret)) = host_credential {
+                super::existing_host::save_replacement_credential(
+                    &launch.local_profile,
+                    &credential_id,
+                    &secret,
+                )?;
             }
-        })
-        .detach();
+            crate::remote_host::connect(launch, events)
+        });
+
+        self.listen_for_events(receiver, cx);
 
         cx.spawn_in(window, async move |this, cx| {
             let result = connect.await;
@@ -154,6 +228,94 @@ impl RemoteConnectView {
         .detach();
 
         cx.notify();
+    }
+
+    fn listen_for_events(
+        &self,
+        receiver: flume::Receiver<RemoteConnectEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        let connected = self.connected.clone();
+        let text = self.text;
+        // The connector outlives this window. Reconnect challenges belong to the
+        // Client application, not to the disposable initial-connect view.
+        cx.spawn(async move |this, cx| {
+            while let Ok(event) = receiver.recv_async().await {
+                if !connected.get() {
+                    if this
+                        .update(cx, |view, cx| view.handle_event(event, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                match event {
+                    RemoteConnectEvent::HostKey(challenge) => {
+                        let detail = format!(
+                            "{}\n{}:{}\n{}: {}\n{}: {}{}",
+                            text.get(if challenge.previous_fingerprint.is_some() {
+                                UiTextKey::SshHostKeyChangedDescription
+                            } else {
+                                UiTextKey::SshHostKeyDescription
+                            }),
+                            challenge.host,
+                            challenge.port,
+                            text.get(UiTextKey::RemoteKeyAlgorithm),
+                            challenge.algorithm,
+                            text.get(UiTextKey::SshHostKeyReceivedFingerprint),
+                            challenge.fingerprint,
+                            challenge
+                                .previous_fingerprint
+                                .as_ref()
+                                .map(|previous| format!(
+                                    "\n{}: {previous}",
+                                    text.get(UiTextKey::SshHostKeySavedFingerprint)
+                                ))
+                                .unwrap_or_default(),
+                        );
+                        let answer = cx.update(|cx| {
+                            cx.windows().into_iter().find_map(|handle| {
+                                handle
+                                    .update(cx, |_, window, cx| {
+                                        window.prompt(
+                                            gpui::PromptLevel::Warning,
+                                            text.get(UiTextKey::SshHostKeyTitle),
+                                            Some(&detail),
+                                            &[
+                                                text.get(UiTextKey::SshHostKeyReject),
+                                                text.get(UiTextKey::SshHostKeyTrustOnce),
+                                                text.get(
+                                                    if challenge.previous_fingerprint.is_some() {
+                                                        UiTextKey::SshHostKeyReplace
+                                                    } else {
+                                                        UiTextKey::SshHostKeyTrustAndSave
+                                                    },
+                                                ),
+                                            ],
+                                            cx,
+                                        )
+                                    })
+                                    .ok()
+                            })
+                        });
+                        let choice = match answer {
+                            Some(answer) => answer.await.ok(),
+                            None => None,
+                        };
+                        let _ = challenge.respond(yttt_ssh::HostKeyDecision {
+                            accept: matches!(choice, Some(1 | 2)),
+                            remember: choice == Some(2),
+                        });
+                    }
+                    RemoteConnectEvent::Takeover { answer, .. } => {
+                        let _ = answer.send(false);
+                    }
+                    RemoteConnectEvent::Status(_) => {}
+                }
+            }
+        })
+        .detach();
     }
 
     fn handle_event(&mut self, event: RemoteConnectEvent, cx: &mut Context<Self>) {
@@ -245,10 +407,20 @@ impl RemoteConnectView {
 
         match result {
             Ok(environment) => {
-                self.reject_prompts();
                 let Some(on_ready) = self.on_ready.take() else {
                     return;
                 };
+                self.connected.set(true);
+                while let Some(prompt) = self.prompts.pop_front() {
+                    match prompt {
+                        ConnectPrompt::HostKey(challenge) => {
+                            if let Some(events) = &self.event_sender {
+                                let _ = events.send(RemoteConnectEvent::HostKey(challenge));
+                            }
+                        }
+                        prompt => prompt.reject(),
+                    }
+                }
                 // Keep a window alive until its replacements exist: remote Clients quit when
                 // the last window closes.
                 on_ready(environment, cx);
@@ -258,6 +430,27 @@ impl RemoteConnectView {
                 self.reject_prompts();
                 self.status = UiTextKey::RemoteConnectFailed;
                 self.error = Some(error);
+                if self.launch.saved_target.is_some()
+                    && self.replacement_credentials.is_none()
+                    && !matches!(&self.launch.target, crate::remote_launch::RemoteTarget::SshServer { connection, .. }
+                        if connection.auth == crate::config::ssh::SshAuthPreference::Agent)
+                {
+                    let placeholder =
+                        self.text.get(match &self.launch.target {
+                            crate::remote_launch::RemoteTarget::ExistingHost { .. } => {
+                                UiTextKey::ConnectionCodePlaceholder
+                            }
+                            crate::remote_launch::RemoteTarget::SshServer {
+                                connection, ..
+                            } if replacement_is_password(connection) => UiTextKey::SshPassword,
+                            _ => UiTextKey::SshKeyPassphrase,
+                        });
+                    self.replacement_credentials = Some(cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .masked(true)
+                            .placeholder(placeholder)
+                    }));
+                }
                 cx.notify();
             }
         }
@@ -269,21 +462,28 @@ impl RemoteConnectView {
         }
     }
 
-    fn cancel(&mut self) {
+    fn cancel(&mut self, cx: &mut Context<Self>) {
         if self.cancelled {
             return;
         }
         self.cancelled = true;
         self.connecting = false;
         self.reject_prompts();
+        if cx.has_global::<crate::remote_restore::RemoteRestoreGlobal>()
+            && let Err(error) = cx
+                .global::<crate::remote_restore::RemoteRestoreGlobal>()
+                .cancel_connect()
+        {
+            eprintln!("cannot remove cancelled remote Client restore record: {error}");
+        }
     }
 
     fn retry(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.begin_connect(window, cx);
     }
 
-    fn cancel_window(&mut self, _: &ClickEvent, window: &mut Window, _: &mut Context<Self>) {
-        self.cancel();
+    fn cancel_window(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel(cx);
         window.remove_window();
     }
 
@@ -478,7 +678,27 @@ impl RemoteConnectView {
                     .map(|error| {
                         self.detail(UiTextKey::RemoteConnectErrorDetails, error.clone(), cx)
                     }),
-            ),
+            ).children(self.replacement_credentials.as_ref().map(|input| {
+                div().flex().flex_col().gap_2()
+                    .child(text.get(UiTextKey::RemoteCredentialsRequired))
+                    .child(gpui_component::input::Input::new(input))
+                    .when(matches!(&self.launch.target, crate::remote_launch::RemoteTarget::ExistingHost { .. })
+                        || matches!(&self.launch.target, crate::remote_launch::RemoteTarget::SshServer { connection, .. }
+                            if replacement_is_password(connection)), |body| {
+                        body.child(yttt_button("remember-replacement", text.get(if self.remember_replacement {
+                            UiTextKey::ConnectionRemembered
+                        } else { UiTextKey::ConnectionRemember }), YtttButtonVariant::Secondary, theme, style, cx)
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.remember_replacement = !view.remember_replacement;
+                                cx.notify();
+                            })))
+                    })
+                    .when(matches!(&self.launch.target, crate::remote_launch::RemoteTarget::SshServer { connection, .. }
+                        if !replacement_is_password(connection)), |body| body.child(text.get(UiTextKey::RemotePassphraseTemporary)))
+            })).when(self.error.is_some() && matches!(&self.launch.target,
+                crate::remote_launch::RemoteTarget::SshServer { connection, .. }
+                    if connection.auth == crate::config::ssh::SshAuthPreference::Agent),
+                |body| body.child(text.get(UiTextKey::RemoteRepairSshAgent))),
         }
     }
 
@@ -605,7 +825,7 @@ impl RemoteConnectView {
 
 impl Drop for RemoteConnectView {
     fn drop(&mut self) {
-        self.cancel();
+        self.reject_prompts();
     }
 }
 
@@ -661,7 +881,7 @@ impl Render for RemoteConnectView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
-                    view.cancel();
+                    view.cancel(cx);
                     window.remove_window();
                     cx.stop_propagation();
                 }
@@ -723,5 +943,149 @@ impl Render for RemoteConnectView {
                     ),
             )
             .child(footer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    use yttt_protocol::{
+        Request, Response, ServerEvent,
+        ssh::{CredentialAnswer, CredentialChallenge, CredentialChallengeKind, HostKeyDecision},
+    };
+
+    struct ChallengeHost {
+        events: flume::Receiver<ServerEvent>,
+        answers: flume::Sender<Request>,
+    }
+
+    impl yttt_ssh::HostTransportProxy for ChallengeHost {
+        fn request(&self, request: Request) -> Result<Response, String> {
+            self.answers.send(request).unwrap();
+            Err("response unused by the one-way challenge answer".into())
+        }
+        fn events(&self) -> flume::Receiver<ServerEvent> {
+            self.events.clone()
+        }
+    }
+
+    #[gpui::test]
+    fn reconnect_host_key_prompt_survives_the_initial_window(cx: &mut gpui::TestAppContext) {
+        use crate::config::profile::{
+            AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let profile = AppProfile::scoped(
+            yttt_core::model::ids::ProfileId::new("challenge-test"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            root.path(),
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        cx.skip_drawing();
+        cx.background_executor.allow_parking();
+        let text = UiText::english();
+        let launch = cx.update(|cx| {
+            gpui_component::init(cx);
+            let (_, theme) = super::super::load_app_runtime(&profile.config_paths());
+            cx.set_global(AppearanceState::new(theme));
+            RemoteLaunch {
+                appearance: crate::remote_launch::RemoteAppearance::capture(cx, text),
+                local_profile: profile,
+                saved_target: None,
+                target: crate::remote_launch::RemoteTarget::SshServer {
+                    connection: crate::config::ssh::SshConnectionConfig::new(
+                        "test",
+                        "example.test",
+                        22,
+                        "user",
+                    ),
+                    password: None,
+                    passphrase: None,
+                    save_password_as: None,
+                },
+            }
+        });
+        let (initial, initial_cx) = cx.add_window_view(|window, cx| {
+            RemoteConnectView::new(launch.clone(), Box::new(|_, _| {}), window, cx)
+        });
+        let (events, receiver) = flume::unbounded();
+        initial.update(initial_cx, |view, cx| {
+            view.connected.set(true);
+            view.listen_for_events(receiver, cx);
+        });
+        let weak = initial.downgrade();
+        initial.update_in(initial_cx, |_, window, _| window.remove_window());
+        drop(initial);
+        cx.run_until_parked();
+        assert!(weak.upgrade().is_none());
+        let (_remaining, _) = cx.add_window_view(|window, cx| {
+            RemoteConnectView::new(launch, Box::new(|_, _| {}), window, cx)
+        });
+        let (host_events, host_receiver) = flume::unbounded();
+        let (answers, answer_receiver) = flume::unbounded();
+        let service = yttt_ssh::TransportService::from_host(Arc::new(ChallengeHost {
+            events: host_receiver,
+            answers,
+        }))
+        .unwrap();
+        let challenges = service.events();
+        for (id, button, expected) in [
+            (
+                1,
+                UiTextKey::SshHostKeyTrustOnce,
+                HostKeyDecision::AcceptOnce,
+            ),
+            (2, UiTextKey::SshHostKeyReject, HostKeyDecision::Reject),
+        ] {
+            host_events
+                .send(ServerEvent::CredentialChallenge(CredentialChallenge {
+                    challenge_id: id,
+                    connection_id: "test".into(),
+                    attempt: 1,
+                    kind: CredentialChallengeKind::HostKey {
+                        host: "example.test".into(),
+                        port: 22,
+                        algorithm: "ssh-ed25519".into(),
+                        fingerprint: "SHA256:new".into(),
+                        previous_fingerprint: Some("SHA256:old".into()),
+                    },
+                }))
+                .unwrap();
+            let yttt_ssh::TransportEvent::HostKeyChallenge(challenge) =
+                challenges.recv_blocking().unwrap()
+            else {
+                panic!("host-key challenge")
+            };
+            events.send(RemoteConnectEvent::HostKey(challenge)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !cx.has_pending_prompt() {
+                cx.run_until_parked();
+                assert!(
+                    Instant::now() < deadline,
+                    "reconnect challenge lost with initial view"
+                );
+            }
+            let (_, detail) = cx.pending_prompt().unwrap();
+            assert!(detail.contains("SHA256:new") && detail.contains("SHA256:old"));
+            cx.simulate_prompt_answer(text.get(button));
+            cx.run_until_parked();
+            let Request::CredentialAnswer {
+                challenge_id,
+                answer,
+            } = answer_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+            else {
+                panic!("credential answer")
+            };
+            assert_eq!(challenge_id, id);
+            assert_eq!(answer, CredentialAnswer::HostKey(expected));
+        }
     }
 }

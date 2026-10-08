@@ -625,6 +625,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteConnecting => "正在连接…",
         UiTextKey::RemoteConnectionName => "连接名称",
         UiTextKey::RemoteCredentialsRequired => "补充连接凭据",
+        UiTextKey::RemoteRepairSshAgent => {
+            "请解锁 SSH Agent 并加载此连接使用的密钥，然后重试。此认证方式不使用密码。"
+        }
+        UiTextKey::RemotePassphraseTemporary => "私钥口令仅供当前 Client 使用，不会保存。",
         UiTextKey::RemoteConnectTitle => "连接远程工作区",
         UiTextKey::RemoteConnectPreparing => "正在准备连接…",
         UiTextKey::RemoteConnectFailed => "无法建立连接",

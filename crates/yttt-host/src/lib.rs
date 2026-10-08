@@ -319,14 +319,21 @@ where
         loop {
             match agent_terminal_events.recv().await {
                 Ok(HostTerminalEvent::Exited {
-                    session_id, code, ..
-                }) => terminal_agent_hooks.terminal_exited(&session_id, code),
+                    session_id,
+                    session_epoch,
+                    code,
+                    ..
+                }) => terminal_agent_hooks.terminal_exited(&session_id, session_epoch, code),
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     for placement in terminal_runtime.placements() {
                         if let yttt_protocol::terminal::TerminalProcessState::Exited { code } =
                             placement.process_state
                         {
-                            terminal_agent_hooks.terminal_exited(&placement.session_id, code);
+                            terminal_agent_hooks.terminal_exited(
+                                &placement.session_id,
+                                placement.session_epoch,
+                                code,
+                            );
                         }
                     }
                 }
@@ -2880,7 +2887,7 @@ fn attach_terminal(
 }
 
 fn spawn_terminal(
-    mut spec: TerminalSpawnSpec,
+    spec: TerminalSpawnSpec,
     start_id: String,
     expected_host_epoch: u64,
     context: &ConnectionContext,
@@ -2970,39 +2977,44 @@ fn spawn_terminal(
         return Err(failure);
     }
 
-    let scope = context.agent_hooks.secure_terminal_environment(&mut spec);
+    let mut scope = None;
     let local_cwd = context
         .projects
         .local_root(&spec.project_id)
         .ok()
         .map(|root| spec.cwd.join_under(&root));
-    let (outcome, response) =
-        match context
-            .runtime
-            .spawn_with_transport(spec, Some(context.ssh.transport()), local_cwd)
-        {
-            Ok(terminal) => {
-                let session_epoch = terminal.session_epoch();
-                let response = context
-                    .runtime
-                    .acquire_lease(
-                        terminal.session_id(),
-                        client_id,
-                        TerminalLeaseMode::Interactive,
-                    )
-                    .map(|lease| Response::TerminalSpawned {
-                        lease,
-                        session_epoch,
-                    })
-                    .map_err(runtime_failure);
-                (StartAttemptOutcome::Spawned { session_epoch }, response)
-            }
-            Err(error) => {
+    let (outcome, response) = match context.runtime.spawn_with_transport(
+        spec,
+        Some(context.ssh.transport()),
+        local_cwd,
+        |spec, epoch| {
+            scope = Some(context.agent_hooks.secure_terminal_environment(spec, epoch));
+        },
+    ) {
+        Ok(terminal) => {
+            let session_epoch = terminal.session_epoch();
+            let response = context
+                .runtime
+                .acquire_lease(
+                    terminal.session_id(),
+                    client_id,
+                    TerminalLeaseMode::Interactive,
+                )
+                .map(|lease| Response::TerminalSpawned {
+                    lease,
+                    session_epoch,
+                })
+                .map_err(runtime_failure);
+            (StartAttemptOutcome::Spawned { session_epoch }, response)
+        }
+        Err(error) => {
+            if let Some(scope) = scope {
                 context.agent_hooks.cancel_terminal(&scope);
-                let failure = runtime_failure(error);
-                (StartAttemptOutcome::Failed(failure.code), Err(failure))
             }
-        };
+            let failure = runtime_failure(error);
+            (StartAttemptOutcome::Failed(failure.code), Err(failure))
+        }
+    };
     attempts
         .records
         .get_mut(&start_id)

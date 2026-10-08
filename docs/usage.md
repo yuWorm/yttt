@@ -60,13 +60,27 @@ when the content scrolls. Normal takeover uses **Continue here**; only forced ta
 as destructive. Interface text is available in English and Chinese; underlying diagnostic errors
 remain in their original language under **Technical details**.
 
-With **Restore last session** enabled (the default for new preferences), local and remote
-windows restore the Host's confirmed workspace before starting terminal/Agent views. This
-includes dynamic terminal tabs, file tabs, split layout and active work items—not just the
-project list. Multiple saved workspaces restore separately; a confirmed empty workspace stays
-empty even when recent-project history exists. Disable the setting to start at the initial
-project menu, where **Restore Last Session** explicitly loads a saved workspace through the
-same restoration path. Opening a directory or a new empty window remains a separate action.
+With **Restore last session** enabled, startup restores only workspaces left open when the
+application quit, not every workspace ever saved. Each window restores its Host-confirmed
+projects, terminal/file tabs, split layout and active work items before starting terminal views.
+Explicitly closing a window removes it from startup restoration; its nonempty snapshot remains
+in workspace history. **Restore Last Session** lets you select a historical workspace in a
+separate window or explicitly delete a closed record. Empty closed records are reclaimed
+automatically. Nonempty layouts and drafts are never silently evicted when the 128-record limit
+is reached. Older records without startup membership remain available in history.
+Closing every window leaves the next startup empty, even if recent projects or legacy state exist.
+Disabling restoration, opening a directory, or opening an empty window does not implicitly reopen
+history. An explicit remote connection still opens that Host's current workspaces.
+
+Startup also restores saved SSH and Network Host Clients left open at application exit.
+The Device-private restore registry contains only saved-connection IDs, never passwords, keys,
+or connection codes. Credentials are loaded again from their existing secure stores. Missing or
+rejected credentials prompt for replacement; remembering a replacement password or Host code
+is explicit. Private-key passphrases remain temporary. SSH Agent mode requires unlocking/loading
+the agent instead of entering an ignored password. Closing the last remote work window or cancelling
+its connection removes it from startup restoration; quitting the Client preserves it.
+SSH fingerprint confirmation remains available after the initial connecting window disappears,
+including reconnects after **Trust once**. Changed keys still require explicit approval.
 
 Surviving Host processes are reattached, not duplicated. After a cold Host restart, previously
 running shells are recreated without replaying their startup commands, and saved Agent sessions
@@ -295,8 +309,9 @@ Use this path to access computer A's already-running yttt from B without deployi
 5. The separate Client verifies TLS 1.3, the imported certificate and environment before using
    the work credential. The address is a route, not Host identity: a forwarded `localhost`
    address is valid. No SSH login, binary deployment, or Server startup happens on this path.
-6. Choose observation or profile-wide control. All saved work windows restore under stable
-   workspace IDs, while B's original local windows remain attached to B.
+6. Choose observation or profile-wide control. Work windows marked for startup restore under
+   stable workspace IDs, while B's original local windows remain attached to B. Closed snapshots
+   remain available through workspace history rather than reopening automatically.
 
 **Ownership and handoff.** Host execution settings, layouts, files and published editor drafts
 belong to A's Host. Appearance, themes, keybindings and other Device preferences remain on B.
@@ -324,10 +339,24 @@ not automatically replayed.
 
 Forced control loss, disconnection, or a stale Host epoch preserves unpublished edits in
 Device-private recovery storage, keyed by Device profile, Host environment and workspace.
-**Recover local drafts** restores matching editor drafts explicitly; it does not replace the
-Host workspace wholesale. Failed Host/Project settings retain their candidate and confirmed
-baseline for **Retry**, **Copy**, or **Discard**. Retrying requires current control and rejects a
-changed baseline instead of replaying stale settings.
+Shared editing stays frozen during reconciliation. A transient reconnect can publish a local
+candidate only after confirming its Host revision and authority. A real conflict requires an
+explicit choice: reconcile, reload the Host snapshot after preserving local recovery, or publish
+the local layout/drafts against a newly read Host revision. Stale acknowledgements cannot advance
+the current baseline.
+**Recover local drafts** restores matching document drafts without replacing the whole workspace.
+The separate full-workspace recovery action restores the preserved layout and drafts, including
+after a Host reload or application restart; it refuses to overwrite current unpublished changes.
+A cold restore failure, or a failed Host reload whose local state still matches the preserved
+snapshot, can also be replaced by valid saved recovery. Newer local changes remain protected.
+A deleted history entry reports a stopped recovery failure instead of retrying forever.
+Failed Host/Project settings retain their candidate and confirmed baseline for **Retry**, **Copy**,
+or **Discard**. Retrying requires current control and rejects a changed baseline.
+An explicit connected-controller window close publishes or discards local changes before removing
+startup membership. Discard-close waits for in-flight work and reads the current Host revision,
+including when initial restoration never completed. An offline/observer close cannot change the Host's restore set.
+If publication fails during application quit, you can keep the Client open or explicitly quit
+without publishing; the latter preserves only confirmed Host state and available local recovery.
 
 **Local management.** A can reclaim control, disconnect all TCP sessions, change the address, reset
 credentials or disable access. Closing the management window or a work window does not close the

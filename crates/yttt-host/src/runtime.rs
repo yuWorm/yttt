@@ -173,14 +173,15 @@ impl HostRuntime {
         self: &Arc<Self>,
         spec: TerminalSpawnSpec,
     ) -> Result<HostedTerminal, HostRuntimeError> {
-        self.spawn_with_transport(spec, None, None)
+        self.spawn_with_transport(spec, None, None, |_, _| {})
     }
 
     pub fn spawn_with_transport(
         self: &Arc<Self>,
-        spec: TerminalSpawnSpec,
+        mut spec: TerminalSpawnSpec,
         ssh: Option<TransportService>,
         local_cwd: Option<std::path::PathBuf>,
+        prepare_environment: impl FnOnce(&mut TerminalSpawnSpec, u64),
     ) -> Result<HostedTerminal, HostRuntimeError> {
         if let Some(existing) = self.terminals.lock().get(&spec.session_id) {
             let expected_fingerprint = existing.spec().address_fingerprint();
@@ -196,6 +197,7 @@ impl HostRuntime {
             };
         }
         let session_epoch = self.next_session_epoch.fetch_add(1, Ordering::Relaxed);
+        prepare_environment(&mut spec, session_epoch);
         let terminal = match &spec.execution {
             TerminalExecutionSpec::Ssh { .. } => HostedTerminal::spawn_remote_with_budget(
                 spec.clone(),

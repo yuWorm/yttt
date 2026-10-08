@@ -33,6 +33,15 @@ use yttt_core::model::ids::CredentialId;
 use yttt_protocol::remote_access::RemoteConnectionInfo;
 use zeroize::Zeroizing;
 
+pub(super) fn save_replacement_credential(
+    profile: &AppProfile,
+    credential_id: &CredentialId,
+    secret: &str,
+) -> Result<(), String> {
+    ConnectionCredentialStore::new(format!("{}.existing-host", profile.credential_namespace()))
+        .save(credential_id, secret)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RememberedConnection {
     #[serde(default)]
@@ -263,9 +272,16 @@ enum Editor {
 
 #[derive(Clone)]
 enum LaunchSource {
-    Saved,
-    Full { editing: Option<CredentialId> },
-    Credentials { credential_id: CredentialId },
+    Saved {
+        credential_id: CredentialId,
+    },
+    Full {
+        editing: Option<CredentialId>,
+        credential_id: CredentialId,
+    },
+    Credentials {
+        credential_id: CredentialId,
+    },
 }
 
 enum SavedConnectionLoad {
@@ -452,7 +468,7 @@ impl ExistingHostForm {
                         address,
                         connection_info,
                         generation,
-                        LaunchSource::Saved,
+                        LaunchSource::Saved { credential_id: id },
                         window,
                         cx,
                     ),
@@ -514,6 +530,13 @@ impl ExistingHostForm {
             store.delete(&task_id).map_err(|error| error.to_string())?;
             records.remove(index);
             save_connections(&profile, &records)?;
+            crate::remote_restore::forget(
+                &profile,
+                &crate::remote_restore::SavedRemoteTarget::Host {
+                    credential_id: task_id,
+                },
+            )
+            .map_err(|error| error.to_string())?;
             Ok::<_, String>(records)
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -536,6 +559,19 @@ impl ExistingHostForm {
 
     pub(crate) fn dismiss_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.editor_open() {
+            return;
+        }
+        if !self.busy
+            && let Editor::Credentials { target } = &self.editor
+            && let Err(error) = crate::remote_restore::forget_if_idle(
+                &self.profile,
+                crate::remote_restore::SavedRemoteTarget::Host {
+                    credential_id: target.credential_id.clone(),
+                },
+            )
+        {
+            self.error = Some(error.to_string());
+            cx.notify();
             return;
         }
         self.next_operation_generation();
@@ -682,6 +718,7 @@ impl ExistingHostForm {
             };
             (record, Some(connection_info), credential_persistence)
         };
+        let launch_credential_id = record.credential_id.clone();
         let generation = self.next_operation_generation();
         self.busy = true;
         self.error = None;
@@ -730,7 +767,10 @@ impl ExistingHostForm {
                                 address,
                                 connection_info.expect("connecting requires a connection code"),
                                 generation,
-                                LaunchSource::Full { editing },
+                                LaunchSource::Full {
+                                    editing,
+                                    credential_id: launch_credential_id,
+                                },
                                 window,
                                 cx,
                             );
@@ -850,10 +890,17 @@ impl ExistingHostForm {
     ) {
         let profile = self.profile.clone();
         let appearance = RemoteAppearance::capture(cx, self.text);
+        let credential_id = match &source {
+            LaunchSource::Saved { credential_id }
+            | LaunchSource::Full { credential_id, .. }
+            | LaunchSource::Credentials { credential_id } => credential_id.clone(),
+        };
+        let saved_target = Some(crate::remote_launch::SavedRemoteTarget::Host { credential_id });
         let task = cx.background_spawn(async move {
             crate::remote_launch::spawn_remote_client(RemoteLaunch {
                 local_profile: profile,
                 appearance,
+                saved_target,
                 target: RemoteTarget::ExistingHost {
                     address,
                     connection_info,
@@ -869,7 +916,7 @@ impl ExistingHostForm {
                 }
                 match result {
                     Ok(()) => match &source {
-                        LaunchSource::Saved => {
+                        LaunchSource::Saved { .. } => {
                             view.busy = false;
                             view.error = None;
                             cx.notify();
@@ -899,8 +946,8 @@ impl ExistingHostForm {
             return false;
         }
         match source {
-            LaunchSource::Saved => matches!(&self.editor, Editor::Closed),
-            LaunchSource::Full { editing } => self.full_editor_is_current(generation, editing),
+            LaunchSource::Saved { .. } => matches!(&self.editor, Editor::Closed),
+            LaunchSource::Full { editing, .. } => self.full_editor_is_current(generation, editing),
             LaunchSource::Credentials { credential_id } => matches!(
                 &self.editor,
                 Editor::Credentials { target } if target.credential_id == *credential_id

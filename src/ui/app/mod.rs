@@ -88,6 +88,15 @@ pub fn run(
         crate::config::storage::allow_test_root(&profile.paths().state);
     }
     let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
+    if startup_mode == StartupMode::Normal
+        && (!matches!(&initial_command, DesktopShellCommand::Activate)
+            || !app_settings.general.restore_last_session)
+        && let Some(runtime) = host_runtime.runtime()
+        && let Err(error) = runtime.archive_unclaimed_workspaces()
+    {
+        eprintln!("could not archive skipped startup workspaces: {error}");
+        return;
+    }
     let mut application =
         gpui_platform::application().with_quit_mode(desktop_quit_mode(terminal_performance_mode));
     if !terminal_performance_mode {
@@ -136,6 +145,8 @@ pub fn run(
             })
             .detach();
         }
+        let restore_windows = matches!(&initial_command, DesktopShellCommand::Activate)
+            && app_settings.general.restore_last_session;
         let window_context = DesktopWindowContext {
             profile,
             config_paths,
@@ -144,10 +155,10 @@ pub fn run(
             appearance,
             startup_mode,
             workbenches: Rc::new(RefCell::new(Vec::new())),
+            restore_remote_clients: Rc::new(std::cell::Cell::new(restore_windows)),
         };
+        cx.set_global(window_context.clone());
         install_desktop_tray(window_context.clone(), cx);
-        let restore_windows = matches!(&initial_command, DesktopShellCommand::Activate)
-            && window_context.app_settings.general.restore_last_session;
         if let Err(error) = handle_desktop_shell_command(initial_command, &window_context, cx) {
             eprintln!("failed to open initial yttt window: {error}");
         }
@@ -183,6 +194,17 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
         eprintln!("failed to initialize device preferences: {error}");
         return;
     }
+    let registration = match launch.saved_target.clone() {
+        Some(target) => match crate::remote_restore::Registration::acquire(&profile, target) {
+            Ok(Some(registration)) => Some(registration),
+            Ok(None) => return,
+            Err(error) => {
+                eprintln!("cannot acquire remote Client restore lease: {error}");
+                return;
+            }
+        },
+        None => None,
+    };
     let assets = assets::app_assets(&profile.config_paths());
     gpui_platform::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
@@ -200,9 +222,19 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
                 appearance.runtime().to_gpui_component_theme_config(),
             ));
             cx.set_global(appearance);
+            cx.set_global(crate::remote_restore::RemoteRestoreGlobal::new(
+                registration,
+            ));
             if let Err(error) = remote_connect::open(
                 launch,
                 move |remote, cx| {
+                    if let Some(registration) = &cx
+                        .global::<crate::remote_restore::RemoteRestoreGlobal>()
+                        .registration
+                        && let Err(error) = registration.connected()
+                    {
+                        eprintln!("cannot remember open remote Client: {error}");
+                    }
                     let workspace_count = remote.runtime.pending_workspace_count().max(1);
                     cx.set_global(HostRuntimeGlobal::ready(remote.runtime));
                     let (app_settings, theme_runtime) = load_app_runtime(&remote.config_paths);
@@ -228,7 +260,9 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
                         appearance,
                         startup_mode: StartupMode::Normal,
                         workbenches: Rc::new(RefCell::new(Vec::new())),
+                        restore_remote_clients: Rc::new(std::cell::Cell::new(false)),
                     };
+                    cx.set_global(context.clone());
                     for _ in 0..workspace_count {
                         if let Err(error) =
                             open_workbench_window(&context, WindowIntent::Restore, cx)
@@ -261,6 +295,16 @@ struct DesktopWindowContext {
     appearance: AppearanceState,
     startup_mode: StartupMode,
     workbenches: Rc<RefCell<Vec<WeakEntity<WorkbenchView>>>>,
+    restore_remote_clients: Rc<std::cell::Cell<bool>>,
+}
+impl gpui::Global for DesktopWindowContext {}
+
+pub(crate) fn open_history_workspace(
+    id: yttt_protocol::workspace::WorkspaceId,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    let context = cx.global::<DesktopWindowContext>().clone();
+    open_workbench_window(&context, WindowIntent::History(id), cx)
 }
 fn desktop_quit_mode(terminal_performance_mode: bool) -> QuitMode {
     if terminal_performance_mode {
@@ -339,9 +383,89 @@ fn activate_workbench_window(cx: &mut App) -> bool {
         .is_ok()
 }
 
+fn start_remote_client_restore(profile: AppProfile, cx: &mut App) {
+    let scan = cx.background_spawn({
+        let profile = profile.clone();
+        async move { crate::remote_restore::pending(&profile) }
+    });
+    cx.spawn(async move |cx| {
+        let targets = match scan.await {
+            Ok(targets) => targets,
+            Err(error) => {
+                cx.update(|cx| {
+                    if let Some(handle) = cx.windows().first().copied() {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            std::mem::drop(window.prompt(
+                                gpui::PromptLevel::Warning,
+                                "Cannot restore remote Clients",
+                                Some(&error.to_string()),
+                                &["OK"],
+                                cx,
+                            ));
+                        });
+                    }
+                });
+                return;
+            }
+        };
+        for target in targets {
+            let mut owner = None;
+            let mut started = false;
+            loop {
+                let completed = cx.update(|cx| {
+                    let mut windows = cx.windows();
+                    windows.sort_by_key(|handle| Some(*handle) != owner);
+                    for handle in windows {
+                        let result = handle
+                            .update(cx, |_, window, cx| {
+                                let view =
+                                    window.root::<ComponentRoot>().flatten().and_then(|root| {
+                                        root.read(cx)
+                                            .view()
+                                            .clone()
+                                            .downcast::<WorkbenchView>()
+                                            .ok()
+                                    })?;
+                                if owner != Some(handle) {
+                                    started = false;
+                                    owner = Some(handle);
+                                }
+                                Some(view.update(cx, |root, cx| {
+                                    if !root.remote_restore_ready(window, cx) {
+                                        return false;
+                                    }
+                                    if started {
+                                        return true;
+                                    }
+                                    root.restore_remote_target(target.clone(), window, cx);
+                                    started = true;
+                                    false
+                                }))
+                            })
+                            .ok()
+                            .flatten();
+                        if let Some(completed) = result {
+                            return completed;
+                        }
+                    }
+                    false
+                });
+                if completed {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+            }
+        }
+    })
+    .detach();
+}
+
 enum WindowIntent {
     Restore,
     Empty,
+    History(yttt_protocol::workspace::WorkspaceId),
     OpenProjects(Vec<PathBuf>),
 }
 
@@ -368,9 +492,21 @@ fn open_workbench_window(
     let has_host_snapshot = cx
         .global::<HostRuntimeGlobal>()
         .runtime()
-        .is_some_and(|runtime| runtime.pending_workspace_count() > 0 || runtime.is_remote());
+        .is_some_and(|runtime| runtime.is_remote() || runtime.has_workspace_history());
     let should_check_for_updates =
         startup_mode == StartupMode::Normal && !crate::config::storage::is_remote();
+    let history_view = if let WindowIntent::History(id) = &intent {
+        Some(
+            cx.global::<HostRuntimeGlobal>()
+                .runtime()
+                .ok_or_else(|| anyhow::anyhow!("Host unavailable"))?
+                .claim_history_workspace(id.clone())
+                .map_err(anyhow::Error::msg)?,
+        )
+    } else {
+        None
+    };
+    let restore_remote_clients = window_context.restore_remote_clients.clone();
     let mut options = workbench_window_options(bounds, window_context.app_settings.window.effect);
     if startup_mode == StartupMode::ReadmeFixture {
         options.window_bounds = Some(WindowBounds::Maximized(bounds));
@@ -389,11 +525,13 @@ fn open_workbench_window(
                         force_onboarding,
                         paths,
                     ),
-                    WindowIntent::Empty => WorkbenchView::from_project_paths(
-                        config_paths.clone(),
-                        force_onboarding,
-                        Vec::new(),
-                    ),
+                    WindowIntent::Empty | WindowIntent::History(_) => {
+                        WorkbenchView::from_project_paths(
+                            config_paths.clone(),
+                            force_onboarding,
+                            Vec::new(),
+                        )
+                    }
                     WindowIntent::Restore if !restore_existing => {
                         WorkbenchView::from_project_paths(
                             config_paths.clone(),
@@ -421,8 +559,18 @@ fn open_workbench_window(
             view.set_host_runtime_status(&host_runtime);
         });
         view.update(cx, |view, cx| {
+            if let Some(lease) = history_view {
+                view.set_workspace_view(lease);
+            }
             view.start_workspace_persistence(restore_existing, window, cx)
         });
+        if cx.has_global::<crate::remote_restore::RemoteRestoreGlobal>() {
+            cx.global_mut::<crate::remote_restore::RemoteRestoreGlobal>()
+                .opened_window();
+        }
+        if restore_remote_clients.replace(false) {
+            start_remote_client_restore(cx.global::<DesktopWindowContext>().profile.clone(), cx);
+        }
         view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
         if should_check_for_updates {
             view.update(cx, |view, cx| view.start_update_check(window, cx));
@@ -627,14 +775,19 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
             }
         };
         if let Err(error) = publication {
-            runtime.cancel_exit_publication();
-            cx.update(|cx| {
-                let _ = window_handle.update(cx, |_, window, cx| {
-                    std::mem::drop(window.prompt(gpui::PromptLevel::Warning, "Desktop remains open", Some(&error), &["OK"], cx));
-                });
-                cx.refresh_windows();
+            let answer = cx.update(|cx| {
+                window_handle.update(cx, |_, window, cx| {
+                    window.prompt(gpui::PromptLevel::Warning, "Some changes could not be published",
+                        Some(&format!("{error}\nUnpublished changes may be lost. Confirmed Host workspaces remain saved.")),
+                        &["Keep desktop open", "Quit without publishing"], cx)
+                }).ok()
             });
-            return;
+            let discard = match answer { Some(answer) => matches!(answer.await, Ok(1)), None => false };
+            if !discard {
+                runtime.cancel_exit_publication();
+                cx.update(|cx| cx.refresh_windows());
+                return;
+            }
         }
         if stops_host {
             let result = runtime.request_lifecycle(LifecycleRequest::ForceStop, true).recv_async().await;
@@ -895,11 +1048,7 @@ pub fn register_workbench_close_guard(window: &Window, cx: &App, view: &Entity<W
     let view = view.downgrade();
     window.on_window_should_close(cx, move |window, cx| {
         view.update(cx, |root, cx| {
-            if crate::config::storage::is_remote() {
-                root.flush_workspace_persistence_on_close(window, cx)
-            } else {
-                root.request_window_close(cx)
-            }
+            root.flush_workspace_persistence_on_close(window, cx)
         })
         .unwrap_or(true)
     });
@@ -1035,6 +1184,7 @@ mod tests {
             appearance: appearance.clone(),
             startup_mode: StartupMode::Normal,
             workbenches: Rc::new(RefCell::new(Vec::new())),
+            restore_remote_clients: Rc::new(std::cell::Cell::new(false)),
         };
         cx.background_executor.allow_parking();
         cx.skip_drawing();

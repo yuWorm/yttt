@@ -44,6 +44,7 @@ struct State {
     views: HashMap<WorkspaceId, Publication>,
     submitted_transfer: Option<String>,
     local_flush: Option<String>,
+    history_initialized: bool,
 }
 
 /// One instance per Client process/profile, shared by all work windows.
@@ -82,7 +83,6 @@ impl Drop for WorkspaceViewLease {
         if let Some(coordinator) = self.coordinator.upgrade() {
             let mut state = coordinator.state.lock();
             state.views.remove(&self.id);
-            state.available.push_front(self.id.clone());
         }
     }
 }
@@ -95,8 +95,10 @@ impl SessionCoordinator {
     ) -> Arc<Self> {
         let coordinator = Arc::new(Self {
             state: Mutex::new(State {
+                history_initialized: !workspaces.is_empty(),
                 available: workspaces
                     .into_iter()
+                    .filter(|entry| entry.restore_on_startup)
                     .map(|entry| entry.workspace_id)
                     .collect(),
                 views: HashMap::new(),
@@ -207,6 +209,7 @@ impl SessionCoordinator {
             WorkspaceId::new(uuid::Uuid::new_v4().to_string()).expect("UUID is a workspace ID")
         };
         state.views.insert(id.clone(), Publication::default());
+        state.history_initialized = true;
         Ok(WorkspaceViewLease {
             id,
             coordinator: Arc::downgrade(self),
@@ -215,6 +218,18 @@ impl SessionCoordinator {
 
     pub fn pending_workspace_count(&self) -> usize {
         self.state.lock().available.len()
+    }
+
+    pub fn is_open(&self, id: &WorkspaceId) -> bool {
+        self.state.lock().views.contains_key(id)
+    }
+
+    pub(crate) fn has_workspace_history(&self) -> bool {
+        self.state.lock().history_initialized
+    }
+
+    pub(crate) fn remove_pending_workspace(&self, id: &WorkspaceId) {
+        self.state.lock().available.retain(|entry| entry != id);
     }
 
     pub fn local_flush(&self) -> Option<String> {
@@ -258,7 +273,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reopening_a_closed_view_restores_its_identity_without_reusing_an_open_view() {
+    fn closed_history_requires_explicit_selection_and_never_reuses_an_open_view() {
         let saved = WorkspaceId::new("saved-window").unwrap();
         let coordinator = Arc::new(SessionCoordinator {
             state: Mutex::new(State {
@@ -266,14 +281,17 @@ mod tests {
                 views: HashMap::new(),
                 submitted_transfer: None,
                 local_flush: None,
+                history_initialized: true,
             }),
         });
         let first = coordinator.claim(None, true).unwrap();
         let other = coordinator.claim(None, false).unwrap();
         drop(first);
-        let restored = coordinator.claim(None, true).unwrap();
+        assert_eq!(coordinator.pending_workspace_count(), 0);
+        let restored = coordinator.claim(Some(saved.clone()), false).unwrap();
         assert_eq!(restored.id(), &saved);
         assert_ne!(restored.id(), other.id());
+        assert!(coordinator.claim(Some(saved), false).is_err());
     }
 
     #[test]

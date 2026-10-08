@@ -538,7 +538,7 @@ mod tests {
             let runtime = HostRuntime::new();
             let agent_hooks = HostAgentHookRuntime::start(7).unwrap();
             let session_id = TerminalSessionId::new("manual-grok");
-            let mut spec = TerminalSpawnSpec {
+            let spec = TerminalSpawnSpec {
                 session_id,
                 project_id: ProjectId::new("project"),
                 cwd: ProjectRelativePath::root(),
@@ -560,8 +560,11 @@ mod tests {
                 environment: Vec::new(),
                 removed_environment: Vec::new(),
             };
-            agent_hooks.secure_terminal_environment(&mut spec);
-            let terminal = runtime.spawn(spec).unwrap();
+            let terminal = runtime
+                .spawn_with_transport(spec, None, None, |spec, epoch| {
+                    agent_hooks.secure_terminal_environment(spec, epoch);
+                })
+                .unwrap();
             let mut updates = agent_hooks.subscribe();
             let (stop_tx, stop_rx) = watch::channel(false);
             let monitor = tokio::spawn(run(runtime, agent_hooks, stop_rx));

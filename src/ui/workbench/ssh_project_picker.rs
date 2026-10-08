@@ -396,6 +396,9 @@ impl WorkbenchView {
         let launch = crate::remote_launch::RemoteLaunch {
             local_profile,
             appearance,
+            saved_target: Some(crate::remote_launch::SavedRemoteTarget::Ssh {
+                connection_id: connection.id.clone(),
+            }),
             target: crate::remote_launch::RemoteTarget::SshServer {
                 connection,
                 save_password_as: password

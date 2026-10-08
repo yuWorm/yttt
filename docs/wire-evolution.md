@@ -14,7 +14,11 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 13`。v13 追加工作区 `OmpSessionExists`
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 14`。v14 追加工作区 `SetRestoreOnStartup`、
+  `Forget`、只读 `OpenExisting` 请求与 `Forgotten` 响应。`WorkspaceSummary.restore_on_startup`
+  缺省为 false，旧记录保留为历史；`WorkspaceEnvironment.workspace_history_initialized` 缺省为 false。
+  显式关闭改变启动集合，不再把所有历史窗口视为待恢复窗口。桌面端与 Host 必须同步更新。
+  v13 追加工作区 `OmpSessionExists`
   请求／响应，由执行 Host 查询完整 OMP 会话存储；确认不存在时恢复流程自动新建会话，
   查询错误不当作不存在。v12 追加项目 `ReadFileChunk` / `FileChunk`
   和 SSH `ReadChunk` / `Chunk`，以最多 1 MiB 的 CBOR 字节串传输二进制文件；
