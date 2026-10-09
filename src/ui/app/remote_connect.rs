@@ -15,7 +15,10 @@ use gpui_component::{
     Icon, IconName, Root as ComponentRoot, Sizable as _, scroll::ScrollableElement as _,
     spinner::Spinner,
 };
-use yttt_ui::primitives::button::{YtttButtonVariant, yttt_button};
+use yttt_ui::primitives::{
+    button::{YtttButtonVariant, yttt_button},
+    input::{YtttInputKind, yttt_input},
+};
 
 use crate::{
     remote_host::{RemoteConnectEvent, RemoteConnectStatus, RemoteControlOwner, RemoteEnvironment},
@@ -681,7 +684,7 @@ impl RemoteConnectView {
             ).children(self.replacement_credentials.as_ref().map(|input| {
                 div().flex().flex_col().gap_2()
                     .child(text.get(UiTextKey::RemoteCredentialsRequired))
-                    .child(gpui_component::input::Input::new(input))
+                    .child(yttt_input(input, YtttInputKind::Settings, theme, style))
                     .when(matches!(&self.launch.target, crate::remote_launch::RemoteTarget::ExistingHost { .. })
                         || matches!(&self.launch.target, crate::remote_launch::RemoteTarget::SshServer { connection, .. }
                             if replacement_is_password(connection)), |body| {

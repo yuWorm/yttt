@@ -2,13 +2,15 @@
 
 ## Unreleased
 
-## 0.3.8 - 2026-10-09
+## 0.3.9 - 2026-10-09
 
 - 修复 Agent 标签页关闭后重开时，旧终端退出事件污染新代际的问题。
 - 补齐控制权丢失后的对账、Host/本地快照选择、完整工作区恢复和发布闭环；旧确认不再覆盖当前基线。
 - 修复 SSH 和连接码远程连接成功后批量打开已关闭历史窗口的问题：区分启动恢复集合与工作区历史，
   显式关闭的窗口不再下次自动打开，空记录自动回收，非空历史仍保留供手动恢复或清理。
 - SSH 主机密钥确认贯穿重连生命周期；保存的远程 Client 可跨应用启动恢复，凭据仍从安全存储读取。
+- 修复 Windows 远程 Client 注册表将文件锁争用误判为错误的问题；已在运行的连接会被正确跳过。
+- 远程凭据补录输入框统一使用应用输入组件，保持主题与输入交互一致。
 - 资源协议升级至 14，桌面 Client、Host 与远端 Server 必须同步更新并重启；旧工作区保留在历史中，
   不自动批量打开。升级前请先保存工作并妥善结束运行中的任务。
 - Fence Agent exit events by terminal epoch; reconcile control loss before publishing and explicitly
@@ -17,8 +19,16 @@
   Restore only windows left open at quit, retain nonempty history for explicit recovery/deletion,
   and reclaim empty closed records. Saved remote Clients reopen by reference without storing secrets
   in restoration metadata; SSH trust prompts survive the initial connection window.
+- Recognize native Windows file-lock contention when restoring remote Clients, so an already-running
+  connection is skipped rather than reported as an error. Use the app input component for replacement credentials.
 - Resource protocol is now 14; update and restart desktop Clients, Hosts, and remote Servers together.
   Save work and safely finish running tasks before upgrading. Legacy workspaces remain in history.
+
+## 0.3.8 - 2026-10-09
+
+- 未发布：跨平台验证未通过，未生成安装包。全部修复随下一版本发布，保留原标签用于追溯。
+- Not published: cross-platform validation failed before packaging. Fixes ship in the next release;
+  the original tag is retained for traceability.
 
 ## 0.3.7 - 2026-10-05
 

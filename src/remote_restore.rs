@@ -73,7 +73,9 @@ impl Registration {
                 path: directory(profile).join(format!("{}.json", key(&target))),
                 target,
             })),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+                Ok(None)
+            }
             Err(error) => Err(error),
         }
     }
@@ -179,10 +181,10 @@ impl RemoteRestoreGlobal {
         self.windows += 1;
     }
     pub(crate) fn close_window(&mut self) -> io::Result<()> {
-        if self.windows <= 1 {
-            if let Some(registration) = &self.registration {
-                registration.closed()?;
-            }
+        if self.windows <= 1
+            && let Some(registration) = &self.registration
+        {
+            registration.closed()?;
         }
         self.windows = self.windows.saturating_sub(1);
         Ok(())
