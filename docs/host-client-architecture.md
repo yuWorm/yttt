@@ -1,8 +1,8 @@
 # yttt Host/Client 架构规范
 
 - 状态：桌面既有 Host 远程访问已接入；平台与实际 UI 验收结果见实施计划
-- 更新：2026-09-17
-- 适用协议：`yttt-protocol` 资源 v9、lifecycle v3、desktop-shell v2；帧头 v1
+- 更新：2026-10-09
+- 适用协议：`yttt-protocol` 资源 v14、lifecycle v3、desktop-shell v3；帧头 v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
 
 本文定义 yttt 的标准 Host/Client 边界、资源所有权、终端同步协议、本地安全模型、生命周期和恢复语义。P2P、Relay、移动端等连接路径只能扩展本规范，不能改变资源所有权。
