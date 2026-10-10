@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 主工作区标签过多时保持标签宽度，通过鼠标滚轮或触控板左右滚动；新建、分屏和项目面板按钮固定在右侧。
+- Keep overflowing workbench tabs at their natural width and scroll horizontally with the mouse wheel
+  or trackpad, while keeping the new-tab, split and project-panel controls fixed on the right.
+
 ## 0.3.9 - 2026-10-09
 
 - 修复 Agent 标签页关闭后重开时，旧终端退出事件污染新代际的问题。

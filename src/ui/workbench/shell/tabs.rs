@@ -484,6 +484,7 @@ where
         .group(group_name.clone())
         .relative()
         .flex()
+        .flex_shrink_0()
         .items_center()
         .gap(ui_style.spacing.md)
         .text_xs()
@@ -720,6 +721,7 @@ where
         ui_style,
     )
     .h_full()
+    .flex_shrink_0()
     .border_l(ui_style.border.hairline)
     .border_b(ui_style.border.hairline)
     .border_color(theme.border_variant)
