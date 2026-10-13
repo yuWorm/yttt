@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.10 - 2026-10-13
+
 - 安装后自动提供 `yttt` 命令：macOS 已安装应用首次启动时注册命令链接（需要时请求系统授权），
   Windows 安装器默认注册 PATH，Linux 发布包提供用户级 `install.sh`。不覆盖无关同名命令。
 - Make `yttt` available from the terminal after installation: installed macOS bundles register
@@ -19,6 +21,7 @@
   or trackpad, while keeping the new-tab, split and project-panel controls fixed on the right.
 
 ## 0.3.9 - 2026-10-09
+
 - 修复 Agent 标签页关闭后重开时，旧终端退出事件污染新代际的问题。
 - 补齐控制权丢失后的对账、Host/本地快照选择、完整工作区恢复和发布闭环；旧确认不再覆盖当前基线。
 - 修复 SSH 和连接码远程连接成功后批量打开已关闭历史窗口的问题：区分启动恢复集合与工作区历史，
