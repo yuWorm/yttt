@@ -16,6 +16,10 @@ Project
 The sidebar shows only currently opened projects. Recent projects are reachable from the
 project palette, not shown by default.
 
+Work item tabs keep their width when the tab bar fills up. Hover over the tab strip and use the
+mouse wheel or swipe horizontally on a trackpad to reach tabs on either side. The new-tab, split,
+and project-panel controls stay fixed on the right.
+
 ## CLI Control
 
 Use `yttt ctl` to list projects, terminal tabs, panes, and Agent status; create tabs

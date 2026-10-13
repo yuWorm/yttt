@@ -44,4 +44,4 @@
   缺失 epoch 不提供宽松默认值。ordered one-way `TerminalInput` 于 v3 引入，
   独立终端通道于 v5 引入。
 - lifecycle：`LIFECYCLE_PROTOCOL_VERSION = 3`
-- desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 2`
+- desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 3`

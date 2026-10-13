@@ -326,6 +326,8 @@ fn file_close_button_uses_terminal_trailing_position(cx: &mut gpui::TestAppConte
 struct ReorderableTabs {
     items: Vec<WorkbenchTabItem>,
     context_selected: Option<WorkItemId>,
+    width: gpui::Pixels,
+    ui_style: UiStyle,
 }
 
 impl ReorderableTabs {
@@ -352,6 +354,8 @@ impl ReorderableTabs {
                 })
                 .collect(),
             context_selected: None,
+            width: gpui::px(1200.0),
+            ui_style: UiStyle::default(),
         }
     }
 }
@@ -362,22 +366,39 @@ impl gpui::Render for ReorderableTabs {
         _window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        project_tabs(
+        gpui::div().w(self.width).child(project_tabs(
             ProjectId::new("test-project"),
             TabGroupId::new(1),
             self.items.clone(),
             WorkbenchTheme::one_dark(),
-            UiStyle::default(),
+            self.ui_style,
             IconTheme::default(),
             UiText::new(Locale::English),
-            |_| |_, _, _| {},
+            |selected| {
+                cx.listener(move |this, _event: &gpui::ClickEvent, _window, cx| {
+                    for item in &mut this.items {
+                        item.state = if item.id == selected {
+                            SelectableState::Active
+                        } else {
+                            SelectableState::Inactive
+                        };
+                    }
+                    cx.notify();
+                })
+            },
             |selected| {
                 cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
                     this.context_selected = Some(selected.clone());
                     cx.notify();
                 })
             },
-            |_| |_, _, _| {},
+            |closed| {
+                cx.listener(move |this, _event: &gpui::ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    this.items.retain(|item| item.id != closed);
+                    cx.notify();
+                })
+            },
             |target_index| {
                 cx.listener(move |this, dragged: &DraggedWorkbenchTab, _window, cx| {
                     let Some(from_index) =
@@ -402,7 +423,70 @@ impl gpui::Render for ReorderableTabs {
                 noop_tab_toolbar_click,
                 noop_tab_toolbar_click,
             ),
-        )
+        ))
+    }
+}
+
+#[gpui::test]
+fn overflowing_tabs_scroll_without_shrinking_or_moving_toolbar(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    for style in [UiStyleId::Zed, UiStyleId::Rounded] {
+        let (view, cx) = cx.add_window_view(|_, _| {
+            let mut tabs = ReorderableTabs::new();
+            tabs.width = gpui::px(480.0);
+            tabs.ui_style = UiStyle::resolve(style);
+            tabs.items = (0..12)
+                .map(|index| {
+                    let mut item = tabs.items[0].clone();
+                    item.id = WorkItemId::Terminal(format!("tab-{index}"));
+                    item.title = format!("Terminal {index:02} with a long title");
+                    item.state = SelectableState::Inactive;
+                    item
+                })
+                .collect();
+            tabs
+        });
+        let first = cx.debug_bounds("project-tab-1-0").unwrap();
+        let toolbar = cx.debug_bounds("tab-new").unwrap();
+        let last = cx.debug_bounds("project-tab-1-11").unwrap();
+        assert!(
+            last.right() > toolbar.left(),
+            "{style:?}: tabs must overflow"
+        );
+
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: first.center(),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -100.0)),
+            ..Default::default()
+        });
+        let scrolled_first = cx.debug_bounds("project-tab-1-0").unwrap();
+        let scrolled_last = cx.debug_bounds("project-tab-1-11").unwrap();
+        assert!(scrolled_first.left() < first.left());
+        assert_eq!(scrolled_first.size.width, first.size.width);
+        assert!(scrolled_last.right() <= toolbar.left());
+        assert_eq!(cx.debug_bounds("tab-new").unwrap(), toolbar);
+        cx.simulate_click(scrolled_last.center(), gpui::Modifiers::none());
+        view.read_with(cx, |tabs, _| {
+            assert_eq!(tabs.items[11].state, SelectableState::Active);
+        });
+        let close = cx.debug_bounds("project-tab-close-11").unwrap();
+        cx.simulate_click(close.center(), gpui::Modifiers::none());
+        view.read_with(cx, |tabs, _| {
+            assert!(
+                !tabs
+                    .items
+                    .iter()
+                    .any(|item| item.id == WorkItemId::Terminal("tab-11".into()))
+            );
+        });
+
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(first.center().x, first.center().y),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(10000.0), gpui::px(0.0))),
+            ..Default::default()
+        });
+        assert_eq!(cx.debug_bounds("project-tab-1-0").unwrap(), first);
+        assert_eq!(cx.debug_bounds("tab-new").unwrap(), toolbar);
     }
 }
 
