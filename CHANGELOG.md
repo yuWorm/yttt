@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- 安装后自动提供 `yttt` 命令：macOS 已安装应用首次启动时注册命令链接（需要时请求系统授权），
+  Windows 安装器默认注册 PATH，Linux 发布包提供用户级 `install.sh`。不覆盖无关同名命令。
+- Make `yttt` available from the terminal after installation: installed macOS bundles register
+  the command on first launch with authorization when needed, Windows setup registers PATH by
+  default, and Linux archives include a per-user installer. Preserve unrelated command entries.
+- 修复 CLI 注册的持久性与安装生命周期：Linux 同时覆盖 Bash 登录/非登录终端，并发安装加锁，
+  安装失败后可重试；拒绝无法表示为单个 PATH 项的目录。Windows 安装后启动立即获得命令路径，
+  卸载按记录的原范围清理；跨目录或范围升级要求先卸载，避免旧命令继续抢占。
+- Harden CLI registration: persist Linux login/non-login shell configuration independently of
+  transient PATH, serialize installers, and allow failed installs to be retried. Reject PATH
+  delimiters in command directories. Refresh the Windows post-install child's PATH and use
+  recorded uninstall scope; require uninstall before changing an owned installation's directory or scope.
 - 修复 Agent 标签页关闭后重开时，旧终端退出事件污染新代际的问题。
 - 补齐控制权丢失后的对账、Host/本地快照选择、完整工作区恢复和发布闭环；旧确认不再覆盖当前基线。
 - 区分启动恢复集合与工作区历史：显式关闭不再下次自动打开，空记录自动回收，非空历史只能显式清理。

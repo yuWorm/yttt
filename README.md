@@ -65,13 +65,34 @@ Run the CLI agents you already use in terminal panes. yttt can show supported Ag
 status in the project sidebar; a terminal command and an Agent-status integration are distinct.
 See [Agent status](docs/usage.md#agent-status).
 
-## Download
+## Installation
 
 Get the desktop package for your platform from [GitHub Releases](https://github.com/yuWorm/yttt/releases):
 
-- **macOS Apple Silicon:** download the `.dmg` and drag yttt to Applications.
-- **Windows x86_64:** run the `.exe` installer.
-- **Linux x86_64:** extract the `.tar.gz` and run `bin/yttt` inside it.
+- **macOS Apple Silicon:** download the `.dmg` and drag yttt to `/Applications` or `~/Applications`.
+  On its first launch there, yttt registers `/usr/local/bin/yttt`, using native macOS authorization
+  only when permission is required. It does not modify shell configuration.
+- **Windows x86_64:** run the `.exe` installer. It adds the selected application directory to
+  user `PATH` by default, or system `PATH` for an all-users installation. Open a new terminal afterward.
+  The app launched by Setup receives the new command directory immediately. Installation paths
+  containing `;` are rejected. Upgrade in place; uninstall first to change an installer-owned
+  command's installation directory or scope. Per-user uninstall must run as the original user.
+- **Linux x86_64:** extract the `.tar.gz`, then run the explicit per-user installer from the extracted
+  directory:
+
+  ```sh
+  ./install.sh
+  ```
+
+  It copies yttt to `${XDG_DATA_HOME:-$HOME/.local/share}/yttt/desktop`, links
+  `~/.local/bin/yttt`, and persists PATH even when the current terminal already contains that
+  directory. Bash is configured for both interactive and login shells (`.bashrc` and the first
+  existing `.bash_profile`, `.bash_login`, or `.profile`; `.bash_profile` is created if none exists).
+  Zsh, Fish, and sh use their normal startup configuration. Open a new terminal afterward.
+  The installer requires `flock`, serializes concurrent runs, preserves user configuration and
+  unrelated commands, and can be retried after a failed install. HOME must not contain `:`.
+  It does not call `sudo`; running the archive's `bin/yttt` directly remains portable and does not
+  alter PATH or shell files.
 
 Check the supplied SHA-256 sums. macOS packages are ad-hoc signed, not notarized.
 Keep desktop, Host, and remote Server on matching versions.

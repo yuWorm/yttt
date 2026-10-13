@@ -131,6 +131,14 @@ pub fn run(
         let command_registry = bindable_registry();
         cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
 
+        #[cfg(target_os = "macos")]
+        if startup_mode == StartupMode::Normal && !terminal_performance_mode {
+            cx.background_spawn(async {
+                crate::cli_registration::register_installed_app();
+            })
+            .detach();
+        }
+
         let login_startup = LoginStartupManager::for_current_platform(&profile).ok();
         if let Some(manager) = login_startup.clone() {
             cx.background_spawn(async move {

@@ -7,6 +7,42 @@ The default development profile depends on the executable path; an installed rel
 and a development binary do not address the same desktop. Restart the desktop after
 updating it to a build with CLI control support.
 
+## Installing the command
+
+- **macOS:** drag the release app to `/Applications` or `~/Applications`, then launch it.
+  The desktop automatically registers `/usr/local/bin/yttt` as a link to that bundle.
+  If the directory needs administrator access, macOS asks for authorization. Development
+  builds, custom `YTTT_PROFILE_ROOT` runs, and apps opened from a mounted DMG do not register.
+  An existing command pointing elsewhere is never overwritten; a native alert explains
+  conflicts or denied authorization. Resolve the issue and restart the app to retry.
+  Keep the app at its installed location; moving it breaks the link. If you deliberately
+  exclude `/usr/local/bin` from your shell's `PATH`, add it before using the short command.
+- **Windows:** the installer adds the application directory to the installation scope's
+  PATH by default. Open a new terminal after installing. Uninstall removes only a PATH
+  entry added by the installer, preserving an entry that existed before installation.
+  If PATH has been reorganized so the installer's addition cannot be identified safely,
+  uninstall leaves it untouched rather than removing a potentially user-managed entry.
+  The post-install launch prepends the selected application directory to the child's PATH
+  while retaining the original user's inherited entries. Semicolon-containing destinations
+  are rejected before installing. An installer-owned command must be upgraded in its existing
+  directory and scope; uninstall first to change either. Uninstall reads the recorded scope
+  rather than inferring it from current elevation. For per-user installs, running as another
+  user is rejected before removing the app. Keep `yttt-installer-state.ini` with the application;
+  missing or invalid scope metadata must be restored before uninstalling.
+- **Linux:** run the installer included in the release archive; see the
+  [installation instructions](../README.md#installation). It always establishes persistent
+  shell configuration, independently of the invoking process's PATH. Bash login and
+  non-login startup files are both covered; Zsh honors `ZDOTDIR` and Fish honors
+  `XDG_CONFIG_HOME`. The installer requires `flock`; `~/.yttt-install.lock` is retained
+  as a lock inode but is unlocked when the installer exits. HOME containing `:` is rejected
+  before writing files, because it cannot be represented as one PATH element.
+
+The command and desktop use the same executable, so updating the application does not
+leave a separately copied CLI behind. To bypass PATH registration on macOS, run
+`/Applications/yttt.app/Contents/MacOS/yttt ctl --help` directly.
+
+## Commands
+
 ```sh
 yttt ctl --help
 yttt ctl windows list --json
