@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>yttt · 多项目指挥台原型</title>
+  <link rel="stylesheet" href="./prototype.css">
+  <script defer src="./prototype.js"></script>
+</head>
+<body>
+  <!-- THROWAWAY PROTOTYPE: three structural variants (?variant=A/B/C).
+       All data and mutations are simulated, in memory, and never contact an Agent.
+       Open this file directly, or from the worktree root run:
+       python3 -m http.server 4177 --bind 127.0.0.1 --directory crates/yttt-ui/prototypes/command-center
+       This standalone directory is not included in the desktop build. -->
+  <header class="appbar">
+    <div class="brand"><span class="brand-mark">y</span><strong>yttt</strong><span class="app-divider"></span><span>多项目指挥台</span></div>
+    <div class="appbar-right"><span class="demo-label">交互原型 · 全部为演示数据</span><button class="icon-button" data-action="info" aria-label="查看数据说明" title="数据说明">i</button><button class="icon-button" data-action="fullscreen" aria-label="切换全屏" title="切换全屏">⛶</button></div>
+  </header>
+  <main>
+    <section class="page-heading">
+      <div><div class="eyebrow">WORKSPACE / COMMAND CENTER</div><h1 id="page-title">所有项目，一眼掌握<span class="heading-dot"></span></h1><p id="page-description">把注意力留给决策，而不是巡视终端。</p></div>
+      <div class="toolbar">
+        <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索项目、目标或 Agent" aria-label="搜索项目、目标或 Agent" autocomplete="off"></label>
+        <label class="scenario-label"><span class="sr-only">演示场景</span><select id="scenario" aria-label="演示场景"><option value="normal">场景：多项目并行</option><option value="questions">场景：集中提问</option><option value="offline">场景：Host 失联</option></select></label>
+        <button class="quiet-button" data-action="reset">重置演示</button>
+      </div>
+    </section>
+    <section id="metrics" class="metrics" aria-label="全局执行概况"></section>
+    <section id="workspace" class="workspace" aria-label="指挥台工作区"></section>
+  </main>
+  <footer class="footer"><div id="state-summary"></div><button class="text-button" data-action="state">查看原型状态 ↗</button></footer>
+  <nav id="variant-switcher" class="variant-switcher" aria-label="切换原型布局"></nav>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+</body>
+</html>
