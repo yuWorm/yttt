@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.12 - 2026-10-14
+
 - 修复进程扫描短暂漏报后同一 Agent 的有序事件投递停滞：重新识别相同 PID 时保留接收进度，
   漏报只标记失联，不再推断任务完成。未确认的回合状态显示为未知，而不是空闲。
 - Preserve ordered hook delivery across transient process-scan misses for the same Agent PID.
