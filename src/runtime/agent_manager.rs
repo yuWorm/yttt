@@ -792,13 +792,12 @@ mod tests {
             snapshot: reducer.snapshot().clone(),
         };
 
-        let Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) =
+        let Some(AgentPaneExitOutcome::Snapshot { address, .. }) =
             manager.apply_host_snapshot(address.clone(), update.clone())
         else {
             panic!("new Host snapshot was not applied");
         };
         assert_eq!(address, AgentPaneAddress::new("project", "tab", "pane"));
-        assert_eq!(snapshot.view_state(), AgentViewState::Idle);
         assert!(
             manager
                 .apply_host_snapshot(address.clone(), update)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.3.13 - 2026-10-14
+
+- 发布 Agent 状态恢复修复：进程重识别保留有序投递进度，OMP 定期确认活动，未知状态与空闲分开展示。
+- Ship Agent status recovery: preserve ordered delivery on process rediscovery, periodically confirm OMP activity, and distinguish unknown status from idle.
+- 移除 Host 快照序号测试对默认空闲状态的过时断言，保留序号去重和不落盘验证。0.3.12 标签未通过发布验证，没有生成安装包。
+- Remove an obsolete default-idle assertion from the Host snapshot ordering test while retaining deduplication and no-persistence checks. The 0.3.12 tag failed release validation and produced no packages.
+
 ## 0.3.12 - 2026-10-14
 
 - 修复进程扫描短暂漏报后同一 Agent 的有序事件投递停滞：重新识别相同 PID 时保留接收进度，
