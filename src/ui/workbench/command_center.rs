@@ -2530,9 +2530,11 @@ impl WorkbenchView {
                 .or_default();
             let locale_changed = draft.input_locale.replace(locale) != Some(locale);
             let existing = draft.custom_inputs.get(question_id).cloned();
-            let inputs_to_refresh = locale_changed
-                .then(|| draft.custom_inputs.values().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
+            let inputs_to_refresh = if locale_changed {
+                draft.custom_inputs.values().cloned().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             (existing, inputs_to_refresh)
         };
         for input in inputs_to_refresh {
@@ -3809,7 +3811,7 @@ fn command_center_compact_count(value: u64) -> String {
 }
 
 fn command_center_cost(microusd: u64) -> String {
-    if microusd % 1_000_000 == 0 {
+    if microusd.is_multiple_of(1_000_000) {
         return format!("${}", microusd / 1_000_000);
     }
     format!("${}.{:06}", microusd / 1_000_000, microusd % 1_000_000)

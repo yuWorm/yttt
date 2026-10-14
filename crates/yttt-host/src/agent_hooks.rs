@@ -681,20 +681,19 @@ impl HostAgentHookRuntime {
                     false,
                 ));
             }
-            if let AgentBoardCommand::AnswerQuestion { request_id, .. } = &request.command {
-                if record.terminal_exited
+            if let AgentBoardCommand::AnswerQuestion { request_id, .. } = &request.command
+                && (record.terminal_exited
                     || record.reducer.snapshot().process_state != AgentProcessState::Running
                     || record
                         .question_polls
                         .get(request_id)
-                        .is_none_or(|at| now.saturating_sub(*at) > QUESTION_POLL_FRESH_MILLIS)
-                {
-                    return Err(ProtocolFailure::new(
-                        FailureCode::Conflict,
-                        "question answer channel is unavailable; no answer was sent",
-                        false,
-                    ));
-                }
+                        .is_none_or(|at| now.saturating_sub(*at) > QUESTION_POLL_FRESH_MILLIS))
+            {
+                return Err(ProtocolFailure::new(
+                    FailureCode::Conflict,
+                    "question answer channel is unavailable; no answer was sent",
+                    false,
+                ));
             }
             record
                 .reducer
