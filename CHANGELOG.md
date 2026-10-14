@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.3.11 - 2026-10-14
 - 将产品可见名称改为「调度中心」；任务行显示关联执行的用量（不是按 todo 分摊的花费），进行中和待处理任务排在已完成历史之前。
 - Rename the product-visible board to Dispatch center; task rows show execution-associated usage, not per-todo spend, with active and pending tasks before completed history.
 - 修复调度中心用量展示：OMP 根 Todo 与子执行用量分别保留，在项目卡片独立展示已上报的执行用量；无 Todo 也可查看，结束后移入历史，不将子执行 Token 误记为根任务消耗。任务标签按执行复用，详情仅悬停生成，移除多余的渲染期 ID 分配。
