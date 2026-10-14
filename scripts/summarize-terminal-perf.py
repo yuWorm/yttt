@@ -523,6 +523,12 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
     if backend == "host":
         if host is None:
             failures.append("missing host-diagnostics.jsonl")
+        if metadata.get("desktop_lifecycle") in {"reopened", "exited"}:
+            epochs = [sample.get("host_epoch") for sample in host_samples]
+            if not epochs or any(not isinstance(epoch, int) for epoch in epochs):
+                failures.append("missing Host epoch for desktop lifecycle smoke")
+            elif len(set(epochs)) != 1:
+                failures.append("Host restarted during desktop lifecycle smoke")
         queues = all_queues(host)
         if terminal_host is not None and terminal_host not in (nested(host, "terminals") or []):
             queues.extend(

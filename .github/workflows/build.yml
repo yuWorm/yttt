@@ -93,11 +93,11 @@ jobs:
       - name: Smoke bundled desktop reopen and Host terminal reattach
         if: runner.os == 'macOS'
         run: |
-          cargo build --locked --target "${{ matrix.target }}" -p yttt --features perf-metrics
+          cargo build --release --locked --target "${{ matrix.target }}" -p yttt --features perf-metrics
           scripts/build-macos-bundle.sh \
             --no-build \
             --no-sign \
-            --binary "target/${{ matrix.target }}/debug/yttt" \
+            --binary "target/${{ matrix.target }}/release/yttt" \
             --output "target/package-smoke/yttt-perf.app"
           scripts/run-terminal-perf.sh \
             --backend host \
@@ -112,6 +112,17 @@ jobs:
             --no-build \
             --host-binary "target/package-smoke/yttt-perf.app/Contents/MacOS/yttt" \
             --output-dir "target/package-smoke/reopen-smoke"
+      - name: Upload macOS reopen smoke metrics
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-reopen-smoke
+          path: |
+            target/package-smoke/reopen-smoke/summary.json
+            target/package-smoke/reopen-smoke/**/run.json
+            target/package-smoke/reopen-smoke/**/metrics.json
+            target/package-smoke/reopen-smoke/**/workload.json
+            target/package-smoke/reopen-smoke/**/host-diagnostics.jsonl
 
 
       - name: Smoke-package Linux archive

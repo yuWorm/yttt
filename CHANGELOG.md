@@ -50,6 +50,16 @@
   需同步更新。运行中的 Agent 需在受管初始化后重启，以加载更新后的 Hook／扩展／插件。
 - Resource protocol is now 16 and desktop-shell protocol 5. Update Clients, Hosts, Servers,
   and CLI together; restart running Agents after managed initialization to load updated adapters.
+- 修复 Host 终端输出帧调度的累积漂移：采用固定节拍并跳过错过的节拍，避免定时器延迟
+  持续降低更新频率，同时保留帧合并与有界队列。
+- Prevent terminal stream cadence from drifting below the display rate by scheduling Host
+  frames on a fixed clock, skipping missed ticks without catch-up bursts, and retaining
+  frame coalescing and bounded queues.
+- 修正 macOS 打包重开验收：使用 release 性能构建和独立 Host，检查重开前后 Host epoch 连续，
+  防止将工作负载重启误判为续接；保留原始指标供 CI 失败排查，不放宽帧率门槛。
+- Correct the macOS bundled-reopen smoke to use release performance builds and an
+  independent Host, reject Host epoch changes, and retain raw CI metrics without
+  relaxing cadence thresholds.
 
 ## 0.3.10 - 2026-10-13
 

@@ -111,6 +111,36 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
             )
             self.assertNotIn("paint cadence is below", exited_failures)
 
+    def test_lifecycle_analysis_rejects_a_restarted_or_unidentified_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            run_dir = root / "host" / "damage" / "run-01"
+            run_dir.mkdir(parents=True)
+            for lifecycle in ("reopened", "exited"):
+                self.write_json(
+                    run_dir / "run.json",
+                    {"backend": "host", "scenario": "damage", "desktop_lifecycle": lifecycle},
+                )
+                for epochs, expected in (
+                    ((7, 7, 7), []),
+                    ((7, 7, 8), ["Host restarted during desktop lifecycle smoke"]),
+                    ((None, None), ["missing Host epoch for desktop lifecycle smoke"]),
+                ):
+                    with self.subTest(lifecycle=lifecycle, epochs=epochs):
+                        samples = [
+                            {"host_epoch": epoch, "clients": clients, "queues": [], "terminals": []}
+                            for epoch, clients in zip(epochs, (1, 0, 1))
+                        ]
+                        (run_dir / "host-diagnostics.jsonl").write_text(
+                            "".join(json.dumps(sample) + "\n" for sample in samples),
+                            encoding="utf-8",
+                        )
+                        failures = summary.analyze_run(root, run_dir)["failures"]
+                        self.assertEqual(
+                            [failure for failure in failures if "desktop lifecycle smoke" in failure],
+                            expected,
+                        )
+
     def test_interactive_analysis_rejects_non_finite_and_low_sample_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

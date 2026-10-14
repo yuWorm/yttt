@@ -1965,7 +1965,10 @@ async fn serve_terminal_data_connection(
         return Ok(());
     }
     let mut pending_frame = None::<PendingTerminalFrame>;
-    let mut frame_deadline = tokio::time::Instant::now();
+    // Keep scheduler lateness from accumulating into a slower-than-display stream.
+    // Skip missed ticks after idle periods instead of bursting to catch up.
+    let mut frame_interval = tokio::time::interval(TERMINAL_FRAME_INTERVAL);
+    frame_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             event = terminal_events.recv() => {
@@ -2063,10 +2066,9 @@ async fn serve_terminal_data_connection(
                         .map_err(|_| ())?;
                 }
             }
-            _ = tokio::time::sleep_until(frame_deadline), if pending_frame.is_some() => {
+            _ = frame_interval.tick(), if pending_frame.is_some() => {
                 if let Some(pending) = pending_frame.take() {
                     pending.enqueue(&terminal, &output, host_sequence)?;
-                    frame_deadline = tokio::time::Instant::now() + TERMINAL_FRAME_INTERVAL;
                 }
             }
             _ = output_failure.changed() => return Err(()),

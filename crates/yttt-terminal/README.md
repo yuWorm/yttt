@@ -131,6 +131,16 @@ The runner builds the release binary with `perf-metrics`, waits for Instruments
 to finish attaching before opening the workload gate, excludes warmup from
 yttt's counters, and injects repeated English and Chinese-IME samples.
 
+Host `--lifecycle reopened` and `--lifecycle exited` runs first start an independent
+Host so closing the desktop does not terminate the workload. The summary rejects
+a missing or changed Host epoch; starting a fresh Host is not successful
+reattachment. The macOS bundled reopen CI smoke uses a release-mode instrumented
+binary with the same cadence limits and retains its JSON metrics as an artifact,
+including on failure.
+Host stream frames use a fixed cadence with missed ticks skipped, rather than adding
+another full frame interval after each delayed wakeup. The reopen smoke also guards
+against accumulated scheduling drift without relaxing its 60-FPS cadence budget.
+
 For a fair cross-terminal CPU trace without yttt's histogram/correlation probes
 or synthetic input, add `--external-only`. That mode builds the normal release
 binary and intentionally omits yttt's `metrics.json`; workload and Instruments

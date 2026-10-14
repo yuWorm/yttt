@@ -613,6 +613,11 @@ run_host() {
   fi
   printf 'run: backend=host scenario=%s run=%s panes=%s clients=%s lifecycle=%s output=%s\n' \
     "$scenario_name" "$run_number" "$panes" "$clients" "$lifecycle" "$run_dir"
+  if [[ "$lifecycle" == "reopened" || "$lifecycle" == "exited" ]]; then
+    # These cohorts measure reattachment, not the desktop-owned Host's shutdown policy.
+    env YTTT_PROFILE_ROOT="$profile_root" "$host_binary" --start-host || \
+      die "independent Host did not start for the desktop lifecycle smoke"
+  fi
   env "${performance_env[@]}" "$host_binary" --project "$project" &
   local desktop_pid=$! second_pid=""
   active_desktop_pid="$desktop_pid"
