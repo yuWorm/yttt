@@ -236,10 +236,12 @@ pub struct ChildAgentDescriptor {
     pub task: Option<AgentTask>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChildAgentUpdate {
     pub task: Option<AgentTask>,
     pub current_action: Option<AgentAction>,
+    #[serde(default)]
+    pub clear_current_action: bool,
     pub turn_state: Option<AgentTurnState>,
 }
 

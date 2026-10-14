@@ -103,6 +103,8 @@ impl AgentProvider for OmpProvider {
                         .and_then(|task| AgentTask::new(task, AgentTaskSource::External)),
                     current_action: string_field(payload, "action")
                         .and_then(|action| AgentAction::new(None, action, None)),
+                    clear_current_action: bool_field(payload, "clearCurrentAction")
+                        .unwrap_or(false),
                     turn_state: string_field(payload, "status")
                         .map(|status| child_turn_state(&status))
                         .transpose()?,
@@ -376,6 +378,29 @@ mod tests {
                     ..
                 }
             } if child_id == "child-1"
+        ));
+
+        let cleared = json!({
+            "childId": "child-1",
+            "clearCurrentAction": true,
+            "status": "working"
+        });
+        let events = provider
+            .normalize_hook(ProviderHookEvent {
+                name: "child_updated",
+                payload: &cleared,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[0],
+            AgentEventKind::ChildUpdated {
+                update: ChildAgentUpdate {
+                    current_action: None,
+                    clear_current_action: true,
+                    ..
+                },
+                ..
+            }
         ));
 
         let finished = json!({ "childId": "child-1", "outcome": "failed" });

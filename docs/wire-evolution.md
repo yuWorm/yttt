@@ -14,7 +14,11 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 15`。v15 追加 `AgentCommand`，答案提交与人工验收
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 16`。v16 为执行记录追加缺省为空的 `telemetry`
+  与 `current_action`；未上报不等于零。费用使用整数微美元，自估完成度仅接受 0–100，
+  不作为人工验收或项目进度。保留记录与实时快照共用这一结构；迟到的已确认执行结果只补充
+  遥测，不重启已结束执行。Client、Host、远端 Server 与 CLI 需同步更新。
+  v15 追加 `AgentCommand`，答案提交与人工验收
   使用现有控制权校验，并校验 Host epoch、完整 pane scope 与 Agent instance。
   `AgentSnapshot.board` 为带缺省值的结构化任务、执行、消息与问题记录。
   `AgentSnapshots` 改为 `{ snapshots, has_more }`；恢复读取按确认游标分页（目标每页 8 MiB），
@@ -50,5 +54,6 @@
   缺失 epoch 不提供宽松默认值。ordered one-way `TerminalInput` 于 v3 引入，
   独立终端通道于 v5 引入。
 - lifecycle：`LIFECYCLE_PROTOCOL_VERSION = 3`
-- desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 4`，新增原生看板显示与结构化问题提交命令；
-  响应帧上限为 16 MiB，允许 CLI Agent 查询包含有界看板记录。桌面与 CLI 必须使用同一版本。
+- desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 5`，CLI Agent 查询同步包含执行遥测与当前动作。
+  v4 新增原生看板显示与结构化问题提交命令；响应帧上限为 16 MiB。
+  桌面与 CLI 必须使用同一版本。

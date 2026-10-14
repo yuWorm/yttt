@@ -393,6 +393,17 @@ impl AgentReducer {
                     }
                 }
             }
+            AgentEventKind::ChildBoard { child_id, event } => {
+                if !self
+                    .snapshot
+                    .children
+                    .iter()
+                    .any(|child| child.id == child_id)
+                    || !self.snapshot.board.apply(event, now)
+                {
+                    return false;
+                }
+            }
         }
         self.snapshot.updated_at = now;
         true
@@ -486,6 +497,9 @@ impl AgentReducer {
         };
         if let Some(task) = update.task {
             child.task = Some(task);
+        }
+        if update.clear_current_action {
+            child.current_action = None;
         }
         if let Some(action) = update.current_action {
             child.current_action = Some(action);

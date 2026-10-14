@@ -8,9 +8,9 @@ mod reducer;
 
 pub use board::{
     AgentAnswerSource, AgentBoardCommand, AgentBoardEvent, AgentBoardMessage, AgentBoardSnapshot,
-    AgentBoardTask, AgentExecutionRecord, AgentMessageRole, AgentPlanItem, AgentPlanStatus,
-    AgentQuestion, AgentQuestionAnswer, AgentQuestionOption, AgentQuestionRecord,
-    AgentQuestionRequest, AgentQuestionState,
+    AgentBoardTask, AgentExecutionRecord, AgentExecutionTelemetry, AgentMessageRole,
+    AgentPlanDelta, AgentPlanItem, AgentPlanStatus, AgentQuestion, AgentQuestionAnswer,
+    AgentQuestionOption, AgentQuestionRecord, AgentQuestionRequest, AgentQuestionState,
 };
 pub use event::AgentEventKind;
 pub use model::{
@@ -153,6 +153,7 @@ mod tests {
                 update: ChildAgentUpdate {
                     task: None,
                     current_action: AgentAction::new(None, "Read", Some("event.rs".to_string())),
+                    clear_current_action: false,
                     turn_state: Some(AgentTurnState::Working),
                 },
             },
@@ -162,6 +163,18 @@ mod tests {
         assert_eq!(child.name.as_deref(), Some("Reviewer"));
         assert_eq!(child.primary_text(), "Review event mapping");
         assert_eq!(child.turn_state, AgentTurnState::Working);
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildUpdated {
+                child_id: "child-1".to_string(),
+                update: ChildAgentUpdate {
+                    clear_current_action: true,
+                    ..Default::default()
+                },
+            },
+            6,
+        ));
+        assert!(reducer.snapshot().children[0].current_action.is_none());
         assert!(reducer.apply(
             1,
             AgentEventKind::ChildFinished {
@@ -203,6 +216,155 @@ mod tests {
         ));
         assert!(reducer.snapshot().children.is_empty());
         assert_eq!(reducer.snapshot().view_state(), AgentViewState::Completed);
+    }
+
+    #[test]
+    fn child_board_activity_requires_a_known_child_and_cannot_change_root_action() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        let root_action =
+            AgentAction::new(Some("root-tool".into()), "Edit", Some("src/lib.rs".into())).unwrap();
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ActionStarted {
+                action: root_action.clone(),
+            },
+            4,
+        ));
+        let child_execution = AgentExecutionRecord {
+            id: "root:child:child-1".into(),
+            parent_id: Some("root".into()),
+            name: "Explore".into(),
+            task: None,
+            telemetry: AgentExecutionTelemetry::default(),
+            current_action: Some("Read src/board.rs".into()),
+            state: AgentTurnState::Working,
+            started_at: 4,
+            updated_at: 4,
+            ended_at: None,
+        };
+        assert!(!reducer.apply(
+            1,
+            AgentEventKind::ChildBoard {
+                child_id: "child-1".into(),
+                event: AgentBoardEvent::Execution {
+                    execution: child_execution.clone(),
+                },
+            },
+            5,
+        ));
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildStarted {
+                child: ChildAgentDescriptor {
+                    id: "child-1".into(),
+                    name: Some("Explore".into()),
+                    task: None,
+                },
+            },
+            6,
+        ));
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildBoard {
+                child_id: "child-1".into(),
+                event: AgentBoardEvent::Execution {
+                    execution: child_execution,
+                },
+            },
+            7,
+        ));
+        assert_eq!(reducer.snapshot().current_action, Some(root_action));
+        assert_eq!(reducer.snapshot().waiting_reason, None);
+        assert_eq!(
+            reducer.snapshot().board.executions[0]
+                .current_action
+                .as_deref(),
+            Some("Read src/board.rs")
+        );
+    }
+
+    #[test]
+    fn retained_child_telemetry_arrives_after_stop_without_reviving_the_execution() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildStarted {
+                child: ChildAgentDescriptor {
+                    id: "child-1".into(),
+                    name: Some("Explore".into()),
+                    task: None,
+                },
+            },
+            4,
+        ));
+        let execution = AgentExecutionRecord {
+            id: "claude:session:prompt:child:child-1".into(),
+            parent_id: Some("claude:session:prompt".into()),
+            name: "Explore".into(),
+            task: None,
+            telemetry: AgentExecutionTelemetry::default(),
+            current_action: None,
+            state: AgentTurnState::Working,
+            started_at: 4,
+            updated_at: 4,
+            ended_at: None,
+        };
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildBoard {
+                child_id: "child-1".into(),
+                event: AgentBoardEvent::Execution {
+                    execution: execution.clone(),
+                },
+            },
+            5,
+        ));
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildBoard {
+                child_id: "child-1".into(),
+                event: AgentBoardEvent::Execution {
+                    execution: AgentExecutionRecord {
+                        state: AgentTurnState::Completed,
+                        ended_at: Some(6),
+                        ..execution
+                    },
+                },
+            },
+            6,
+        ));
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildFinished {
+                child_id: "child-1".into(),
+                outcome: TurnOutcome::Completed,
+            },
+            7,
+        ));
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::Board {
+                event: AgentBoardEvent::ExecutionTelemetry {
+                    execution_id: "claude:session:prompt:child:child-1".into(),
+                    telemetry: AgentExecutionTelemetry {
+                        tokens: Some(17),
+                        input_tokens: Some(11),
+                        ..Default::default()
+                    },
+                },
+            },
+            8,
+        ));
+        let retained = &reducer.snapshot().board.executions[0];
+        assert_eq!(retained.name, "Explore");
+        assert_eq!(retained.state, AgentTurnState::Completed);
+        assert_eq!(retained.ended_at, Some(6));
+        assert_eq!(retained.telemetry.tokens, Some(17));
+        assert_eq!(retained.telemetry.input_tokens, Some(11));
     }
 
     #[test]
@@ -326,6 +488,7 @@ mod tests {
                 update: ChildAgentUpdate {
                     task: AgentTask::new("Still awaiting result", AgentTaskSource::External),
                     current_action: None,
+                    clear_current_action: false,
                     turn_state: None,
                 },
             },

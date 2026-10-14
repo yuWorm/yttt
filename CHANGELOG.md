@@ -33,10 +33,17 @@
   task/execution history. Link answer
   controls to exact question context, add scoped keyboard navigation, and preserve focus and drafts
   across live updates. Move terminal termination behind secondary session actions.
-- 资源协议升级为 15、desktop-shell 协议升级为 4；桌面 Client、Host、远端 Server 与 CLI
-  需同步更新。运行中的 OMP 需重启以加载更新后的扩展。
-- Resource protocol is now 15 and desktop-shell protocol 4. Update Clients, Hosts, Servers,
-  and CLI together; restart running OMP sessions to load the updated managed extension.
+- 指挥中心接入 OMP 直接子 Agent 的真实模型、用量、上下文、耗时、费用和可选「自估完成度」；
+  Claude Code / Codex 增加原生执行记录、子 Agent 独立动作与等待状态，Claude 成功任务变更进入任务板；
+  OpenCode 仅追踪已确认根会话的派生树，按消息去重用量。未知字段不补零，不追加模型探测。
+- Observe OMP direct-child telemetry and optional self-estimates, native Claude/Codex executions
+  and child-scoped activity, confirmed Claude task mutations, and verified OpenCode descendants.
+  Retain partial/final metrics without reviving ended runs. Label Claude token usage as the final
+  API request rather than cumulative run usage; never invent missing values or trigger model probes.
+- 资源协议升级为 16、desktop-shell 协议升级为 5；桌面 Client、Host、远端 Server 与 CLI
+  需同步更新。运行中的 Agent 需在受管初始化后重启，以加载更新后的 Hook／扩展／插件。
+- Resource protocol is now 16 and desktop-shell protocol 5. Update Clients, Hosts, Servers,
+  and CLI together; restart running Agents after managed initialization to load updated adapters.
 
 - 主工作区标签过多时保持标签宽度，通过鼠标滚轮或触控板左右滚动；新建、分屏和项目面板按钮固定在右侧。
 - Keep overflowing workbench tabs at their natural width and scroll horizontally with the mouse wheel

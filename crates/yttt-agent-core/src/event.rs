@@ -47,4 +47,9 @@ pub enum AgentEventKind {
     Board {
         event: AgentBoardEvent,
     },
+    /// A board observation emitted by a known child. It must not alter root lifecycle state.
+    ChildBoard {
+        child_id: String,
+        event: AgentBoardEvent,
+    },
 }

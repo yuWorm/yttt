@@ -187,41 +187,303 @@ try {
 		`${openCodeSource.replace("export const YtttAgentStatusPlugin", "const YtttAgentStatusPlugin")}\nreturn YtttAgentStatusPlugin;`,
 	)();
 	const sessions = new Map<string, Record<string, unknown>>([
-		["attached-root", { id: "attached-root", title: "Attached root" }],
-		["next-root", { id: "next-root", title: "Resumed root" }],
-		["child", { id: "child", parentID: "attached-root", title: "Child" }],
-		["other-root", { id: "other-root", title: "Other client" }],
+		["attached-root", { id: "attached-root", title: "Attached root", time: { created: 1_000, updated: 1_001 } }],
+		["next-root", { id: "next-root", title: "Resumed root", time: { created: 2_000, updated: 2_001 } }],
+		["child", { id: "child", parentID: "attached-root", title: "Child worker", time: { created: 1_100, updated: 1_101 } }],
+		["grandchild", { id: "grandchild", parentID: "child", title: "Grandchild worker", time: { created: 1_200, updated: 1_201 } }],
+		["late-child", { id: "late-child", parentID: "attached-root", title: "Late child", time: { created: 1_300, updated: 1_301 } }],
+		["usage-child", { id: "usage-child", parentID: "attached-root", title: "Usage child", time: { created: 1_350, updated: 1_351 } }],
+		["other-root", { id: "other-root", title: "Other client", time: { created: 3_000, updated: 3_001 } }],
+		["other-child", { id: "other-child", parentID: "other-root", title: "Other child", time: { created: 3_100, updated: 3_101 } }],
+		["spoof-child", { id: "spoof-child", parentID: "other-root", title: "Spoofed child", time: { created: 3_200, updated: 3_201 } }],
 	]);
+	let exposeLateChild = false;
+	const loadedSessionIds: string[] = [];
 	const plugin = await YtttAgentStatusPlugin({
 		client: {
 			session: {
 				list: async () => [sessions.get("attached-root"), sessions.get("next-root"), sessions.get("other-root")],
-				status: async () => ({ "attached-root": { type: "busy" }, "next-root": { type: "idle" }, "other-root": { type: "idle" } }),
-				get: async ({ path: requestPath }: { path: { id: string } }) => sessions.get(requestPath.id),
+				status: async () => ({
+					"attached-root": { type: "busy" },
+					"next-root": { type: "idle" },
+					"other-root": { type: "idle" },
+					child: { type: "idle" },
+					grandchild: { type: "idle" },
+				}),
+				get: async ({ path: requestPath }: { path: { id: string } }) => {
+					loadedSessionIds.push(requestPath.id);
+					return sessions.get(requestPath.id);
+				},
+				children: async ({ path: requestPath }: { path: { id: string } }) => {
+					const children = [...sessions.values()].filter(info =>
+						info.parentID === requestPath.id && (info.id !== "late-child" || exposeLateChild),
+					);
+					return requestPath.id === "attached-root"
+						? [...children, sessions.get("spoof-child")]
+						: children;
+				},
 			},
 		},
 	});
 	const openCodeEvents = () => [...delivered.values()].filter(delivery => delivery.path === "/hook/opencode");
+	const boardExecutions = (): Record<string, unknown>[] => openCodeEvents().flatMap(delivery => {
+		const board = delivery.payload.board;
+		if (!board || typeof board !== "object" || (board as Record<string, unknown>).kind !== "execution") return [];
+		const execution = (board as Record<string, unknown>).execution;
+		return execution && typeof execution === "object" ? [execution as Record<string, unknown>] : [];
+	});
 	await waitFor(
 		() => openCodeEvents().some(delivery => delivery.event === "session_busy" && delivery.payload.sessionID === "attached-root"),
 		"OpenCode did not attach the unique busy root",
 	);
 
-	// Metadata from another root must not change selection. A child can then
-	// create/idle/complete a tool without clobbering the attached root.
+	// Discovery starts at the selected root, validates each advertised direct
+	// parent, and can still resolve a status event arriving before a child cache.
 	await plugin.event({ event: { type: "session.updated", properties: { info: sessions.get("other-root") } } });
-	await plugin.event({ event: { type: "session.created", properties: { info: sessions.get("child") } } });
-	await plugin.event({ event: { type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } } });
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "child", status: { type: "busy" } } } });
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "grandchild", status: { type: "busy" } } } });
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "late-child", status: { type: "busy" } } } });
+	await waitFor(
+		() => ["child", "grandchild", "late-child"].every(childId =>
+			openCodeEvents().some(delivery => delivery.event === "child_started" && delivery.payload.childId === childId)),
+		"OpenCode did not report the verified child tree",
+	);
+	assert.ok(loadedSessionIds.includes("late-child"), "a child status before cache must verify its parent chain through session.get");
+	assert.equal(
+		openCodeEvents().some(delivery => delivery.payload.childId === "spoof-child") ||
+			boardExecutions().some(execution => execution.name === "Spoofed child"),
+		false,
+		"a children response with the wrong parentID must not enter the owned tree",
+	);
+
+	await plugin.event({
+		event: { type: "message.updated", properties: { info: { id: "child-task", sessionID: "child", role: "user", time: { created: 1_300 } } } },
+	});
 	await plugin.event({
 		event: {
 			type: "message.part.updated",
-			properties: { sessionID: "child", part: { id: "child-tool", messageID: "child-message", type: "tool", tool: "bash", state: { status: "completed", input: {} } } },
+			properties: { sessionID: "child", part: { id: "child-task-text", messageID: "child-task", type: "text", text: "Investigate the tree" } },
+		},
+	});
+	await plugin.event({
+		event: {
+			type: "session.updated",
+			properties: {
+				info: { ...sessions.get("child"), title: "Child worker", time: { created: 1_100, updated: 1_400 } },
+			},
+		},
+	});
+	const childAssistant = {
+		id: "child-assistant",
+		sessionID: "child",
+		role: "assistant",
+		providerID: "openai",
+		modelID: "gpt-5.6",
+		time: { created: 1_500, completed: 1_600 },
+		cost: 0.000321,
+		tokens: { input: 120, output: 45, reasoning: 9, cache: { read: 30, write: 4 } },
+	};
+	await plugin.event({ event: { type: "message.updated", properties: { info: childAssistant } } });
+	await plugin.event({ event: { type: "message.updated", properties: { info: childAssistant } } });
+	await plugin.event({
+		event: {
+			type: "message.part.updated",
+			properties: {
+				sessionID: "grandchild",
+				part: {
+					id: "grandchild-tool",
+					messageID: "grandchild-message",
+					type: "tool",
+					callID: "grandchild-tool-call",
+					tool: "bash",
+					state: { status: "running", input: {}, title: "Inspect files", time: { start: 1_700 } },
+				},
+			},
+		},
+	});
+	await waitFor(
+		() => boardExecutions().some(execution => execution.name === "Grandchild worker" && execution.current_action === "Inspect files"),
+		"OpenCode did not project a child tool action onto its child execution",
+	);
+	await plugin.event({ event: { type: "permission.asked", properties: { sessionID: "grandchild", id: "child-approval" } } });
+	await waitFor(
+		() => boardExecutions().filter(execution => execution.name === "Grandchild worker").at(-1)?.state === "waiting",
+		"a child's approval must make only its own execution wait",
+	);
+	assert.notEqual(boardExecutions().filter(execution => execution.name === "Attached root").at(-1)?.state, "waiting");
+	assert.equal(openCodeEvents().some(delivery => delivery.event === "permission_request" && delivery.payload.sessionID === "grandchild"), false);
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "grandchild", status: { type: "busy" } } } });
+	await plugin.event({
+		event: {
+			type: "message.part.updated",
+			properties: {
+				sessionID: "grandchild",
+				part: {
+					id: "grandchild-tool",
+					messageID: "grandchild-message",
+					type: "tool",
+					callID: "grandchild-tool-call",
+					tool: "bash",
+					state: { status: "completed", input: {}, title: "Inspect files", time: { start: 1_700, end: 1_800 } },
+				},
+			},
+		},
+	});
+	await waitFor(
+		() => boardExecutions().filter(execution => execution.name === "Grandchild worker").at(-1)?.current_action === null
+			&& openCodeEvents().some(delivery => delivery.event === "child_updated" && delivery.payload.childId === "grandchild" && delivery.payload.clearCurrentAction === true),
+		"OpenCode did not clear a completed child tool action on its retained execution",
+	);
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "grandchild", status: { type: "idle" } } } });
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } } });
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "late-child", status: { type: "idle" } } } });
+	await waitFor(
+		() => openCodeEvents().some(delivery => delivery.event === "child_finished" && delivery.payload.childId === "child"),
+		"OpenCode did not finish a completed child execution",
+	);
+
+	const executions = boardExecutions();
+	const rootExecution = executions.filter(execution => execution.name === "Attached root").at(-1);
+	const childExecution = executions.filter(execution => execution.name === "Child worker").at(-1);
+	const grandchildExecution = executions.filter(execution => execution.name === "Grandchild worker").at(-1);
+	assert.ok(rootExecution && childExecution && grandchildExecution, "owned tree executions must be retained");
+	assert.equal(childExecution.parent_id, rootExecution.id, "child execution must point to the current root execution");
+	assert.equal(grandchildExecution.parent_id, childExecution.id, "grandchild execution must point to its real parent execution");
+	assert.equal(childExecution.task, "Investigate the tree");
+	assert.equal(childExecution.state, "completed");
+	assert.equal(childExecution.ended_at, 1_600, "the latest official assistant/session timestamp must be retained");
+	const childTelemetry = childExecution.telemetry as Record<string, unknown>;
+	assert.deepEqual(
+		{
+			model: childTelemetry.model,
+			input_tokens: childTelemetry.input_tokens,
+			output_tokens: childTelemetry.output_tokens,
+			cache_read_tokens: childTelemetry.cache_read_tokens,
+			cache_write_tokens: childTelemetry.cache_write_tokens,
+			cost_microusd: childTelemetry.cost_microusd,
+		},
+		{
+			model: "gpt-5.6",
+			input_tokens: 120,
+			output_tokens: 45,
+			cache_read_tokens: 30,
+			cache_write_tokens: 4,
+			cost_microusd: 321,
+		},
+		"assistant usage must use official fields once without synthesizing a total",
+	);
+	const childBoardEventsBeforeReplay = boardExecutions()
+		.filter(execution => execution.id === childExecution.id).length;
+	await plugin.event({ event: { type: "message.updated", properties: { info: childAssistant } } });
+	await Bun.sleep(25);
+	assert.equal(
+		boardExecutions().filter(execution => execution.id === childExecution.id).length,
+		childBoardEventsBeforeReplay,
+		"a late replayed assistant usage event must not revive or duplicate a finished execution",
+	);
+	const childExecutionEventsBeforeLateLifecycle = boardExecutions()
+		.filter(execution => execution.id === childExecution.id).length;
+	const childStartsBeforeLateLifecycle = openCodeEvents()
+		.filter(delivery => delivery.event === "child_started" && delivery.payload.childId === "child").length;
+	await plugin.event({
+		event: {
+			type: "session.updated",
+			properties: { info: { ...sessions.get("child"), time: { created: 1_100, updated: 1_900 } } },
+		},
+	});
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } } });
+	await plugin.event({
+		event: {
+			type: "message.updated",
+			properties: { info: { ...childAssistant, id: "late-child-assistant", time: { created: 1_500, completed: 1_600 } } },
 		},
 	});
 	await plugin.event({
 		event: {
 			type: "message.part.updated",
-			properties: { sessionID: "attached-root", part: { id: "root-tool", messageID: "root-message", type: "tool", tool: "bash", state: { status: "completed", input: {} } } },
+			properties: {
+				sessionID: "child",
+				part: {
+					id: "late-child-tool",
+					messageID: "late-child-message",
+					type: "tool",
+					callID: "late-child-tool-call",
+					tool: "bash",
+					state: { status: "completed", input: {}, time: { start: 1_800, end: 2_000 } },
+				},
+			},
+		},
+	});
+	await Bun.sleep(25);
+	assert.equal(
+		boardExecutions().filter(execution => execution.id === childExecution.id).length,
+		childExecutionEventsBeforeLateLifecycle,
+		"metadata, duplicate idle, and late completion events must not reopen an ended child run",
+	);
+	assert.equal(
+		openCodeEvents().filter(delivery => delivery.event === "child_started" && delivery.payload.childId === "child").length,
+		childStartsBeforeLateLifecycle,
+		"late lifecycle events must not publish a second child start",
+	);
+
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "usage-child", status: { type: "busy" } } } });
+	for (let index = 0; index < 513; index += 1) {
+		await plugin.event({
+			event: {
+				type: "message.updated",
+				properties: {
+					info: {
+						id: `usage-${index}`,
+						sessionID: "usage-child",
+						role: "assistant",
+						providerID: "openai",
+						modelID: "cache-model",
+						time: { created: 2_100 + index },
+						cost: 0,
+						tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+					},
+				},
+			},
+		});
+	}
+	await waitFor(
+		() => boardExecutions().some(execution =>
+			execution.name === "Usage child" &&
+			(execution.telemetry as Record<string, unknown>).input_tokens === 513),
+		"OpenCode usage aggregation dropped totals when its per-message cache evicted",
+	);
+	await plugin.event({
+		event: {
+			type: "message.updated",
+			properties: {
+				info: {
+					id: "usage-0",
+					sessionID: "usage-child",
+					role: "assistant",
+					providerID: "openai",
+					modelID: "cache-model",
+					time: { created: 2_100 },
+					cost: 0,
+					tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+				},
+			},
+		},
+	});
+	await Bun.sleep(25);
+	assert.equal(
+		(boardExecutions().filter(execution => execution.name === "Usage child").at(-1)?.telemetry as Record<string, unknown>).input_tokens,
+		513,
+		"a replayed evicted usage message must not change the settled aggregate",
+	);
+
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "other-child", status: { type: "busy" } } } });
+	await plugin.event({
+		event: {
+			type: "message.part.updated",
+			properties: {
+				sessionID: "attached-root",
+				part: { id: "root-tool", messageID: "root-message", type: "tool", tool: "bash", state: { status: "completed", input: {} } },
+			},
 		},
 	});
 	await waitFor(
@@ -229,24 +491,51 @@ try {
 		"OpenCode root tool completion did not deliver",
 	);
 	assert.equal(
-		openCodeEvents().some(delivery => delivery.payload.sessionID === "child"),
+		openCodeEvents().some(delivery => delivery.payload.sessionID === "other-root" || delivery.payload.childId === "other-child") ||
+			boardExecutions().some(execution => execution.name === "Other child"),
 		false,
-		"child lifecycle/tool events must not enter the root stream",
-	);
-	assert.equal(
-		openCodeEvents().some(delivery => delivery.event === "session_updated" && delivery.payload.sessionID === "other-root"),
-		false,
-		"unselected root metadata must not switch the active root",
+		"unrelated roots and their descendants must not enter the selected tree",
 	);
 
-	// A user prompt is explicit active-session evidence for an attached/resumed
-	// root. A late idle from the former root remains ignored.
+	// Server events do not identify the active TUI session. A user message from
+	// another root is therefore not provenance and cannot switch ownership.
 	await plugin.event({
-		event: { type: "message.updated", properties: { info: { id: "next-user", sessionID: "next-root", role: "user" } } },
+		event: { type: "message.updated", properties: { info: { id: "next-user", sessionID: "next-root", role: "user", time: { created: 2_010 } } } },
 	});
 	await plugin.event({
 		event: { type: "message.part.updated", properties: { sessionID: "next-root", part: { id: "next-text", messageID: "next-user", type: "text", text: "continue" } } },
 	});
+	await Bun.sleep(25);
+	assert.equal(
+		openCodeEvents().some(delivery => delivery.payload.sessionID === "next-root"),
+		false,
+		"another root's user message must not replace the selected yttt root",
+	);
+
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "attached-root", status: { type: "idle" } } } });
+	await waitFor(
+		() => boardExecutions().filter(execution => execution.name === "Attached root").at(-1)?.ended_at != null,
+		"root idle must finish its execution before detached child activity",
+	);
+	const finishedRoot = boardExecutions().filter(execution => execution.name === "Attached root").at(-1)!;
+	const detachedStart = Number(finishedRoot.ended_at) + 1;
+	await plugin.event({ event: { type: "session.created", properties: { info: {
+		id: "detached-child", parentID: "attached-root", title: "Detached worker",
+		time: { created: detachedStart, updated: detachedStart },
+	} } } });
+	await waitFor(
+		() => openCodeEvents().some(delivery => delivery.event === "child_started" && delivery.payload.childId === "detached-child"),
+		"verified detached child activity must remain observable",
+	);
+	const detached = boardExecutions().filter(execution => execution.name === "Detached worker").at(-1)!;
+	assert.equal(detached.parent_id, finishedRoot.id, "a child must retain the observed parent execution, not invent another parent run");
+	assert.equal(boardExecutions().filter(execution => execution.name === "Attached root").at(-1)?.state, "completed", "child activity cannot restart its ended parent");
+	const ownedRootIdles = openCodeEvents().filter(delivery => delivery.event === "session_idle" && delivery.payload.sessionID === "attached-root").length;
+
+	// A new root can be selected only after the owned root is deleted, then a
+	// root session is explicitly created by the observed OpenCode process.
+	await plugin.event({ event: { type: "session.deleted", properties: { info: sessions.get("attached-root") } } });
+	await plugin.event({ event: { type: "session.created", properties: { info: sessions.get("next-root") } } });
 	await plugin.event({ event: { type: "session.status", properties: { sessionID: "attached-root", status: { type: "idle" } } } });
 	await plugin.event({ event: { type: "session.status", properties: { sessionID: "next-root", status: { type: "busy" } } } });
 	await plugin.event({ event: { type: "permission.asked", properties: { sessionID: "next-root", description: "approve" } } });
@@ -255,14 +544,22 @@ try {
 		"OpenCode approval prompt did not await ordered delivery",
 	);
 	assert.equal(
-		openCodeEvents().some(delivery => delivery.event === "session_idle" && delivery.payload.sessionID === "attached-root"),
-		false,
-		"late idle from the prior root must not finish the selected root",
+		openCodeEvents().filter(delivery => delivery.event === "session_idle" && delivery.payload.sessionID === "attached-root").length,
+		ownedRootIdles,
+		"late idle from a deleted root must not finish the replacement root",
 	);
 	assert.deepEqual(
 		openCodeEvents().filter(delivery => delivery.payload.sessionID === "next-root").map(delivery => delivery.event),
-		["session_start", "user_prompt", "session_busy", "permission_request"],
-		"attached root switch must keep lifecycle, prompt, work, and approval FIFO",
+		["session_start", "session_busy", "permission_request"],
+		"replacement root lifecycle must be FIFO without accepting an unrelated prompt",
+	);
+	const nextExecution = boardExecutions().filter(execution => execution.name === "Resumed root").at(-1);
+	assert.ok(nextExecution, "the replacement root must have a fresh retained execution");
+	await plugin.event({ event: { type: "session.deleted", properties: { info: sessions.get("next-root") } } });
+	await plugin.event({ event: { type: "session.status", properties: { sessionID: "next-root", status: { type: "busy" } } } });
+	await waitFor(
+		() => boardExecutions().some(execution => execution.id === nextExecution.id && execution.state === "interrupted" && execution.ended_at !== null),
+		"OpenCode deletion did not finish the selected execution without reselecting it",
 	);
 
 	for (const route of ["/hook/pi", "/hook/opencode"]) {

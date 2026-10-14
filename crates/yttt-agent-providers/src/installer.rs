@@ -31,6 +31,7 @@ const CLAUDE_EVENTS: &[&str] = &[
     "UserPromptSubmit",
     "PreToolUse",
     "PermissionRequest",
+    "PermissionDenied",
     "PostToolUse",
     "PostToolUseFailure",
     "SubagentStart",
@@ -40,6 +41,7 @@ const CLAUDE_EVENTS: &[&str] = &[
 ];
 const CODEX_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "session_start"),
+    ("SessionEnd", "session_end"),
     ("UserPromptSubmit", "user_prompt_submit"),
     ("PreToolUse", "pre_tool_use"),
     ("PermissionRequest", "permission_request"),

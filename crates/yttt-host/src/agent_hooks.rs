@@ -17,9 +17,9 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::broadcast;
 use yttt_agent_core::{
-    AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentBoardCommand, AgentEventKind, AgentExitReason,
-    AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider, AgentQuestionState,
-    AgentReducer, ProviderId,
+    AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentBoardCommand, AgentBoardEvent, AgentEventKind,
+    AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider,
+    AgentQuestionState, AgentReducer, ProviderId,
 };
 use yttt_agent_providers::{
     CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, builtin_providers,
@@ -138,6 +138,7 @@ struct HookApplication {
     provider_id: ProviderId,
     events: Vec<AgentEventKind>,
     session_id: Option<String>,
+    parent_session_id: Option<String>,
     explicit_child_session: bool,
     verified_root_session: bool,
 }
@@ -891,14 +892,16 @@ fn ingest_request(
     } else {
         None
     };
+    let parent_session_id = payload_parent_session_id(&request.payload);
     let application = HookApplication {
         provider_id: provider.descriptor().id,
         session_id,
-        explicit_child_session: payload_has_parent_session(&request.payload)
+        explicit_child_session: parent_session_id.is_some()
             || (request.source == GROK_PROVIDER_ID
                 && (payload_string(&request.payload, &["subagentType", "subagent_type"])
                     .is_some()
                     || grok_kind == Some(GrokSessionKind::Subagent))),
+        parent_session_id,
         verified_root_session: grok_kind == Some(GrokSessionKind::Root),
         events: normalized,
     };
@@ -1110,7 +1113,7 @@ fn hook_session_id(payload: &Value, events: &[AgentEventKind]) -> Option<String>
         .or_else(|| payload_string(payload, &["sessionId", "sessionID", "session_id"]))
 }
 
-fn payload_has_parent_session(payload: &Value) -> bool {
+fn payload_parent_session_id(payload: &Value) -> Option<String> {
     payload_string(
         payload,
         &[
@@ -1122,7 +1125,6 @@ fn payload_has_parent_session(payload: &Value) -> bool {
             "parent_session_id",
         ],
     )
-    .is_some()
 }
 
 fn payload_string(payload: &Value, names: &[&str]) -> Option<String> {
@@ -1145,6 +1147,12 @@ fn is_child_event(event: &AgentEventKind) -> bool {
         AgentEventKind::ChildStarted { .. }
             | AgentEventKind::ChildUpdated { .. }
             | AgentEventKind::ChildFinished { .. }
+            | AgentEventKind::ChildBoard { .. }
+    ) || matches!(
+        event,
+        AgentEventKind::Board {
+            event: AgentBoardEvent::Execution { execution }
+        } if execution.parent_id.is_some()
     )
 }
 
@@ -1181,6 +1189,29 @@ fn apply_hook_application(
         }
     }
     if !root_session_started
+        && let (Some(root_session_id), Some(parent_session_id)) = (
+            record.provider_session_id.as_deref(),
+            application.parent_session_id.as_deref(),
+        )
+        && root_session_id != parent_session_id
+    {
+        return HookApplicationOutcome::Ignored;
+    }
+    // Native child hooks commonly carry their parent's session or no session at all. A different
+    // unparented session is not a descendant, but an authenticated no-session child board event
+    // remains valid for its terminal scope.
+    if !root_session_started
+        && !contains_root_event
+        && !application.explicit_child_session
+        && let (Some(root_session_id), Some(event_session_id)) = (
+            record.provider_session_id.as_deref(),
+            application.session_id.as_deref(),
+        )
+        && root_session_id != event_session_id
+    {
+        return HookApplicationOutcome::Ignored;
+    }
+    if !root_session_started
         && contains_root_event
         && let (Some(root_session_id), Some(event_session_id)) = (
             record.provider_session_id.as_deref(),
@@ -1196,10 +1227,7 @@ fn apply_hook_application(
 
     let current_provider_id = record.reducer.snapshot().provider_id.clone();
     let process_exited = record.reducer.snapshot().process_state == AgentProcessState::Exited;
-    if !root_session_started
-        && contains_root_event
-        && current_provider_id != application.provider_id
-    {
+    if !root_session_started && current_provider_id != application.provider_id {
         return HookApplicationOutcome::Ignored;
     }
     if incoming_provider_is_compatibility_duplicate(
@@ -1699,7 +1727,10 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yttt_agent_core::AgentViewState;
+    use yttt_agent_core::{
+        AgentBoardEvent, AgentExecutionRecord, AgentExecutionTelemetry, AgentTurnState,
+        AgentViewState,
+    };
     use yttt_core::model::ids::ProjectId;
     use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry};
 
@@ -3175,5 +3206,244 @@ mod tests {
         let current = runtime.snapshots_after(&[]).remove(0);
         assert_eq!(current.sequence, later.sequence);
         assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+    }
+
+    #[test]
+    fn scoped_child_board_events_preserve_root_isolation_and_session_fences() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("native-child-hooks", "native-child-hooks");
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "SessionStart",
+                serde_json::json!({ "session_id": "root-session" }),
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "UserPromptSubmit",
+                serde_json::json!({
+                    "session_id": "root-session",
+                    "prompt_id": "prompt-1",
+                    "prompt": "Inspect the native child hooks"
+                }),
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "PreToolUse",
+                serde_json::json!({
+                    "session_id": "root-session",
+                    "prompt_id": "prompt-1",
+                    "tool_name": "Read",
+                    "tool_use_id": "root-tool",
+                    "tool_input": { "file_path": "/tmp/repo/Cargo.toml" }
+                }),
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "SubagentStart",
+                serde_json::json!({
+                    "session_id": "root-session",
+                    "prompt_id": "prompt-1",
+                    "agent_id": "child-1",
+                    "agent_type": "Explore"
+                }),
+            ),
+        )
+        .unwrap();
+        let child_tool = serde_json::json!({
+            "session_id": "root-session",
+            "prompt_id": "prompt-1",
+            "agent_id": "child-1",
+            "tool_name": "Read",
+            "tool_use_id": "tool-1",
+            "tool_input": { "file_path": "/tmp/repo/src/lib.rs" }
+        });
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "claude", "PreToolUse", child_tool),
+        )
+        .unwrap();
+
+        let snapshot = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(
+            snapshot
+                .current_action
+                .as_ref()
+                .map(|action| action.label())
+                .as_deref(),
+            Some("Read: /tmp/repo/Cargo.toml")
+        );
+        assert_eq!(snapshot.children.len(), 1);
+        assert_eq!(
+            snapshot.children[0]
+                .current_action
+                .as_ref()
+                .map(|action| action.label())
+                .as_deref(),
+            Some("Read: /tmp/repo/src/lib.rs")
+        );
+        let child_execution = snapshot
+            .board
+            .executions
+            .iter()
+            .find(|execution| execution.parent_id.is_some())
+            .unwrap();
+        assert_eq!(
+            child_execution.current_action.as_deref(),
+            Some("Read: /tmp/repo/src/lib.rs")
+        );
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "PreToolUse",
+                serde_json::json!({
+                    "session_id": "foreign-session",
+                    "prompt_id": "prompt-1",
+                    "agent_id": "child-1",
+                    "tool_name": "Write",
+                    "tool_use_id": "foreign-tool"
+                }),
+            ),
+        )
+        .unwrap();
+        let fenced = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(
+            fenced.children[0]
+                .current_action
+                .as_ref()
+                .map(|action| action.label())
+                .as_deref(),
+            Some("Read: /tmp/repo/src/lib.rs")
+        );
+        assert_eq!(
+            fenced
+                .current_action
+                .as_ref()
+                .map(|action| action.label())
+                .as_deref(),
+            Some("Read: /tmp/repo/Cargo.toml")
+        );
+    }
+
+    #[test]
+    fn only_parented_board_executions_are_child_scoped() {
+        let execution = |id: &str, parent_id: Option<&str>| AgentExecutionRecord {
+            id: id.into(),
+            parent_id: parent_id.map(str::to_string),
+            name: "Agent".into(),
+            task: None,
+            telemetry: AgentExecutionTelemetry::default(),
+            current_action: None,
+            state: AgentTurnState::Working,
+            started_at: 1,
+            updated_at: 1,
+            ended_at: None,
+        };
+        assert!(is_child_event(&AgentEventKind::Board {
+            event: AgentBoardEvent::Execution {
+                execution: execution("child-run", Some("root-run")),
+            },
+        }));
+        assert!(!is_child_event(&AgentEventKind::Board {
+            event: AgentBoardEvent::Execution {
+                execution: execution("root-run", None),
+            },
+        }));
+
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("unscoped-child-board", "unscoped-child-board");
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "omp",
+                "session_start",
+                serde_json::json!({ "sessionId": "root-session" }),
+            ),
+        )
+        .unwrap();
+        // OMP/OpenCode board events deliberately do not need a duplicated top-level session ID:
+        // their authenticated terminal scope and parented execution identify them as descendants.
+        let child_board = serde_json::json!({
+            "board": {
+                "kind": "execution",
+                "execution": {
+                    "id": "child-run",
+                    "parent_id": "root-run",
+                    "name": "Child",
+                    "task": null,
+                    "telemetry": { "tokens": 0 },
+                    "current_action": null,
+                    "state": "working",
+                    "started_at": 1,
+                    "updated_at": 1,
+                    "ended_at": null
+                }
+            }
+        });
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "omp", "board_event", child_board),
+        )
+        .unwrap();
+        let root_board = serde_json::json!({
+            "board": {
+                "kind": "execution",
+                "execution": {
+                    "id": "root-run",
+                    "parent_id": null,
+                    "name": "Root",
+                    "task": null,
+                    "telemetry": {},
+                    "current_action": null,
+                    "state": "working",
+                    "started_at": 1,
+                    "updated_at": 1,
+                    "ended_at": null
+                }
+            }
+        });
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "omp", "board_event", root_board),
+        )
+        .unwrap();
+        let snapshot = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(snapshot.board.executions.len(), 2);
+        assert!(snapshot
+            .board
+            .executions
+            .iter()
+            .any(|item| item.id == "child-run" && item.parent_id.as_deref() == Some("root-run")));
+        assert!(
+            snapshot
+                .board
+                .executions
+                .iter()
+                .any(|item| item.id == "root-run" && item.parent_id.is_none())
+        );
     }
 }

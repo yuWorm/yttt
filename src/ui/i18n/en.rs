@@ -177,6 +177,28 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterActivityCount => "current {count}",
         UiTextKey::CommandCenterExecutionHistoryShow => "Show execution history ({count})",
         UiTextKey::CommandCenterExecutionHistoryHide => "Hide execution history ({count})",
+        UiTextKey::CommandCenterModel => "Model",
+        UiTextKey::CommandCenterTokenCount => "{value} tokens",
+        UiTextKey::CommandCenterLastRequestTokens => "{value} tokens (last request)",
+        UiTextKey::CommandCenterLastRequestTokensHint => {
+            "Claude Code reports tokens for the subagent's final API request, not the whole run."
+        }
+        UiTextKey::CommandCenterInputTokens => "Input tokens",
+        UiTextKey::CommandCenterOutputTokens => "Output tokens",
+        UiTextKey::CommandCenterCacheReadTokens => "Cache-read tokens",
+        UiTextKey::CommandCenterCacheWriteTokens => "Cache-write tokens",
+        UiTextKey::CommandCenterContextTokens => "Context tokens",
+        UiTextKey::CommandCenterRequests => "Requests",
+        UiTextKey::CommandCenterToolCalls => "Tool calls",
+        UiTextKey::CommandCenterReportedDuration => "Reported elapsed",
+        UiTextKey::CommandCenterCost => "Reported cost (USD)",
+        UiTextKey::CommandCenterSelfEstimate => "self-est. {value}%",
+        UiTextKey::CommandCenterSelfEstimateHint => {
+            "Agent's own estimate, not verified completion. Missing estimates are not zero."
+        }
+        UiTextKey::CommandCenterTelemetryObserved => "Last observed {value} ago",
+        UiTextKey::CommandCenterCurrentAction => "Current action",
+        UiTextKey::CommandCenterParentExecution => "Parent execution",
         UiTextKey::CommandCenterSessionActions => "Session actions…",
         UiTextKey::CommandCenterHideSessionActions => "Hide session actions",
         UiTextKey::CommandCenterShowResolvedQuestions => "Show resolved history",

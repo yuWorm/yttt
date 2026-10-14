@@ -79,10 +79,13 @@ type ChildExecution = {
 	task?: string;
 	startedAt: number;
 	ended: boolean;
+	telemetry: JsonRecord;
+	currentAction?: string;
 };
 
 type ChildQuestion = {
 	requestId: string;
+	executionId: string;
 	questions: AskQuestion[];
 };
 
@@ -198,6 +201,43 @@ function clip(value: unknown): string | undefined {
 	const normalized = value.trim().replace(/\s+/g, " ");
 	if (!normalized) return undefined;
 	return normalized.length <= MAX_TEXT ? normalized : `${normalized.slice(0, MAX_TEXT - 1)}…`;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function costMicrousd(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+	const microusd = Math.round(value * 1_000_000);
+	return Number.isSafeInteger(microusd) && microusd >= 0 ? microusd : undefined;
+}
+
+function progressTelemetry(progress: SubagentProgressPayload["progress"], observedAt: number): JsonRecord {
+	const telemetry: JsonRecord = { observed_at: observedAt };
+	const model = clip(progress.resolvedModel ?? progress.resolvedModelIdentity);
+	const tokens = nonNegativeInteger(progress.tokens);
+	const contextTokens = nonNegativeInteger(progress.contextTokens);
+	const contextWindow = nonNegativeInteger(progress.contextWindow);
+	const requests = nonNegativeInteger(progress.requests);
+	const toolCalls = nonNegativeInteger(progress.toolCount);
+	const durationMs = nonNegativeInteger(progress.durationMs);
+	const cost = costMicrousd(progress.cost);
+	const completion = nonNegativeInteger(progress.completionPercent);
+	if (model) telemetry.model = model;
+	if (tokens !== undefined) telemetry.tokens = tokens;
+	if (contextTokens !== undefined) telemetry.context_tokens = contextTokens;
+	if (contextWindow !== undefined) telemetry.context_window = contextWindow;
+	if (requests !== undefined) telemetry.requests = requests;
+	if (toolCalls !== undefined) telemetry.tool_calls = toolCalls;
+	if (durationMs !== undefined) telemetry.duration_ms = durationMs;
+	if (cost !== undefined) telemetry.cost_microusd = cost;
+	if (completion !== undefined && completion <= 100) telemetry.self_estimated_completion = completion;
+	return telemetry;
+}
+
+function progressAction(progress: SubagentProgressPayload["progress"]): string | undefined {
+	return clip(progress.currentToolIntent) ?? clip(progress.currentTool);
 }
 
 function toolDetail(input: unknown): string | undefined {
@@ -664,8 +704,8 @@ function latestTodoEntry(entries: readonly unknown[]): JsonRecord | undefined {
 
 export default function (pi: ExtensionAPI) {
 	// A subagent gets a separately initialized extension API, but shares the root
-	// transport environment. Only the root owns that transport; raw child events
-	// arrive through the root EventBus and retain an explicit child execution ID.
+	// transport environment. Only the root owns that transport; direct child
+	// events arrive through the root session EventBus with explicit child IDs.
 	const scope = reportingScope();
 	if (scope && transportScopeOwners.has(scope)) return;
 	if (scope) transportScopeOwners.add(scope);
@@ -676,6 +716,7 @@ export default function (pi: ExtensionAPI) {
 	let historyExecutionId: string | undefined;
 	let historyExecutionSent = false;
 	const childExecutions = new Map<string, ChildExecution>();
+	const childRunCounts = new Map<string, number>();
 	const childQuestions = new Map<string, ChildQuestion>();
 	const sentMessageIds = new Set<string>();
 	const sentChildMessageIds = new Set<string>();
@@ -688,6 +729,7 @@ export default function (pi: ExtensionAPI) {
 		historyExecutionId = `history:${sessionId}`;
 		historyExecutionSent = false;
 		childExecutions.clear();
+		childRunCounts.clear();
 		childQuestions.clear();
 		sentMessageIds.clear();
 		sentChildMessageIds.clear();
@@ -721,6 +763,8 @@ export default function (pi: ExtensionAPI) {
 				started_at: now,
 				updated_at: now,
 				ended_at: null,
+				telemetry: {},
+				current_action: null,
 			},
 		});
 		return root;
@@ -742,6 +786,8 @@ export default function (pi: ExtensionAPI) {
 					started_at: startedAt,
 					updated_at: now,
 					ended_at: null,
+					telemetry: {},
+					current_action: null,
 				},
 			});
 		}
@@ -806,6 +852,7 @@ export default function (pi: ExtensionAPI) {
 						...(typeof data.task === "string" ? { task: data.task } : {}),
 						state, started_at: data.startedAt,
 						updated_at: endedAt ?? data.startedAt, ended_at: endedAt,
+						telemetry: {}, current_action: null,
 					});
 				}
 				continue;
@@ -834,25 +881,28 @@ export default function (pi: ExtensionAPI) {
 		});
 	};
 
-	const ensureChild = (
+	const startChild = (
 		ctx: ExtensionContext,
 		childId: string,
 		name?: string,
 		task?: string,
-	): ChildExecution | undefined => {
+	): { child: ChildExecution; created: boolean } | undefined => {
 		resetSession(ctx);
 		const existing = childExecutions.get(childId);
-		if (existing) return existing;
+		if (existing && !existing.ended) return { child: existing, created: false };
 		const root = currentRoot;
-		if (!root || root.ended || root.sessionId !== ctx.sessionManager.getSessionId()) return undefined;
+		if (!root || root.sessionId !== ctx.sessionManager.getSessionId()) return undefined;
 		const now = Date.now();
+		const run = (childRunCounts.get(childId) ?? 0) + 1;
+		childRunCounts.set(childId, run);
 		const child: ChildExecution = {
-			id: `child:${root.id}:${childId}`,
+			id: `child:${root.id}:${childId}:${run}`,
 			rootId: root.id,
 			name: name || "Subagent",
 			...(task ? { task } : {}),
 			startedAt: now,
 			ended: false,
+			telemetry: {},
 		};
 		childExecutions.set(childId, child);
 		board(ctx, {
@@ -866,9 +916,11 @@ export default function (pi: ExtensionAPI) {
 				started_at: now,
 				updated_at: now,
 				ended_at: null,
+				telemetry: {},
+				current_action: null,
 			},
 		});
-		return child;
+		return { child, created: true };
 	};
 
 	const updateChild = (
@@ -879,6 +931,7 @@ export default function (pi: ExtensionAPI) {
 	) => {
 		const now = Date.now();
 		child.ended = ended;
+		if (ended) child.currentAction = undefined;
 		board(ctx, {
 			kind: "execution",
 			execution: {
@@ -890,6 +943,8 @@ export default function (pi: ExtensionAPI) {
 				started_at: child.startedAt,
 				updated_at: now,
 				ended_at: ended ? now : null,
+				telemetry: { ...child.telemetry },
+				current_action: child.currentAction ?? null,
 			},
 		});
 	};
@@ -1136,6 +1191,8 @@ export default function (pi: ExtensionAPI) {
 					started_at: root.startedAt,
 					updated_at: now,
 					ended_at: now,
+					telemetry: {},
+					current_action: null,
 				},
 			});
 		}
@@ -1229,8 +1286,8 @@ export default function (pi: ExtensionAPI) {
 		const ctx = statusContext;
 		if (!ctx) return;
 		if (event.status === "started") {
-			const child = ensureChild(ctx, event.id, clip(event.id), clip(event.description));
-			if (!child) return;
+			const started = startChild(ctx, event.id, clip(event.id), clip(event.description));
+			if (!started || !started.created) return;
 			send(
 				"child_started",
 				{
@@ -1245,9 +1302,8 @@ export default function (pi: ExtensionAPI) {
 		const child = childExecutions.get(event.id);
 		if (!child || child.ended) return;
 		updateChild(ctx, child, statusForChild(event.status), true);
-		const childQuestionPrefix = `${event.id}:`;
 		for (const [key, question] of childQuestions) {
-			if (!key.startsWith(childQuestionPrefix)) continue;
+			if (question.executionId !== child.id) continue;
 			childQuestions.delete(key);
 			resolveQuestion(ctx, question.requestId, "cancelled", [], "native");
 		}
@@ -1267,13 +1323,16 @@ export default function (pi: ExtensionAPI) {
 		const child = childExecutions.get(event.progress.id);
 		if (!child || child.ended) return;
 		if (typeof event.task === "string" && event.task.trim()) child.task = clip(event.task);
+		Object.assign(child.telemetry, progressTelemetry(event.progress, Date.now()));
+		child.currentAction = progressAction(event.progress);
 		updateChild(ctx, child, statusForChild(event.progress.status), false);
 		send(
 			"child_updated",
 			{
 				childId: event.progress.id,
 				task: clip(event.task),
-				action: clip(event.progress.currentTool),
+				action: child.currentAction,
+				clearCurrentAction: child.currentAction === undefined,
 				status: event.progress.status,
 			},
 			ctx,
@@ -1298,7 +1357,11 @@ export default function (pi: ExtensionAPI) {
 			const toolCallId = asString(event.toolCallId);
 			if (!params || !toolCallId || !isBoardQuestionRepresentable(params)) return;
 			const requestId = `ask:${child.id}:${toolCallId}`;
-			childQuestions.set(`${payload.id}:${toolCallId}`, { requestId, questions: params.questions });
+			childQuestions.set(`${child.id}:${toolCallId}`, {
+				requestId,
+				executionId: child.id,
+				questions: params.questions,
+			});
 			board(ctx, {
 				kind: "question_opened",
 				request: {
@@ -1314,9 +1377,9 @@ export default function (pi: ExtensionAPI) {
 		if (event.type === "tool_execution_end" && event.toolName === "ask") {
 			const toolCallId = asString(event.toolCallId);
 			if (!toolCallId) return;
-			const key = `${payload.id}:${toolCallId}`;
+			const key = `${child.id}:${toolCallId}`;
 			const question = childQuestions.get(key);
-			if (!question) return;
+			if (!question || question.executionId !== child.id) return;
 			const resolution = event.isError === true
 				? { state: "cancelled" as const }
 				: answersFromAskResult(event.result, { questions: question.questions }) ?? { state: "cancelled" as const };

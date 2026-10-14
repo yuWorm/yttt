@@ -155,6 +155,28 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterActivityCount => "当前 {count}",
         UiTextKey::CommandCenterExecutionHistoryShow => "展开执行历史（{count}）",
         UiTextKey::CommandCenterExecutionHistoryHide => "收起执行历史（{count}）",
+        UiTextKey::CommandCenterModel => "模型",
+        UiTextKey::CommandCenterTokenCount => "{value} token",
+        UiTextKey::CommandCenterLastRequestTokens => "{value} token（末次请求）",
+        UiTextKey::CommandCenterLastRequestTokensHint => {
+            "Claude Code 上报的是子 Agent 最后一次 API 请求的 token，并非整段执行的累计用量。"
+        }
+        UiTextKey::CommandCenterInputTokens => "输入 token",
+        UiTextKey::CommandCenterOutputTokens => "输出 token",
+        UiTextKey::CommandCenterCacheReadTokens => "缓存读取 token",
+        UiTextKey::CommandCenterCacheWriteTokens => "缓存写入 token",
+        UiTextKey::CommandCenterContextTokens => "上下文 token",
+        UiTextKey::CommandCenterRequests => "请求次数",
+        UiTextKey::CommandCenterToolCalls => "工具调用",
+        UiTextKey::CommandCenterReportedDuration => "上报耗时",
+        UiTextKey::CommandCenterCost => "上报费用（USD）",
+        UiTextKey::CommandCenterSelfEstimate => "自估 {value}%",
+        UiTextKey::CommandCenterSelfEstimateHint => {
+            "Agent 自行估算，不代表已验收完成。未上报不等于 0%。"
+        }
+        UiTextKey::CommandCenterTelemetryObserved => "{value}前观测",
+        UiTextKey::CommandCenterCurrentAction => "当前动作",
+        UiTextKey::CommandCenterParentExecution => "父执行",
         UiTextKey::CommandCenterSessionActions => "会话操作…",
         UiTextKey::CommandCenterHideSessionActions => "收起会话操作",
         UiTextKey::CommandCenterShowResolvedQuestions => "展开已解决历史",

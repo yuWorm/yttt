@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{AgentTurnState, model::bounded_text};
 
@@ -29,6 +29,18 @@ pub struct AgentPlanItem {
     pub blocker: Option<String>,
 }
 
+/// A confirmed mutation of one provider task. Unlike a full plan, omitted fields are unchanged.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentPlanDelta {
+    pub id: String,
+    pub title: Option<String>,
+    pub phase: Option<String>,
+    pub status: Option<AgentPlanStatus>,
+    pub blocker: Option<String>,
+    pub retired: Option<bool>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentBoardTask {
     #[serde(flatten)]
@@ -42,6 +54,26 @@ pub struct AgentBoardTask {
     pub retired: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentExecutionTelemetry {
+    pub model: Option<String>,
+    pub tokens: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
+    pub requests: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub cost_microusd: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_completion")]
+    pub self_estimated_completion: Option<u8>,
+    pub observed_at: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentExecutionRecord {
     pub id: String,
@@ -50,6 +82,10 @@ pub struct AgentExecutionRecord {
     pub name: String,
     #[serde(default)]
     pub task: Option<String>,
+    #[serde(default)]
+    pub telemetry: AgentExecutionTelemetry,
+    #[serde(default)]
+    pub current_action: Option<String>,
     pub state: AgentTurnState,
     pub started_at: u64,
     pub updated_at: u64,
@@ -155,8 +191,27 @@ pub enum AgentBoardEvent {
         execution_id: String,
         items: Vec<AgentPlanItem>,
     },
+    PlanDelta {
+        execution_id: String,
+        delta: AgentPlanDelta,
+    },
     Execution {
         execution: AgentExecutionRecord,
+    },
+    /// A narrow telemetry-only patch for an already retained run. It never creates or revives
+    /// an execution, including after the provider reports that it ended.
+    ExecutionTelemetry {
+        execution_id: String,
+        telemetry: AgentExecutionTelemetry,
+    },
+    /// An explicit partial activity observation. Omitted action preserves the last reported
+    /// action; `clear_current_action` distinguishes an observed clear from absent data.
+    ExecutionActivity {
+        execution_id: String,
+        current_action: Option<String>,
+        #[serde(default)]
+        clear_current_action: bool,
+        state: Option<AgentTurnState>,
     },
     Message {
         message: AgentBoardMessage,
@@ -198,6 +253,62 @@ pub struct AgentBoardSnapshot {
 
 fn valid_id(id: &str) -> bool {
     !id.trim().is_empty() && id.len() <= 512
+}
+
+fn deserialize_completion<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<u8>::deserialize(deserializer)
+        .ok()
+        .flatten()
+        .filter(|value| *value <= 100))
+}
+
+impl AgentExecutionTelemetry {
+    fn sanitized(mut self) -> Self {
+        self.model = self
+            .model
+            .map(|model| bounded_text(model, 256))
+            .filter(|model| !model.is_empty());
+        if self
+            .self_estimated_completion
+            .is_some_and(|completion| completion > 100)
+        {
+            self.self_estimated_completion = None;
+        }
+        self
+    }
+
+    fn merge_from(&mut self, update: Self) {
+        let update = update.sanitized();
+        if let (Some(current), Some(incoming)) = (self.observed_at, update.observed_at)
+            && incoming < current
+        {
+            return;
+        }
+        macro_rules! merge {
+            ($field:ident) => {
+                if update.$field.is_some() {
+                    self.$field = update.$field;
+                }
+            };
+        }
+        merge!(model);
+        merge!(tokens);
+        merge!(input_tokens);
+        merge!(output_tokens);
+        merge!(cache_read_tokens);
+        merge!(cache_write_tokens);
+        merge!(context_tokens);
+        merge!(context_window);
+        merge!(requests);
+        merge!(tool_calls);
+        merge!(duration_ms);
+        merge!(cost_microusd);
+        merge!(self_estimated_completion);
+        merge!(observed_at);
+    }
 }
 
 impl AgentBoardSnapshot {
@@ -263,51 +374,27 @@ impl AgentBoardSnapshot {
                 }
                 true
             }
-            AgentBoardEvent::Execution { mut execution } => {
-                if !valid_id(&execution.id)
-                    || execution
-                        .parent_id
-                        .as_deref()
-                        .is_some_and(|id| !valid_id(id))
-                {
-                    return false;
-                }
-                execution.name = bounded_text(execution.name, 256);
-                execution.task = execution.task.map(|text| bounded_text(text, 4096));
-                if execution.started_at == 0 {
-                    execution.started_at = now;
-                }
-                execution.updated_at = now;
-                if let Some(current) = self
-                    .executions
-                    .iter_mut()
-                    .find(|item| item.id == execution.id)
-                {
-                    // Finished executions never restart under the same identity.
-                    if current.ended_at.is_some() && execution.ended_at.is_none() {
-                        return false;
-                    }
-                    execution.started_at = current.started_at;
-                    if execution.task.is_none() {
-                        execution.task.clone_from(&current.task);
-                    }
-                    *current = execution;
-                } else {
-                    if self.executions.len() >= MAX_EXECUTIONS {
-                        if let Some(index) = self
-                            .executions
-                            .iter()
-                            .position(|item| item.ended_at.is_some())
-                        {
-                            self.executions.remove(index);
-                        } else {
-                            return false;
-                        }
-                    }
-                    self.executions.push(execution);
-                }
-                true
-            }
+            AgentBoardEvent::PlanDelta {
+                execution_id,
+                delta,
+            } => self.apply_plan_delta(execution_id, delta, now),
+            AgentBoardEvent::Execution { execution } => self.apply_execution(execution, now),
+            AgentBoardEvent::ExecutionTelemetry {
+                execution_id,
+                telemetry,
+            } => self.apply_execution_telemetry(execution_id, telemetry),
+            AgentBoardEvent::ExecutionActivity {
+                execution_id,
+                current_action,
+                clear_current_action,
+                state,
+            } => self.apply_execution_activity(
+                execution_id,
+                current_action,
+                clear_current_action,
+                state,
+                now,
+            ),
             AgentBoardEvent::Message { mut message } => {
                 if !valid_id(&message.id)
                     || !valid_id(&message.execution_id)
@@ -413,6 +500,231 @@ impl AgentBoardSnapshot {
         }
     }
 
+    fn apply_plan_delta(
+        &mut self,
+        execution_id: String,
+        mut delta: AgentPlanDelta,
+        now: u64,
+    ) -> bool {
+        if !valid_id(&execution_id) || !valid_id(&delta.id) {
+            return false;
+        }
+        delta.title = delta
+            .title
+            .map(|title| bounded_text(title, 2048))
+            .filter(|title| !title.is_empty());
+        delta.phase = delta
+            .phase
+            .map(|phase| bounded_text(phase, 256))
+            .filter(|phase| !phase.is_empty());
+        delta.blocker = delta
+            .blocker
+            .map(|blocker| bounded_text(blocker, 2048))
+            .filter(|blocker| !blocker.is_empty());
+        if let Some(task) = self
+            .tasks
+            .iter_mut()
+            .find(|task| task.execution_id == execution_id && task.item.id == delta.id)
+        {
+            let previous = task.item.clone();
+            let previous_retired = task.retired;
+            if let Some(title) = delta.title {
+                task.item.title = title;
+            }
+            if let Some(phase) = delta.phase {
+                task.item.phase = Some(phase);
+            }
+            if let Some(status) = delta.status {
+                task.item.status = status;
+            }
+            if let Some(blocker) = delta.blocker {
+                task.item.blocker = Some(blocker);
+            }
+            if task.item != previous {
+                task.accepted_at = None;
+            }
+            if let Some(retired) = delta.retired {
+                task.retired = retired;
+            }
+            let changed = task.item != previous || task.retired != previous_retired;
+            if changed {
+                task.updated_at = now;
+            }
+            return changed;
+        }
+        let (Some(title), Some(status)) = (delta.title, delta.status) else {
+            return false;
+        };
+        if delta.retired == Some(true) {
+            return false;
+        }
+        if self.tasks.len() >= MAX_TASKS {
+            if let Some(index) = self.tasks.iter().position(|task| {
+                task.retired
+                    || matches!(
+                        task.item.status,
+                        AgentPlanStatus::Completed | AgentPlanStatus::Abandoned
+                    )
+            }) {
+                self.tasks.remove(index);
+            } else {
+                return false;
+            }
+        }
+        self.tasks.push(AgentBoardTask {
+            item: AgentPlanItem {
+                id: delta.id,
+                title,
+                phase: delta.phase,
+                status,
+                blocker: delta.blocker,
+            },
+            execution_id,
+            created_at: now,
+            updated_at: now,
+            accepted_at: None,
+            retired: false,
+        });
+        true
+    }
+
+    fn apply_execution(&mut self, mut execution: AgentExecutionRecord, now: u64) -> bool {
+        if !valid_id(&execution.id)
+            || execution
+                .parent_id
+                .as_deref()
+                .is_some_and(|id| !valid_id(id))
+        {
+            return false;
+        }
+        execution.name = bounded_text(execution.name, 256);
+        if execution.name.is_empty() {
+            return false;
+        }
+        execution.task = execution
+            .task
+            .map(|task| bounded_text(task, 4096))
+            .filter(|task| !task.is_empty());
+        execution.current_action = execution
+            .current_action
+            .map(|action| bounded_text(action, 4096))
+            .filter(|action| !action.is_empty());
+        execution.telemetry = execution.telemetry.sanitized();
+        if execution.started_at == 0 {
+            execution.started_at = now;
+        }
+        let provider_updated_at = execution.updated_at;
+        if provider_updated_at == 0 || provider_updated_at < execution.started_at {
+            execution.updated_at = now.max(execution.started_at);
+        }
+        if let Some(ended_at) = execution.ended_at {
+            execution.ended_at = Some(if ended_at == 0 || ended_at < execution.started_at {
+                now.max(execution.started_at)
+            } else {
+                ended_at
+            });
+            execution.current_action = None;
+        }
+        if let Some(current) = self
+            .executions
+            .iter_mut()
+            .find(|item| item.id == execution.id)
+        {
+            // Execution IDs are run identities. A completed identity cannot be changed or revived,
+            // and a different parent is a different native run rather than a partial update.
+            if current.ended_at.is_some() || current.parent_id != execution.parent_id {
+                return false;
+            }
+            if provider_updated_at != 0 && provider_updated_at < current.updated_at {
+                return false;
+            }
+            execution.started_at = current.started_at;
+            if provider_updated_at == 0 || provider_updated_at < execution.started_at {
+                execution.updated_at = now.max(current.updated_at);
+            }
+            if execution.task.is_none() {
+                execution.task.clone_from(&current.task);
+            }
+            let incoming_telemetry = execution.telemetry;
+            execution.telemetry = current.telemetry.clone();
+            execution.telemetry.merge_from(incoming_telemetry);
+            if *current == execution {
+                return false;
+            }
+            *current = execution;
+            return true;
+        }
+        if self.executions.len() >= MAX_EXECUTIONS {
+            if let Some(index) = self
+                .executions
+                .iter()
+                .position(|item| item.ended_at.is_some())
+            {
+                self.executions.remove(index);
+            } else {
+                return false;
+            }
+        }
+        self.executions.push(execution);
+        true
+    }
+
+    fn apply_execution_telemetry(
+        &mut self,
+        execution_id: String,
+        telemetry: AgentExecutionTelemetry,
+    ) -> bool {
+        if !valid_id(&execution_id) {
+            return false;
+        }
+        let Some(execution) = self
+            .executions
+            .iter_mut()
+            .find(|execution| execution.id == execution_id)
+        else {
+            return false;
+        };
+        let previous = execution.telemetry.clone();
+        execution.telemetry.merge_from(telemetry);
+        execution.telemetry != previous
+    }
+
+    fn apply_execution_activity(
+        &mut self,
+        execution_id: String,
+        current_action: Option<String>,
+        clear_current_action: bool,
+        state: Option<AgentTurnState>,
+        now: u64,
+    ) -> bool {
+        if !valid_id(&execution_id) {
+            return false;
+        }
+        let Some(execution) = self
+            .executions
+            .iter_mut()
+            .find(|execution| execution.id == execution_id && execution.ended_at.is_none())
+        else {
+            return false;
+        };
+        let current_action = current_action
+            .map(|action| bounded_text(action, 4096))
+            .filter(|action| !action.is_empty());
+        let action_changed = current_action.is_some() || clear_current_action;
+        let state = state.unwrap_or(execution.state);
+        if (!action_changed || execution.current_action == current_action)
+            && execution.state == state
+        {
+            return false;
+        }
+        if action_changed {
+            execution.current_action = current_action;
+        }
+        execution.state = state;
+        execution.updated_at = now.max(execution.updated_at);
+        true
+    }
+
     pub fn command(&mut self, command: AgentBoardCommand, now: u64) -> Result<(), &'static str> {
         match command {
             AgentBoardCommand::AnswerQuestion {
@@ -483,6 +795,7 @@ impl AgentBoardSnapshot {
                 execution.state = state;
                 if state != AgentTurnState::Unknown {
                     execution.ended_at = Some(now);
+                    execution.current_action = None;
                 }
                 execution.updated_at = now;
             }
@@ -685,6 +998,203 @@ mod tests {
         }]
     }
 
+    fn execution(id: &str, parent_id: Option<&str>, updated_at: u64) -> AgentExecutionRecord {
+        AgentExecutionRecord {
+            id: id.into(),
+            parent_id: parent_id.map(str::to_string),
+            name: "Observed agent".into(),
+            task: None,
+            telemetry: AgentExecutionTelemetry::default(),
+            current_action: None,
+            state: AgentTurnState::Working,
+            started_at: 100,
+            updated_at,
+            ended_at: None,
+        }
+    }
+
+    #[test]
+    fn execution_telemetry_defaults_for_old_records_and_round_trips_real_zeroes() {
+        let old: AgentExecutionRecord = serde_json::from_value(serde_json::json!({
+            "id": "old-run",
+            "name": "Old agent",
+            "state": "working",
+            "started_at": 1,
+            "updated_at": 1,
+            "ended_at": null
+        }))
+        .unwrap();
+        assert_eq!(old.telemetry, AgentExecutionTelemetry::default());
+        assert_eq!(old.current_action, None);
+
+        let mut observed = execution("run-1", None, 100);
+        observed.telemetry = AgentExecutionTelemetry {
+            tokens: Some(0),
+            input_tokens: Some(0),
+            observed_at: Some(0),
+            ..Default::default()
+        };
+        let round_trip: AgentExecutionRecord =
+            serde_json::from_value(serde_json::to_value(&observed).unwrap()).unwrap();
+        assert_eq!(round_trip, observed);
+        assert_eq!(round_trip.telemetry.output_tokens, None);
+        let invalid: AgentExecutionTelemetry = serde_json::from_value(serde_json::json!({
+            "self_estimated_completion": 101
+        }))
+        .unwrap();
+        assert_eq!(invalid.self_estimated_completion, None);
+    }
+
+    #[test]
+    fn execution_merge_retains_partial_telemetry_and_discards_invalid_completion() {
+        let mut board = AgentBoardSnapshot::default();
+        let mut initial = execution("run-1", None, 100);
+        initial.current_action = Some("Read src/lib.rs".into());
+        initial.telemetry = AgentExecutionTelemetry {
+            model: Some(" model-a ".into()),
+            tokens: Some(0),
+            self_estimated_completion: Some(101),
+            observed_at: Some(10),
+            ..Default::default()
+        };
+        assert!(board.apply(AgentBoardEvent::Execution { execution: initial }, 100));
+
+        let mut partial = execution("run-1", None, 110);
+        partial.telemetry = AgentExecutionTelemetry {
+            input_tokens: Some(0),
+            observed_at: Some(11),
+            ..Default::default()
+        };
+        assert!(board.apply(AgentBoardEvent::Execution { execution: partial }, 110));
+        let current = &board.executions[0];
+        assert_eq!(current.telemetry.model.as_deref(), Some("model-a"));
+        assert_eq!(current.telemetry.tokens, Some(0));
+        assert_eq!(current.telemetry.input_tokens, Some(0));
+        assert_eq!(current.telemetry.self_estimated_completion, None);
+        assert_eq!(current.current_action, None);
+
+        assert!(!board.apply(
+            AgentBoardEvent::Execution {
+                execution: AgentExecutionRecord {
+                    telemetry: AgentExecutionTelemetry {
+                        tokens: Some(99),
+                        observed_at: Some(10),
+                        ..Default::default()
+                    },
+                    ..execution("run-1", None, 105)
+                }
+            },
+            120,
+        ));
+        assert_eq!(board.executions[0].telemetry.tokens, Some(0));
+    }
+
+    #[test]
+    fn activity_omissions_preserve_action_but_explicit_clear_removes_it() {
+        let mut board = AgentBoardSnapshot::default();
+        let mut active = execution("run-1", None, 1);
+        active.current_action = Some("Read src/lib.rs".into());
+        assert!(board.apply(AgentBoardEvent::Execution { execution: active }, 1));
+
+        assert!(board.apply(
+            AgentBoardEvent::ExecutionActivity {
+                execution_id: "run-1".into(),
+                current_action: None,
+                clear_current_action: false,
+                state: Some(AgentTurnState::Waiting),
+            },
+            2,
+        ));
+        assert_eq!(
+            board.executions[0].current_action.as_deref(),
+            Some("Read src/lib.rs")
+        );
+
+        assert!(board.apply(
+            AgentBoardEvent::ExecutionActivity {
+                execution_id: "run-1".into(),
+                current_action: None,
+                clear_current_action: true,
+                state: Some(AgentTurnState::Working),
+            },
+            3,
+        ));
+        assert_eq!(board.executions[0].current_action, None);
+    }
+
+    #[test]
+    fn execution_identity_and_provider_timestamps_fence_late_observations() {
+        let mut board = AgentBoardSnapshot::default();
+        let mut child = execution("child-native", Some("root-a"), 150);
+        child.started_at = 125;
+        child.current_action = Some("Search".into());
+        assert!(board.apply(AgentBoardEvent::Execution { execution: child }, 1));
+        assert_eq!(board.executions[0].started_at, 125);
+        assert_eq!(board.executions[0].updated_at, 150);
+
+        let mut wrong_parent = execution("child-native", Some("root-b"), 151);
+        wrong_parent.started_at = 125;
+        assert!(!board.apply(
+            AgentBoardEvent::Execution {
+                execution: wrong_parent
+            },
+            2,
+        ));
+        let mut ended = execution("child-native", Some("root-a"), 160);
+        ended.started_at = 125;
+        ended.state = AgentTurnState::Completed;
+        ended.ended_at = Some(160);
+        assert!(board.apply(AgentBoardEvent::Execution { execution: ended }, 3));
+        let mut late = execution("child-native", Some("root-a"), 170);
+        late.started_at = 125;
+        assert!(!board.apply(AgentBoardEvent::Execution { execution: late }, 4));
+        assert_eq!(board.executions[0].ended_at, Some(160));
+        assert_eq!(board.executions[0].current_action, None);
+    }
+
+    #[test]
+    fn confirmed_plan_delta_updates_one_task_without_retiring_others() {
+        let mut board = AgentBoardSnapshot::default();
+        assert!(board.apply(
+            AgentBoardEvent::PlanDelta {
+                execution_id: "run-1".into(),
+                delta: AgentPlanDelta {
+                    id: "task-1".into(),
+                    title: Some("Implement telemetry".into()),
+                    status: Some(AgentPlanStatus::Pending),
+                    ..Default::default()
+                },
+            },
+            1,
+        ));
+        assert!(board.apply(
+            AgentBoardEvent::PlanDelta {
+                execution_id: "run-1".into(),
+                delta: AgentPlanDelta {
+                    id: "task-2".into(),
+                    title: Some("Review host routing".into()),
+                    status: Some(AgentPlanStatus::Pending),
+                    ..Default::default()
+                },
+            },
+            2,
+        ));
+        assert!(board.apply(
+            AgentBoardEvent::PlanDelta {
+                execution_id: "run-1".into(),
+                delta: AgentPlanDelta {
+                    id: "task-1".into(),
+                    status: Some(AgentPlanStatus::Completed),
+                    ..Default::default()
+                },
+            },
+            3,
+        ));
+        assert_eq!(board.tasks.len(), 2);
+        assert_eq!(board.tasks[0].item.status, AgentPlanStatus::Completed);
+        assert!(!board.tasks[1].retired);
+    }
+
     #[test]
     fn submitted_answer_waits_for_provider_and_native_winner_cannot_be_overwritten() {
         let mut board = AgentBoardSnapshot::default();
@@ -776,6 +1286,12 @@ mod tests {
                     parent_id: None,
                     name: "OMP".into(),
                     task: None,
+                    telemetry: AgentExecutionTelemetry {
+                        tokens: Some(0),
+                        observed_at: Some(5),
+                        ..Default::default()
+                    },
+                    current_action: Some("Inspect state".into()),
                     state: AgentTurnState::Working,
                     started_at: 1,
                     updated_at: 1,
@@ -793,6 +1309,11 @@ mod tests {
         );
         assert_eq!(replacement.executions[0].state, AgentTurnState::Unknown);
         assert_eq!(replacement.executions[0].ended_at, None);
+        assert_eq!(replacement.executions[0].telemetry.tokens, Some(0));
+        assert_eq!(
+            replacement.executions[0].current_action.as_deref(),
+            Some("Inspect state")
+        );
         assert!(
             replacement
                 .command(
@@ -874,6 +1395,8 @@ mod tests {
                         parent_id: None,
                         name: "OMP".into(),
                         task: None,
+                        telemetry: AgentExecutionTelemetry::default(),
+                        current_action: None,
                         state: AgentTurnState::Working,
                         started_at: 1,
                         updated_at: 1,

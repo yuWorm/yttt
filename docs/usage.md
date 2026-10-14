@@ -1258,11 +1258,15 @@ active task, tool action, waiting reason, turn completion, and child-agent lifec
 discovery and start/exit events remain the fallback for startup, interruption, failure, and
 manually launched Agents in either environment.
 
-Agent session identity is separate from the terminal scope. OpenCode child sessions do not select
-or finish the root session; an existing uniquely busy root can be attached, and a new root or
-user prompt can select a different session. Late discovery and prior-session idle events cannot
-overwrite that selection. Pi and OMP duplicate extension copies share one reporter per terminal
-transport. Pi releases ownership on session shutdown so `/reload` can register the replacement;
+Agent session identity is separate from the terminal scope. OpenCode follows the selected
+root's verified `parentID` chain, including nested descendants; unrelated roots and their
+children are ignored. Initial attachment requires a unique busy root, or a newly created
+root when none is owned. Arbitrary user-text events cannot switch ownership. OpenCode's SDK
+does not report which session its TUI selected: changing to another existing root requires
+restarting the managed Agent with unambiguous ownership, rather than guessing from server-wide
+traffic. Deleting the owned root releases it and interrupts its retained executions.
+Pi and OMP duplicate extension copies share one reporter per terminal transport.
+Pi releases ownership on session shutdown so `/reload` can register the replacement;
 late callbacks from the previous reporter cannot finish the new session.
 
 The Host validates session identity when applying ordered events, acknowledges ignored foreign
@@ -1341,12 +1345,42 @@ Board labels, states, confirmations, feedback, and input hints follow the applic
 English/Chinese language setting. Switching language preserves answer and follow-up drafts.
 Provider messages, task names, question text, and answer option labels remain unchanged.
 
-The OMP adapter reports native todo phases/items, root and derived executions, user/assistant
-messages, and structured Ask questions. Other providers retain their existing status summaries;
-missing plans, transcripts, and execution records are labeled as unreported rather than invented.
-Durations use observed timestamps. Task completion does not imply human acceptance: completed
-tasks have a separate **Accept** action. No estimated completion times, costs, automatic retries,
-or individual-child termination are inferred from terminal text.
+Provider capabilities are deliberately different:
+
+| Provider | Native Command center observations |
+| --- | --- |
+| OMP | Todo phases/items, root and direct-child executions, messages, Ask; direct-child model, aggregate tokens, context usage/window, requests, tool calls, elapsed time, cost, and optional self-estimated completion. |
+| Claude Code | Prompt-scoped root/child lifecycle, child-specific actions/waiting, confirmed `TaskCreate`/`TaskUpdate` changes, and foreground Agent-result model/usage/duration/tool counts when reported. |
+| Codex | Turn-scoped root/child lifecycle and child-specific tool/approval/input activity from native hooks. No fabricated completion percentage or usage counters. |
+| OpenCode | Verified descendant session tree, native activity/waiting, assistant-message model, input/output/cache tokens and cost observed by the plugin. |
+| Pi / Grok | Existing native status summaries; unavailable structured fields remain unreported. |
+
+Execution rows show child names and parent indentation, reported model/token data, and an
+optional **self-est.** percentage (**自估**). Hover an execution or the selected conversation's
+metrics for exact token counts, context, requests, tool calls, cost, and observation age.
+Unknown fields are omitted, not converted to zero. Partial updates preserve the last reported
+values; ended runs stay ended. A later confirmed result may enrich telemetry without changing
+the execution's outcome. Saved observations survive workspace restoration.
+
+OMP's percentage is the Agent's own optional estimate, not verified task/project completion.
+yttt only forwards existing `completionPercent` values: it does not trigger probes or model
+requests. OMP 18.10.4's extension API exposes direct task children, not the separate nested
+observability bus; nested descendants are not guessed or attributed to the root. Its progress
+events expose aggregate tokens, not input/output/cache splits, and do not provide a run generation;
+same-child follow-ups rely on the native EventBus's ordered lifecycle starts.
+
+Claude Code's foreground Agent `totalTokens` and `usage` describe the **final API request**,
+not cumulative run usage; the UI explicitly labels this scope. Its duration and tool count
+describe the run. Records require native `session_id` plus `prompt_id` (Claude) or `turn_id`
+(Codex); older payloads lacking these identifiers retain status-only observations. Precondition
+`TaskCreated`/`TaskCompleted` hooks are not treated as successful mutations.
+OpenCode usage is deduplicated by assistant-message identity and accumulated only from messages
+observed by this plugin, not presented as complete pre-attachment history.
+
+Durations prefer reported elapsed time and otherwise use observed timestamps; disconnected or
+retained records do not keep aging as live runs. Task completion still has a separate **Accept**
+action. No ETA, acceptance percentage, automatic retries, or individual-child termination is
+inferred from terminal text.
 
 Root OMP Ask questions can be answered in place, including multiple questions, multi-select,
 and custom text. The native OMP Ask remains available. The adapter settles the first answer it
@@ -1382,8 +1416,14 @@ Agent with current workspace control. **Terminate terminal** requires confirmati
 all work in that pane, not just the selected derived execution. Observers can inspect the
 board without installing hooks, starting Agents, or taking control.
 
-The adapter was exercised with OMP 17.3.8. Running Agents must be restarted after updating
-yttt's managed extension to load its new observation and answer hooks.
+The OMP bridge is exercised against the 18.10.4 extension loader, native SessionManager and
+EventBus with a local hook transport replay. OpenCode's plugin replay uses the
+[SDK 1.19.0 event types](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/sdk/js/src/gen/types.gen.ts).
+Native hook contracts follow the [Claude Code hook reference](https://code.claude.com/docs/en/hooks)
+and [Codex hook reference](https://learn.chatgpt.com/docs/hooks).
+Update desktop Client, Host, remote Server and CLI together (resource protocol 16,
+desktop-shell protocol 5). After managed-hook initialization, restart running Agents to load
+the updated hook/extension/plugin code; updating yttt does not replace already-loaded adapters.
 
 
 If yttt closes while a resumable Agent is still running, reopening the workspace restores that

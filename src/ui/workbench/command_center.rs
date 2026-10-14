@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    fmt::Write as _,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,9 +13,9 @@ use gpui_component::{
     input::{InputEvent, InputState},
 };
 use yttt_agent_core::{
-    AgentBoardCommand, AgentBoardTask, AgentExecutionRecord, AgentMessageRole, AgentPlanStatus,
-    AgentProcessState, AgentQuestionAnswer, AgentQuestionRecord, AgentQuestionState, AgentSnapshot,
-    AgentTurnState,
+    AgentBoardCommand, AgentBoardTask, AgentExecutionRecord, AgentExecutionTelemetry,
+    AgentMessageRole, AgentPlanStatus, AgentProcessState, AgentQuestionAnswer, AgentQuestionRecord,
+    AgentQuestionState, AgentSnapshot, AgentTurnState,
 };
 use yttt_client_core::{ClientEvent, ConnectionState};
 use yttt_protocol::{
@@ -1660,6 +1661,32 @@ impl WorkbenchView {
             .text_xs()
             .text_color(theme.text_muted)
             .child(title);
+        if let Some(execution) = execution {
+            if let Some(action) = execution.current_action.as_deref() {
+                header = header.child(div().truncate().child(format!(
+                    "{} · {action}",
+                    self.ui_text.get(UiTextKey::CommandCenterCurrentAction),
+                )));
+            }
+            if let Some(metrics) = command_center_telemetry_line(
+                self.ui_text,
+                &execution.telemetry,
+                source.snapshot.provider_id.as_str() == "claude",
+                theme,
+            ) {
+                let details = command_center_execution_details(self.ui_text, source, execution);
+                header = header.child(metrics.id("command-center-selected-telemetry").tooltip(
+                    move |window, cx| {
+                        yttt_ui::primitives::tooltip::yttt_tooltip(
+                            details.clone(),
+                            crate::ui::theme::current_workbench_theme(cx),
+                            crate::ui::theme::current_ui_style(cx),
+                        )
+                        .build(window, cx)
+                    },
+                ));
+            }
+        }
         if let Some(question) = selected_question {
             header = header.child(div().truncate().child(format!(
                 "{} · {question}",
@@ -2232,7 +2259,40 @@ impl WorkbenchView {
         let task = execution
             .and_then(|record| record.task.as_deref())
             .unwrap_or(name);
-        div()
+        let title = if execution.is_some_and(|record| record.parent_id.is_some()) {
+            name
+        } else {
+            task
+        };
+        let live =
+            source.snapshot.process_state == AgentProcessState::Running
+                && state != AgentTurnState::Unknown
+                && self.terminal.host_runtime.as_ref().is_some_and(|runtime| {
+                    matches!(runtime.state(), ConnectionState::Ready { .. })
+                });
+        let elapsed = execution
+            .and_then(|record| record.telemetry.duration_ms)
+            .map(|millis| command_center_format_duration(self.ui_text, millis))
+            .unwrap_or_else(|| {
+                command_center_duration(
+                    self.ui_text,
+                    started_at,
+                    ended_at.or_else(|| {
+                        (!live).then_some(
+                            execution
+                                .map_or(source.snapshot.updated_at, |record| record.updated_at),
+                        )
+                    }),
+                )
+            });
+        let details = execution.map_or_else(
+            || task.to_string(),
+            |record| command_center_execution_details(self.ui_text, source, record),
+        );
+        let depth = execution.map_or(0, |record| {
+            command_center_execution_depth(record, &source.snapshot.board.executions)
+        });
+        let mut row = div()
             .id(format!(
                 "command-center-execution:{session_id}:{execution_id}"
             ))
@@ -2242,10 +2302,11 @@ impl WorkbenchView {
             })
             .cursor_pointer()
             .flex()
-            .items_center()
-            .min_h(px(23.0))
+            .flex_col()
+            .flex_none()
+            .min_w_0()
             .px(px(4.0))
-            .gap(px(5.0))
+            .py(px(2.0))
             .border_l(px(2.0))
             .border_color(if selected {
                 theme.accent
@@ -2257,42 +2318,70 @@ impl WorkbenchView {
             } else {
                 theme.ghost_element_background
             })
+            .tooltip(move |window, cx| {
+                yttt_ui::primitives::tooltip::yttt_tooltip(
+                    details.clone(),
+                    crate::ui::theme::current_workbench_theme(cx),
+                    crate::ui::theme::current_ui_style(cx),
+                )
+                .build(window, cx)
+            })
             .on_click(cx.listener(move |root, _, _window, cx| {
                 root.command_center_select(session_id.clone(), execution_id.clone(), None, cx);
             }))
             .child(
                 div()
-                    .w(px(25.0))
-                    .text_xs()
-                    .text_color(theme.text_subtle)
-                    .child(hierarchy),
-            )
-            .child(
-                div()
+                    .flex()
+                    .items_center()
                     .min_w_0()
-                    .flex_1()
-                    .truncate()
-                    .text_xs()
-                    .child(task.to_string()),
+                    .min_h(px(23.0))
+                    .gap(px(5.0))
+                    .pl(px(depth.saturating_sub(1).min(3) as f32 * 8.0))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(theme.text_subtle)
+                            .child(hierarchy),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_xs()
+                            .child(title.to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .text_xs()
+                            .text_color(command_center_turn_color(state, theme))
+                            .child(self.ui_text.get(command_center_turn_label(state))),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(px(37.0))
+                            .text_right()
+                            .whitespace_nowrap()
+                            .text_xs()
+                            .text_color(theme.text_subtle)
+                            .child(elapsed),
+                    ),
+            );
+        if let Some(metrics) = execution.and_then(|record| {
+            command_center_telemetry_line(
+                self.ui_text,
+                &record.telemetry,
+                source.snapshot.provider_id.as_str() == "claude",
+                theme,
             )
-            .child(
-                div()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .text_xs()
-                    .text_color(command_center_turn_color(state, theme))
-                    .child(self.ui_text.get(command_center_turn_label(state))),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .min_w(px(37.0))
-                    .text_right()
-                    .whitespace_nowrap()
-                    .text_xs()
-                    .text_color(theme.text_subtle)
-                    .child(command_center_duration(self.ui_text, started_at, ended_at)),
-            )
+        }) {
+            row = row.child(metrics);
+        }
+        row
     }
 
     fn command_center_question_focus(
@@ -3500,6 +3589,243 @@ fn command_center_now_millis() -> u64 {
         .unwrap_or_default()
 }
 
+fn command_center_execution_depth(
+    execution: &AgentExecutionRecord,
+    records: &[AgentExecutionRecord],
+) -> usize {
+    let mut parent = execution.parent_id.as_deref();
+    let mut depth = 0;
+    // Indentation is capped, including malformed or partially retained parent chains.
+    while let Some(id) = parent {
+        depth += 1;
+        if depth == 4 {
+            break;
+        }
+        parent = records
+            .iter()
+            .find(|record| record.id == id)
+            .and_then(|record| record.parent_id.as_deref());
+    }
+    depth
+}
+
+fn command_center_compact_count(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.1}k", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
+    }
+}
+
+fn command_center_cost(microusd: u64) -> String {
+    if microusd % 1_000_000 == 0 {
+        return format!("${}", microusd / 1_000_000);
+    }
+    format!("${}.{:06}", microusd / 1_000_000, microusd % 1_000_000)
+        .trim_end_matches('0')
+        .to_string()
+}
+
+fn command_center_telemetry_line(
+    ui_text: UiText,
+    telemetry: &AgentExecutionTelemetry,
+    last_request: bool,
+    theme: WorkbenchTheme,
+) -> Option<Div> {
+    if telemetry.model.is_none()
+        && telemetry.tokens.is_none()
+        && telemetry.self_estimated_completion.is_none()
+        && telemetry.cost_microusd.is_none()
+    {
+        return None;
+    }
+    let mut row = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .min_w_0()
+        .gap(px(5.0))
+        .text_xs()
+        .text_color(theme.text_subtle);
+    if let Some(model) = &telemetry.model {
+        row = row.child(div().min_w_0().flex_1().truncate().child(model.clone()));
+    }
+    if let Some(tokens) = telemetry.tokens {
+        row = row.child(
+            div()
+                .flex_none()
+                .whitespace_nowrap()
+                .child(command_center_template(
+                    ui_text.get(if last_request {
+                        UiTextKey::CommandCenterLastRequestTokens
+                    } else {
+                        UiTextKey::CommandCenterTokenCount
+                    }),
+                    &[("value", &command_center_compact_count(tokens))],
+                )),
+        );
+    }
+    if let Some(estimate) = telemetry.self_estimated_completion {
+        row = row.child(
+            div()
+                .flex_none()
+                .whitespace_nowrap()
+                .text_color(theme.accent)
+                .child(command_center_template(
+                    ui_text.get(UiTextKey::CommandCenterSelfEstimate),
+                    &[("value", &estimate.to_string())],
+                )),
+        );
+    } else if let Some(cost) = telemetry.cost_microusd {
+        row = row.child(
+            div()
+                .flex_none()
+                .whitespace_nowrap()
+                .child(command_center_cost(cost)),
+        );
+    }
+    Some(row)
+}
+
+fn command_center_execution_details(
+    ui_text: UiText,
+    source: &CommandCenterSource,
+    execution: &AgentExecutionRecord,
+) -> String {
+    let mut details = execution.name.clone();
+    if let Some(task) = &execution.task
+        && task != &execution.name
+    {
+        let _ = write!(details, "\n{task}");
+    }
+    if let Some(parent) = execution.parent_id.as_deref().and_then(|id| {
+        source
+            .snapshot
+            .board
+            .executions
+            .iter()
+            .find(|record| record.id == id)
+    }) {
+        let _ = write!(
+            details,
+            "\n{}: {}",
+            ui_text.get(UiTextKey::CommandCenterParentExecution),
+            parent.name
+        );
+    }
+    if let Some(action) = &execution.current_action {
+        let _ = write!(
+            details,
+            "\n{}: {action}",
+            ui_text.get(UiTextKey::CommandCenterCurrentAction)
+        );
+    }
+    let telemetry = &execution.telemetry;
+    if let Some(model) = &telemetry.model {
+        let _ = write!(
+            details,
+            "\n{}: {model}",
+            ui_text.get(UiTextKey::CommandCenterModel)
+        );
+    }
+    if source.snapshot.provider_id.as_str() == "claude"
+        && telemetry
+            .tokens
+            .or(telemetry.input_tokens)
+            .or(telemetry.output_tokens)
+            .or(telemetry.cache_read_tokens)
+            .or(telemetry.cache_write_tokens)
+            .is_some()
+    {
+        let _ = write!(
+            details,
+            "\n{}",
+            ui_text.get(UiTextKey::CommandCenterLastRequestTokensHint)
+        );
+    }
+    if let Some(tokens) = telemetry.tokens {
+        let _ = write!(
+            details,
+            "\n{}",
+            command_center_template(
+                ui_text.get(UiTextKey::CommandCenterTokenCount),
+                &[("value", &tokens.to_string())],
+            )
+        );
+    }
+    for (key, value) in [
+        (UiTextKey::CommandCenterInputTokens, telemetry.input_tokens),
+        (
+            UiTextKey::CommandCenterOutputTokens,
+            telemetry.output_tokens,
+        ),
+        (
+            UiTextKey::CommandCenterCacheReadTokens,
+            telemetry.cache_read_tokens,
+        ),
+        (
+            UiTextKey::CommandCenterCacheWriteTokens,
+            telemetry.cache_write_tokens,
+        ),
+        (UiTextKey::CommandCenterRequests, telemetry.requests),
+        (UiTextKey::CommandCenterToolCalls, telemetry.tool_calls),
+    ] {
+        if let Some(value) = value {
+            let _ = write!(details, "\n{}: {value}", ui_text.get(key));
+        }
+    }
+    if let Some(tokens) = telemetry.context_tokens {
+        let _ = write!(
+            details,
+            "\n{}: {tokens}",
+            ui_text.get(UiTextKey::CommandCenterContextTokens)
+        );
+        if let Some(window) = telemetry.context_window {
+            let _ = write!(details, " / {window}");
+        }
+    }
+    if let Some(duration) = telemetry.duration_ms {
+        let _ = write!(
+            details,
+            "\n{}: {}",
+            ui_text.get(UiTextKey::CommandCenterReportedDuration),
+            command_center_format_duration(ui_text, duration)
+        );
+    }
+    if let Some(cost) = telemetry.cost_microusd {
+        let _ = write!(
+            details,
+            "\n{}: {}",
+            ui_text.get(UiTextKey::CommandCenterCost),
+            command_center_cost(cost)
+        );
+    }
+    if let Some(estimate) = telemetry.self_estimated_completion {
+        let _ = write!(
+            details,
+            "\n{}\n{}",
+            command_center_template(
+                ui_text.get(UiTextKey::CommandCenterSelfEstimate),
+                &[("value", &estimate.to_string())],
+            ),
+            ui_text.get(UiTextKey::CommandCenterSelfEstimateHint)
+        );
+    }
+    if let Some(observed_at) = telemetry.observed_at.filter(|timestamp| *timestamp > 0) {
+        let _ = write!(
+            details,
+            "\n{}",
+            command_center_template(
+                ui_text.get(UiTextKey::CommandCenterTelemetryObserved),
+                &[("value", &command_center_age(ui_text, observed_at))],
+            )
+        );
+    }
+    details
+}
+
 fn command_center_duration(ui_text: UiText, started_at: u64, ended_at: Option<u64>) -> String {
     if started_at == 0 {
         return "—".to_string();
@@ -3507,6 +3833,10 @@ fn command_center_duration(ui_text: UiText, started_at: u64, ended_at: Option<u6
     let millis = ended_at
         .unwrap_or_else(command_center_now_millis)
         .saturating_sub(started_at);
+    command_center_format_duration(ui_text, millis)
+}
+
+fn command_center_format_duration(ui_text: UiText, millis: u64) -> String {
     let seconds = millis / 1_000;
     let (key, value) = if seconds >= 3_600 {
         (
@@ -3726,6 +4056,8 @@ mod tests {
             started_at: 1,
             updated_at: 2,
             ended_at: Some(2),
+            current_action: None,
+            telemetry: Default::default(),
         });
         workspace
             .record_agent_snapshot(
@@ -4202,6 +4534,8 @@ mod tests {
             started_at: 3,
             updated_at: 3,
             ended_at: None,
+            current_action: None,
+            telemetry: Default::default(),
         });
         view.workspace
             .record_agent_snapshot(
