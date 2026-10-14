@@ -98,6 +98,7 @@ mod tests {
                 process_exit: None,
                 state_started_at: 0,
                 updated_at: sequence,
+                board: Default::default(),
             },
         }
     }

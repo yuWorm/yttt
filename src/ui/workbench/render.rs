@@ -13,7 +13,9 @@ impl Render for WorkbenchView {
         self.flush_pending_project_settings_save(window, cx);
         self.flush_pending_onboarding_completion(window, cx);
         self.ensure_settings_sync(window, cx);
-        self.ensure_agent_initialization(window, cx);
+        if !self.command_center_is_active() {
+            self.ensure_agent_initialization(window, cx);
+        }
         self.ensure_settings_project_target_loaded(window, cx);
         let appearance = self.appearance.runtime();
         self.app_settings.theme.ui_style = appearance.style_id;
@@ -25,8 +27,10 @@ impl Render for WorkbenchView {
         self.flush_pending_keybindings_reload(cx);
         self.flush_pending_git_operations(window, cx);
         self.flush_pending_file_finder_operations(window, cx);
-        self.ensure_agent_session_scan_requested();
-        self.flush_pending_agent_session_scan(window, cx);
+        if !self.command_center_is_active() {
+            self.ensure_agent_session_scan_requested();
+            self.flush_pending_agent_session_scan(window, cx);
+        }
         self.flush_pending_project_tree_loads(window, cx);
         self.flush_pending_document_saves(window, cx);
         self.flush_pending_focus_change_autosaves(window, cx);
@@ -34,7 +38,9 @@ impl Render for WorkbenchView {
         self.flush_pending_project_close_requests(cx);
         self.sync_input_owner_state();
         self.prune_terminal_panes();
-        self.ensure_eager_terminal_panes(window, cx);
+        if !self.command_center_is_active() {
+            self.ensure_eager_terminal_panes(window, cx);
+        }
         #[cfg(feature = "perf-metrics")]
         if std::env::var_os("YTTT_TERMINAL_PERF_OUTPUT").is_some()
             && let Some(terminal) = self.terminal.terminal_panes.iter().find_map(|(key, pane)| {
@@ -70,6 +76,7 @@ impl Render for WorkbenchView {
             .as_ref()
             .is_some_and(|state| state.step == OnboardingStep::Font)
             .then(|| self.settings_font_family_select(window, cx));
+        let command_center_active = self.command_center_is_active();
         let body = if self.workspace_is_loading() {
             div()
                 .flex()
@@ -132,8 +139,11 @@ impl Render for WorkbenchView {
             )
         } else {
             self.reconcile_selected_work_area();
-            let projects_focus_requested =
-                self.pending_projects_focus && self.should_auto_focus_workspace();
+            let projects_focus_requested = self.pending_projects_focus
+                && matches!(
+                    self.foreground_input_owner_kind(),
+                    InputOwnerKind::Workspace | InputOwnerKind::CommandCenter
+                );
             if projects_focus_requested {
                 focus_handle.focus(window, cx);
                 self.pending_projects_focus = false;
@@ -143,7 +153,15 @@ impl Render for WorkbenchView {
             let tab_items = self.workbench_tab_items(cx);
             let project_panel_visible = self.selected_project_panel_visible();
             let work_area_snapshot = self.selected_work_area_snapshot();
-            let work_area = if let Some((project_id, node, active_group_id)) = work_area_snapshot {
+            let work_area = if command_center_active {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.profile_control_banner(cx))
+                    .child(self.command_center_view(window, cx))
+            } else if let Some((project_id, node, active_group_id)) = work_area_snapshot {
                 self.work_area_view(
                     &project_id,
                     &node,
@@ -177,6 +195,7 @@ impl Render for WorkbenchView {
                         projects_has_keyboard_focus,
                         self.app_settings.project_panel.project_sidebar_width,
                         self.sidebar_collapsed,
+                        command_center_active,
                         &self.app_settings.project_panel.collapsed_agent_projects,
                         cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                             if this.queue_projects_focus() {
@@ -185,6 +204,11 @@ impl Render for WorkbenchView {
                         }),
                         cx.listener(|this, _, _window, cx| {
                             this.toggle_sidebar();
+                            cx.notify();
+                        }),
+                        cx.listener(|this, _, window, cx| {
+                            this.select_command_center();
+                            this.workbench_focus_handle(cx).focus(window, cx);
                             cx.notify();
                         }),
                         |project_id| {
@@ -253,7 +277,15 @@ impl Render for WorkbenchView {
                 None => false,
             };
 
-        let (window_bar_sections, status_bar_sections) = self.shell_bar_sections(window, cx);
+        let (window_bar_sections, status_bar_sections) = if command_center_active
+            && self.onboarding.is_none()
+            && !self.workspace_is_loading()
+            && !self.workspace_restore_failed()
+        {
+            (self.command_center_window_bar_sections(cx), None)
+        } else {
+            self.shell_bar_sections(window, cx)
+        };
         let mut root = div()
             .debug_selector(|| "workbench-surface".to_string())
             .flex()
@@ -427,6 +459,7 @@ impl Render for WorkbenchView {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_resize_mouse_up))
             .on_action(cx.listener(Self::on_create_project))
             .on_action(cx.listener(Self::on_application_quit))
+            .on_action(cx.listener(Self::on_command_center_toggle))
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_ssh_project))
             .on_action(cx.listener(Self::on_connect_existing_host))

@@ -58,6 +58,7 @@ fn agent_snapshot(turn_state: AgentTurnState) -> AgentSnapshot {
         process_exit: None,
         state_started_at: 1,
         updated_at: 1,
+        board: Default::default(),
     }
 }
 

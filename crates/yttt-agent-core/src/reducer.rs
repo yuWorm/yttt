@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgentAction, AgentEventKind, AgentExitReason, AgentInstanceId, AgentProcessExit,
-    AgentProcessState, AgentSessionMetadata, AgentTask, AgentTurnState, AgentViewState,
-    ChildAgentDescriptor, ChildAgentSnapshot, ChildAgentUpdate, ProviderId, TurnOutcome,
-    WaitingReason, model::bounded_text,
+    AgentAction, AgentBoardCommand, AgentBoardEvent, AgentBoardSnapshot, AgentEventKind,
+    AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProcessState, AgentQuestionState,
+    AgentSessionMetadata, AgentTask, AgentTurnState, AgentViewState, ChildAgentDescriptor,
+    ChildAgentSnapshot, ChildAgentUpdate, ProviderId, TurnOutcome, WaitingReason,
+    model::bounded_text,
 };
 
 const MAX_CHILD_AGENTS: usize = 64;
@@ -29,6 +30,8 @@ pub struct AgentSnapshot {
     pub process_exit: Option<AgentProcessExit>,
     pub state_started_at: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub board: AgentBoardSnapshot,
 }
 
 impl AgentSnapshot {
@@ -75,6 +78,7 @@ impl AgentSnapshot {
         self.waiting_reason = None;
         self.waiting_message = None;
         self.children.clear();
+        self.board.mark_unavailable(self.updated_at);
     }
 
     pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
@@ -95,6 +99,9 @@ impl AgentSnapshot {
             self.waiting_message = None;
             self.state_started_at = now;
             changed = true;
+        }
+        if changed {
+            self.board.mark_unavailable(now);
         }
         for child in &mut self.children {
             if matches!(
@@ -155,6 +162,7 @@ impl AgentReducer {
                 current_action: None,
                 last_action_failed: false,
                 children: Vec::new(),
+                board: AgentBoardSnapshot::default(),
                 session: None,
                 process_exit: None,
                 state_started_at: now,
@@ -172,11 +180,28 @@ impl AgentReducer {
         let mut reducer = Self::new(instance_id, provider_id, now);
         reducer.snapshot.task = restored.task.clone();
         reducer.snapshot.session = restored.session.clone().map(sanitize_session_metadata);
+        reducer.snapshot.board = restored.board.clone();
+        reducer.snapshot.board.mark_unavailable(now);
         reducer
     }
 
     pub fn snapshot(&self) -> &AgentSnapshot {
         &self.snapshot
+    }
+    pub fn board_command(
+        &mut self,
+        command: AgentBoardCommand,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        self.snapshot.board.command(command, now)
+    }
+
+    pub fn retain_board(&mut self, mut board: AgentBoardSnapshot, now: u64) {
+        board.mark_unavailable(now);
+        self.snapshot.board = board;
+    }
+    pub fn take_board(&mut self) -> AgentBoardSnapshot {
+        std::mem::take(&mut self.snapshot.board)
     }
     pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
         if !self.snapshot.decay_stale_activity(now, stale_after_millis) {
@@ -197,6 +222,7 @@ impl AgentReducer {
         self.set_process_state(AgentProcessState::Starting, now);
         self.snapshot.current_action = None;
         self.snapshot.children.clear();
+        self.snapshot.board.mark_unavailable(now);
         self.snapshot.waiting_reason = None;
         self.snapshot.waiting_message = None;
         self.set_lead_turn_state(AgentTurnState::Idle, now);
@@ -220,7 +246,8 @@ impl AgentReducer {
         self.set_process_state(AgentProcessState::Exited, now);
         let outcome = match exit.reason {
             AgentExitReason::KilledByUser => AgentTurnState::Interrupted,
-            AgentExitReason::Failed | AgentExitReason::Disconnected => AgentTurnState::Failed,
+            AgentExitReason::Failed => AgentTurnState::Failed,
+            AgentExitReason::Disconnected => AgentTurnState::Unknown,
             AgentExitReason::Completed if exit.code.unwrap_or_default() == 0 => {
                 AgentTurnState::Completed
             }
@@ -230,6 +257,7 @@ impl AgentReducer {
         self.snapshot.waiting_reason = None;
         self.snapshot.waiting_message = None;
         self.snapshot.children.clear();
+        self.snapshot.board.finish_executions(outcome, now);
         self.set_lead_turn_state(outcome, now);
         self.snapshot.updated_at = now;
         true
@@ -325,6 +353,46 @@ impl AgentReducer {
                 self.child_finished(&child_id);
                 self.refresh_turn_state(now);
             }
+            AgentEventKind::Board { event } => {
+                let opened_root_question = match &event {
+                    AgentBoardEvent::QuestionOpened { request } => {
+                        self.snapshot.board.executions.iter().any(|execution| {
+                            execution.id == request.execution_id && execution.parent_id.is_none()
+                        })
+                    }
+                    _ => false,
+                };
+                let resolved = matches!(&event, AgentBoardEvent::QuestionResolved { .. });
+                if !self.snapshot.board.apply(event, now) {
+                    return false;
+                }
+                if opened_root_question {
+                    self.snapshot.waiting_reason = Some(WaitingReason::UserInput);
+                    self.snapshot.waiting_message = self
+                        .snapshot
+                        .board
+                        .questions
+                        .last()
+                        .and_then(|record| record.request.questions.first())
+                        .map(|question| question.question.clone());
+                    self.set_lead_turn_state(AgentTurnState::Waiting, now);
+                } else if resolved && self.snapshot.waiting_reason == Some(WaitingReason::UserInput)
+                {
+                    let pending_root = self.snapshot.board.questions.iter().any(|question| {
+                        matches!(
+                            question.state,
+                            AgentQuestionState::Pending | AgentQuestionState::Submitted
+                        ) && self.snapshot.board.executions.iter().any(|execution| {
+                            execution.id == question.request.execution_id
+                                && execution.parent_id.is_none()
+                        })
+                    });
+                    if !pending_root {
+                        self.clear_waiting();
+                        self.set_lead_turn_state(AgentTurnState::Working, now);
+                    }
+                }
+            }
         }
         self.snapshot.updated_at = now;
         true
@@ -341,6 +409,7 @@ impl AgentReducer {
             && metadata.session_id.is_some()
             && current_session_id != metadata.session_id.as_ref();
         if identity_changed {
+            self.snapshot.board.mark_unavailable(now);
             self.snapshot.task = None;
             self.snapshot.current_action = None;
             self.snapshot.children.clear();
@@ -449,7 +518,27 @@ impl AgentReducer {
             self.lead_turn_state,
             AgentTurnState::Working | AgentTurnState::Waiting
         );
-        let state = if child_is_active && !lead_is_active {
+        // Native tools may emit Working after opening their Ask surface. A live structured
+        // root question remains authoritative until the provider resolves or loses it.
+        let root_question = self.snapshot.board.questions.iter().find(|question| {
+            matches!(
+                question.state,
+                AgentQuestionState::Pending | AgentQuestionState::Submitted
+            ) && self.snapshot.board.executions.iter().any(|execution| {
+                execution.id == question.request.execution_id
+                    && execution.parent_id.is_none()
+                    && execution.ended_at.is_none()
+            })
+        });
+        let state = if lead_is_active && let Some(question) = root_question {
+            self.snapshot.waiting_reason = Some(WaitingReason::UserInput);
+            self.snapshot.waiting_message = question
+                .request
+                .questions
+                .first()
+                .map(|item| item.question.clone());
+            AgentTurnState::Waiting
+        } else if child_is_active && !lead_is_active {
             AgentTurnState::Working
         } else if !lead_is_active
             && self

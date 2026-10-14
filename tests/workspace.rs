@@ -10,7 +10,7 @@ use yttt::model::{
     project::{ProjectDescriptor, ProjectLocation},
     workspace::{
         CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
-        PaneProcessState, TabStartState, Workspace,
+        PaneProcessState, TabStartState, Workspace, WorkspaceNavigation,
     },
 };
 
@@ -39,6 +39,7 @@ fn completed_agent_snapshot() -> AgentSnapshot {
         process_exit: None,
         state_started_at: 1,
         updated_at: 1,
+        board: Default::default(),
     }
 }
 
@@ -82,6 +83,72 @@ fn switching_projects_preserves_both_projects() {
     assert_eq!(workspace.opened_projects().len(), 2);
     assert_eq!(workspace.selected_project_id(), Some(&first));
     assert_ne!(first, second);
+}
+
+#[test]
+fn command_center_requires_open_projects_and_last_close_restores_dashboard() {
+    let mut workspace = Workspace::new();
+    workspace.select_command_center();
+    assert_eq!(workspace.navigation(), &WorkspaceNavigation::Dashboard);
+    let restored = Workspace::restore_persisted_state(workspace.persisted_state()).unwrap();
+    assert_eq!(restored.navigation(), &WorkspaceNavigation::Dashboard);
+
+    let project_id = workspace
+        .open_project(
+            local_project(PathBuf::from("/tmp/board-boundary")),
+            sample_layout(),
+        )
+        .unwrap();
+    assert_eq!(workspace.selected_project_id(), Some(&project_id));
+    workspace.select_command_center();
+    assert_eq!(workspace.navigation(), &WorkspaceNavigation::CommandCenter);
+    assert!(workspace.selected_project_id().is_none());
+    let mut restored = Workspace::restore_persisted_state(workspace.persisted_state()).unwrap();
+    assert_eq!(restored.navigation(), &WorkspaceNavigation::CommandCenter);
+
+    assert!(matches!(
+        restored.request_close_project(&project_id).unwrap(),
+        CloseProjectDecision::Closed(_)
+    ));
+    assert!(restored.opened_projects().is_empty());
+    assert_eq!(restored.navigation(), &WorkspaceNavigation::Dashboard);
+    let restored = Workspace::restore_persisted_state(restored.persisted_state()).unwrap();
+    assert_eq!(restored.navigation(), &WorkspaceNavigation::Dashboard);
+}
+
+#[test]
+fn command_center_round_trip_preserves_running_projects_without_selecting_one() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(
+            local_project(PathBuf::from("/tmp/board-retention")),
+            sample_layout(),
+        )
+        .unwrap();
+    workspace.select_tab("agent").unwrap();
+    workspace
+        .mark_pane_running(&project_id, "agent", "codex")
+        .unwrap();
+    workspace
+        .record_agent_snapshot(&project_id, "agent", "codex", completed_agent_snapshot())
+        .unwrap();
+    let projects = workspace.opened_projects().to_vec();
+
+    workspace.select_command_center();
+    let encoded = serde_json::to_vec(&workspace.persisted_state()).unwrap();
+    let mut restored =
+        Workspace::restore_persisted_state(serde_json::from_slice(&encoded).unwrap()).unwrap();
+
+    assert!(restored.selected_project_id().is_none());
+    assert_eq!(restored.opened_projects(), projects);
+    assert!(restored.close_selected_tab().is_err());
+    assert_eq!(restored.opened_projects(), projects);
+    restored.select_project(&project_id).unwrap();
+    assert_eq!(
+        restored.project(&project_id).unwrap().selected_tab_id,
+        "agent"
+    );
+    assert_eq!(restored.opened_projects(), projects);
 }
 
 #[test]
@@ -152,6 +219,7 @@ fn closing_project_with_no_running_panes_succeeds() {
         })
     );
     assert!(workspace.opened_projects().is_empty());
+    assert_eq!(workspace.navigation(), &WorkspaceNavigation::Dashboard);
 }
 
 #[test]

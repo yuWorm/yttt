@@ -51,6 +51,7 @@ actions!(
     yttt,
     [
         ApplicationQuit,
+        CommandCenterToggle,
         OpenCommandPalette,
         OpenFileFinder,
         CreateProject,
@@ -310,6 +311,12 @@ define_bindable_actions! {
         CommandId::SettingsNotifications => SettingsNotifications,
     }
     ui {
+        CommandCenter => {
+            id: "command_center.toggle",
+            action: CommandCenterToggle,
+            title: "Toggle Command Center",
+            description: "Show or hide the single-screen agent command center.",
+        },
         PaletteNext => {
             id: "palette.select_next",
             action: PaletteSelectNext,
@@ -1140,6 +1147,15 @@ pub fn ui_action_for_id(id: &str) -> Option<Box<dyn Action>> {
 
 fn default_contextual_keybindings() -> Vec<Keybinding> {
     let mut bindings = vec![
+        contextual_binding(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-b"
+            } else {
+                "ctrl-shift-b"
+            },
+            BindableActionId::CommandCenter,
+            WORKSPACE_CONTEXT,
+        ),
         contextual_binding("down", BindableActionId::PaletteNext, PALETTE_CONTEXT),
         contextual_binding("up", BindableActionId::PalettePrevious, PALETTE_CONTEXT),
         contextual_binding("enter", BindableActionId::PaletteAccept, PALETTE_CONTEXT),

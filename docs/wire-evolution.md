@@ -14,7 +14,13 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 14`。v14 追加工作区 `SetRestoreOnStartup`、
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 15`。v15 追加 `AgentCommand`，答案提交与人工验收
+  使用现有控制权校验，并校验 Host epoch、完整 pane scope 与 Agent instance。
+  `AgentSnapshot.board` 为带缺省值的结构化任务、执行、消息与问题记录。
+  `AgentSnapshots` 改为 `{ snapshots, has_more }`；恢复读取按确认游标分页（目标每页 8 MiB），
+  单条事件仍携带完整有界快照。工作区 manifest 上限调整为 16 MiB，Host 状态文件为 24 MiB。
+  本次资源协议为明确切换，桌面 Client、Host 与远端 Server 必须同步更新。
+  v14 追加工作区 `SetRestoreOnStartup`、
   `Forget`、只读 `OpenExisting` 请求与 `Forgotten` 响应。`WorkspaceSummary.restore_on_startup`
   缺省为 false，旧记录保留为历史；`WorkspaceEnvironment.workspace_history_initialized` 缺省为 false。
   显式关闭改变启动集合，不再把所有历史窗口视为待恢复窗口。桌面端与 Host 必须同步更新。
@@ -44,4 +50,5 @@
   缺失 epoch 不提供宽松默认值。ordered one-way `TerminalInput` 于 v3 引入，
   独立终端通道于 v5 引入。
 - lifecycle：`LIFECYCLE_PROTOCOL_VERSION = 3`
-- desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 3`
+- desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 4`，新增原生看板显示与结构化问题提交命令；
+  响应帧上限为 16 MiB，允许 CLI Agent 查询包含有界看板记录。桌面与 CLI 必须使用同一版本。

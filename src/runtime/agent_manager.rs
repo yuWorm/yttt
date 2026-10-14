@@ -418,6 +418,9 @@ impl AgentManager {
             return None;
         }
         self.host_snapshot_sequences.insert(address.clone(), cursor);
+        if let Some(previous) = self.retained_snapshots.get(&address) {
+            update.snapshot.board.merge_retained(&previous.board);
+        }
         let session_confirmed = update.snapshot.session.is_some();
         let resuming = self
             .launches_by_address

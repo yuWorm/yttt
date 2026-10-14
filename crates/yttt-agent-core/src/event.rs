@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgentAction, AgentSessionMetadata, AgentTask, ChildAgentDescriptor, ChildAgentUpdate,
-    TurnOutcome, WaitingReason,
+    AgentAction, AgentBoardEvent, AgentSessionMetadata, AgentTask, ChildAgentDescriptor,
+    ChildAgentUpdate, TurnOutcome, WaitingReason,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,5 +43,8 @@ pub enum AgentEventKind {
     ChildFinished {
         child_id: String,
         outcome: TurnOutcome,
+    },
+    Board {
+        event: AgentBoardEvent,
     },
 }

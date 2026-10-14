@@ -2600,9 +2600,14 @@ async fn handle_request(
             .map_err(|error| ProtocolFailure::new(FailureCode::Internal, error.to_string(), false))
             .and_then(|result| result.map(Response::Project).map_err(project_failure))
         }
-        Request::ReadAgentSnapshots { acknowledged } => Ok(Response::AgentSnapshots(
-            agent_hooks.snapshots_after(&acknowledged),
-        )),
+        Request::ReadAgentSnapshots { acknowledged } => {
+            let (snapshots, has_more) = agent_hooks.snapshot_page(&acknowledged);
+            Ok(Response::AgentSnapshots {
+                snapshots,
+                has_more,
+            })
+        }
+        Request::AgentCommand(request) => agent_hooks.command(request).map(|()| Response::Applied),
         Request::Workspace(request) => {
             let workspaces = context.workspaces.clone();
             let requesting_client = client_id.clone();

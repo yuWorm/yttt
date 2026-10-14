@@ -1,8 +1,9 @@
 use serde_json::Value;
 use yttt_agent_core::{
-    AgentAction, AgentEventKind, AgentProvider, AgentSessionMetadata, AgentTask, AgentTaskSource,
-    AgentTurnState, ChildAgentDescriptor, ChildAgentUpdate, ProviderDescriptor, ProviderError,
-    ProviderHookEvent, ProviderId, ProviderResumeCommand, TurnOutcome, WaitingReason,
+    AgentAction, AgentBoardEvent, AgentEventKind, AgentProvider, AgentSessionMetadata, AgentTask,
+    AgentTaskSource, AgentTurnState, ChildAgentDescriptor, ChildAgentUpdate, ProviderDescriptor,
+    ProviderError, ProviderHookEvent, ProviderId, ProviderResumeCommand, TurnOutcome,
+    WaitingReason,
 };
 
 pub const OMP_PROVIDER_ID: &str = "omp";
@@ -38,6 +39,16 @@ impl AgentProvider for OmpProvider {
     ) -> Result<Vec<AgentEventKind>, ProviderError> {
         let payload = event.payload;
         let events = match event.name {
+            "board_event" => vec![AgentEventKind::Board {
+                event: serde_json::from_value::<AgentBoardEvent>(
+                    payload.get("board").cloned().ok_or_else(|| {
+                        ProviderError::InvalidPayload("board is required".to_string())
+                    })?,
+                )
+                .map_err(|error| {
+                    ProviderError::InvalidPayload(format!("invalid board event: {error}"))
+                })?,
+            }],
             "session_start" | "session_switch" => vec![AgentEventKind::SessionStarted {
                 metadata: session_metadata(payload),
             }],
@@ -57,7 +68,11 @@ impl AgentProvider for OmpProvider {
                 vec![AgentEventKind::Working]
             }
             "agent_end" => vec![AgentEventKind::TurnFinished {
-                outcome: TurnOutcome::Completed,
+                outcome: turn_outcome(
+                    string_field(payload, "outcome")
+                        .as_deref()
+                        .unwrap_or("completed"),
+                )?,
             }],
             "tool_call" | "tool_execution_start" => action_started(payload)?,
             "tool_approval_requested" => vec![AgentEventKind::Waiting {
@@ -95,7 +110,7 @@ impl AgentProvider for OmpProvider {
             }],
             "child_finished" => vec![AgentEventKind::ChildFinished {
                 child_id: required_string_field(payload, "childId")?,
-                outcome: child_outcome(
+                outcome: turn_outcome(
                     string_field(payload, "outcome")
                         .as_deref()
                         .unwrap_or("completed"),
@@ -181,13 +196,13 @@ fn child_turn_state(value: &str) -> Result<AgentTurnState, ProviderError> {
     }
 }
 
-fn child_outcome(value: &str) -> Result<TurnOutcome, ProviderError> {
+fn turn_outcome(value: &str) -> Result<TurnOutcome, ProviderError> {
     match value {
         "completed" => Ok(TurnOutcome::Completed),
         "failed" => Ok(TurnOutcome::Failed),
         "aborted" | "interrupted" => Ok(TurnOutcome::Interrupted),
         _ => Err(ProviderError::InvalidPayload(format!(
-            "unsupported child outcome: {value}"
+            "unsupported turn outcome: {value}"
         ))),
     }
 }
@@ -274,6 +289,19 @@ mod tests {
             events,
             vec![AgentEventKind::TurnFinished {
                 outcome: TurnOutcome::Completed
+            }]
+        );
+
+        let cancelled = json!({ "willContinue": false, "outcome": "interrupted" });
+        assert_eq!(
+            provider
+                .normalize_hook(ProviderHookEvent {
+                    name: "agent_end",
+                    payload: &cancelled
+                })
+                .unwrap(),
+            vec![AgentEventKind::TurnFinished {
+                outcome: TurnOutcome::Interrupted
             }]
         );
 
@@ -364,5 +392,41 @@ mod tests {
                 outcome: TurnOutcome::Failed,
             }]
         );
+    }
+    #[test]
+    fn normalizes_structured_board_events() {
+        let payload = json!({
+            "board": {
+                "kind": "message",
+                "message": {
+                    "id": "message-1",
+                    "execution_id": "root-1",
+                    "role": "assistant",
+                    "text": "Done",
+                    "timestamp": 42,
+                    "truncated": false
+                }
+            }
+        });
+        let events = OmpProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "board_event",
+                payload: &payload,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[..],
+            [AgentEventKind::Board {
+                event: AgentBoardEvent::Message { message }
+            }] if message.id == "message-1" && message.execution_id == "root-1"
+        ));
+
+        let error = OmpProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "board_event",
+                payload: &json!({ "board": { "kind": "not_real" } }),
+            })
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidPayload(_)));
     }
 }

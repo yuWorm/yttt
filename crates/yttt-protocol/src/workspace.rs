@@ -11,7 +11,8 @@ pub const MAX_OPERATION_ID_BYTES: usize = 128;
 
 pub const MAX_DRAFT_CONTENT_BYTES: usize = 6 * 1024 * 1024;
 pub const MAX_WORKSPACE_DRAFT_BYTES: usize = 64 * 1024 * 1024;
-pub const MAX_WORKSPACE_MANIFEST_BYTES: usize = 1024 * 1024;
+/// Includes bounded Agent plans, questions and recent conversation records across projects.
+pub const MAX_WORKSPACE_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 /// A short, path-safe identifier for one persisted workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]

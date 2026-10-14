@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use yttt_agent_core::AgentSnapshot;
+use yttt_agent_core::{AgentQuestionAnswer, AgentSnapshot};
 
 pub const MAX_CONTROL_TEXT_BYTES: usize = 64 * 1024;
 
@@ -49,6 +49,11 @@ pub enum DesktopControlCommand {
         agent_only: bool,
     },
     Read,
+    ShowCommandCenter,
+    AnswerAgentQuestion {
+        request_id: String,
+        answers: Vec<AgentQuestionAnswer>,
+    },
 }
 
 impl DesktopControlCommand {
@@ -146,6 +151,13 @@ pub enum DesktopControlResponse {
         target: ControlTarget,
         text: String,
     },
+    CommandCenterShown {
+        window: String,
+    },
+    AgentQuestionSubmitted {
+        target: ControlTarget,
+        request_id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +208,14 @@ impl DesktopControlRequest {
                 "A pane requires --tab and --project; a tab requires --project",
             ));
         }
+        if matches!(self.command, DesktopControlCommand::ShowCommandCenter) {
+            if self.project.is_some() || self.tab.is_some() || self.pane.is_some() {
+                return Err(invalid(
+                    "The command center targets a window, not a project or pane",
+                ));
+            }
+            return Ok(());
+        }
         let text = match &self.command {
             DesktopControlCommand::CreateShell { command, title } => {
                 validate_title(title.as_deref())?;
@@ -225,6 +245,32 @@ impl DesktopControlRequest {
             }
             DesktopControlCommand::Resize { percent, .. } if !(1..=90).contains(percent) => {
                 return Err(invalid("Resize percent must be between 1 and 90"));
+            }
+            DesktopControlCommand::AnswerAgentQuestion {
+                request_id,
+                answers,
+            } => {
+                if request_id.trim().is_empty()
+                    || request_id.len() > 512
+                    || answers.is_empty()
+                    || answers.len() > 16
+                    || answers
+                        .iter()
+                        .map(|answer| {
+                            answer.question_id.len()
+                                + answer.custom_input.as_ref().map_or(0, String::len)
+                                + answer
+                                    .selected_options
+                                    .iter()
+                                    .map(String::len)
+                                    .sum::<usize>()
+                        })
+                        .sum::<usize>()
+                        > MAX_CONTROL_TEXT_BYTES
+                {
+                    return Err(invalid("Invalid question request or answer payload"));
+                }
+                None
             }
             _ => None,
         };
@@ -258,6 +304,7 @@ impl DesktopControlRequest {
             DesktopControlCommand::Split { .. }
                 | DesktopControlCommand::Resize { .. }
                 | DesktopControlCommand::Send { .. }
+                | DesktopControlCommand::AnswerAgentQuestion { .. }
                 | DesktopControlCommand::Read
         ) && self.pane.is_none()
         {

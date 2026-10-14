@@ -13,8 +13,12 @@ Project
     -> File Tab
 ```
 
-The sidebar shows only currently opened projects. Recent projects are reachable from the
-project palette, not shown by default.
+With no projects open, the original Dashboard provides open-directory, recent-project,
+restoration, and global actions; it does not show the project sidebar or Command center.
+After opening a project, the sidebar keeps **Command center** above the project list.
+Entering this global page clears the project selection without closing projects or their
+background sessions. Closing the last project returns to Dashboard. Recent projects are
+reachable from the project palette, not shown by default.
 
 Work item tabs keep their width when the tab bar fills up. Hover over the tab strip and use the
 mouse wheel or swipe horizontally on a trackpad to reach tabs on either side. The new-tab, split,
@@ -46,8 +50,9 @@ and `general.onboarding_completed = true`. Configuration reads alone never creat
 install hooks. Projects opened afterward inherit the Host default unless they provide a project
 or personal layout override.
 
-Normal application launches remain local. The bottom status bar identifies the current
-environment; connecting a remote service never replaces the current local window.
+Normal application launches remain local. The project status bar identifies the current
+environment; Command center uses its connection banner instead. Connecting a remote service
+never replaces the current local window.
 Use **Remote services** on the homepage to open one management window with two tabs:
 **Remote connections** and **Remote access to this computer**. The first tab lists saved SSH
 and network Host connections together. Click a row to connect; use its **⋯** menu to edit or
@@ -1293,6 +1298,72 @@ ellipsized instead of adding stacked metadata lines. Oh My Pi uses its OMP mark,
 the generic Agent glyph, and hovering either icon identifies it. Clicking an Agent selects its
 project, tab, and pane. Project Agent groups can be collapsed; the collapsed project IDs and the
 latest bounded Agent snapshots are persisted.
+
+### Command center
+
+After opening at least one project, select **Command center** (**指挥中心** in Chinese)
+above the project list. This fixed sidebar entry remains available when the sidebar is
+collapsed. It opens a workspace-level page with no project selected: the project sidebar
+stays visible, while project tabs, file panels, editors, terminals, and the project status
+bar are hidden. Global command-palette/settings actions and connection/control notices
+remain available. With no projects open, Dashboard remains the homepage and the board
+shortcut does not open Command center.
+
+Selecting a project restores its own work area without restarting its processes. Opening the
+board preserves running Agents, terminal sessions, editor state, and unsent board drafts.
+`Cmd+Shift+B` on macOS (`Ctrl+Shift+B` elsewhere) switches between the board and the previous
+available project. Workspace restoration distinguishes Dashboard with no open projects
+from Command center with open projects but no selection.
+Project-scoped shortcuts cannot modify a hidden project from the board.
+
+The same page shows the project/task matrix above questions, linked conversation/composer,
+and execution records. Selecting a board row only links these regions; it does not select
+that project in the sidebar. Only yttt-managed Agent scopes in the connected Host and retained
+workspace snapshots are included; this is not a machine-wide process monitor.
+
+Choose **Open session** (**打开会话**) in **Linked conversation** to activate the exact
+existing project, tab, and terminal pane for the selected record. Child Agent records open
+their hosting session, not a separate child tab. The action does not create tabs or restart
+running Agents; returning to the board preserves its selection and unsent drafts. If the
+corresponding session is closed or is not open in this window, the action is disabled.
+
+Board labels, states, confirmations, feedback, and input hints follow the application's
+English/Chinese language setting. Switching language preserves answer and follow-up drafts.
+Provider messages, task names, question text, and answer option labels remain unchanged.
+
+The OMP adapter reports native todo phases/items, root and derived executions, user/assistant
+messages, and structured Ask questions. Other providers retain their existing status summaries;
+missing plans, transcripts, and execution records are labeled as unreported rather than invented.
+Durations use observed timestamps. Task completion does not imply human acceptance: completed
+tasks have a separate **Accept** action. No estimated completion times, costs, automatic retries,
+or individual-child termination are inferred from terminal text.
+
+Root OMP Ask questions can be answered in place, including multiple questions, multi-select,
+and custom text. The native OMP Ask remains available. The adapter settles the first answer it
+receives and cancels the losing surface; Host submission alone is displayed as **queued**, not
+answered. Answers target the exact Host epoch, pane generation, Agent instance, and request.
+An active authenticated OMP poll channel is required. Child Ask records are read-only, and
+native approval/permission prompts must still be handled in the terminal.
+
+Disconnects retain observations but disable unavailable answer channels; unknown execution
+state is not failure or completion. Completed executions and resolved questions remain visible.
+Workspace persistence retains bounded snapshots (per Agent: up to 512 task rows, 256 executions,
+256 recent messages, and 128 question records). Messages are capped at 16 KiB each and older
+messages can be evicted; this is not an unlimited transcript archive. Open questions are not
+evicted to make room for newer questions. UI answer drafts survive selection changes and
+temporary connection loss within the current window, not application restart.
+OMP stores root execution identities in native session metadata, so resuming a session keeps
+the same task and message identities instead of creating duplicate rows. Older transcripts
+without that metadata appear as **Session history** with unknown execution outcome.
+
+The linked composer only sends a new prompt to a reported idle/completed/failed/interrupted
+Agent with current workspace control. **Terminate terminal** requires confirmation and ends
+all work in that pane, not just the selected derived execution. Observers can inspect the
+board without installing hooks, starting Agents, or taking control.
+
+The adapter was exercised with OMP 17.3.8. Running Agents must be restarted after updating
+yttt's managed extension to load its new observation and answer hooks.
+
 
 If yttt closes while a resumable Agent is still running, reopening the workspace restores that
 session with the provider's native command: `claude --resume`, `codex resume`,

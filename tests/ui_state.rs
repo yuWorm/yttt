@@ -161,6 +161,7 @@ fn agent_snapshot(turn_state: AgentTurnState) -> AgentSnapshot {
         process_exit: None,
         state_started_at: 1,
         updated_at: 1,
+        board: Default::default(),
     }
 }
 
@@ -210,10 +211,6 @@ fn settings_window_reuses_search_state_and_rebinds_after_native_close(
     focus_surface_window(cx, "workbench-surface");
     cx.read(|app| {
         assert!(view.read(app).settings_is_open());
-        assert_eq!(
-            view.read(app).foreground_input_owner_kind(),
-            InputOwnerKind::Workspace
-        );
     });
     view.update(cx, |view, cx| {
         view.open_settings();
@@ -314,10 +311,6 @@ fn layout_editor_window_keeps_invalid_edits_and_outlives_settings(cx: &mut gpui:
     focus_surface_window(cx, "workbench-surface");
     cx.read(|app| {
         assert!(view.read(app).layout_toml_editor_is_open());
-        assert_eq!(
-            view.read(app).foreground_input_owner_kind(),
-            InputOwnerKind::Workspace
-        );
     });
     focus_surface_window(cx, "layout-editor-window");
     assert_eq!(cx.update(|window, _| window.window_handle()), editor_window);
@@ -626,6 +619,67 @@ fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppCon
         "action rows must grow with the window: small={:?}, large={large_first_action:?}",
         small_actions[0]
     );
+}
+
+#[gpui::test]
+fn dashboard_and_command_center_follow_open_project_lifecycle(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let output = root_slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        *output.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("empty-workspace-actions").is_some());
+    assert!(cx.debug_bounds("command-center-surface").is_none());
+    assert!(cx.debug_bounds("command-center-sidebar-item").is_none());
+    assert!(cx.debug_bounds("project-sidebar-list").is_none());
+
+    root.update_in(cx, |root, _window, cx| {
+        root.select_command_center();
+        assert!(!root.command_center_is_active());
+        root.open_project_path(&project_path).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("empty-workspace-actions").is_none());
+    assert!(cx.debug_bounds("command-center-surface").is_none());
+    let board_entry = cx.debug_bounds("command-center-sidebar-item").unwrap();
+    cx.simulate_click(board_entry.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("command-center-surface").is_some());
+    assert!(cx.debug_bounds("empty-workspace-actions").is_none());
+    cx.read(|app| {
+        assert!(root.read(app).workspace().selected_project_id().is_none());
+        assert_eq!(root.read(app).workspace().opened_projects().len(), 1);
+    });
+
+    let project_entry = cx.debug_bounds("project-sidebar-item-0").unwrap();
+    cx.simulate_click(project_entry.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    root.update_in(cx, |root, _window, cx| {
+        root.run_command(CommandId::ProjectClose).unwrap();
+        assert!(root.has_pending_project_close());
+        root.confirm_pending_project_close().unwrap();
+        assert!(root.workspace().opened_projects().is_empty());
+        assert!(!root.command_center_is_active());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("empty-workspace-actions").is_some());
+    assert!(cx.debug_bounds("command-center-surface").is_none());
+    assert!(cx.debug_bounds("command-center-sidebar-item").is_none());
+    assert!(cx.debug_bounds("project-sidebar-list").is_none());
 }
 
 #[test]
@@ -2123,6 +2177,60 @@ fn root_view_project_switch_preserves_each_editor_session() {
     );
     assert_eq!(root.pending_editor_focus_document_id(), Some(&opened_file));
     assert!(root.pending_terminal_focus_pane_id().is_none());
+}
+
+#[test]
+fn command_center_isolates_project_commands_and_restores_the_selected_work_item() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/board-draft.rs"));
+    root.select_project(&project_id).unwrap();
+    let projects = root.workspace().opened_projects().to_vec();
+
+    root.select_command_center();
+    assert!(root.workspace().selected_project_id().is_none());
+    assert!(root.active_work_item().is_none());
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::CommandCenter
+    );
+    assert!(root.pending_editor_focus_document_id().is_none());
+    assert!(root.pending_terminal_focus_pane_id().is_none());
+    assert!(
+        visible_project_items(root.workspace())
+            .iter()
+            .all(|project| project.state == SelectableState::Inactive)
+    );
+
+    for command in [
+        CommandId::TabClose,
+        CommandId::PaneClose,
+        CommandId::ProjectClose,
+    ] {
+        root.run_command(command).unwrap();
+    }
+    assert_eq!(root.workspace().opened_projects(), projects);
+    assert_eq!(
+        root.project_editor_runtime()
+            .workspace()
+            .session(&project_id)
+            .unwrap()
+            .active_work_item(),
+        Some(&WorkItemId::File(document_id.clone()))
+    );
+
+    root.select_project(&project_id).unwrap();
+    assert!(!root.command_center_is_active());
+    assert_eq!(
+        root.active_work_item(),
+        Some(WorkItemId::File(document_id.clone()))
+    );
+    assert_eq!(root.pending_editor_focus_document_id(), Some(&document_id));
 }
 
 #[test]
@@ -4754,7 +4862,12 @@ fn external_keybindings_edits_reload_without_restart(cx: &mut gpui::TestAppConte
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(
+                workspace_with_sample_project(),
+                view_paths,
+            )
+        });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -5518,7 +5631,12 @@ fn status_bar_keeps_text_and_actions_inside_vertical_insets(cx: &mut gpui::TestA
     save_bars(&paths, &bars).unwrap();
 
     let (_, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(
+                workspace_with_sample_project(),
+                paths,
+            )
+        });
         gpui_component::Root::new(root, window, cx)
     });
     cx.run_until_parked();
@@ -5559,16 +5677,6 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
     let root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
     cx.refresh().unwrap();
-    let window_bar = cx
-        .debug_bounds("window-bar")
-        .expect("Window Bar should always render");
-    let status_bar = cx
-        .debug_bounds("status-bar")
-        .expect("Status Bar should be enabled by default");
-    assert!(
-        status_bar.size.height < window_bar.size.height,
-        "Status Bar should stay more compact than the platform Window Bar"
-    );
     root.update(cx, |root, cx| {
         root.open_settings();
         root.select_settings_group("appearance").unwrap();
@@ -8223,6 +8331,14 @@ fn projects_vim_navigation_selects_opened_projects(cx: &mut gpui::TestAppContext
     cx.run_until_parked();
     cx.refresh().unwrap();
     cx.read(|app| {
+        assert!(root.read(app).command_center_is_active());
+        assert!(root.read(app).workspace().selected_project_id().is_none());
+    });
+
+    cx.simulate_keystrokes("j");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
         assert_eq!(
             root.read(app).workspace().selected_project_id(),
             Some(&first_project_id)
@@ -8238,6 +8354,31 @@ fn projects_vim_navigation_selects_opened_projects(cx: &mut gpui::TestAppContext
             Some(&second_project_id)
         );
     });
+
+    let board_entry = cx.debug_bounds("command-center-sidebar-item").unwrap();
+    let first_project = cx.debug_bounds("project-sidebar-item-0").unwrap();
+    assert!(board_entry.bottom() <= first_project.top());
+    cx.simulate_click(board_entry.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert!(root.read(app).command_center_is_active());
+        assert!(root.read(app).workspace().selected_project_id().is_none());
+    });
+    assert!(cx.debug_bounds("command-center-surface").is_some());
+    assert!(cx.debug_bounds("status-bar").is_none());
+
+    let project_entry = cx.debug_bounds("project-sidebar-item-1").unwrap();
+    cx.simulate_click(project_entry.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).workspace().selected_project_id(),
+            Some(&second_project_id)
+        );
+    });
+    assert!(cx.debug_bounds("command-center-surface").is_none());
 }
 
 #[gpui::test]

@@ -32,6 +32,7 @@ mod agent_process_monitor;
 mod agent_sessions;
 mod auxiliary_windows;
 mod bars;
+mod command_center;
 mod desktop_control;
 mod dialogs;
 mod document_lifecycle;
@@ -41,6 +42,7 @@ mod git;
 mod helpers;
 pub mod layout_editor;
 mod layout_editor_controller;
+mod navigation;
 #[cfg(test)]
 mod non_destructive_tests;
 mod onboarding;
@@ -62,6 +64,7 @@ mod update;
 mod vim_controller;
 mod work_area;
 use auxiliary_windows::{AuxiliaryWindowKind, AuxiliaryWindows};
+use command_center::CommandCenterState;
 use dialogs::*;
 use git::*;
 use helpers::*;
@@ -210,25 +213,26 @@ use crate::{
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
-            ApplicationQuit, BindableActionId, ConnectExistingHost, CreateProject, FileSave,
-            FocusProjects, GIT_DIFF_CONTEXT, GitBranchSwitch, GitDiffClose, GitDiffCopySelected,
-            GitDiffOpen, GitDiffSelectNextFile, GitDiffSelectPreviousFile, GitDiffToggleStageMode,
-            GitDiffToggleViewMode, GitDiffToggleWhitespace, LayoutDefaultEdit, LayoutDefaultReload,
-            LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
-            LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette, OpenFileFinder,
-            OpenOpenedProjectPalette, OpenPanePalette, OpenProject, OpenProjectPalette,
-            OpenRecentProjectPalette, OpenSshProject, OpenTabPalette, PALETTE_CONTEXT,
-            PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
-            PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown,
-            PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical,
-            ProjectClose, ProjectPanelRefresh, ProjectPanelSelectFilesPage,
-            ProjectPanelSelectNextPage, ProjectPanelSelectPreviousPage, ProjectPanelToggle,
-            ProjectsSelectFirst, ProjectsSelectLast, ProjectsSelectNext, ProjectsSelectPrevious,
-            SettingsKeybindings, SettingsNotifications, SettingsOpen, SettingsVimFirstGroup,
-            SettingsVimLastGroup, SettingsVimNextGroup, SettingsVimPreviousGroup, TabClose,
-            TabCloseAfter, TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore,
-            TabNew, TabNext, TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT,
-            bindable_registry, layered_ui_keybinding_specs, runtime_command_for_keystroke,
+            ApplicationQuit, BindableActionId, CommandCenterToggle, ConnectExistingHost,
+            CreateProject, FileSave, FocusProjects, GIT_DIFF_CONTEXT, GitBranchSwitch,
+            GitDiffClose, GitDiffCopySelected, GitDiffOpen, GitDiffSelectNextFile,
+            GitDiffSelectPreviousFile, GitDiffToggleStageMode, GitDiffToggleViewMode,
+            GitDiffToggleWhitespace, LayoutDefaultEdit, LayoutDefaultReload, LayoutDefaultReset,
+            LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,
+            LayoutSaveCurrent, OpenCommandPalette, OpenFileFinder, OpenOpenedProjectPalette,
+            OpenPanePalette, OpenProject, OpenProjectPalette, OpenRecentProjectPalette,
+            OpenSshProject, OpenTabPalette, PALETTE_CONTEXT, PaletteCancel, PaletteConfirm,
+            PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft,
+            PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
+            PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
+            ProjectPanelRefresh, ProjectPanelSelectFilesPage, ProjectPanelSelectNextPage,
+            ProjectPanelSelectPreviousPage, ProjectPanelToggle, ProjectsSelectFirst,
+            ProjectsSelectLast, ProjectsSelectNext, ProjectsSelectPrevious, SettingsKeybindings,
+            SettingsNotifications, SettingsOpen, SettingsVimFirstGroup, SettingsVimLastGroup,
+            SettingsVimNextGroup, SettingsVimPreviousGroup, TabClose, TabCloseAfter, TabCloseAll,
+            TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore, TabNew, TabNext, TabPrev,
+            TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, bindable_registry,
+            layered_ui_keybinding_specs, runtime_command_for_keystroke,
         },
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputScopeId, TerminalInputGate,
@@ -356,6 +360,7 @@ pub struct WorkbenchView {
     pending_projects_focus: bool,
     window_activation_subscription: Option<Subscription>,
     terminal: TerminalControllerState,
+    command_center: CommandCenterState,
     sidebar_collapsed: bool,
     active_sidebar_resize_drag: Option<ActiveSidebarResizeDrag>,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
@@ -928,6 +933,7 @@ impl WorkbenchView {
             projects_focus_active: false,
             pending_projects_focus: false,
             window_activation_subscription: None,
+            command_center: CommandCenterState::default(),
             terminal: TerminalControllerState::new(
                 app_settings.terminal.environment.clone(),
                 shell_candidates,
@@ -1186,9 +1192,12 @@ impl WorkbenchView {
             self.queue_focus_change_autosave(document_id);
         }
         self.workspace.select_project(project_id)?;
+        self.command_center_stop_live_updates();
+        self.command_center.pending_terminal_termination = None;
         if let Some(active) = self.active_work_item() {
             self.apply_active_work_item(&active)?;
         }
+        self.sync_input_owner_state();
         Ok(())
     }
 
@@ -1210,7 +1219,15 @@ impl WorkbenchView {
     fn select_adjacent_project(&mut self, forward: bool) -> Result<bool, WorkbenchError> {
         let projects = self.workspace.opened_projects();
         let Some(selected_project_id) = self.workspace.selected_project_id() else {
-            return Ok(false);
+            let Some(project_id) = forward
+                .then(|| projects.first().map(|project| project.id.clone()))
+                .flatten()
+            else {
+                return Ok(false);
+            };
+            self.select_project(&project_id)?;
+            self.queue_projects_focus();
+            return Ok(true);
         };
         let Some(selected_index) = projects
             .iter()
@@ -1228,6 +1245,10 @@ impl WorkbenchView {
         let Some(target_project_id) =
             target_index.and_then(|index| projects.get(index).map(|project| project.id.clone()))
         else {
+            if !forward {
+                self.select_command_center();
+                return Ok(true);
+            }
             return Ok(false);
         };
 
@@ -1237,12 +1258,19 @@ impl WorkbenchView {
     }
 
     fn select_boundary_project(&mut self, first: bool) -> Result<bool, WorkbenchError> {
-        let target_project_id = if first {
-            self.workspace.opened_projects().first()
-        } else {
-            self.workspace.opened_projects().last()
+        if self.workspace.opened_projects().is_empty() {
+            return Ok(false);
         }
-        .map(|project| project.id.clone());
+        if first {
+            let changed = !self.command_center_is_active();
+            self.select_command_center();
+            return Ok(changed);
+        }
+        let target_project_id = self
+            .workspace
+            .opened_projects()
+            .last()
+            .map(|project| project.id.clone());
         let Some(target_project_id) = target_project_id else {
             return Ok(false);
         };
@@ -1936,7 +1964,10 @@ impl WorkbenchView {
     }
 
     pub fn should_auto_focus_workspace(&self) -> bool {
-        self.foreground_input_owner_kind() == InputOwnerKind::Workspace
+        matches!(
+            self.foreground_input_owner_kind(),
+            InputOwnerKind::Workspace | InputOwnerKind::CommandCenter
+        )
     }
 
     pub fn foreground_input_owner_kind(&self) -> InputOwnerKind {
@@ -3086,6 +3117,7 @@ impl WorkbenchView {
                             current_action: None,
                             last_action_failed: false,
                             children: Vec::new(),
+                            board: Default::default(),
                             session: None,
                             process_exit: None,
                             state_started_at: now,
@@ -3226,6 +3258,13 @@ impl WorkbenchView {
     }
 
     fn cleanup_closed_project(&mut self, project_id: &ProjectId) {
+        if self.workspace.opened_projects().is_empty() {
+            self.command_center_stop_live_updates();
+            self.command_center.previous_project = None;
+            self.command_center.pending_terminal_termination = None;
+            self.pending_projects_focus = false;
+            self.projects_focus_active = false;
+        }
         self.project.layout_source_messages.remove(project_id);
         self.project.project_git_statuses.remove(project_id);
         self.project.services.remove(project_id);
@@ -3593,6 +3632,9 @@ impl WorkbenchView {
         tab_id: String,
         pane_id: String,
     ) {
+        if self.command_center_is_active() {
+            return;
+        }
         self.pending_projects_focus = false;
         self.projects_focus_active = false;
         self.terminal.pending_terminal_focus = Some(TerminalPaneTarget {
@@ -3655,6 +3697,9 @@ impl WorkbenchView {
     }
 
     fn queue_work_item_focus(&mut self, item: &WorkItemId) -> bool {
+        if self.command_center_is_active() {
+            return false;
+        }
         self.pending_projects_focus = false;
         self.projects_focus_active = false;
         self.project.pending_project_tree_focus = false;
@@ -3927,6 +3972,11 @@ impl WorkbenchView {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Palette,
                 InputScopeId::new(palette_input_scope_id(active_palette.kind)),
+            )
+        } else if self.command_center_is_active() {
+            InputOwnerRegistration::blocking(
+                InputOwnerKind::CommandCenter,
+                InputScopeId::new("command_center"),
             )
         } else if let Some(WorkItemId::File(document_id)) = self.active_work_item() {
             InputOwnerRegistration::blocking(

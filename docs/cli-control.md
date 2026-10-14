@@ -87,13 +87,43 @@ not a complete transcript or separate stdout/stderr. Agent list responses includ
 process and turn state, waiting reason, task, current action, children, and timestamps
 when available; these depend on the provider's installed hooks and observations.
 
+## Command center
+
+```sh
+yttt ctl board show
+yttt ctl board show --window WINDOW_ID
+yttt ctl board answer --project PROJECT_ID --tab TAB_ID --pane PANE_ID \
+  --request REQUEST_ID \
+  --answers-json '[{"question_id":"delivery","selected_options":["Continue"],"custom_input":null}]' \
+  --json
+```
+
+`board show` selects the native workspace-level command center, including on an observing
+desktop. The target window must have at least one open project; an empty Dashboard returns
+`not_ready` and is left unchanged. It clears project selection without closing projects,
+restarting processes, or toggling the page closed. Consequently `projects list` reports no
+selected project.
+Explicit `tabs focus` or `panes focus` returns to the targeted project's work area.
+`agents list --json` includes the structured `agent.board` snapshot with plans, execution
+records, messages, and question requests. Use those request/question IDs and exact option
+labels when answering.
+
+`board answer` uses the same Host submission path as the native question cards. Every
+question in a request must have an answer. Multi-select accepts several labels; custom
+answers use `custom_input`. `agent_question_submitted` means the Host queued the answer.
+Only a later question state of `answered` confirms that the OMP adapter accepted it.
+Native terminal answers may win the race; already resolved, unavailable, read-only child,
+or stale-scope requests are rejected. Submission never writes an answer into PTY input
+and is never automatically replayed.
+
+
 ## Results and scope
 
 `--json` produces one JSON response on stdout, or a structured error on stderr.
 Exit status is `0` for success, `2` for invalid requests, and `1` for operational
 failures. Requests are never automatically retried. An `outcome_unknown` error means
 the response was lost or timed out: inspect the target before retrying a mutation.
-Responses are limited to 256 KiB; narrow large queries using target flags.
+Responses are limited to 16 MiB to include bounded Agent board histories; narrow large queries using target flags.
 
 Layout mutations are rejected while a dialog or palette owns the window's input,
 so pending UI actions cannot accidentally apply to a different project or tab.

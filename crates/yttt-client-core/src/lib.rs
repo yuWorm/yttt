@@ -868,8 +868,22 @@ async fn connected_control_session(
                             ) => Some(session_id.clone()),
                             _ => None,
                         };
+                        let more_agents = matches!((&pending_request, &response.result),
+                            (PendingRequest::AgentSnapshots, Ok(Response::AgentSnapshots { has_more: true, .. })));
                         let checkpoints =
                             handle_response(pending_request, response.result, context);
+                        if more_agents {
+                            let acknowledged = context.agent_snapshots.read().values().map(|update| AgentSnapshotCursor {
+                                scope: update.scope.clone(), host_epoch: update.host_epoch, sequence: update.sequence,
+                            }).collect();
+                            if send_internal_request(
+                                &mut writer, &mut pending, &next_internal_request_id,
+                                Some(context.identity.client_instance_id.to_string()),
+                                Request::ReadAgentSnapshots { acknowledged }, PendingRequest::AgentSnapshots,
+                            ).await.is_err() {
+                                break 'connected Some("failed to read next Agent snapshot page".to_string());
+                            }
+                        }
                         if let Some(session_id) = completed_checkpoint
                             && let Some(event) =
                                 context.deferred_terminal_events.lock().remove(&session_id)
@@ -1197,7 +1211,7 @@ fn handle_response(
                 Ok(Response::Resources(resources)) => {
                     catalog.write().replace(Arc::new(resources.clone()));
                 }
-                Ok(Response::AgentSnapshots(snapshots)) => {
+                Ok(Response::AgentSnapshots { snapshots, .. }) => {
                     apply_agent_snapshots(snapshots.clone(), agent_snapshots, events);
                 }
                 _ => {}
@@ -1219,7 +1233,7 @@ fn handle_response(
             Vec::new()
         }
         PendingRequest::AgentSnapshots => {
-            if let Ok(Response::AgentSnapshots(snapshots)) = result {
+            if let Ok(Response::AgentSnapshots { snapshots, .. }) = result {
                 apply_agent_snapshots(snapshots, agent_snapshots, events);
             }
             Vec::new()

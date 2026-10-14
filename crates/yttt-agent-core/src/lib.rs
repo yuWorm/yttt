@@ -1,10 +1,17 @@
 #![forbid(unsafe_code)]
 
+mod board;
 mod event;
 mod model;
 mod provider;
 mod reducer;
 
+pub use board::{
+    AgentAnswerSource, AgentBoardCommand, AgentBoardEvent, AgentBoardMessage, AgentBoardSnapshot,
+    AgentBoardTask, AgentExecutionRecord, AgentMessageRole, AgentPlanItem, AgentPlanStatus,
+    AgentQuestion, AgentQuestionAnswer, AgentQuestionOption, AgentQuestionRecord,
+    AgentQuestionRequest, AgentQuestionState,
+};
 pub use event::AgentEventKind;
 pub use model::{
     AgentAction, AgentExitReason, AgentIdError, AgentInstanceId, AgentProcessExit,

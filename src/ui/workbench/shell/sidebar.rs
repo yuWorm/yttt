@@ -247,6 +247,7 @@ pub fn project_sidebar<
     ContextH,
     ContextF,
     ToggleH,
+    CommandCenterH,
 >(
     workspace: &Workspace,
     theme: WorkbenchTheme,
@@ -256,9 +257,11 @@ pub fn project_sidebar<
     has_keyboard_focus: bool,
     expanded_width: f32,
     collapsed: bool,
+    command_center_selected: bool,
     collapsed_agent_projects: &[String],
     on_focus_sidebar: FocusH,
     on_toggle_sidebar: ToggleH,
+    on_select_command_center: CommandCenterH,
     mut on_select_project: SelectF,
     mut on_toggle_project: ProjectToggleF,
     mut on_select_agent: AgentSelectF,
@@ -275,6 +278,7 @@ where
     ContextH: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     ContextF: FnMut(String) -> ContextH,
     ToggleH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    CommandCenterH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     let style = yttt_sidebar_style(theme, ui_style);
     let width = if collapsed {
@@ -288,7 +292,7 @@ where
             PROJECT_SIDEBAR_MAX_WIDTH,
         ))
     };
-    let mut sidebar = div()
+    let sidebar = div()
         .on_mouse_down(MouseButton::Left, on_focus_sidebar)
         .flex()
         .flex_col()
@@ -305,10 +309,27 @@ where
             collapsed,
             theme,
             ui_style,
+            text,
             on_toggle_sidebar,
         ));
 
+    let mut project_list = div()
+        .id("project-sidebar-list")
+        .debug_selector(|| "project-sidebar-list".to_string())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
+
     for (index, item) in visible_project_items(workspace).into_iter().enumerate() {
+        let mut item = item;
+        if command_center_selected {
+            item.state = SelectableState::Inactive;
+            for agent in &mut item.agents {
+                agent.selection = SelectableState::Inactive;
+            }
+        }
         let compacted_path = compact_path(&item.path);
         let suffix = if compacted_path != item.title {
             compacted_path
@@ -320,7 +341,7 @@ where
         let on_click = on_select_project(item.id.clone());
         let on_toggle = on_toggle_project(item.id.clone());
         let on_context = on_context_project(item.id.clone());
-        sidebar = sidebar.child(project_sidebar_item(
+        project_list = project_list.child(project_sidebar_item(
             index,
             item.clone(),
             suffix,
@@ -339,7 +360,7 @@ where
             for (agent_index, agent) in agents.into_iter().enumerate() {
                 let on_click =
                     on_select_agent(item.id.clone(), agent.tab_id.clone(), agent.pane_id.clone());
-                sidebar = sidebar.child(project_sidebar_agent_item(
+                project_list = project_list.child(project_sidebar_agent_item(
                     index,
                     agent_index,
                     agent,
@@ -352,12 +373,96 @@ where
     }
 
     sidebar
+        .child(command_center_sidebar_item(
+            command_center_selected,
+            collapsed,
+            theme,
+            ui_style,
+            text,
+            has_keyboard_focus,
+            on_select_command_center,
+        ))
+        .child(project_list)
+}
+
+fn command_center_sidebar_item<H>(
+    selected: bool,
+    collapsed: bool,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    text: UiText,
+    has_keyboard_focus: bool,
+    on_select_command_center: H,
+) -> impl IntoElement
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let state = if selected {
+        SelectableState::Active
+    } else {
+        SelectableState::Inactive
+    };
+    let row_style = yttt_row_style(YtttRowKind::Sidebar, state, true, theme, ui_style);
+    let focused_selection = selected && has_keyboard_focus;
+    let title: SharedString = text.get(UiTextKey::CommandCenterTitle).into();
+    let tooltip_title = title.clone();
+
+    yttt_row(YtttRowKind::Sidebar, state, true, theme, ui_style)
+        .id("command-center-sidebar-item")
+        .debug_selector(|| "command-center-sidebar-item".to_string())
+        .mb(ui_style.shell.sidebar_header_gap)
+        .flex()
+        .relative()
+        .items_center()
+        .justify_between()
+        .gap(ui_style.spacing.md)
+        .on_click(on_select_command_center)
+        .tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                tooltip_title.clone(),
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        })
+        .children(focused_selection.then(|| {
+            div()
+                .debug_selector(|| "command-center-sidebar-focus-indicator".to_string())
+                .absolute()
+                .left(gpui::px(2.0))
+                .top(gpui::px(6.0))
+                .bottom(gpui::px(6.0))
+                .w(gpui::px(2.0))
+                .rounded_full()
+                .bg(theme.accent)
+        }))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(ui_style.spacing.md)
+                .overflow_hidden()
+                .when(collapsed, |this| this.w_full().justify_center())
+                .child(
+                    Icon::new(IconName::Bot)
+                        .size_3()
+                        .text_color(row_style.subtitle),
+                )
+                .children((!collapsed).then(|| {
+                    div()
+                        .text_sm()
+                        .text_color(row_style.title)
+                        .truncate()
+                        .child(title)
+                })),
+        )
 }
 
 fn project_sidebar_header<H>(
     collapsed: bool,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
+    text: UiText,
     on_toggle_sidebar: H,
 ) -> impl IntoElement
 where
@@ -377,7 +482,11 @@ where
         .text_color(theme.text_subtle);
 
     if !collapsed {
-        header = header.child(div().px(ui_style.spacing.xs).child("Projects"));
+        header = header.child(
+            div()
+                .px(ui_style.spacing.xs)
+                .child(text.get(UiTextKey::Projects)),
+        );
     }
 
     header.child(yttt_icon_button(

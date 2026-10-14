@@ -11,6 +11,7 @@ use gpui::FocusHandle;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputOwnerKind {
     Workspace,
+    CommandCenter,
     Palette,
     Settings,
     Dialog,
@@ -24,6 +25,7 @@ impl InputOwnerKind {
     fn default_scope_id(self) -> InputScopeId {
         let scope_id = match self {
             InputOwnerKind::Workspace => "workspace",
+            InputOwnerKind::CommandCenter => "command_center",
             InputOwnerKind::Palette => "palette",
             InputOwnerKind::Settings => "settings",
             InputOwnerKind::Dialog => "dialog",

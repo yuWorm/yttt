@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- 新增 yttt 原生单屏 Command center：项目任务矩阵、集中问题、关联对话和执行记录同屏显示。
+  OMP 接入真实 todo、主／子执行、消息和 Ask；支持看板与原生终端单次回答结算，
+  区分排队提交、Agent 确认与人工验收，断线保留有界记录。其他 Provider 不伪造缺失数据。
+- Add a native single-screen command center with live OMP plans, root/child executions,
+  conversations, and structured Ask answers. Native and board answers settle once; queued
+  submission, provider completion, and human acceptance remain distinct.
+- 指挥中心改为项目列表上方的固定全局入口；进入时不选中项目，只保留项目导航与看板，
+  后台终端和 Agent 不受影响。补齐中英文本地化，语言与页面切换保留未提交草稿。
+- Promote Command center to a fixed global sidebar destination with no selected project.
+  Keep background work alive, isolate project shortcuts, and localize the board in English
+  and Chinese without discarding unsent drafts.
+- 修正指挥中心的显示边界：未打开项目时保留原 Dashboard；打开项目后才显示侧栏入口，
+  关闭最后一个项目返回 Dashboard。空工作区不会因快捷键或 CLI 进入看板。
+- Preserve the original Dashboard until a project is opened, show the Command center
+  entry only inside an opened workspace, and return to Dashboard after the last project
+  closes. Empty workspaces cannot enter the board through its shortcut or CLI.
+- 指挥中心的关联对话新增「打开会话」，精确切换到对应项目、标签页与终端；
+  子 Agent 跳转到承载会话，目标已关闭或不在当前窗口时禁用。保留看板草稿，不重建标签页。
+- Add **Open session** to linked conversations, focusing the exact project, tab, and terminal.
+  Child Agents open their hosting session; unavailable targets are disabled. Preserve board
+  drafts without creating duplicate tabs.
+- 资源协议升级为 15、desktop-shell 协议升级为 4；桌面 Client、Host、远端 Server 与 CLI
+  需同步更新。运行中的 OMP 需重启以加载更新后的扩展。
+- Resource protocol is now 15 and desktop-shell protocol 4. Update Clients, Hosts, Servers,
+  and CLI together; restart running OMP sessions to load the updated managed extension.
+
 - 主工作区标签过多时保持标签宽度，通过鼠标滚轮或触控板左右滚动；新建、分屏和项目面板按钮固定在右侧。
 - Keep overflowing workbench tabs at their natural width and scroll horizontally with the mouse wheel
   or trackpad, while keeping the new-tab, split and project-panel controls fixed on the right.

@@ -3183,7 +3183,10 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     assert!(response.starts_with("HTTP/1.1 204"), "{response}");
 
     let observer = host.client("agent-observer").await;
-    let Response::AgentSnapshots(observer_replay) = observer
+    let Response::AgentSnapshots {
+        snapshots: observer_replay,
+        has_more: false,
+    } = observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: Vec::new(),
         })
@@ -3221,7 +3224,10 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     })
     .await
     .expect("automatic Agent snapshot replay timeout");
-    let Response::AgentSnapshots(second_replay) = second_observer
+    let Response::AgentSnapshots {
+        snapshots: second_replay,
+        has_more: false,
+    } = second_observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: Vec::new(),
         })
@@ -3232,7 +3238,10 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     };
     assert_eq!(second_replay, vec![update.clone()]);
     second_observer.shutdown().await;
-    let Response::AgentSnapshots(current) = observer
+    let Response::AgentSnapshots {
+        snapshots: current,
+        has_more: false,
+    } = observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: vec![AgentSnapshotCursor {
                 scope: update.scope.clone(),
@@ -3301,7 +3310,10 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     else {
         panic!("unexpected terminal terminate response");
     };
-    let Response::AgentSnapshots(after_exit) = observer
+    let Response::AgentSnapshots {
+        snapshots: after_exit,
+        has_more: false,
+    } = observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: Vec::new(),
         })

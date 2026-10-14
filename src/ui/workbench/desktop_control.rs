@@ -105,7 +105,13 @@ impl WorkbenchView {
                     let agent = host_agents
                         .iter()
                         .find(|update| update.terminal_session_id.as_str() == session_id)
-                        .map(|update| update.snapshot.clone())
+                        .map(|update| {
+                            let mut snapshot = update.snapshot.clone();
+                            if let Some(retained) = &pane.agent_snapshot {
+                                snapshot.board.merge_retained(&retained.board);
+                            }
+                            snapshot
+                        })
                         .or_else(|| pane.agent_snapshot.clone());
                     if matches!(request.command, DesktopControlCommand::Agents)
                         && agent.is_none()
@@ -220,6 +226,21 @@ impl WorkbenchView {
     ) -> Option<DesktopControlResult> {
         let result = (|| {
             request.validate()?;
+            if matches!(request.command, DesktopControlCommand::ShowCommandCenter) {
+                if self.workspace.opened_projects().is_empty() {
+                    return Err(control_error(
+                        DesktopControlErrorCode::NotReady,
+                        "Open a project before showing Command center",
+                    ));
+                }
+                self.select_command_center();
+                self.workbench_focus_handle(cx).focus(window, cx);
+                window.activate_window();
+                cx.notify();
+                return Ok(Some(DesktopControlResponse::CommandCenterShown {
+                    window: window_id.to_string(),
+                }));
+            }
             let mut target = self.control_target(request, window_id)?;
             if matches!(request.command, DesktopControlCommand::Read) {
                 let key = terminal_pane_key(
@@ -269,6 +290,68 @@ impl WorkbenchView {
                     DesktopControlErrorCode::PermissionDenied,
                     "This desktop does not hold workspace control",
                 ));
+            }
+            if let DesktopControlCommand::AnswerAgentQuestion {
+                request_id,
+                answers,
+            } = &request.command
+            {
+                let session_id = terminal_pane_key(
+                    &target.project,
+                    &target.tab,
+                    target.pane.as_deref().unwrap_or_default(),
+                );
+                let sources = self.command_center_sources();
+                let source = sources
+                    .iter()
+                    .find(|source| source.terminal_session_id == session_id)
+                    .ok_or_else(|| {
+                        control_error(
+                            DesktopControlErrorCode::NotReady,
+                            "The selected pane has no live yttt agent snapshot",
+                        )
+                    })?;
+                self.command_center_validate_answer(source, request_id, answers)
+                    .map_err(|message| {
+                        control_error(DesktopControlErrorCode::InvalidRequest, message)
+                    })?;
+                let (runtime, host_request) = self
+                    .command_center_host_request(
+                        source,
+                        yttt_agent_core::AgentBoardCommand::AnswerQuestion {
+                            request_id: request_id.clone(),
+                            answers: answers.clone(),
+                        },
+                    )
+                    .map_err(|message| control_error(DesktopControlErrorCode::NotReady, message))?;
+                let reply = reply.clone();
+                let target = target.clone();
+                let request_id = request_id.clone();
+                cx.spawn(async move |_, _| {
+                    let result = match runtime.request(host_request).recv_async().await {
+                        Ok(Ok(yttt_protocol::Response::Applied)) => {
+                            Ok(DesktopControlResponse::AgentQuestionSubmitted {
+                                target,
+                                request_id,
+                            })
+                        }
+                        Ok(Ok(_)) => Err(control_error(
+                            DesktopControlErrorCode::OutcomeUnknown,
+                            "Host returned an unexpected agent-command response",
+                        )),
+                        Ok(Err(error)) => Err(control_error(
+                            DesktopControlErrorCode::Failed,
+                            error.to_string(),
+                        )),
+                        Err(_) => Err(control_error(
+                            DesktopControlErrorCode::OutcomeUnknown,
+                            "Host command acknowledgement was lost; answer will not be replayed",
+                        )),
+                    };
+                    let _ = reply.send(result);
+                })
+                .detach();
+                return Ok(None);
             }
             if let DesktopControlCommand::Send {
                 text,
@@ -339,7 +422,7 @@ impl WorkbenchView {
             }
             if !matches!(
                 self.foreground_input_owner_kind(),
-                InputOwnerKind::Workspace | InputOwnerKind::Editor
+                InputOwnerKind::Workspace | InputOwnerKind::CommandCenter | InputOwnerKind::Editor
             ) {
                 return Err(control_error(
                     DesktopControlErrorCode::Busy,

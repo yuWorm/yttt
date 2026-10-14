@@ -439,36 +439,38 @@ impl WorkbenchView {
             return div();
         };
         let Some(status) = runtime.control_status() else {
-            return div().child("连接已断开 · 未同步");
+            return div().child(self.ui_text.get(UiTextKey::ProfileControlDisconnected));
         };
         let appearance = self.theme_runtime();
         let observer = !runtime.is_controller();
         let identity = if runtime.is_remote() {
-            format!(
-                "远程 · {}",
-                runtime
-                    .remote_label()
-                    .and_then(|label| label.rsplit(" · ").next())
-                    .unwrap_or("Host")
-            )
+            let host = runtime
+                .remote_label()
+                .and_then(|label| label.rsplit(" · ").next())
+                .unwrap_or(self.ui_text.get(UiTextKey::TrayHost));
+            self.ui_text
+                .get(UiTextKey::ProfileControlRemoteIdentity)
+                .replace("{host}", host)
         } else {
-            "本地".to_string()
+            self.ui_text
+                .get(UiTextKey::ProfileControlLocalIdentity)
+                .to_string()
         };
         let state = if self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed {
-            " · 恢复失败"
+            self.ui_text.get(UiTextKey::ProfileControlRestoreFailed)
         } else if self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost {
-            " · 未同步，编辑已保留"
+            self.ui_text.get(UiTextKey::ProfileControlLost)
         } else if self.workspace_persistence.recoverable_draft_path.is_some() {
             self.ui_text
                 .get(UiTextKey::RemoteDeviceDraftRecoveryAvailable)
         } else if status.transfer.is_some() {
-            " · 正在交接"
+            self.ui_text.get(UiTextKey::ProfileControlTransferring)
         } else if self.workspace_is_loading() {
-            " · 正在恢复"
+            self.ui_text.get(UiTextKey::ProfileControlRestoring)
         } else if observer {
-            " · 只读"
+            self.ui_text.get(UiTextKey::ProfileControlReadOnly)
         } else if self.settings_save_pending() {
-            " · 正在保存"
+            self.ui_text.get(UiTextKey::ProfileControlSaving)
         } else {
             ""
         };
@@ -487,11 +489,11 @@ impl WorkbenchView {
             banner = banner.child(
                 yttt_button(
                     "profile-request-control",
-                    if force {
-                        "强制接管…"
+                    self.ui_text.get(if force {
+                        UiTextKey::RemoteForceContinue
                     } else {
-                        "在此继续"
-                    },
+                        UiTextKey::RemoteContinueHere
+                    }),
                     YtttButtonVariant::Secondary,
                     appearance.ui,
                     appearance.style,
@@ -506,7 +508,7 @@ impl WorkbenchView {
             banner = banner.child(
                 yttt_button(
                     "resolve-workspace-recovery",
-                    "恢复工作区…",
+                    self.ui_text.get(UiTextKey::ProfileControlRecoverWorkspace),
                     YtttButtonVariant::Secondary,
                     appearance.ui,
                     appearance.style,
@@ -534,7 +536,8 @@ impl WorkbenchView {
             banner = banner.child(
                 yttt_button(
                     "recover-full-workspace",
-                    "恢复完整工作区…",
+                    self.ui_text
+                        .get(UiTextKey::ProfileControlRecoverFullWorkspace),
                     YtttButtonVariant::Secondary,
                     appearance.ui,
                     appearance.style,
@@ -548,7 +551,7 @@ impl WorkbenchView {
         banner = banner.child(
             yttt_button(
                 "workspace-history",
-                "工作区历史…",
+                self.ui_text.get(UiTextKey::ProfileControlWorkspaceHistory),
                 YtttButtonVariant::Ghost,
                 appearance.ui,
                 appearance.style,

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId, ProjectId, TerminalSessionId};
 
 use crate::{
-    agent::{AgentSnapshotCursor, AgentSnapshotUpdate},
+    agent::{AgentCommandRequest, AgentSnapshotCursor, AgentSnapshotUpdate},
     project::{ProjectChange, ProjectRequest, ProjectResponse},
     ssh::{
         CredentialAnswer, CredentialChallenge, RemoteCommandRequest, RemoteCommandResponse,
@@ -187,6 +187,7 @@ pub enum Request {
         granted: bool,
     },
     RemoteAccess(crate::remote_access::RemoteAccessRequest),
+    AgentCommand(AgentCommandRequest),
 }
 
 impl Request {
@@ -207,6 +208,7 @@ impl Request {
             | Self::ReadAgentSnapshots { .. } => None,
             Self::SpawnTerminal { .. }
             | Self::TerminalInput(_)
+            | Self::AgentCommand(_)
             | Self::ResizeTerminal(_)
             | Self::SetTerminalQueryPalette(_)
             | Self::RequestTerminalControl { .. }
@@ -271,6 +273,7 @@ impl Request {
             | Self::AcknowledgeTerminalExit { session_id, .. }
             | Self::TerminateTerminal { session_id, .. } => session_id.to_string(),
             Self::TerminalInput(input) => input.session_id.to_string(),
+            Self::AgentCommand(request) => request.scope.pane_id.clone(),
             Self::ResizeTerminal(request) => request.session_id.to_string(),
             Self::ScrollTerminal(request) => request.session_id.to_string(),
             Self::ReadTerminalViewport(request) => request.session_id.to_string(),
@@ -381,7 +384,10 @@ pub enum Response {
     RemoteFile(RemoteFileResponse),
     RemoteCommand(RemoteCommandResponse),
     Project(ProjectResponse),
-    AgentSnapshots(Vec<AgentSnapshotUpdate>),
+    AgentSnapshots {
+        snapshots: Vec<AgentSnapshotUpdate>,
+        has_more: bool,
+    },
     Applied,
     TerminalControlPending {
         session_id: TerminalSessionId,

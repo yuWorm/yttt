@@ -13,6 +13,7 @@ pub const HELP: &str = r#"Usage: yttt ctl <resource> <action> [options]
   tabs list | create | focus | rename | close
   panes list | split | focus | rename | close | resize | send | read
   agents list | create | send
+  board show                   Opens the native multi-project command center
 
 Targets:
   --window ID                  Window ID from windows list (required if ambiguous)
@@ -34,6 +35,8 @@ Input:
   agents send <targets> --prompt-file PATH
   panes|agents send <targets> --stdin
   panes read <targets>        Reads the current terminal viewport
+  board answer <targets> --request ID --answers-json JSON
+                              Queues structured answers; inspect Agent confirmation
 
   --json                      Machine-readable response (errors go to stderr)
   --help                      Show this help
@@ -105,6 +108,16 @@ pub fn parse(args: &[OsString]) -> Result<CliInvocation, String> {
         ("tabs", "list") => DesktopControlCommand::Tabs,
         ("panes", "list") => DesktopControlCommand::Panes,
         ("agents", "list") => DesktopControlCommand::Agents,
+        ("board", "show") => DesktopControlCommand::ShowCommandCenter,
+        ("board", "answer") => DesktopControlCommand::AnswerAgentQuestion {
+            request_id: options.remove("--request").ok_or("--request is required")?,
+            answers: serde_json::from_str(
+                &options
+                    .remove("--answers-json")
+                    .ok_or("--answers-json is required")?,
+            )
+            .map_err(|error| format!("Invalid structured answers: {error}"))?,
+        },
         ("tabs", "create") => DesktopControlCommand::CreateShell {
             command: options.remove("--command").unwrap_or_default(),
             title: options.remove("--title"),
@@ -360,5 +373,15 @@ fn format_response(response: &DesktopControlResponse) -> String {
             format!("Host accepted {bytes} bytes for {}", target_label(target))
         }
         DesktopControlResponse::Text { text, .. } => text.clone(),
+        DesktopControlResponse::CommandCenterShown { window } => {
+            format!("Command center shown in window={}", clean(window))
+        }
+        DesktopControlResponse::AgentQuestionSubmitted { target, request_id } => {
+            format!(
+                "Answer queued for {} request={}; awaiting Agent confirmation",
+                target_label(target),
+                clean(request_id)
+            )
+        }
     }
 }

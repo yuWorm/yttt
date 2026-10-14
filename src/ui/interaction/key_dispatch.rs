@@ -14,7 +14,7 @@ pub fn workspace_runtime_command_allowed(
     context: CommandContext,
 ) -> bool {
     match owner {
-        InputOwnerKind::Workspace | InputOwnerKind::Editor => {
+        InputOwnerKind::Workspace | InputOwnerKind::CommandCenter | InputOwnerKind::Editor => {
             command.availability_for_context(context).enabled
         }
         InputOwnerKind::Palette

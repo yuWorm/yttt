@@ -17,8 +17,9 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::broadcast;
 use yttt_agent_core::{
-    AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentEventKind, AgentExitReason, AgentInstanceId,
-    AgentProcessExit, AgentProcessState, AgentProvider, AgentReducer, ProviderId,
+    AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentBoardCommand, AgentEventKind, AgentExitReason,
+    AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider, AgentQuestionState,
+    AgentReducer, ProviderId,
 };
 use yttt_agent_providers::{
     CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, builtin_providers,
@@ -26,9 +27,10 @@ use yttt_agent_providers::{
 };
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
+    FailureCode, ProtocolFailure,
     agent::{
-        AGENT_HOOK_DELIVERY_PROTOCOL, AgentHookAcknowledgement, AgentHookDelivery, AgentHookScope,
-        AgentSnapshotCursor, AgentSnapshotUpdate,
+        AGENT_HOOK_DELIVERY_PROTOCOL, AgentCommandRequest, AgentHookAcknowledgement,
+        AgentHookDelivery, AgentHookScope, AgentSnapshotCursor, AgentSnapshotUpdate,
     },
     terminal::TerminalSpawnSpec,
 };
@@ -51,6 +53,7 @@ const CONNECTION_QUEUE_CAPACITY: usize = 64;
 const TOKEN_HEADER: &str = "x-yttt-agent-hook-token";
 const SCOPE_HEADER: &str = "x-yttt-agent-hook-scope";
 const SCRIPT_DELIVERY_ID_HEADER: &str = "x-yttt-agent-hook-delivery-id";
+const QUESTION_POLL_FRESH_MILLIS: u64 = 5_000;
 const ENVIRONMENT_VARIABLES: [&str; 3] = [
     "YTTT_AGENT_HOOK_ENDPOINT",
     "YTTT_AGENT_HOOK_TOKEN",
@@ -84,6 +87,7 @@ struct AgentRecord {
     child_session_ids: VecDeque<String>,
     script_delivery_ids: VecDeque<String>,
     terminal_exited: bool,
+    question_polls: HashMap<String, u64>,
 }
 
 #[derive(Clone)]
@@ -456,6 +460,9 @@ impl HostAgentHookRuntime {
                         AgentReducer::new(AgentInstanceId::random(), provider_id, now);
                     reducer.process_starting(scope.generation, now);
                     reducer.process_started(scope.generation, now);
+                    if let Some(previous) = records.get_mut(&address) {
+                        reducer.retain_board(previous.reducer.take_board(), now);
+                    }
                     records.insert(
                         address.clone(),
                         AgentRecord {
@@ -468,6 +475,7 @@ impl HostAgentHookRuntime {
                             child_session_ids: VecDeque::new(),
                             script_delivery_ids,
                             terminal_exited: false,
+                            question_polls: HashMap::new(),
                         },
                     );
                     let record = records
@@ -531,6 +539,12 @@ impl HostAgentHookRuntime {
         {
             let mut records = self.state.records.lock();
             for record in records.values_mut() {
+                record
+                    .question_polls
+                    .retain(|_, polled| now.saturating_sub(*polled) <= QUESTION_POLL_FRESH_MILLIS);
+                if !record.question_polls.is_empty() {
+                    continue;
+                }
                 if record
                     .reducer
                     .decay_stale_activity(now, AGENT_ACTIVITY_STALE_AFTER_MILLIS)
@@ -579,6 +593,55 @@ impl HostAgentHookRuntime {
         snapshots
     }
 
+    /// Recovery pages stay below the frame budget even with retained conversation history.
+    pub fn snapshot_page(
+        &self,
+        acknowledged: &[AgentSnapshotCursor],
+    ) -> (Vec<AgentSnapshotUpdate>, bool) {
+        let records = self.state.records.lock();
+        let mut pending: Vec<_> = records
+            .values()
+            .filter(|record| {
+                !acknowledged.iter().any(|cursor| {
+                    cursor.scope == record.scope
+                        && cursor.host_epoch == self.state.host_epoch
+                        && cursor.sequence >= record.sequence
+                })
+            })
+            .collect();
+        pending.sort_by(|left, right| {
+            (
+                &left.scope.project_id,
+                &left.scope.tab_id,
+                &left.scope.pane_id,
+            )
+                .cmp(&(
+                    &right.scope.project_id,
+                    &right.scope.tab_id,
+                    &right.scope.pane_id,
+                ))
+        });
+        let mut page = Vec::new();
+        let mut bytes = 0_usize;
+        for record in pending {
+            let mut counter = crate::CountingWriter::default();
+            serde_json::to_writer(&mut counter, record.reducer.snapshot())
+                .expect("Agent snapshot must serialize");
+            let size = counter.0
+                + record.scope.project_id.len()
+                + record.scope.tab_id.len()
+                + record.scope.pane_id.len()
+                + record.terminal_session_id.as_str().len()
+                + 512;
+            if !page.is_empty() && bytes.saturating_add(size) > 8 * 1024 * 1024 {
+                return (page, true);
+            }
+            bytes = bytes.saturating_add(size);
+            page.push(current_snapshot(self.state.host_epoch, record));
+        }
+        (page, false)
+    }
+
     pub fn active_agent_count(&self) -> usize {
         self.state
             .records
@@ -586,6 +649,60 @@ impl HostAgentHookRuntime {
             .values()
             .filter(|record| record.reducer.snapshot().process_state != AgentProcessState::Exited)
             .count()
+    }
+
+    pub fn command(&self, request: AgentCommandRequest) -> Result<(), ProtocolFailure> {
+        if request.host_epoch != self.state.host_epoch {
+            return Err(ProtocolFailure::new(
+                FailureCode::StaleEpoch,
+                "agent Host has changed",
+                false,
+            ));
+        }
+        let now = now_millis();
+        let update = {
+            let mut records = self.state.records.lock();
+            let record = records
+                .get_mut(&AgentAddress::from(&request.scope))
+                .ok_or_else(|| {
+                    ProtocolFailure::new(
+                        FailureCode::NotFound,
+                        "agent is no longer available",
+                        false,
+                    )
+                })?;
+            if record.scope != request.scope
+                || record.reducer.snapshot().instance_id != request.instance_id
+            {
+                return Err(ProtocolFailure::new(
+                    FailureCode::StaleEpoch,
+                    "agent execution has changed",
+                    false,
+                ));
+            }
+            if let AgentBoardCommand::AnswerQuestion { request_id, .. } = &request.command {
+                if record.terminal_exited
+                    || record.reducer.snapshot().process_state != AgentProcessState::Running
+                    || record
+                        .question_polls
+                        .get(request_id)
+                        .is_none_or(|at| now.saturating_sub(*at) > QUESTION_POLL_FRESH_MILLIS)
+                {
+                    return Err(ProtocolFailure::new(
+                        FailureCode::Conflict,
+                        "question answer channel is unavailable; no answer was sent",
+                        false,
+                    ));
+                }
+            }
+            record
+                .reducer
+                .board_command(request.command, now)
+                .map_err(|message| ProtocolFailure::new(FailureCode::Conflict, message, false))?;
+            snapshot_update(self.state.host_epoch, record)
+        };
+        let _ = self.state.events.send(update);
+        Ok(())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentSnapshotUpdate> {
@@ -663,6 +780,7 @@ enum HookIngestOutcome {
         acknowledgement: AgentHookAcknowledgement,
         pending: bool,
     },
+    QuestionPoll(Value),
 }
 
 struct DeliveryApplication {
@@ -686,6 +804,11 @@ fn handle_connection(mut stream: TcpStream, state: &AgentState) {
         .and_then(|request| ingest_request(state, request));
     let (status, reason, body) = match request {
         Ok(HookIngestOutcome::Unsequenced) => (204, "No Content", Vec::new()),
+        Ok(HookIngestOutcome::QuestionPoll(response)) => (
+            200,
+            "OK",
+            serde_json::to_vec(&response).expect("question poll response must serialize"),
+        ),
         Ok(HookIngestOutcome::Sequenced {
             acknowledgement,
             pending,
@@ -741,6 +864,9 @@ fn ingest_request(
         .get(&request.scope)
         .cloned()
         .ok_or(HttpRequestError::Unauthorized)?;
+    if request.event == "question_poll" {
+        return poll_question(state, request);
+    }
     let provider = state
         .providers
         .get(&request.source)
@@ -874,6 +1000,62 @@ fn ingest_request(
     Ok(outcome)
 }
 
+fn poll_question(
+    state: &AgentState,
+    request: DecodedHookRequest,
+) -> Result<HookIngestOutcome, HttpRequestError> {
+    if request.source != "omp" || request.delivery.is_some() {
+        return Err(HttpRequestError::Invalid);
+    }
+    let session_id =
+        payload_string(&request.payload, &["sessionId"]).ok_or(HttpRequestError::Invalid)?;
+    let request_id =
+        payload_string(&request.payload, &["requestId"]).ok_or(HttpRequestError::Invalid)?;
+    let mut records = state.records.lock();
+    let record = records
+        .get_mut(&AgentAddress::from(&request.scope))
+        .ok_or(HttpRequestError::NotFound)?;
+    if record.scope != request.scope
+        || record.provider_session_id.as_deref() != Some(session_id.as_str())
+        || record.reducer.snapshot().provider_id.as_str() != "omp"
+    {
+        return Err(HttpRequestError::Unauthorized);
+    }
+    let question = record
+        .reducer
+        .snapshot()
+        .board
+        .questions
+        .iter()
+        .find(|question| question.request.id == request_id)
+        .ok_or(HttpRequestError::NotFound)?;
+    if !question.request.answerable {
+        return Err(HttpRequestError::Unauthorized);
+    }
+    let available = !record.terminal_exited
+        && record.reducer.snapshot().process_state == AgentProcessState::Running;
+    let question_state = if available {
+        question.state
+    } else {
+        AgentQuestionState::Unavailable
+    };
+    let response = serde_json::json!({
+        "state": question_state,
+        "answers": if question_state == AgentQuestionState::Submitted { question.answers.as_slice() } else { &[] },
+    });
+    if available
+        && matches!(
+            question_state,
+            AgentQuestionState::Pending | AgentQuestionState::Submitted
+        )
+    {
+        record.question_polls.insert(request_id, now_millis());
+    } else {
+        record.question_polls.remove(&request_id);
+    }
+    Ok(HookIngestOutcome::QuestionPoll(response))
+}
+
 fn new_hook_record(
     scope: AgentHookScope,
     terminal_session_id: TerminalSessionId,
@@ -897,6 +1079,7 @@ fn new_hook_record(
         child_session_ids: VecDeque::new(),
         script_delivery_ids: VecDeque::new(),
         terminal_exited: terminal_exit.is_some(),
+        question_polls: HashMap::new(),
     }
 }
 
@@ -1092,6 +1275,8 @@ fn restart_hook_record(
         record.child_session_ids.clear();
     }
     let mut reducer = AgentReducer::new(AgentInstanceId::random(), provider_id, now);
+    reducer.retain_board(record.reducer.take_board(), now);
+    record.question_polls.clear();
     reducer.process_starting(record.scope.generation, now);
     reducer.process_started(record.scope.generation, now);
     if let Some(exit) = terminal_exit {

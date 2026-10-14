@@ -1533,6 +1533,7 @@ fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &m
         current_action: None,
         last_action_failed: false,
         children: Vec::new(),
+        board: Default::default(),
         session: None,
         process_exit: None,
         state_started_at: 1,

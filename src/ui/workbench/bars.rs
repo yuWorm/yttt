@@ -18,6 +18,7 @@ use crate::{
     model::project::ProjectLocation,
     ui::{
         editor::{EditorDiagnosticSeverity, WorkItemId},
+        i18n::UiTextKey,
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
         terminal::status::{agent_status_label, project_agent_status},
         theme::{UiStyle, WorkbenchTheme, current_ui_style, current_workbench_theme},
@@ -159,6 +160,53 @@ pub(super) enum BarUnavailableReason {
 }
 
 impl WorkbenchView {
+    pub(super) fn command_center_window_bar_sections(&self, cx: &mut Context<Self>) -> BarSections {
+        let settings = BarModuleSettings::default();
+        let actions = [
+            (
+                ShellBarModule::CommandPalette,
+                IconName::Search,
+                CommandId::CommandPaletteOpen,
+                UiTextKey::CommandPalette,
+            ),
+            (
+                ShellBarModule::Settings,
+                IconName::Settings,
+                CommandId::SettingsOpen,
+                UiTextKey::SettingsWindowTitle,
+            ),
+        ];
+        let right = actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, (module, icon, action, key))| {
+                let mut view = BarModuleView::text("");
+                view.icon = Some(icon);
+                view.action = Some(action);
+                view.tooltip = Some(self.ui_text.get(key).to_string());
+                render_bar_module(
+                    BarHost::Window,
+                    "right",
+                    index,
+                    &module,
+                    settings,
+                    view,
+                    true,
+                    cx,
+                )
+            })
+            .collect();
+        BarSections {
+            left: vec![
+                div()
+                    .child(self.ui_text.get(UiTextKey::AppName))
+                    .into_any_element(),
+            ],
+            center: Vec::new(),
+            right,
+        }
+    }
+
     pub(super) fn shell_bar_sections(
         &mut self,
         window: &mut Window,

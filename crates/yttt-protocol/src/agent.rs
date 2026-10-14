@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use yttt_agent_core::AgentSnapshot;
+use yttt_agent_core::{AgentBoardCommand, AgentInstanceId, AgentSnapshot};
 use yttt_core::model::ids::TerminalSessionId;
 
 pub const AGENT_HOOK_DELIVERY_PROTOCOL: u16 = 1;
@@ -43,4 +43,13 @@ pub struct AgentSnapshotUpdate {
     pub host_epoch: u64,
     pub sequence: u64,
     pub snapshot: AgentSnapshot,
+}
+
+/// Fences an interaction to the exact Host, terminal generation and agent instance shown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCommandRequest {
+    pub scope: AgentHookScope,
+    pub host_epoch: u64,
+    pub instance_id: AgentInstanceId,
+    pub command: AgentBoardCommand,
 }

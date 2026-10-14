@@ -30,7 +30,17 @@ fn route_control(call: crate::desktop_shell::DesktopControlCall, cx: &mut App) {
         return;
     }
     let mut windows = Vec::new();
-    for handle in cx.windows() {
+    let handles = if matches!(
+        &call.request.command,
+        DesktopControlCommand::ShowCommandCenter
+    ) && call.request.window.is_none()
+        && call.request.project.is_none()
+    {
+        cx.window_stack().unwrap_or_else(|| cx.windows())
+    } else {
+        cx.windows()
+    };
+    for handle in handles {
         let view = handle
             .update(cx, |_, window, cx| {
                 window.root::<ComponentRoot>().flatten().and_then(|root| {
@@ -55,6 +65,14 @@ fn route_control(call: crate::desktop_shell::DesktopControlCall, cx: &mut App) {
                 windows.push((handle, view, id));
             }
         }
+    }
+    if matches!(
+        &call.request.command,
+        DesktopControlCommand::ShowCommandCenter
+    ) && call.request.window.is_none()
+        && call.request.project.is_none()
+    {
+        windows.truncate(1);
     }
     if call.request.command.is_list() {
         let mut result = match call.request.command {

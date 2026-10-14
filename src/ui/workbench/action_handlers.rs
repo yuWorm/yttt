@@ -104,6 +104,9 @@ impl WorkbenchView {
         page: ProjectPanelPage,
         cx: &mut Context<Self>,
     ) {
+        if self.command_center_is_active() {
+            return;
+        }
         self.project.active_panel_page = page;
         self.project.pending_project_tree_focus = true;
         cx.notify();

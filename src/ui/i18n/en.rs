@@ -101,6 +101,197 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AgentSessionsModel => "Model",
         UiTextKey::AgentSessionsTranscript => "Transcript",
         UiTextKey::AgentSessionsUntitled => "Untitled session",
+        UiTextKey::CommandCenterTitle => "Command center",
+        UiTextKey::CommandCenterSubtitle => "projects / tasks / agent activity",
+        UiTextKey::CommandCenterHostLive => "Host live",
+        UiTextKey::CommandCenterHostLiveReadOnly => "Host live · read-only",
+        UiTextKey::CommandCenterHostDisconnectedRetained => "Host disconnected · retained history",
+        UiTextKey::CommandCenterHostUnavailableRetained => "Host unavailable · retained history",
+        UiTextKey::CommandCenterNoRecords => {
+            "No yttt-managed agent records are available in this Host or workspace."
+        }
+        UiTextKey::CommandCenterProjectsCount => "projects {count}",
+        UiTextKey::CommandCenterTasksCount => "tasks {count}",
+        UiTextKey::CommandCenterQuestionsCount => "questions {count}",
+        UiTextKey::CommandCenterExecutionsCount => "executions {count}",
+        UiTextKey::CommandCenterStablePositions => {
+            "Stable project positions · completed and resolved records stay in place"
+        }
+        UiTextKey::CommandCenterSelectionHint => {
+            "Select a task, question, or execution to link the lower panels"
+        }
+        UiTextKey::CommandCenterNoReportedTasks => "no reported tasks",
+        UiTextKey::CommandCenterCompletedTasks => "completed {completed}/{total}",
+        UiTextKey::CommandCenterProviderPlanNotReported => "provider plan not reported",
+        UiTextKey::CommandCenterProviderTaskPlan => "provider task plan",
+        UiTextKey::CommandCenterTaskAccepted => "accepted",
+        UiTextKey::CommandCenterTaskRetired => "retired",
+        UiTextKey::CommandCenterPlanPending => "pending",
+        UiTextKey::CommandCenterPlanWorking => "working",
+        UiTextKey::CommandCenterPlanCompleted => "completed",
+        UiTextKey::CommandCenterPlanBlocked => "blocked",
+        UiTextKey::CommandCenterPlanAbandoned => "abandoned",
+        UiTextKey::CommandCenterPlanUnknown => "unknown",
+        UiTextKey::CommandCenterQuestions => "Questions",
+        UiTextKey::CommandCenterRecordsCount => "records {count}",
+        UiTextKey::CommandCenterNoQuestions => "No provider question records have been reported.",
+        UiTextKey::CommandCenterDurationHours => "{value}h",
+        UiTextKey::CommandCenterDurationMinutes => "{value}m",
+        UiTextKey::CommandCenterDurationSeconds => "{value}s",
+        UiTextKey::CommandCenterOptionPreview => "preview",
+        UiTextKey::CommandCenterQueueAnswer => "Queue answer",
+        UiTextKey::CommandCenterQueuedHint => "Queued is not provider acceptance.",
+        UiTextKey::CommandCenterLinkedConversation => "Linked conversation",
+        UiTextKey::CommandCenterOpenSession => "Open session",
+        UiTextKey::CommandCenterOpenSessionHint => {
+            "Open the owning project, tab, and terminal. Child agents open their hosting session."
+        }
+        UiTextKey::CommandCenterSessionNotOpen => {
+            "The corresponding session is not open in this window."
+        }
+        UiTextKey::CommandCenterOpenSessionFailed => "Could not open the session",
+        UiTextKey::CommandCenterNoSelection => "no selection",
+        UiTextKey::CommandCenterSelectRecord => "Select a task, question, or execution.",
+        UiTextKey::CommandCenterNoConversation => {
+            "No conversation records were reported for this execution."
+        }
+        UiTextKey::CommandCenterYou => "you",
+        UiTextKey::CommandCenterAgent => "agent",
+        UiTextKey::CommandCenterMessageTruncated => "Provider truncated this retained message.",
+        UiTextKey::CommandCenterPromptHint => "Safe prompt to this idle agent",
+        UiTextKey::CommandCenterSend => "Send",
+        UiTextKey::CommandCenterAcceptCompletedTask => "Accept completed task",
+        UiTextKey::CommandCenterAcceptHint => {
+            "Human acceptance remains separate from provider completion."
+        }
+        UiTextKey::CommandCenterAcceptRetainedReadOnly => {
+            "Retained history is read-only; this task cannot be accepted here."
+        }
+        UiTextKey::CommandCenterAcceptDesktopReadOnly => {
+            "This desktop is read-only; task acceptance is disabled."
+        }
+        UiTextKey::CommandCenterConfirmTerminateTerminal => "Confirm terminate terminal",
+        UiTextKey::CommandCenterTerminateTerminal => "Terminate terminal (all work in pane)",
+        UiTextKey::CommandCenterTerminateHint => {
+            "This closes the terminal, not one derived execution."
+        }
+        UiTextKey::CommandCenterInputFailed => "Could not send terminal input",
+        UiTextKey::CommandCenterTerminateDesktopReadOnly => {
+            "This desktop is read-only; terminal termination is disabled."
+        }
+        UiTextKey::CommandCenterExecutionSummary => {
+            "session summary (provider did not report execution records)"
+        }
+        UiTextKey::CommandCenterNoExecutions => "No retained execution records.",
+        UiTextKey::CommandCenterExecutionRecords => "Execution records",
+        UiTextKey::CommandCenterReportedCount => "reported {count}",
+        UiTextKey::CommandCenterAgentTask => "Agent / task",
+        UiTextKey::CommandCenterState => "state",
+        UiTextKey::CommandCenterDuration => "duration",
+        UiTextKey::CommandCenterRoot => "root",
+        UiTextKey::CommandCenterOptionalAnswerPlaceholder => "Optional additional answer",
+        UiTextKey::CommandCenterPromptPlaceholder => "Send a follow-up to the selected idle agent",
+        UiTextKey::CommandCenterQuestionNoLongerRetained => {
+            "Question is no longer retained by this Host."
+        }
+        UiTextKey::CommandCenterAnswerAllQuestions => {
+            "Answer every question before queueing the request."
+        }
+        UiTextKey::CommandCenterAnswerRequired => {
+            "Answer every question with an option or additional text."
+        }
+        UiTextKey::CommandCenterSendingToHost => "Sending to Host…",
+        UiTextKey::CommandCenterQueuedWaitingProvider => {
+            "Queued by Host; waiting for provider confirmation."
+        }
+        UiTextKey::CommandCenterUnexpectedCommandResponse => {
+            "Host returned an unexpected command response."
+        }
+        UiTextKey::CommandCenterHostRejectedCommand => "Host rejected command",
+        UiTextKey::CommandCenterCommandChannelClosed => {
+            "Host command channel closed; no command will be replayed."
+        }
+        UiTextKey::CommandCenterHostUnavailableReadOnly => {
+            "Host is unavailable; retained history is read-only."
+        }
+        UiTextKey::CommandCenterLiveSnapshotRequired => {
+            "Only a live Host snapshot can receive this command."
+        }
+        UiTextKey::CommandCenterDesktopReadOnlyCommands => {
+            "This desktop is read-only; Host commands are disabled."
+        }
+        UiTextKey::CommandCenterQuestionNotInSelectedPane => {
+            "Question does not belong to the selected live agent pane."
+        }
+        UiTextKey::CommandCenterQuestionNotAwaiting => {
+            "Question is {state}, not awaiting an answer."
+        }
+        UiTextKey::CommandCenterProviderNoAnswerChannel => {
+            "This provider did not expose an active answer channel."
+        }
+        UiTextKey::CommandCenterAnswerRejected => "Answer rejected",
+        UiTextKey::CommandCenterPromptRequired => "Enter a prompt before sending.",
+        UiTextKey::CommandCenterSessionNoLongerRetained => {
+            "Selected session is no longer retained."
+        }
+        UiTextKey::CommandCenterPromptOtherWindow => {
+            "This agent is live in another window; prompt it from its owning terminal."
+        }
+        UiTextKey::CommandCenterAwaitingHostInput => "Waiting for Host input acknowledgement…",
+        UiTextKey::CommandCenterPromptAccepted => {
+            "Host accepted terminal input; agent processing is observed separately."
+        }
+        UiTextKey::CommandCenterUnexpectedInputResponse => {
+            "Host returned an unexpected input response."
+        }
+        UiTextKey::CommandCenterHostRejectedInput => "Host rejected terminal input",
+        UiTextKey::CommandCenterInputAcknowledgementLost => {
+            "Host acknowledgement was lost; input will not be replayed."
+        }
+        UiTextKey::CommandCenterTerminationConfirmed => {
+            "Host confirmed terminal termination; all work in this pane is ending."
+        }
+        UiTextKey::CommandCenterHostRejectedTermination => "Host rejected terminal termination",
+        UiTextKey::CommandCenterQuestionSubmitted => {
+            "Queued with Host; waiting for provider confirmation."
+        }
+        UiTextKey::CommandCenterQuestionAnswered => {
+            "Provider recorded this answer; the retained card is read-only."
+        }
+        UiTextKey::CommandCenterQuestionCancelled => {
+            "Provider cancelled this question; the retained card is read-only."
+        }
+        UiTextKey::CommandCenterQuestionUnavailable => {
+            "Provider answer channel is unavailable; retained history is read-only."
+        }
+        UiTextKey::CommandCenterQuestionLiveSnapshotRequired => {
+            "Only a live Host snapshot can answer this retained question."
+        }
+        UiTextKey::CommandCenterDesktopReadOnlyAnswer => {
+            "This desktop is read-only; answering is disabled."
+        }
+        UiTextKey::CommandCenterPromptRetainedReadOnly => {
+            "Retained history is read-only; the original terminal is not live here."
+        }
+        UiTextKey::CommandCenterDesktopReadOnlyPrompt => {
+            "This desktop is read-only; prompting is disabled."
+        }
+        UiTextKey::CommandCenterAgentNotRunning => "Agent process is not running.",
+        UiTextKey::CommandCenterAgentBusy => {
+            "Agent is busy; wait for an idle or completed turn before prompting."
+        }
+        UiTextKey::CommandCenterTurnIdle => "idle",
+        UiTextKey::CommandCenterTurnWorking => "working",
+        UiTextKey::CommandCenterTurnWaiting => "waiting",
+        UiTextKey::CommandCenterTurnCompleted => "completed",
+        UiTextKey::CommandCenterTurnFailed => "failed",
+        UiTextKey::CommandCenterTurnInterrupted => "interrupted",
+        UiTextKey::CommandCenterTurnUnknown => "unknown",
+        UiTextKey::CommandCenterQuestionAwaitingAnswer => "awaiting answer",
+        UiTextKey::CommandCenterQuestionQueued => "queued",
+        UiTextKey::CommandCenterQuestionAnsweredStatus => "answered",
+        UiTextKey::CommandCenterQuestionCancelledStatus => "cancelled",
+        UiTextKey::CommandCenterQuestionUnavailableStatus => "unavailable",
         UiTextKey::ProjectFilesShow => "Show Project Panel",
         UiTextKey::ProjectFilesHide => "Hide Project Panel",
         UiTextKey::ProjectFilesRefresh => "Refresh",
@@ -627,6 +818,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsCopyDraft => "Copy draft",
         UiTextKey::RemoteDeviceDraftRecoveryAvailable => " · Device draft recovery available",
         UiTextKey::RemoteRecoverDeviceDrafts => "Recover device drafts",
+        UiTextKey::ProfileControlDisconnected => "Connection disconnected · not synchronized",
+        UiTextKey::ProfileControlRemoteIdentity => "Remote · {host}",
+        UiTextKey::ProfileControlLocalIdentity => "Local",
+        UiTextKey::ProfileControlRestoreFailed => " · Restore failed",
+        UiTextKey::ProfileControlLost => " · Not synchronized; edits retained",
+        UiTextKey::ProfileControlTransferring => " · Transferring control",
+        UiTextKey::ProfileControlRestoring => " · Restoring",
+        UiTextKey::ProfileControlReadOnly => " · Read-only",
+        UiTextKey::ProfileControlSaving => " · Saving",
+        UiTextKey::ProfileControlRecoverWorkspace => "Recover workspace…",
+        UiTextKey::ProfileControlRecoverFullWorkspace => "Recover full workspace…",
+        UiTextKey::ProfileControlWorkspaceHistory => "Workspace history…",
         UiTextKey::SettingsUseHostDefault => "Restore environment default",
         UiTextKey::SettingsSectionApplicationInteraction => "Application & interaction",
         UiTextKey::SettingsSectionStartupNotifications => "Startup & notifications",

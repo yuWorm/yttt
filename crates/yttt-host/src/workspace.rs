@@ -24,7 +24,7 @@ use yttt_protocol::{
 const WORKSPACE_SCHEMA_VERSION: u16 = 2;
 const MAX_WORKSPACES: usize = 128;
 const MAX_COMPLETED_OPERATIONS: usize = 128;
-const MAX_WORKSPACE_STATE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_WORKSPACE_STATE_BYTES: usize = 24 * 1024 * 1024;
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BROWSE_ENTRIES: usize = 4096;
 

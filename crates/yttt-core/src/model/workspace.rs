@@ -12,10 +12,18 @@ use crate::model::{
     split_tree::{FocusDirection, ResizeDirection},
 };
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum WorkspaceNavigation {
+    #[default]
+    Dashboard,
+    CommandCenter,
+    Project(ProjectId),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Workspace {
     opened_projects: Vec<OpenedProject>,
-    selected_project_id: Option<ProjectId>,
+    navigation: WorkspaceNavigation,
 }
 
 /// The validated, serializable state needed to restore one workspace exactly.
@@ -35,7 +43,7 @@ impl Workspace {
     pub fn persisted_state(&self) -> WorkspaceState {
         WorkspaceState {
             opened_projects: self.opened_projects.clone(),
-            selected_project_id: self.selected_project_id.clone(),
+            selected_project_id: self.selected_project_id().cloned(),
         }
     }
 
@@ -60,9 +68,14 @@ impl Workspace {
                 selected_project_id.as_str().to_string(),
             ));
         }
+        let navigation = match state.selected_project_id {
+            Some(project_id) => WorkspaceNavigation::Project(project_id),
+            None if state.opened_projects.is_empty() => WorkspaceNavigation::Dashboard,
+            None => WorkspaceNavigation::CommandCenter,
+        };
         Ok(Self {
             opened_projects: state.opened_projects,
-            selected_project_id: state.selected_project_id,
+            navigation,
         })
     }
 
@@ -114,7 +127,20 @@ impl Workspace {
     }
 
     pub fn selected_project_id(&self) -> Option<&ProjectId> {
-        self.selected_project_id.as_ref()
+        match &self.navigation {
+            WorkspaceNavigation::Dashboard | WorkspaceNavigation::CommandCenter => None,
+            WorkspaceNavigation::Project(project_id) => Some(project_id),
+        }
+    }
+
+    pub fn navigation(&self) -> &WorkspaceNavigation {
+        &self.navigation
+    }
+
+    pub fn select_command_center(&mut self) {
+        if !self.opened_projects.is_empty() {
+            self.navigation = WorkspaceNavigation::CommandCenter;
+        }
     }
 
     pub fn project(&self, project_id: &ProjectId) -> Option<&OpenedProject> {
@@ -136,7 +162,7 @@ impl Workspace {
             location,
         } = descriptor;
         if self.project(&id).is_some() {
-            self.selected_project_id = Some(id.clone());
+            self.navigation = WorkspaceNavigation::Project(id.clone());
             return Ok(id);
         }
         let selected_tab_id = default_tab_id(&layout).unwrap_or_default();
@@ -150,7 +176,7 @@ impl Workspace {
             selected_tab_id,
             tab_states,
         });
-        self.selected_project_id = Some(id.clone());
+        self.navigation = WorkspaceNavigation::Project(id.clone());
 
         Ok(id)
     }
@@ -182,7 +208,7 @@ impl Workspace {
             ));
         }
 
-        self.selected_project_id = Some(project_id.clone());
+        self.navigation = WorkspaceNavigation::Project(project_id.clone());
         Ok(())
     }
 
@@ -946,8 +972,8 @@ impl Workspace {
 
     fn selected_project_mut(&mut self) -> Result<&mut OpenedProject, WorkspaceError> {
         let project_id = self
-            .selected_project_id
-            .clone()
+            .selected_project_id()
+            .cloned()
             .ok_or(WorkspaceError::NoSelectedProject)?;
 
         self.opened_projects
@@ -965,11 +991,14 @@ impl Workspace {
 
     fn remove_project_at(&mut self, index: usize) -> ClosedProject {
         let project = self.opened_projects.remove(index);
-        if self.selected_project_id.as_ref() == Some(&project.id) {
-            self.selected_project_id = self
+        if self.opened_projects.is_empty() {
+            self.navigation = WorkspaceNavigation::Dashboard;
+        } else if self.selected_project_id() == Some(&project.id) {
+            self.navigation = self
                 .opened_projects
                 .first()
-                .map(|project| project.id.clone());
+                .map(|project| WorkspaceNavigation::Project(project.id.clone()))
+                .unwrap_or_default();
         }
 
         ClosedProject {

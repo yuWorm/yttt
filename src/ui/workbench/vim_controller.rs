@@ -176,7 +176,7 @@ impl WorkbenchView {
             InputOwnerKind::ContextMenu | InputOwnerKind::Popover => {
                 return WorkbenchSurface::Dialog;
             }
-            InputOwnerKind::Workspace | InputOwnerKind::Editor => {}
+            InputOwnerKind::Workspace | InputOwnerKind::CommandCenter | InputOwnerKind::Editor => {}
         }
 
         if self.pending_projects_focus {
@@ -193,7 +193,6 @@ impl WorkbenchView {
         }
 
         if self.projects_focus_active
-            && !self.workspace.opened_projects().is_empty()
             && self
                 .focus_handle
                 .as_ref()
@@ -236,6 +235,9 @@ impl WorkbenchView {
             | InputOwnerKind::ContextMenu
             | InputOwnerKind::Popover => return VimCapture::Suspended,
             InputOwnerKind::Dialog => return VimCapture::ForceInsert,
+            InputOwnerKind::CommandCenter if self.command_center_input_is_focused(window, cx) => {
+                return VimCapture::ForceInsert;
+            }
             InputOwnerKind::Settings if self.settings_text_input_is_focused(window, cx) => {
                 return VimCapture::ForceInsert;
             }
