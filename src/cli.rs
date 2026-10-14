@@ -13,7 +13,7 @@ pub const HELP: &str = r#"Usage: yttt ctl <resource> <action> [options]
   tabs list | create | focus | rename | close
   panes list | split | focus | rename | close | resize | send | read
   agents list | create | send
-  board show                   Opens the native multi-project command center
+  board show                   Opens the native multi-project Dispatch center
 
 Targets:
   --window ID                  Window ID from windows list (required if ambiguous)
@@ -374,7 +374,7 @@ fn format_response(response: &DesktopControlResponse) -> String {
         }
         DesktopControlResponse::Text { text, .. } => text.clone(),
         DesktopControlResponse::CommandCenterShown { window } => {
-            format!("Command center shown in window={}", clean(window))
+            format!("Dispatch center shown in window={}", clean(window))
         }
         DesktopControlResponse::AgentQuestionSubmitted { target, request_id } => {
             format!(

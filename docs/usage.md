@@ -14,8 +14,8 @@ Project
 ```
 
 With no projects open, the original Dashboard provides open-directory, recent-project,
-restoration, and global actions; it does not show the project sidebar or Command center.
-After opening a project, the sidebar keeps **Command center** above the project list.
+restoration, and global actions; it does not show the project sidebar or Dispatch center.
+After opening a project, the sidebar keeps **Dispatch center** above the project list.
 Entering this global page clears the project selection without closing projects or their
 background sessions. Closing the last project returns to Dashboard. Recent projects are
 reachable from the project palette, not shown by default.
@@ -51,7 +51,7 @@ install hooks. Projects opened afterward inherit the Host default unless they pr
 or personal layout override.
 
 Normal application launches remain local. The project status bar identifies the current
-environment; Command center uses its connection banner instead. Connecting a remote service
+environment; Dispatch center uses its connection banner instead. Connecting a remote service
 never replaces the current local window.
 Use **Remote services** on the homepage to open one management window with two tabs:
 **Remote connections** and **Remote access to this computer**. The first tab lists saved SSH
@@ -1303,21 +1303,21 @@ the generic Agent glyph, and hovering either icon identifies it. Clicking an Age
 project, tab, and pane. Project Agent groups can be collapsed; the collapsed project IDs and the
 latest bounded Agent snapshots are persisted.
 
-### Command center
+### Dispatch center
 
-After opening at least one project, select **Command center** (**指挥中心** in Chinese)
+After opening at least one project, select **Dispatch center** (**调度中心** in Chinese)
 above the project list. This fixed sidebar entry remains available when the sidebar is
 collapsed. It opens a workspace-level page with no project selected: the project sidebar
 stays visible, while project tabs, file panels, editors, terminals, and the project status
 bar are hidden. Global command-palette/settings actions and connection/control notices
 remain available. With no projects open, Dashboard remains the homepage and the board
-shortcut does not open Command center.
+shortcut does not open Dispatch center.
 
 Selecting a project restores its own work area without restarting its processes. Opening the
 board preserves running Agents, terminal sessions, editor state, and unsent board drafts.
 `Cmd+Shift+B` on macOS (`Ctrl+Shift+B` elsewhere) switches between the board and the previous
 available project. Workspace restoration distinguishes Dashboard with no open projects
-from Command center with open projects but no selection.
+from Dispatch center with open projects but no selection.
 Project-scoped shortcuts cannot modify a hidden project from the board.
 
 The same page shows the project/task matrix above **Needs attention**, linked conversation/composer,
@@ -1329,11 +1329,30 @@ Project positions do not reorder when Agent states change. Cards summarize repor
 active Agents, and pending questions, and group tasks by their owning tab/pane.
 These counts are observations, not estimates of project completion.
 
-Completed, abandoned, and retired tasks are retained in collapsible project history. Current
-Agent activity appears before execution history. A selected historical record remains accessible
-when history is folded. Selecting a board row only links these regions; it does not select that
-project in the sidebar. Only yttt-managed Agent scopes in the connected Host and retained workspace
-snapshots are included; this is not a machine-wide process monitor.
+Each task row shows tokens from its associated execution record: **Run … tok** (Chinese:
+**执行 … tok**), or **Last req. … tok** for Claude's last-request measurements. **Tokens —**
+means no reported value, while a reported zero remains **0**. Hover the value for exact counts
+and available input/output/cache tokens, cost, and duration. This is execution-associated
+usage, not a per-todo spend allocation: tasks sharing an execution share its metrics and
+must not be summed. No unrelated run or session total is used as a fallback.
+
+Executions with reported usage but no directly associated Todo appear separately inside
+their owning session's project card under **Execution usage · not per Todo**. This includes
+OMP child executions when the root Todo has no usage, and sessions that report usage but
+no plan. These rows retain their own execution identity and select that execution's conversation;
+child usage is never added to the root Todo or inferred from matching task titles.
+Ended execution-usage rows move below active and pending work into the same collapsible
+task/execution history. Zero-valued reports remain visible; records without reported usage
+are not invented. Shared task labels are prepared once per execution, and tooltip details
+are resolved from current observations only on hover.
+
+Active (working or blocked), pending, and unknown-status tasks appear before completed history,
+preserving provider order within each group. Completed,
+abandoned, and retired tasks are retained in collapsible project history. Current Agent activity
+appears before execution history. A selected historical record remains accessible when history is
+folded. Selecting a board row only links these regions; it does not select that project in the
+sidebar. Only yttt-managed Agent scopes in the connected Host and retained workspace snapshots
+are included; this is not a machine-wide process monitor.
 
 Choose **Open session** (**打开会话**) in **Linked conversation** to activate the exact
 existing project, tab, and terminal pane for the selected record. Child Agent records open
@@ -1347,7 +1366,7 @@ Provider messages, task names, question text, and answer option labels remain un
 
 Provider capabilities are deliberately different:
 
-| Provider | Native Command center observations |
+| Provider | Native Dispatch center observations |
 | --- | --- |
 | OMP | Todo phases/items, root and direct-child executions, messages, Ask; direct-child model, aggregate tokens, context usage/window, requests, tool calls, elapsed time, cost, and optional self-estimated completion. |
 | Claude Code | Prompt-scoped root/child lifecycle, child-specific actions/waiting, confirmed `TaskCreate`/`TaskUpdate` changes, and foreground Agent-result model/usage/duration/tool counts when reported. |

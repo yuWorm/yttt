@@ -123,7 +123,7 @@ not a complete transcript or separate stdout/stderr. Agent list responses includ
 process and turn state, waiting reason, task, current action, children, and timestamps
 when available; these depend on the provider's installed hooks and observations.
 
-## Command center
+## Dispatch center
 
 ```sh
 yttt ctl board show
@@ -134,7 +134,7 @@ yttt ctl board answer --project PROJECT_ID --tab TAB_ID --pane PANE_ID \
   --json
 ```
 
-`board show` selects the native workspace-level command center, including on an observing
+`board show` selects the native workspace-level Dispatch center, including on an observing
 desktop. The target window must have at least one open project; an empty Dashboard returns
 `not_ready` and is left unchanged. It clears project selection without closing projects,
 restarting processes, or toggling the page closed. Consequently `projects list` reports no
@@ -143,10 +143,12 @@ Explicit `tabs focus` or `panes focus` returns to the targeted project's work ar
 `agents list --json` includes the structured `agent.board` snapshot with plans, execution
 records, messages, and question requests. Use those request/question IDs and exact option
 labels when answering.
-Execution records also contain optional `current_action` and `telemetry` fields. Missing metrics
-remain `null`, not zero; `cost_microusd` is integer micro-USD and `self_estimated_completion`
-is an optional Agent estimate, not accepted progress. Token scope differs by provider; see
-[Command center](usage.md#command-center) before aggregating reported values.
+Task-row usage in the Dispatch center comes from the task's associated execution record, not
+from a per-todo spend allocation. Execution records also contain optional `current_action` and
+`telemetry` fields. Missing metrics remain `null`, not zero; `cost_microusd` is integer
+micro-USD and `self_estimated_completion` is an optional Agent estimate, not accepted progress.
+Token scope differs by provider; see [Dispatch center](usage.md#dispatch-center) before
+aggregating reported values.
 
 `board answer` uses the same Host submission path as the native question cards. Every
 question in a request must have an answer. Multi-select accepts several labels; custom

@@ -676,6 +676,15 @@ impl WorkbenchView {
             };
             task_status_counts[status_index].1 += 1;
         }
+        let source_usage: Vec<_> = sources
+            .iter()
+            .map(|source| CommandCenterProjectUsage::new(self.ui_text, source))
+            .collect();
+        history_count += source_usage
+            .iter()
+            .flat_map(|usage| &usage.independent)
+            .filter(|execution| command_center_execution_priority(execution) == 3)
+            .count();
         let selected_project = self
             .command_center
             .selection
@@ -740,7 +749,8 @@ impl WorkbenchView {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
-        for history in [false, true] {
+        for priority in 0..4 {
+            let history = priority == 3;
             if history && history_count > 0 {
                 let history_project_id = history_project_id.clone();
                 let history_debug_project_id = project_id.to_string();
@@ -782,40 +792,44 @@ impl WorkbenchView {
                     continue;
                 }
             }
-            for source in sources {
+            for (source, usage) in sources.iter().zip(&source_usage) {
                 let mut visible_tasks = source
                     .snapshot
                     .board
                     .tasks
                     .iter()
-                    .filter(|task| {
-                        if !history {
-                            return !command_center_task_is_history(task);
-                        }
-                        command_center_task_is_history(task)
-                            && (history_expanded
-                                || self.command_center.selection.as_ref().is_some_and(
-                                    |selection| {
-                                        selection.terminal_session_id == source.terminal_session_id
-                                            && selection.execution_id == task.execution_id
-                                            && selection.task_id.as_deref()
-                                                == Some(task.item.id.as_str())
-                                    },
-                                ))
-                    })
+                    .filter(|task| command_center_task_priority(task) == priority)
                     .peekable();
                 let has_visible_tasks = visible_tasks.peek().is_some();
-                if !has_visible_tasks && (history || !source.snapshot.board.tasks.is_empty()) {
+                let mut visible_executions = usage
+                    .independent
+                    .iter()
+                    .copied()
+                    .filter(|execution| command_center_execution_priority(execution) == priority)
+                    .peekable();
+                let has_visible_executions = visible_executions.peek().is_some();
+                if !has_visible_tasks
+                    && !has_visible_executions
+                    && (priority != 0
+                        || !source.snapshot.board.tasks.is_empty()
+                        || !usage.independent.is_empty())
+                {
                     continue;
                 }
                 let selection_execution_id = visible_tasks
                     .peek()
                     .map(|task| task.execution_id.clone())
+                    .or_else(|| {
+                        visible_executions
+                            .peek()
+                            .map(|execution| execution.id.clone())
+                    })
                     .unwrap_or_else(|| source.terminal_session_id.clone());
                 let selection_task_id = visible_tasks.peek().map(|task| task.item.id.clone());
                 let session_id = source.terminal_session_id.clone();
                 let session_label = self.command_center_session_label(source);
                 let session_selected = !has_visible_tasks
+                    && !has_visible_executions
                     && self
                         .command_center
                         .selection
@@ -827,7 +841,7 @@ impl WorkbenchView {
                         });
                 let session_row = div()
                     .id(format!(
-                        "command-center-session:{}:{history}",
+                        "command-center-session:{}:{priority}",
                         source.terminal_session_id
                     ))
                     .cursor_pointer()
@@ -888,7 +902,44 @@ impl WorkbenchView {
                     .min_w_0()
                     .child(session_row);
                 for task in visible_tasks {
-                    group = group.child(self.command_center_task_row(source, task, theme, cx));
+                    group = group.child(self.command_center_task_row(
+                        source,
+                        task,
+                        &usage.task_labels[task.execution_id.as_str()],
+                        theme,
+                        cx,
+                    ));
+                }
+                if has_visible_executions {
+                    group = group.child(
+                        div()
+                            .px(px(5.0))
+                            .text_xs()
+                            .text_color(theme.text_subtle)
+                            .child(self.ui_text.get(UiTextKey::CommandCenterExecutionUsage)),
+                    );
+                }
+                for execution in visible_executions {
+                    group = group.child(
+                        div()
+                            .debug_selector(|| {
+                                format!(
+                                    "command-center-project-usage:{}:{}",
+                                    source.terminal_session_id, execution.id
+                                )
+                            })
+                            .child(self.command_center_execution_row(
+                                source,
+                                Some(execution),
+                                execution.id.clone(),
+                                &execution.name,
+                                execution.state,
+                                execution.started_at,
+                                execution.ended_at,
+                                theme,
+                                cx,
+                            )),
+                    );
                 }
                 task_list = task_list.child(group);
             }
@@ -935,6 +986,7 @@ impl WorkbenchView {
         &self,
         source: &CommandCenterSource,
         task: &AgentBoardTask,
+        usage_label: &SharedString,
         theme: WorkbenchTheme,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
@@ -955,6 +1007,7 @@ impl WorkbenchView {
             .id(format!(
                 "command-center-task:{session_id}:{execution_id}:{task_id}"
             ))
+            .debug_selector(|| format!("command-center-task:{session_id}:{execution_id}:{task_id}"))
             .cursor_pointer()
             .flex()
             .items_center()
@@ -997,6 +1050,20 @@ impl WorkbenchView {
                     .child(task.item.title.clone()),
             )
             .child(
+                div()
+                    .id("task-usage")
+                    .flex_none()
+                    .text_xs()
+                    .text_color(theme.text_subtle)
+                    .child(usage_label.clone())
+                    .tooltip(self.command_center_usage_tooltip(
+                        source,
+                        &task.execution_id,
+                        true,
+                        cx,
+                    )),
+            )
+            .child(
                 div().text_xs().text_color(theme.text_subtle).child(
                     self.ui_text
                         .get(command_center_plan_label(task.item.status)),
@@ -1018,6 +1085,58 @@ impl WorkbenchView {
                         .child(self.ui_text.get(UiTextKey::CommandCenterTaskRetired)),
                 )
             })
+    }
+
+    fn command_center_usage_tooltip(
+        &self,
+        source: &CommandCenterSource,
+        execution_id: &str,
+        task_hint: bool,
+        cx: &Context<Self>,
+    ) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+        let weak = cx.entity().downgrade();
+        let session_id = source.terminal_session_id.clone();
+        let execution_id = execution_id.to_string();
+        let ui_text = self.ui_text;
+        move |window, cx| {
+            // Resolve only on hover, using current observations rather than formatting and
+            // duplicating every execution's details for every task on each live repaint.
+            let details = weak
+                .upgrade()
+                .and_then(|root| {
+                    let root = root.read(cx);
+                    let sources = root.command_center_sources();
+                    let source = sources
+                        .iter()
+                        .find(|source| source.terminal_session_id == session_id)?;
+                    let execution = source
+                        .snapshot
+                        .board
+                        .executions
+                        .iter()
+                        .find(|execution| execution.id == execution_id)?;
+                    let details = command_center_execution_details(root.ui_text, source, execution);
+                    Some(if task_hint {
+                        format!(
+                            "{}\n{details}",
+                            root.ui_text.get(UiTextKey::CommandCenterTaskUsageHint)
+                        )
+                    } else {
+                        details
+                    })
+                })
+                .unwrap_or_else(|| {
+                    ui_text
+                        .get(UiTextKey::CommandCenterTaskUsageUnavailable)
+                        .to_string()
+                });
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                details,
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        }
     }
 
     fn command_center_questions_panel(
@@ -2285,10 +2404,8 @@ impl WorkbenchView {
                     }),
                 )
             });
-        let details = execution.map_or_else(
-            || task.to_string(),
-            |record| command_center_execution_details(self.ui_text, source, record),
-        );
+        let tooltip = execution
+            .map(|record| self.command_center_usage_tooltip(source, &record.id, false, cx));
         let depth = execution.map_or(0, |record| {
             command_center_execution_depth(record, &source.snapshot.board.executions)
         });
@@ -2318,14 +2435,7 @@ impl WorkbenchView {
             } else {
                 theme.ghost_element_background
             })
-            .tooltip(move |window, cx| {
-                yttt_ui::primitives::tooltip::yttt_tooltip(
-                    details.clone(),
-                    crate::ui::theme::current_workbench_theme(cx),
-                    crate::ui::theme::current_ui_style(cx),
-                )
-                .build(window, cx)
-            })
+            .when_some(tooltip, |row, tooltip| row.tooltip(tooltip))
             .on_click(cx.listener(move |root, _, _window, cx| {
                 root.command_center_select(session_id.clone(), execution_id.clone(), None, cx);
             }))
@@ -3575,6 +3685,85 @@ fn command_center_task_is_history(task: &AgentBoardTask) -> bool {
         )
 }
 
+fn command_center_task_priority(task: &AgentBoardTask) -> u8 {
+    if command_center_task_is_history(task) {
+        return 3;
+    }
+    match task.item.status {
+        AgentPlanStatus::InProgress | AgentPlanStatus::Blocked => 0,
+        AgentPlanStatus::Pending => 1,
+        _ => 2,
+    }
+}
+
+struct CommandCenterProjectUsage<'a> {
+    task_labels: HashMap<&'a str, SharedString>,
+    independent: Vec<&'a AgentExecutionRecord>,
+}
+
+impl<'a> CommandCenterProjectUsage<'a> {
+    fn new(ui_text: UiText, source: &'a CommandCenterSource) -> Self {
+        let unknown = SharedString::from(ui_text.get(UiTextKey::CommandCenterTaskUsageUnknown));
+        let mut task_labels: HashMap<_, _> = source
+            .snapshot
+            .board
+            .tasks
+            .iter()
+            .map(|task| (task.execution_id.as_str(), unknown.clone()))
+            .collect();
+        let mut independent = Vec::new();
+        for execution in &source.snapshot.board.executions {
+            if let Some(label) = task_labels.get_mut(execution.id.as_str()) {
+                *label = command_center_task_usage(ui_text, source, Some(execution)).into();
+            } else if execution.telemetry.tokens.is_some()
+                || execution.telemetry.input_tokens.is_some()
+                || execution.telemetry.output_tokens.is_some()
+                || execution.telemetry.cache_read_tokens.is_some()
+                || execution.telemetry.cache_write_tokens.is_some()
+                || execution.telemetry.cost_microusd.is_some()
+            {
+                independent.push(execution);
+            }
+        }
+        Self {
+            task_labels,
+            independent,
+        }
+    }
+}
+
+fn command_center_execution_priority(execution: &AgentExecutionRecord) -> u8 {
+    if execution.ended_at.is_some() {
+        return 3;
+    }
+    match execution.state {
+        AgentTurnState::Working | AgentTurnState::Waiting => 0,
+        AgentTurnState::Idle => 1,
+        AgentTurnState::Unknown => 2,
+        AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted => 3,
+    }
+}
+
+fn command_center_task_usage(
+    ui_text: UiText,
+    source: &CommandCenterSource,
+    execution: Option<&AgentExecutionRecord>,
+) -> String {
+    let Some(tokens) = execution.and_then(|record| record.telemetry.tokens) else {
+        return ui_text
+            .get(UiTextKey::CommandCenterTaskUsageUnknown)
+            .to_string();
+    };
+    command_center_template(
+        ui_text.get(if source.snapshot.provider_id.as_str() == "claude" {
+            UiTextKey::CommandCenterTaskLastRequestUsage
+        } else {
+            UiTextKey::CommandCenterTaskExecutionUsage
+        }),
+        &[("value", &command_center_compact_count(tokens))],
+    )
+}
+
 fn command_center_question_key(terminal_session_id: &str, request_id: &str) -> String {
     format!(
         "question:{}:{terminal_session_id}:{request_id}",
@@ -4002,6 +4191,196 @@ fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn usage_task(id: &str, status: AgentPlanStatus) -> AgentBoardTask {
+        AgentBoardTask {
+            item: yttt_agent_core::AgentPlanItem {
+                id: id.into(),
+                title: id.into(),
+                phase: None,
+                status,
+                blocker: None,
+            },
+            execution_id: "child-execution".into(),
+            created_at: 1,
+            updated_at: 2,
+            accepted_at: None,
+            retired: false,
+        }
+    }
+    #[gpui::test]
+    fn root_plan_keeps_child_usage_visible_in_project_card(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_temp, mut view, target) = session_jump_fixture();
+        let source = view.command_center_sources().pop().unwrap();
+        let mut snapshot = source.snapshot;
+        let child = &mut snapshot.board.executions[0];
+        child.state = AgentTurnState::Working;
+        child.ended_at = None;
+        child.telemetry.tokens = Some(48_325);
+        let mut root_execution = child.clone();
+        root_execution.id = "root-execution".into();
+        root_execution.parent_id = None;
+        root_execution.telemetry = Default::default();
+        snapshot.board.apply(
+            yttt_agent_core::AgentBoardEvent::Execution {
+                execution: root_execution,
+            },
+            3,
+        );
+        snapshot.board.apply(
+            yttt_agent_core::AgentBoardEvent::Plan {
+                execution_id: "root-execution".into(),
+                items: vec![usage_task("root-todo", AgentPlanStatus::InProgress).item],
+            },
+            4,
+        );
+        view.workspace
+            .record_agent_snapshot(
+                &target.project_id,
+                &target.tab_id,
+                &target.pane_id,
+                snapshot,
+            )
+            .unwrap();
+        let slot = Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let root = cx.new(|_| view);
+            *output.borrow_mut() = Some(root.clone());
+            ComponentRoot::new(root, window, cx)
+        });
+        let root = slot.borrow_mut().take().unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let usage = cx.debug_bounds(
+            "command-center-project-usage:target:project:conversation:one:agent:pane:child-execution",
+        ).expect("OMP child usage must be shown independently of root Todo attribution");
+        let task = cx.debug_bounds(
+            "command-center-task:target:project:conversation:one:agent:pane:root-execution:root-todo",
+        ).unwrap();
+        assert!(usage.origin.y >= task.bottom());
+        cx.simulate_click(usage.center(), gpui::Modifiers::default());
+        root.read_with(cx, |view, _| {
+            let selected = view.command_center.selection.as_ref().unwrap();
+            assert_eq!(selected.execution_id, "child-execution");
+            assert!(selected.task_id.is_none());
+        });
+        root.update(cx, |view, cx| {
+            let mut snapshot = view.command_center_sources().pop().unwrap().snapshot;
+            snapshot.board.tasks[0].item.status = AgentPlanStatus::Pending;
+            let child = snapshot
+                .board
+                .executions
+                .iter_mut()
+                .find(|execution| execution.id == "child-execution")
+                .unwrap();
+            child.state = AgentTurnState::Completed;
+            child.ended_at = Some(5);
+            child.updated_at = 5;
+            view.workspace
+                .record_agent_snapshot(
+                    &target.project_id,
+                    &target.tab_id,
+                    &target.pane_id,
+                    snapshot,
+                )
+                .unwrap();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(cx.debug_bounds(
+            "command-center-project-usage:target:project:conversation:one:agent:pane:child-execution",
+        ).is_none());
+        let history = cx
+            .debug_bounds("command-center-project-history:target:project")
+            .unwrap();
+        cx.simulate_click(history.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let completed = cx.debug_bounds(
+            "command-center-project-usage:target:project:conversation:one:agent:pane:child-execution",
+        ).unwrap();
+        let pending = cx.debug_bounds(
+            "command-center-task:target:project:conversation:one:agent:pane:root-execution:root-todo",
+        ).unwrap();
+        assert!(completed.origin.y >= pending.bottom());
+    }
+
+    #[test]
+    fn execution_usage_without_plans_preserves_zero_and_missing_measurements() {
+        let (_temp, view, _) = session_jump_fixture();
+        let mut source = view.command_center_sources().pop().unwrap();
+        assert!(source.snapshot.board.tasks.is_empty());
+        assert!(
+            CommandCenterProjectUsage::new(view.ui_text, &source)
+                .independent
+                .is_empty()
+        );
+        source.snapshot.board.executions[0].telemetry.tokens = Some(0);
+        let usage = CommandCenterProjectUsage::new(view.ui_text, &source);
+        assert_eq!(
+            usage
+                .independent
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["child-execution"]
+        );
+        assert!(usage.task_labels.is_empty());
+    }
+
+    #[test]
+    fn task_usage_never_falls_back_to_an_unrelated_execution() {
+        let (_temp, view, _) = session_jump_fixture();
+        let mut source = view.command_center_sources().pop().unwrap();
+        let task = usage_task("task", AgentPlanStatus::InProgress);
+        source.snapshot.board.executions[0].id = "unrelated-run".into();
+        source.snapshot.board.executions[0].telemetry.tokens = Some(100_000);
+        source.snapshot.board.tasks.push(task);
+        let usage = CommandCenterProjectUsage::new(view.ui_text, &source);
+        assert_eq!(
+            usage.task_labels["child-execution"].as_ref(),
+            view.ui_text.get(UiTextKey::CommandCenterTaskUsageUnknown)
+        );
+        assert_eq!(usage.independent[0].id, "unrelated-run");
+    }
+
+    #[gpui::test]
+    fn task_rows_keep_active_and_pending_before_completed(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_temp, mut view, target) = session_jump_fixture();
+        let source = view.command_center_sources().pop().unwrap();
+        let mut snapshot = source.snapshot;
+        snapshot.board.tasks = vec![
+            usage_task("completed", AgentPlanStatus::Completed),
+            usage_task("pending", AgentPlanStatus::Pending),
+            usage_task("working", AgentPlanStatus::InProgress),
+        ];
+        view.workspace
+            .record_agent_snapshot(
+                &target.project_id,
+                &target.tab_id,
+                &target.pane_id,
+                snapshot,
+            )
+            .unwrap();
+        view.command_center
+            .project_history_expanded
+            .insert(target.project_id.to_string());
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let root = cx.new(|_| view);
+            ComponentRoot::new(root, window, cx)
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let working = cx.debug_bounds("command-center-task:target:project:conversation:one:agent:pane:child-execution:working").unwrap();
+        let pending = cx.debug_bounds("command-center-task:target:project:conversation:one:agent:pane:child-execution:pending").unwrap();
+        let completed = cx.debug_bounds("command-center-task:target:project:conversation:one:agent:pane:child-execution:completed").unwrap();
+        assert!(working.origin.y < pending.origin.y);
+        assert!(pending.origin.y < completed.origin.y);
+    }
 
     fn session_jump_fixture() -> (tempfile::TempDir, WorkbenchView, CommandCenterSessionTarget) {
         use crate::model::project::{ProjectDescriptor, ProjectLocation};

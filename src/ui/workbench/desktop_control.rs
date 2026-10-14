@@ -230,7 +230,7 @@ impl WorkbenchView {
                 if self.workspace.opened_projects().is_empty() {
                     return Err(control_error(
                         DesktopControlErrorCode::NotReady,
-                        "Open a project before showing Command center",
+                        "Open a project before showing Dispatch center",
                     ));
                 }
                 self.select_command_center();

@@ -101,7 +101,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ProjectFilesHide => "隐藏项目面板",
         UiTextKey::ProjectFilesRefresh => "刷新",
         UiTextKey::ProjectFilesLoading => "正在加载项目文件…",
-        UiTextKey::CommandCenterTitle => "指挥中心",
+        UiTextKey::CommandCenterTitle => "调度中心",
         UiTextKey::CommandCenterHostLive => "Host 在线",
         UiTextKey::CommandCenterHostLiveReadOnly => "Host 在线 · 只读",
         UiTextKey::CommandCenterHostDisconnectedRetained => "Host 已断开 · 保留历史",
@@ -161,6 +161,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterLastRequestTokensHint => {
             "Claude Code 上报的是子 Agent 最后一次 API 请求的 token，并非整段执行的累计用量。"
         }
+        UiTextKey::CommandCenterExecutionUsage => "执行用量 · 非单项 Todo 消耗",
+        UiTextKey::CommandCenterTaskExecutionUsage => "执行 {value} tok",
+        UiTextKey::CommandCenterTaskLastRequestUsage => "末次 {value} tok",
+        UiTextKey::CommandCenterTaskUsageUnknown => "Token —",
+        UiTextKey::CommandCenterTaskUsageHint => {
+            "这是关联执行的用量，不是单个计划条目的独立消耗。同一执行下的任务共享此数据，不可相加。"
+        }
+        UiTextKey::CommandCenterTaskUsageUnavailable => {
+            "关联执行尚未上报 Token 用量；缺失不代表零消耗。"
+        }
         UiTextKey::CommandCenterInputTokens => "输入 token",
         UiTextKey::CommandCenterOutputTokens => "输出 token",
         UiTextKey::CommandCenterCacheReadTokens => "缓存读取 token",
@@ -189,8 +199,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::CommandCenterActiveAgentsCount => "活跃 Agent {count}",
         UiTextKey::CommandCenterPendingQuestionsCount => "待回答 {count}",
-        UiTextKey::CommandCenterTaskHistoryShow => "展开任务历史（{count}）",
-        UiTextKey::CommandCenterTaskHistoryHide => "收起任务历史（{count}）",
+        UiTextKey::CommandCenterTaskHistoryShow => "展开任务／执行历史（{count}）",
+        UiTextKey::CommandCenterTaskHistoryHide => "收起任务／执行历史（{count}）",
         UiTextKey::CommandCenterDurationHours => "{value}小时",
         UiTextKey::CommandCenterDurationMinutes => "{value}分钟",
         UiTextKey::CommandCenterDurationSeconds => "{value}秒",

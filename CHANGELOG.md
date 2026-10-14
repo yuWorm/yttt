@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- 将产品可见名称改为「调度中心」；任务行显示关联执行的用量（不是按 todo 分摊的花费），进行中和待处理任务排在已完成历史之前。
+- Rename the product-visible board to Dispatch center; task rows show execution-associated usage, not per-todo spend, with active and pending tasks before completed history.
+- 修复调度中心用量展示：OMP 根 Todo 与子执行用量分别保留，在项目卡片独立展示已上报的执行用量；无 Todo 也可查看，结束后移入历史，不将子执行 Token 误记为根任务消耗。任务标签按执行复用，详情仅悬停生成，移除多余的渲染期 ID 分配。
+- Show unassigned execution usage separately in Dispatch center project cards, including OMP child usage and sessions without plans. Keep completed usage in history without attributing child tokens to root Todos. Share per-execution task labels, resolve details on hover, and avoid redundant render-time ID allocations.
 
 - 新增 yttt 原生单屏 Command center：项目任务矩阵、集中问题、关联对话和执行记录同屏显示。
   OMP 接入真实 todo、主／子执行、消息和 Ask；支持看板与原生终端单次回答结算，

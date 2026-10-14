@@ -211,7 +211,7 @@ impl DesktopControlRequest {
         if matches!(self.command, DesktopControlCommand::ShowCommandCenter) {
             if self.project.is_some() || self.tab.is_some() || self.pane.is_some() {
                 return Err(invalid(
-                    "The command center targets a window, not a project or pane",
+                    "The dispatch center targets a window, not a project or pane",
                 ));
             }
             return Ok(());

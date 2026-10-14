@@ -101,7 +101,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AgentSessionsModel => "Model",
         UiTextKey::AgentSessionsTranscript => "Transcript",
         UiTextKey::AgentSessionsUntitled => "Untitled session",
-        UiTextKey::CommandCenterTitle => "Command center",
+        UiTextKey::CommandCenterTitle => "Dispatch center",
         UiTextKey::CommandCenterHostLive => "Host live",
         UiTextKey::CommandCenterHostLiveReadOnly => "Host live · read-only",
         UiTextKey::CommandCenterHostDisconnectedRetained => "Host disconnected · retained history",
@@ -177,11 +177,21 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterActivityCount => "current {count}",
         UiTextKey::CommandCenterExecutionHistoryShow => "Show execution history ({count})",
         UiTextKey::CommandCenterExecutionHistoryHide => "Hide execution history ({count})",
+        UiTextKey::CommandCenterExecutionUsage => "Execution usage · not per Todo",
         UiTextKey::CommandCenterModel => "Model",
         UiTextKey::CommandCenterTokenCount => "{value} tokens",
         UiTextKey::CommandCenterLastRequestTokens => "{value} tokens (last request)",
         UiTextKey::CommandCenterLastRequestTokensHint => {
             "Claude Code reports tokens for the subagent's final API request, not the whole run."
+        }
+        UiTextKey::CommandCenterTaskExecutionUsage => "Run {value} tok",
+        UiTextKey::CommandCenterTaskLastRequestUsage => "Last req. {value} tok",
+        UiTextKey::CommandCenterTaskUsageUnknown => "Tokens —",
+        UiTextKey::CommandCenterTaskUsageHint => {
+            "Usage belongs to the associated execution, not this individual plan item. Items sharing an execution share these metrics; do not add them together."
+        }
+        UiTextKey::CommandCenterTaskUsageUnavailable => {
+            "No token usage reported for the associated execution. Missing data is not zero."
         }
         UiTextKey::CommandCenterInputTokens => "Input tokens",
         UiTextKey::CommandCenterOutputTokens => "Output tokens",
@@ -211,8 +221,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::CommandCenterActiveAgentsCount => "active {count}",
         UiTextKey::CommandCenterPendingQuestionsCount => "to answer {count}",
-        UiTextKey::CommandCenterTaskHistoryShow => "Show task history ({count})",
-        UiTextKey::CommandCenterTaskHistoryHide => "Hide task history ({count})",
+        UiTextKey::CommandCenterTaskHistoryShow => "Show task / execution history ({count})",
+        UiTextKey::CommandCenterTaskHistoryHide => "Hide task / execution history ({count})",
         UiTextKey::CommandCenterRoot => "root",
         UiTextKey::CommandCenterOptionalAnswerPlaceholder => "Optional additional answer",
         UiTextKey::CommandCenterPromptPlaceholder => "Send a follow-up to the selected idle agent",
