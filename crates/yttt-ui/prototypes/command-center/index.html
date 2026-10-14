@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>yttt 作战台 · 单屏预览</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%238dcac0'/%3E%3Ctext x='9' y='23' font-size='25' fill='%23272c37'%3Ey%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./prototype.css">
+  <script defer src="./prototype.js"></script>
+</head>
+<body>
+  <!-- THROWAWAY DESIGN PREVIEW: the user chose one fixed screen, not variants.
+       All tasks, conversations, agents and mutations are simulated in memory.
+       No actual terminal, Host connection, file writes or provider requests.
+       Open this file directly, or run from this worktree:
+       python3 -m http.server 4178 --bind 127.0.0.1 --directory crates/yttt-ui/prototypes/command-center
+       This standalone prototype is not included in the native application build. -->
+  <header class="topbar">
+    <h1><span class="brand">yttt</span> 作战台</h1>
+    <span class="top-divider"></span>
+    <span class="scope">多项目 / 任务现场</span>
+    <div id="totals" class="totals" aria-label="全局状态"></div>
+    <span class="demo-tag">演示数据</span>
+  </header>
+  <div class="utilitybar">
+    <div class="legend" aria-label="状态图例">
+      <span class="working">● 进行中</span><span class="waiting">? 等你回答</span><span class="external">◷ 等依赖</span><span class="failed">! 失败</span><span class="completed">✓ 已结束</span><span class="unknown">◇ 未知</span>
+    </div>
+    <div class="utilities">
+      <span class="hint">任务直接展开 · 选中即联动 · 不跳页</span>
+      <select id="scenario" aria-label="切换演示场景"><option value="normal">多项目并行</option><option value="questions">集中提问</option><option value="offline">Host 失联</option></select>
+      <button data-action="reset" title="恢复初始演示状态">重置</button>
+      <button data-action="fullscreen" aria-label="切换全屏" title="全屏">⛶</button>
+    </div>
+  </div>
+  <main class="wall">
+    <section id="board" class="board" aria-label="九个项目的任务矩阵"></section>
+    <section class="console" aria-label="同屏处理区域">
+      <section class="fixed-panel question-panel" aria-labelledby="questions-title">
+        <header class="panel-heading"><h2 id="questions-title" class="waiting">等你回答 <b id="pending-count"></b></h2><span class="panel-note">选项直接回答 · 处理后原位保留</span></header>
+        <div id="questions" class="question-list scroll"></div>
+      </section>
+      <section class="fixed-panel conversation-panel" aria-labelledby="conversation-title">
+        <header class="panel-heading"><h2 id="conversation-title">关联对话</h2><span id="conversation-ref" class="mono"></span></header>
+        <div id="conversation-context" class="conversation-context"></div>
+        <div id="transcript" class="transcript scroll" role="log" aria-live="polite" aria-label="所选任务的演示对话"></div>
+        <div id="conversation-actions" class="conversation-actions"></div>
+        <form id="composer" class="composer">
+          <label id="reply-target" for="message"></label>
+          <div class="composer-row"><textarea id="message" rows="1" placeholder="给所选任务补充一句…" aria-label="给所选任务回复" spellcheck="false"></textarea><button id="send" type="submit">发送</button></div>
+        </form>
+      </section>
+      <section class="fixed-panel agent-panel" aria-labelledby="agents-title">
+        <header class="panel-heading"><h2 id="agents-title">执行队列 <b id="agent-count"></b></h2><span class="panel-note">主 / 派生</span></header>
+        <div class="agent-columns"><span>Agent / 任务</span><span>状态</span><span>持续</span></div>
+        <div id="agents" class="agent-list scroll"></div>
+        <div class="agent-note">只含 yttt 管理的演示执行<br>失联保留记录；未知不等于失败</div>
+      </section>
+    </section>
+  </main>
+  <footer class="statusbar"><span id="last-event" role="status">就绪</span><span class="keyboard-hint">↑ ↓ 选择任务 · R 回复 · Ctrl/⌘ Enter 发送</span><span>本地模拟，不操作真实 Agent</span></footer>
+</body>
+</html>
