@@ -45,7 +45,7 @@ pub(super) struct CommandCenterState {
     live_updates_generation: u64,
     execution_history_expanded: bool,
     project_history_expanded: BTreeSet<String>,
-    project_matrix_width: f32,
+    project_viewport_height: f32,
     question_history_expanded: bool,
     question_scroll: gpui::ScrollHandle,
     management_session: Option<String>,
@@ -108,22 +108,6 @@ pub(super) struct CommandCenterSource {
     operation_target: Option<CommandCenterOperationTarget>,
 }
 
-#[derive(Clone, Copy)]
-struct CommandCenterProjectMatrix {
-    columns: u16,
-    rows: u16,
-}
-
-fn command_center_project_matrix(project_count: usize, width: f32) -> CommandCenterProjectMatrix {
-    let available = (((width - 12.0) / 282.0).floor() as usize).clamp(1, 3);
-    let desired = project_count.clamp(1, 3);
-    let columns = available.min(desired);
-    CommandCenterProjectMatrix {
-        columns: columns as u16,
-        rows: project_count.max(1).div_ceil(columns) as u16,
-    }
-}
-
 impl WorkbenchView {
     pub(super) fn command_center_view(
         &mut self,
@@ -167,22 +151,24 @@ impl WorkbenchView {
                 .or_default()
                 .push(source);
         }
-        let project_matrix = command_center_project_matrix(
-            project_sources.len(),
-            self.command_center.project_matrix_width,
-        );
+        let project_rows = project_sources.len().div_ceil(3).max(2);
+        // Keep six fixed slots regardless of project count. Additional rows extend the
+        // scrollable content instead of shrinking the cards already visible.
+        let project_row_height =
+            ((self.command_center.project_viewport_height - 32.0) / 2.0).max(0.0);
+        let project_matrix_height =
+            project_row_height * project_rows as f32 + (project_rows - 1) as f32 * 10.0 + 22.0;
         let measure_view = cx.entity().downgrade();
         let mut board = div()
             .id("command-center-projects")
             .debug_selector(|| "command-center-project-matrix".to_string())
             .grid()
-            .grid_cols(project_matrix.columns)
-            .grid_rows(project_matrix.rows)
+            .grid_cols(3)
+            .grid_rows(project_rows as u16)
             .gap(px(10.0))
             .w_full()
-            .h_full()
+            .h(px(project_matrix_height))
             .min_w_0()
-            .min_h(px(f32::from(project_matrix.rows) * 146.0 + 12.0))
             .flex_none()
             .p(px(11.0));
         if project_sources.is_empty() {
@@ -311,10 +297,10 @@ impl WorkbenchView {
                     .child(
                         gpui::canvas(
                             move |bounds, _, cx| {
-                                let width = f32::from(bounds.size.width);
+                                let height = f32::from(bounds.size.height);
                                 if measure_view
                                     .read_with(cx, |root, _| {
-                                        (root.command_center.project_matrix_width - width).abs()
+                                        (root.command_center.project_viewport_height - height).abs()
                                             > 1.0
                                     })
                                     .unwrap_or(false)
@@ -322,7 +308,7 @@ impl WorkbenchView {
                                     let view = measure_view.clone();
                                     cx.defer(move |cx| {
                                         let _ = view.update(cx, |root, cx| {
-                                            root.command_center.project_matrix_width = width;
+                                            root.command_center.project_viewport_height = height;
                                             cx.notify();
                                         });
                                     });

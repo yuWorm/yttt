@@ -23,11 +23,14 @@
 - Add **Open session** to linked conversations, focusing the exact project, tab, and terminal.
   Child Agents open their hosting session; unavailable targets are disabled. Preserve board
   drafts without creating duplicate tabs.
-- 优化指挥中心单屏排版：项目矩阵按可用宽度分列、等分行高，补充会话归属和状态概况；
+- 优化指挥中心单屏排版：项目矩阵固定三列、可视两行，卡片随区域缩放，不随项目数重分；
+  第七个项目起纵向滚动，底部面板保持固定。补充会话归属和状态概况；
   待处理问题与当前 Agent 活动优先，任务及执行历史可折叠。问题、答案选项和输入焦点
   精确联动上下文，支持前后问题导航与安全快捷键，实时更新不抢焦点或自动跳到下一题。
-- Refine the single-screen command center with a responsive equal-row project matrix, readable
-  session ownership, pending-first questions, and collapsible task/execution history. Link answer
+- Refine the single-screen command center with a fixed 3×2 project viewport: resize cards
+  with the available area, retain unused slots, and scroll additional rows without moving
+  the lower panels. Add readable session ownership, pending-first questions, and collapsible
+  task/execution history. Link answer
   controls to exact question context, add scoped keyboard navigation, and preserve focus and drafts
   across live updates. Move terminal termination behind secondary session actions.
 - 资源协议升级为 15、desktop-shell 协议升级为 4；桌面 Client、Host、远端 Server 与 CLI

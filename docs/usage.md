@@ -1317,8 +1317,10 @@ from Command center with open projects but no selection.
 Project-scoped shortcuts cannot modify a hidden project from the board.
 
 The same page shows the project/task matrix above **Needs attention**, linked conversation/composer,
-and **Agent activity**. The matrix uses the available board width for up to three columns and
-shares the available height between rows; overflowing tasks scroll inside their project.
+and **Agent activity**. The matrix keeps a fixed three-column, two-row viewport. Card width
+and height follow the available area, not the project count: fewer than six projects leave
+unused slots, and the seventh project starts a third row reached by scrolling the matrix.
+The lower panels stay in place; overflowing tasks scroll separately inside their project.
 Project positions do not reorder when Agent states change. Cards summarize reported task states,
 active Agents, and pending questions, and group tasks by their owning tab/pane.
 These counts are observations, not estimates of project completion.
