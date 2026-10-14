@@ -37,6 +37,38 @@ mod tests {
     }
 
     #[test]
+    fn process_and_session_metadata_do_not_claim_an_idle_turn() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Stale);
+        reducer.apply(
+            1,
+            AgentEventKind::SessionStarted {
+                metadata: AgentSessionMetadata {
+                    session_id: Some("root".into()),
+                    ..Default::default()
+                },
+            },
+            4,
+        );
+        assert_eq!(reducer.snapshot().turn_state, AgentTurnState::Unknown);
+        reducer.apply(1, AgentEventKind::Working, 5);
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Working);
+        reducer.apply(
+            1,
+            AgentEventKind::SessionStarted {
+                metadata: AgentSessionMetadata {
+                    session_id: Some("resumed".into()),
+                    ..Default::default()
+                },
+            },
+            6,
+        );
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Stale);
+    }
+
+    #[test]
     fn reducer_tracks_turn_action_wait_and_completion() {
         let mut reducer = reducer();
         reducer.process_starting(1, 2);
@@ -398,6 +430,94 @@ mod tests {
         assert_eq!(snapshot.children[0].turn_state, AgentTurnState::Unknown);
         assert_eq!(snapshot.primary_text(), "Long-running task");
         assert!(!snapshot.decay_stale_activity(107, 100));
+    }
+
+    #[test]
+    fn live_activity_preserves_actions_and_approvals_but_idle_can_expire() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(
+            1,
+            AgentEventKind::ActionStarted {
+                action: AgentAction {
+                    id: Some("long-tool".into()),
+                    name: "bash".into(),
+                    detail: None,
+                },
+            },
+            4,
+        );
+        reducer.apply(1, AgentEventKind::Activity { is_idle: false }, 100);
+        assert!(!reducer.decay_stale_activity(104, 100));
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Working);
+        assert_eq!(
+            reducer
+                .snapshot()
+                .current_action
+                .as_ref()
+                .unwrap()
+                .id
+                .as_deref(),
+            Some("long-tool")
+        );
+        reducer.apply(
+            1,
+            AgentEventKind::Waiting {
+                reason: WaitingReason::Approval,
+                message: Some("Approve deployment".into()),
+            },
+            105,
+        );
+        reducer.apply(1, AgentEventKind::Activity { is_idle: false }, 200);
+        assert!(!reducer.decay_stale_activity(205, 100));
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Waiting);
+        assert_eq!(
+            reducer.snapshot().waiting_message.as_deref(),
+            Some("Approve deployment")
+        );
+        reducer.apply(1, AgentEventKind::Activity { is_idle: true }, 206);
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Idle);
+        assert!(reducer.snapshot().current_action.is_none());
+        assert!(!reducer.decay_stale_activity(306, 100));
+        assert!(reducer.decay_stale_activity(307, 100));
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Stale);
+    }
+
+    #[test]
+    fn root_activity_does_not_keep_a_lost_child_alive() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(1, AgentEventKind::Activity { is_idle: true }, 4);
+        reducer.apply(
+            1,
+            AgentEventKind::ChildStarted {
+                child: ChildAgentDescriptor {
+                    id: "lost".into(),
+                    name: None,
+                    task: None,
+                },
+            },
+            5,
+        );
+        reducer.apply(1, AgentEventKind::Activity { is_idle: true }, 100);
+        assert!(!reducer.decay_stale_activity(105, 100));
+        assert!(reducer.decay_stale_activity(106, 100));
+        assert_eq!(
+            reducer.snapshot().children[0].turn_state,
+            AgentTurnState::Unknown
+        );
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Stale);
+        reducer.apply(
+            1,
+            AgentEventKind::ChildFinished {
+                child_id: "lost".into(),
+                outcome: TurnOutcome::Completed,
+            },
+            107,
+        );
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Idle);
     }
 
     #[test]

@@ -123,7 +123,7 @@ impl AgentViewState {
             Self::Completed => "agent completed",
             Self::Failed => "agent failed",
             Self::Interrupted => "agent interrupted",
-            Self::Stale => "agent stale",
+            Self::Stale => "agent status unknown",
         }
     }
 

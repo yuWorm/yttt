@@ -28,8 +28,11 @@ const loader = await import(
 const eventBusModule = await import(
 	`${pathToFileURL(path.join(packageRoot, "src/utils/event-bus.ts")).href}?run=${Date.now()}`,
 );
+const { SessionManager } = await import(
+	pathToFileURL(path.join(packageRoot, "src/session/session-manager.ts")).href,
+);
 
-async function loadTwiceAndEmit(sessionId: string, includeReload: boolean): Promise<string[]> {
+async function loadTwiceAndEmit(includeSwitch: boolean): Promise<string[]> {
 	const root = await mkdtemp(path.join(tmpdir(), "yttt-omp-extension-"));
 	try {
 		const modules = path.join(root, "node_modules", "@oh-my-pi");
@@ -44,33 +47,39 @@ async function loadTwiceAndEmit(sessionId: string, includeReload: boolean): Prom
 		const loaded = await loader.loadExtensions([first, second], root, eventBus);
 		assert.deepEqual(loaded.errors, [], `extension load errors: ${JSON.stringify(loaded.errors)}`);
 
+		let idle = true;
 		const ctx = {
-			sessionManager: {
-				getSessionId: () => sessionId,
-				getSessionFile: () => `/tmp/${sessionId}.jsonl`,
-			},
+			sessionManager: SessionManager.inMemory(root),
 			model: { id: "model-1" },
+			isIdle: () => idle,
+		};
+		loaded.runtime.appendEntry = (customType: string, data?: unknown) => {
+			ctx.sessionManager.appendCustomEntry(customType, data);
 		};
 		const emittedEvents: Array<[string, Record<string, unknown>]> = [
 			["session_start", { type: "session_start" }],
 			["before_agent_start", { type: "before_agent_start", prompt: "continue working" }],
 			["agent_start", { type: "agent_start" }],
-			["agent_end", { type: "agent_end", willContinue: true }],
+			["agent_end", { type: "agent_end", willContinue: true, messages: [] }],
 		];
-		if (includeReload) {
+		if (includeSwitch) {
 			// OMP's explicit switch event is a new root-session boundary.
 			emittedEvents.push(["session_switch", { type: "session_switch" }]);
-		} else {
-			emittedEvents.push(["session_shutdown", { type: "session_shutdown" }]);
 		}
+		emittedEvents.push(["session_shutdown", { type: "session_shutdown" }]);
 		for (const [name, event] of emittedEvents) {
+			if (name === "before_agent_start") idle = false;
+			if (name === "session_switch") {
+				ctx.sessionManager = SessionManager.inMemory(root);
+				idle = true;
+			}
 			const handlers = loaded.extensions.flatMap((extension: { handlers: Map<string, unknown[]> }) =>
 				extension.handlers.get(name) ?? [],
 			);
 			for (const handler of handlers) {
 				await (handler as (event: Record<string, unknown>, context: typeof ctx) => Promise<void>)(event, ctx);
 			}
-			if (name === "agent_start" && includeReload) {
+			if (name === "agent_start" && includeSwitch) {
 				// OMP task sessions load the parent's paths with a fresh EventBus,
 				// but share process.env and therefore the parent's terminal scope.
 				const taskSession = await loader.loadExtensions(
@@ -79,12 +88,12 @@ async function loadTwiceAndEmit(sessionId: string, includeReload: boolean): Prom
 				assert.deepEqual(taskSession.errors, []);
 				const taskContext = {
 					...ctx,
-					sessionManager: { getSessionId: () => "task-session" },
+					sessionManager: SessionManager.inMemory(root),
 				};
 				for (const taskEvent of ["session_start", "agent_start", "agent_end", "session_shutdown"]) {
 					for (const extension of taskSession.extensions) {
 						for (const handler of extension.handlers.get(taskEvent) ?? []) {
-							await handler({ type: taskEvent }, taskContext);
+							await handler({ type: taskEvent, messages: [] }, taskContext);
 						}
 					}
 				}
@@ -98,7 +107,7 @@ async function loadTwiceAndEmit(sessionId: string, includeReload: boolean): Prom
 
 if (childMode) {
 	process.env.YTTT_AGENT_HOOK_SCOPE = "child-scope";
-	await loadTwiceAndEmit("child-session", false);
+	await loadTwiceAndEmit(false);
 } else {
 	const deliveries: Delivery[] = [];
 	const rejected: Delivery[] = [];
@@ -121,7 +130,7 @@ if (childMode) {
 		process.env.YTTT_AGENT_HOOK_ENDPOINT = `http://127.0.0.1:${server.port}`;
 		process.env.YTTT_AGENT_HOOK_TOKEN = "test-token";
 		process.env.YTTT_AGENT_HOOK_SCOPE = "parent-scope";
-		const parentEvents = await loadTwiceAndEmit("parent-session", true);
+		const parentEvents = await loadTwiceAndEmit(true);
 		const child = Bun.spawn([process.execPath, process.argv[1]!, "--child", source], {
 			cwd: process.cwd(),
 			env: process.env,
@@ -135,18 +144,14 @@ if (childMode) {
 			clearTimeout(childTimeout);
 		}
 
-		const expectedDeliveries = parentEvents.length + 5;
-		const deadline = performance.now() + 1_000;
-		while (deliveries.length < expectedDeliveries && performance.now() < deadline) {
-			await Bun.sleep(5);
-		}
+		const lifecycle = deliveries.filter(delivery => delivery.event !== "board_event");
 		assert.deepEqual(rejected, [], "one stream per session must never block behind a retired stream");
 		assert.deepEqual(
-			deliveries.filter(delivery => delivery.scope === "parent-scope").map(delivery => delivery.event),
+			lifecycle.filter(delivery => delivery.scope === "parent-scope").map(delivery => delivery.event),
 			parentEvents,
 		);
 		assert.deepEqual(
-			deliveries.filter(delivery => delivery.scope === "child-scope").map(delivery => delivery.event),
+			lifecycle.filter(delivery => delivery.scope === "child-scope").map(delivery => delivery.event),
 			["session_start", "before_agent_start", "agent_start", "agent_end", "session_shutdown"],
 		);
 		assert.equal(
@@ -154,7 +159,7 @@ if (childMode) {
 			true,
 			"continuations must remain working",
 		);
-		console.log("PASS: duplicate paths, in-process task shutdown, reload, and child process preserve the root lifecycle stream");
+		console.log("PASS: duplicate paths, in-process task shutdown, session switch, and child process preserve the root lifecycle stream");
 	} finally {
 		server.stop(true);
 	}

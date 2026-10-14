@@ -1276,6 +1276,9 @@ skipping sequence numbers; permanent HTTP rejection stops that stream with a saf
 Claude, Codex, and Grok command hooks retry network errors, HTTP 429, and HTTP 5xx at most three
 times within their hook timeout. A stable delivery ID lets the Host ignore retries after a lost
 response. This does not impose a global order on independently spawned command-hook processes.
+Transient process-scan misses retain the last PID and ordered-delivery progress for the terminal
+scope. Rediscovering the same process resumes that stream; a different PID starts a new process
+instance. A missing scan marks the process disconnected, not successfully completed.
 
 Adapter updates do not replace extension code already loaded in a running Agent. After active
 tasks finish, update the Host, complete managed-hook initialization, and restart the Agent.
@@ -1291,10 +1294,18 @@ The normalized status model includes:
 - `interrupted`
 - `stale`
 
-After more than 30 minutes without a status update, `working` and `waiting` become `stale`
-(unknown), not `idle`. This does not prove the process stopped or the task completed. A subsequent
-authoritative work/wait/completion event restores the known state; child metadata or a child
-finishing cannot by itself revive an unknown parent.
+Discovering a running process or receiving session metadata alone does not confirm an idle turn.
+Until a provider reports turn activity, the status is `stale` (unknown). OMP reports its SDK
+`isIdle()` observation at session start/switch and every 30 seconds, including during long tools
+and quiet model responses. Busy observations preserve approval waits; idle observations preserve
+confirmed completed, failed, or interrupted outcomes. Only the root reporter owns this timer,
+at most one periodic observation remains pending during a transport outage, and shutdown stops it.
+
+After more than 30 minutes without a status update, `idle`, `working`, and `waiting` become
+`stale` (unknown). This does not prove the process stopped or the task completed. A subsequent
+authoritative observation restores the known state. Child activity expires against the child's
+own last update, not the root's periodic observation; a child finishing cannot by itself revive
+an unknown parent.
 
 The project sidebar groups compact one-line Agent rows below each project. Each row shows a
 status icon, an Agent-type icon, and `pane name — current task · current action`; overflow is
@@ -1302,6 +1313,8 @@ ellipsized instead of adding stacked metadata lines. Oh My Pi uses its OMP mark,
 the generic Agent glyph, and hovering either icon identifies it. Clicking an Agent selects its
 project, tab, and pane. Project Agent groups can be collapsed; the collapsed project IDs and the
 latest bounded Agent snapshots are persisted.
+Confirmed `idle` uses the pause icon; `stale` uses an information icon with the tooltip
+`agent status unknown`, so unknown status cannot be mistaken for a paused or idle Agent.
 
 ### Dispatch center
 

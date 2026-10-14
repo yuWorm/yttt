@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- 修复进程扫描短暂漏报后同一 Agent 的有序事件投递停滞：重新识别相同 PID 时保留接收进度，
+  漏报只标记失联，不再推断任务完成。未确认的回合状态显示为未知，而不是空闲。
+- Preserve ordered hook delivery across transient process-scan misses for the same Agent PID.
+  Missing observations mean disconnected, not completed; unconfirmed turns remain unknown rather than idle.
+- OMP 每 30 秒通过 SDK 确认忙碌／空闲状态；保留审批等待和已确认的回合结果，
+  断线时最多保留一个待投递的周期确认，退出时停止。主会话确认不再延长失联子任务的活动期限。
+- Observe OMP SDK busy/idle state every 30 seconds without erasing approvals or confirmed turn outcomes.
+  Bound pending periodic observations during outages, stop them on shutdown, and expire child activity independently.
+- 侧栏使用独立的信息图标显示未知状态，暂停图标仅表示已确认空闲；空闲状态同样受 30 分钟过期规则约束。
+- Distinguish unknown status from confirmed idle in the sidebar; idle observations also expire after 30 minutes.
+
 ## 0.3.11 - 2026-10-14
 - 将产品可见名称改为「调度中心」；任务行显示关联执行的用量（不是按 todo 分摊的花费），进行中和待处理任务排在已完成历史之前。
 - Rename the product-visible board to Dispatch center; task rows show execution-associated usage, not per-todo spend, with active and pending tasks before completed history.

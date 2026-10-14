@@ -19,6 +19,10 @@ pub enum AgentEventKind {
         task: Option<AgentTask>,
     },
     Working,
+    /// A provider's live observation, not inferred from process or terminal output.
+    Activity {
+        is_idle: bool,
+    },
     ActionStarted {
         action: AgentAction,
     },

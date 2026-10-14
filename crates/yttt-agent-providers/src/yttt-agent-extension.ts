@@ -27,6 +27,7 @@ const DELIVERY_STREAM_ID = randomUUID();
 const MIN_RETRY_DELAY_MS = 25;
 const MAX_RETRY_DELAY_MS = 1000;
 const QUESTION_POLL_INTERVAL_MS = 500;
+const ACTIVITY_INTERVAL_MS = 30_000;
 const ROOT_EXECUTION_ENTRY = "yttt.board.root-execution";
 const TRANSPORT_SCOPE_OWNERS_KEY = Symbol.for("yttt-agent-status.transport-scope-owners");
 const globalTransportScopeOwners = globalThis as { [key: symbol]: Set<string> | undefined };
@@ -711,6 +712,8 @@ export default function (pi: ExtensionAPI) {
 	if (scope) transportScopeOwners.add(scope);
 
 	let statusContext: ExtensionContext | undefined;
+	let activityTimer: NodeJS.Timeout | undefined;
+	let activityPending = false;
 	let observedSessionId: string | undefined;
 	let currentRoot: RootExecution | undefined;
 	let historyExecutionId: string | undefined;
@@ -1149,16 +1152,34 @@ export default function (pi: ExtensionAPI) {
 	};
 	pi.registerTool(askTool);
 
+	const reportActivity = () => {
+		const ctx = statusContext;
+		if (!ctx || activityPending) return;
+		const delivery = deliver("session_updated", { isIdle: ctx.isIdle() }, ctx);
+		// Keep at most one periodic observation queued during an outage.
+		if (delivery) {
+			activityPending = true;
+			void delivery.finally(() => { activityPending = false; });
+		}
+	};
+
 	const trackContext = (ctx: ExtensionContext, event: "session_start" | "session_switch") => {
 		resetSession(ctx);
 		statusContext = ctx;
-		send(event, {}, ctx);
+		send(event, { isIdle: ctx.isIdle() }, ctx);
 		backfill(ctx);
+		if (scope && !activityTimer) {
+			activityTimer = setInterval(reportActivity, ACTIVITY_INTERVAL_MS);
+			activityTimer.unref();
+		}
 	};
 
 	pi.on("session_start", (_event, ctx) => trackContext(ctx, "session_start"));
 	pi.on("session_switch", (_event, ctx) => trackContext(ctx, "session_switch"));
 	pi.on("session_shutdown", async (_event, ctx) => {
+		clearInterval(activityTimer);
+		activityTimer = undefined;
+		statusContext = undefined;
 		await sendAndWait("session_shutdown", {}, ctx);
 		if (scope) transportScopeOwners.delete(scope);
 	});

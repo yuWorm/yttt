@@ -82,17 +82,17 @@ impl AgentSnapshot {
     }
 
     pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
-        if self.process_state != AgentProcessState::Running
-            || now.saturating_sub(self.updated_at) <= stale_after_millis
-        {
+        if self.process_state != AgentProcessState::Running {
             return false;
         }
 
         let mut changed = false;
-        if matches!(
-            self.turn_state,
-            AgentTurnState::Working | AgentTurnState::Waiting
-        ) {
+        if now.saturating_sub(self.updated_at) > stale_after_millis
+            && matches!(
+                self.turn_state,
+                AgentTurnState::Idle | AgentTurnState::Working | AgentTurnState::Waiting
+            )
+        {
             self.turn_state = AgentTurnState::Unknown;
             self.current_action = None;
             self.waiting_reason = None;
@@ -104,10 +104,12 @@ impl AgentSnapshot {
             self.board.mark_unavailable(now);
         }
         for child in &mut self.children {
-            if matches!(
-                child.turn_state,
-                AgentTurnState::Working | AgentTurnState::Waiting
-            ) {
+            if now.saturating_sub(child.updated_at) > stale_after_millis
+                && matches!(
+                    child.turn_state,
+                    AgentTurnState::Working | AgentTurnState::Waiting
+                )
+            {
                 child.turn_state = AgentTurnState::Unknown;
                 child.current_action = None;
                 child.updated_at = now;
@@ -155,7 +157,7 @@ impl AgentReducer {
                 provider_id,
                 generation: 0,
                 process_state: AgentProcessState::Registered,
-                turn_state: AgentTurnState::Idle,
+                turn_state: AgentTurnState::Unknown,
                 waiting_reason: None,
                 waiting_message: None,
                 task: None,
@@ -168,7 +170,7 @@ impl AgentReducer {
                 state_started_at: now,
                 updated_at: now,
             },
-            lead_turn_state: AgentTurnState::Idle,
+            lead_turn_state: AgentTurnState::Unknown,
         }
     }
     pub fn from_restored(
@@ -204,15 +206,19 @@ impl AgentReducer {
         std::mem::take(&mut self.snapshot.board)
     }
     pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
+        let lead_is_stale = now.saturating_sub(self.snapshot.updated_at) > stale_after_millis;
         if !self.snapshot.decay_stale_activity(now, stale_after_millis) {
             return false;
         }
-        if matches!(
-            self.lead_turn_state,
-            AgentTurnState::Working | AgentTurnState::Waiting
-        ) {
+        if lead_is_stale
+            && matches!(
+                self.lead_turn_state,
+                AgentTurnState::Idle | AgentTurnState::Working | AgentTurnState::Waiting
+            )
+        {
             self.lead_turn_state = AgentTurnState::Unknown;
         }
+        self.refresh_turn_state(now);
         true
     }
 
@@ -225,7 +231,7 @@ impl AgentReducer {
         self.snapshot.board.mark_unavailable(now);
         self.snapshot.waiting_reason = None;
         self.snapshot.waiting_message = None;
-        self.set_lead_turn_state(AgentTurnState::Idle, now);
+        self.set_lead_turn_state(AgentTurnState::Unknown, now);
         self.snapshot.updated_at = now;
     }
 
@@ -304,6 +310,25 @@ impl AgentReducer {
             AgentEventKind::Working => {
                 self.clear_waiting();
                 self.set_lead_turn_state(AgentTurnState::Working, now);
+            }
+            AgentEventKind::Activity { is_idle } => {
+                match (is_idle, self.lead_turn_state) {
+                    // A busy observation does not resolve an approval; an idle
+                    // observation does not erase the last confirmed turn outcome.
+                    (false, AgentTurnState::Waiting)
+                    | (
+                        true,
+                        AgentTurnState::Completed
+                        | AgentTurnState::Failed
+                        | AgentTurnState::Interrupted,
+                    ) => {}
+                    (true, _) => {
+                        self.snapshot.current_action = None;
+                        self.clear_waiting();
+                        self.set_lead_turn_state(AgentTurnState::Idle, now);
+                    }
+                    (false, _) => self.set_lead_turn_state(AgentTurnState::Working, now),
+                }
             }
             AgentEventKind::ActionStarted { action } => {
                 self.snapshot.current_action = Some(action);
@@ -426,7 +451,7 @@ impl AgentReducer {
             self.snapshot.children.clear();
             self.snapshot.last_action_failed = false;
             self.clear_waiting();
-            self.set_lead_turn_state(AgentTurnState::Idle, now);
+            self.set_lead_turn_state(AgentTurnState::Unknown, now);
             self.snapshot.session = Some(metadata);
             return;
         }

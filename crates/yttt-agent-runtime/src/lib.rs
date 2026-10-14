@@ -462,6 +462,7 @@ mod tests {
         let (launch, _) = runtime
             .prepare_launch("test-agent", AgentScopeKey::new("scope").unwrap())
             .unwrap();
+        let before = runtime.snapshot(&launch.instance_id).unwrap().clone();
         let frame = json!({
             "protocol": 1,
             "instanceId": launch.instance_id.as_str(),
@@ -478,9 +479,6 @@ mod tests {
             runtime.ingest_title(&title),
             Err(AgentRuntimeError::InvalidToken)
         ));
-        assert_eq!(
-            runtime.snapshot(&launch.instance_id).unwrap().turn_state,
-            AgentTurnState::Idle
-        );
+        assert_eq!(runtime.snapshot(&launch.instance_id).unwrap(), &before);
     }
 }

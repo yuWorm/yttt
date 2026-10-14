@@ -394,15 +394,16 @@ impl HostAgentHookRuntime {
                         let finished = observations.get_mut(session_id).and_then(|observation| {
                             observation.missed_samples =
                                 observation.missed_samples.saturating_add(1);
-                            (observation.missed_samples >= AGENT_PROCESS_MISSED_SAMPLES_BEFORE_EXIT)
+                            (observation.missed_samples == AGENT_PROCESS_MISSED_SAMPLES_BEFORE_EXIT)
                                 .then(|| observation.clone())
                         });
                         if let Some(finished) = finished {
-                            observations.remove(session_id);
+                            // Retain the PID so a transient scan miss resumes the existing
+                            // authenticated delivery stream rather than waiting for sequence 1.
                             actions.push(AgentProcessAction::Finish {
                                 scope: finished.scope,
                                 provider_id: finished.process.provider_id,
-                                reason: AgentExitReason::Completed,
+                                reason: AgentExitReason::Disconnected,
                             });
                         }
                     }
@@ -2101,6 +2102,120 @@ mod tests {
         assert_eq!(restarted.snapshot.process_state, AgentProcessState::Running);
         assert_ne!(restarted.snapshot.instance_id, started.snapshot.instance_id);
         assert!(restarted.sequence > exited.sequence);
+    }
+
+    #[test]
+    fn activity_reports_confirm_idle_without_overwriting_waiting_or_completion() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("activity", "activity");
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let mut sequence = 0;
+        let mut emit = |event: &str, payload: Value| {
+            sequence += 1;
+            ingest_request(
+                &runtime.state,
+                sequenced_request(&scope, sequence, event, payload),
+            )
+            .unwrap();
+            runtime.snapshots_after(&[]).remove(0).snapshot
+        };
+        let idle = emit(
+            "session_start",
+            serde_json::json!({"sessionId":"root", "isIdle":true}),
+        );
+        assert_eq!(idle.view_state(), AgentViewState::Idle);
+        emit("agent_start", session_payload("root"));
+        let waiting = emit(
+            "tool_approval_requested",
+            serde_json::json!({"sessionId":"root", "reason":"Approve deployment"}),
+        );
+        let heartbeat = emit(
+            "session_updated",
+            serde_json::json!({"sessionId":"root", "isIdle":false}),
+        );
+        assert_eq!(heartbeat.view_state(), AgentViewState::Waiting);
+        assert_eq!(heartbeat.waiting_reason, waiting.waiting_reason);
+        assert_eq!(heartbeat.waiting_message, waiting.waiting_message);
+        emit(
+            "tool_approval_resolved",
+            serde_json::json!({"sessionId":"root", "approved":true}),
+        );
+        let idle = emit(
+            "session_updated",
+            serde_json::json!({"sessionId":"root", "isIdle":true}),
+        );
+        assert_eq!(idle.view_state(), AgentViewState::Idle);
+        emit(
+            "agent_end",
+            serde_json::json!({"sessionId":"root", "willContinue":false}),
+        );
+        let completed = emit(
+            "session_updated",
+            serde_json::json!({"sessionId":"root", "isIdle":true}),
+        );
+        assert_eq!(completed.view_state(), AgentViewState::Completed);
+    }
+
+    #[test]
+    fn sequenced_hooks_resume_after_the_same_process_is_rediscovered() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("rediscovered", "rediscovered");
+        let session_id = terminal.session_id.clone();
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let roots = vec![(session_id.clone(), 10)];
+        let detected = HashMap::from([(
+            session_id,
+            DetectedAgentProcess {
+                pid: 20,
+                provider_id: ProviderId::from_static("omp"),
+            },
+        )]);
+        runtime.reconcile_process_scan(&roots, &detected);
+        for (sequence, event) in [(1, "session_start"), (2, "agent_start")] {
+            ingest_request(
+                &runtime.state,
+                sequenced_request(&scope, sequence, event, session_payload("root")),
+            )
+            .unwrap();
+        }
+        runtime.reconcile_process_scan(&roots, &HashMap::new());
+        runtime.reconcile_process_scan(&roots, &HashMap::new());
+        runtime.reconcile_process_scan(&roots, &detected);
+
+        let outcome = ingest_request(
+            &runtime.state,
+            sequenced_request(
+                &scope,
+                3,
+                "tool_execution_start",
+                serde_json::json!({
+                    "sessionId": "root",
+                    "toolCallId": "read-1",
+                    "toolName": "read",
+                }),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 3,
+                    ..
+                },
+                pending: false,
+            }
+        ));
+        let snapshot = runtime.snapshots_after(&[]).remove(0).snapshot;
+        assert_eq!(snapshot.view_state(), AgentViewState::Working);
+        assert_eq!(
+            snapshot.current_action.unwrap().id.as_deref(),
+            Some("read-1")
+        );
+        assert_eq!(
+            snapshot.session.unwrap().session_id.as_deref(),
+            Some("root")
+        );
     }
 
     #[test]

@@ -26,8 +26,8 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-async function waitFor(predicate: () => boolean, message: string): Promise<void> {
-	const deadline = performance.now() + 5_000;
+async function waitFor(predicate: () => boolean, message: string, timeout = 5_000): Promise<void> {
+	const deadline = performance.now() + timeout;
 	while (!predicate()) {
 		if (performance.now() >= deadline) throw new Error(message);
 		await Bun.sleep(5);
@@ -111,14 +111,22 @@ try {
 		loaded.runtime.appendEntry = (customType: string, data?: unknown) => {
 			sessionManager.appendCustomEntry(customType, data);
 		};
+		let idle = true;
 		const context = {
 			sessionManager,
 			model: { id: "root-model" },
+			isIdle: () => idle,
 		};
 
 		await emit(loaded, "session_start", { type: "session_start" }, context);
+		idle = false;
 		await emit(loaded, "before_agent_start", { type: "before_agent_start", prompt: "delegate two tasks" }, context);
 		await emit(loaded, "agent_start", { type: "agent_start" }, context);
+
+		const activity = () => deliveries.filter(delivery => delivery.event === "session_updated");
+		await waitFor(() => activity().some(delivery => delivery.payload.isIdle === false), "busy turn lost its periodic activity", 35_000);
+		await Bun.sleep(100);
+		assert.equal(activity().length, 1, "duplicate extensions must not duplicate the activity timer");
 
 		const childAStarted = {
 			id: "child-a",
@@ -137,6 +145,7 @@ try {
 
 		// The root turn ends while detached work continues. The child progress must
 		// remain attached to the ended root instead of starting a new root run.
+		idle = true;
 		await emit(loaded, "agent_end", { type: "agent_end", willContinue: false, messages: [] }, context);
 		const childBStarted = {
 			id: "child-b",
@@ -313,7 +322,12 @@ try {
 		assert.equal(followUpTelemetry.model, undefined, "follow-up must not inherit prior model telemetry");
 		assert.equal(followUpTelemetry.cost_microusd, undefined, "follow-up must not inherit prior cost telemetry");
 
-		console.log("PASS: OMP source bridge preserves partial/final child telemetry, optional self-estimates, run isolation, and terminal lifecycle boundaries");
+		await waitFor(() => activity().some(delivery => delivery.payload.isIdle === true), "idle turn was not confirmed", 35_000);
+		await emit(loaded, "session_shutdown", { type: "session_shutdown" }, context);
+		const activityBeforeShutdown = activity().length;
+		await Bun.sleep(31_000);
+		assert.equal(activity().length, activityBeforeShutdown, "shutdown must stop activity observations");
+		console.log("PASS: OMP source bridge preserves child telemetry and lifecycle boundaries; real periodic activity confirms busy/idle, has one owner, and stops on shutdown");
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

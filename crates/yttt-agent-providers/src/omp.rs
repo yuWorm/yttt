@@ -49,12 +49,18 @@ impl AgentProvider for OmpProvider {
                     ProviderError::InvalidPayload(format!("invalid board event: {error}"))
                 })?,
             }],
-            "session_start" | "session_switch" => vec![AgentEventKind::SessionStarted {
-                metadata: session_metadata(payload),
-            }],
-            "session_updated" => vec![AgentEventKind::SessionUpdated {
-                metadata: session_metadata(payload),
-            }],
+            "session_start" | "session_switch" => with_observed_activity(
+                payload,
+                AgentEventKind::SessionStarted {
+                    metadata: session_metadata(payload),
+                },
+            ),
+            "session_updated" => with_observed_activity(
+                payload,
+                AgentEventKind::SessionUpdated {
+                    metadata: session_metadata(payload),
+                },
+            ),
             "session_shutdown" => vec![AgentEventKind::SessionEnded],
             "before_agent_start" => with_session_update(
                 payload,
@@ -148,6 +154,15 @@ fn session_metadata(payload: &Value) -> AgentSessionMetadata {
             ],
         ),
     }
+}
+
+fn with_observed_activity(payload: &Value, event: AgentEventKind) -> Vec<AgentEventKind> {
+    let activity =
+        bool_field(payload, "isIdle").map(|is_idle| AgentEventKind::Activity { is_idle });
+    let mut events = Vec::with_capacity(1 + usize::from(activity.is_some()));
+    events.push(event);
+    events.extend(activity);
+    events
 }
 
 fn with_session_update(payload: &Value, event: AgentEventKind) -> Vec<AgentEventKind> {

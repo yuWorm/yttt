@@ -3095,7 +3095,8 @@ impl WorkbenchView {
                     claude_task,
                     match slug {
                         "design-system" => AgentTurnState::Completed,
-                        "gateway" | "studio" => AgentTurnState::Working,
+                        "gateway" => AgentTurnState::Idle,
+                        "studio" => AgentTurnState::Unknown,
                         _ => AgentTurnState::Waiting,
                     },
                 ),

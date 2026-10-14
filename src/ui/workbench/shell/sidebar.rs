@@ -533,8 +533,12 @@ fn agent_state_icon(
             .size(gpui::px(11.0))
             .text_color(color)
             .into_any_element(),
-        AgentViewState::Idle | AgentViewState::Stale => Icon::new(IconName::Pause)
+        AgentViewState::Idle => Icon::new(IconName::Pause)
             .size(gpui::px(10.0))
+            .text_color(color)
+            .into_any_element(),
+        AgentViewState::Stale => Icon::new(IconName::Info)
+            .size(gpui::px(11.0))
             .text_color(color)
             .into_any_element(),
     };
