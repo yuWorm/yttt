@@ -65,13 +65,28 @@
 普通终端命令不等同于已接入状态检测的 Agent。详情见
 [Agent 状态说明](docs/usage.md#agent-status)。
 
-## 下载与安装
+## 安装
 
 从 [GitHub Releases](https://github.com/yuWorm/yttt/releases) 下载对应平台的桌面安装包：
 
-- **macOS Apple Silicon：**下载 `.dmg`，将 yttt 拖入“应用程序”。
-- **Windows x86_64：**运行 `.exe` 安装程序。
-- **Linux x86_64：**解压 `.tar.gz`，运行其中的 `bin/yttt`。
+- **macOS Apple Silicon：**下载 `.dmg`，将 yttt 拖入 `/Applications` 或 `~/Applications`。在其中首次启动时，
+  yttt 会注册 `/usr/local/bin/yttt`；仅在需要权限时显示原生 macOS 授权提示，不会修改 shell 配置。
+- **Windows x86_64：**运行 `.exe` 安装程序。默认将所选安装目录加入用户 `PATH`；选择为所有用户安装时，
+  则加入系统 `PATH`。安装后请打开新的终端。
+  安装器直接启动的应用会立即获得新的命令路径。安装目录不能包含 `;`。升级请使用原目录；
+  更改安装器管理的命令目录或安装范围前，需要先卸载。用户级安装应由原安装用户卸载。
+- **Linux x86_64：**解压 `.tar.gz` 后，在解压目录中显式运行当前用户的安装脚本：
+
+  ```sh
+  ./install.sh
+  ```
+
+  脚本会把 yttt 复制到 `${XDG_DATA_HOME:-$HOME/.local/share}/yttt/desktop`，并链接
+  `~/.local/bin/yttt`。即使当前终端已经包含该 PATH 项，也会补齐持久配置。Bash 同时配置 `.bashrc`
+  和首个已有的 `.bash_profile`、`.bash_login` 或 `.profile`，确保登录与非登录终端都能使用命令；
+  三者均不存在时创建 `.bash_profile`。Zsh、Fish 和 sh 使用各自的启动配置。安装后请打开新的终端。
+  安装脚本依赖 `flock` 串行化并发安装，保留用户配置和无关命令，失败后可以重试；HOME 不能包含 `:`。
+  脚本不会调用 `sudo`；直接运行发布包中的 `bin/yttt` 仍是便携方式，不会修改 PATH 或 shell 文件。
 
 请核对随安装包提供的 SHA-256 校验和。macOS 安装包采用 ad-hoc 签名，未经过 Developer ID 公证。
 桌面端、Host 与远端 Server 需要使用匹配的版本。

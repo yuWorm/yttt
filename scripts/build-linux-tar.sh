@@ -52,7 +52,7 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 manifest="$repo_root/Cargo.toml"
 desktop_file="$repo_root/packaging/linux/com.yttt.app.desktop"
-
+install_script="$repo_root/packaging/linux/install.sh"
 version="$(/usr/bin/awk '
   /^\[workspace\.package\]$/ { section = "workspace"; next }
   /^\[package\]$/ { section = "package"; next }
@@ -90,6 +90,7 @@ if [[ "$build" -eq 1 ]]; then
 fi
 [[ -f "$binary" ]] || { echo "Missing executable binary: $binary" >&2; exit 1; }
 [[ -f "$desktop_file" ]] || { echo "Missing desktop file: $desktop_file" >&2; exit 1; }
+[[ -x "$install_script" ]] || { echo "Missing executable install script: $install_script" >&2; exit 1; }
 
 staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/yttt-linux.XXXXXX")"
 cleanup() { rm -rf "$staging_dir"; }
@@ -100,6 +101,7 @@ install -d \
   "$package_root/share/applications" \
   "$package_root/share/doc/yttt"
 install -m 755 "$binary" "$package_root/bin/yttt"
+install -m 755 "$install_script" "$package_root/install.sh"
 install -m 644 "$desktop_file" "$package_root/share/applications/com.yttt.app.desktop"
 install -m 644 "$repo_root/README.md" "$package_root/share/doc/yttt/README.md"
 

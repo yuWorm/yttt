@@ -45,6 +45,20 @@
 - Resource protocol is now 16 and desktop-shell protocol 5. Update Clients, Hosts, Servers,
   and CLI together; restart running Agents after managed initialization to load updated adapters.
 
+## 0.3.10 - 2026-10-13
+
+- 安装后自动提供 `yttt` 命令：macOS 已安装应用首次启动时注册命令链接（需要时请求系统授权），
+  Windows 安装器默认注册 PATH，Linux 发布包提供用户级 `install.sh`。不覆盖无关同名命令。
+- Make `yttt` available from the terminal after installation: installed macOS bundles register
+  the command on first launch with authorization when needed, Windows setup registers PATH by
+  default, and Linux archives include a per-user installer. Preserve unrelated command entries.
+- 修复 CLI 注册的持久性与安装生命周期：Linux 同时覆盖 Bash 登录/非登录终端，并发安装加锁，
+  安装失败后可重试；拒绝无法表示为单个 PATH 项的目录。Windows 安装后启动立即获得命令路径，
+  卸载按记录的原范围清理；跨目录或范围升级要求先卸载，避免旧命令继续抢占。
+- Harden CLI registration: persist Linux login/non-login shell configuration independently of
+  transient PATH, serialize installers, and allow failed installs to be retried. Reject PATH
+  delimiters in command directories. Refresh the Windows post-install child's PATH and use
+  recorded uninstall scope; require uninstall before changing an owned installation's directory or scope.
 - 主工作区标签过多时保持标签宽度，通过鼠标滚轮或触控板左右滚动；新建、分屏和项目面板按钮固定在右侧。
 - Keep overflowing workbench tabs at their natural width and scroll horizontally with the mouse wheel
   or trackpad, while keeping the new-tab, split and project-panel controls fixed on the right.
