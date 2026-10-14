@@ -42,6 +42,7 @@ use crate::{
 };
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
+pub const COMMAND_CENTER_CONTEXT: &str = "CommandCenter";
 pub const PALETTE_CONTEXT: &str = "YtttPalette";
 pub const PROJECT_TREE_CONTEXT: &str = "Tree";
 pub const GIT_DIFF_CONTEXT: &str = "YtttGitDiff";
@@ -52,6 +53,9 @@ actions!(
     [
         ApplicationQuit,
         CommandCenterToggle,
+        CommandCenterQuestionPrevious,
+        CommandCenterQuestionNext,
+        CommandCenterQuestionSubmit,
         OpenCommandPalette,
         OpenFileFinder,
         CreateProject,
@@ -316,6 +320,24 @@ define_bindable_actions! {
             action: CommandCenterToggle,
             title: "Toggle Command Center",
             description: "Show or hide the single-screen agent command center.",
+        },
+        CommandCenterQuestionPrevious => {
+            id: "command_center.question_previous",
+            action: CommandCenterQuestionPrevious,
+            title: "Previous Command Center Question",
+            description: "Select the previous pending question in the command center.",
+        },
+        CommandCenterQuestionNext => {
+            id: "command_center.question_next",
+            action: CommandCenterQuestionNext,
+            title: "Next Command Center Question",
+            description: "Select the next pending question in the command center.",
+        },
+        CommandCenterQuestionSubmit => {
+            id: "command_center.question_submit",
+            action: CommandCenterQuestionSubmit,
+            title: "Submit Command Center Question",
+            description: "Submit the selected command center question response.",
         },
         PaletteNext => {
             id: "palette.select_next",
@@ -1155,6 +1177,25 @@ fn default_contextual_keybindings() -> Vec<Keybinding> {
             },
             BindableActionId::CommandCenter,
             WORKSPACE_CONTEXT,
+        ),
+        contextual_binding(
+            "alt-up",
+            BindableActionId::CommandCenterQuestionPrevious,
+            COMMAND_CENTER_CONTEXT,
+        ),
+        contextual_binding(
+            "alt-down",
+            BindableActionId::CommandCenterQuestionNext,
+            COMMAND_CENTER_CONTEXT,
+        ),
+        contextual_binding(
+            if cfg!(target_os = "macos") {
+                "cmd-enter"
+            } else {
+                "ctrl-enter"
+            },
+            BindableActionId::CommandCenterQuestionSubmit,
+            COMMAND_CENTER_CONTEXT,
         ),
         contextual_binding("down", BindableActionId::PaletteNext, PALETTE_CONTEXT),
         contextual_binding("up", BindableActionId::PalettePrevious, PALETTE_CONTEXT),

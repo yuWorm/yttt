@@ -102,7 +102,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AgentSessionsTranscript => "Transcript",
         UiTextKey::AgentSessionsUntitled => "Untitled session",
         UiTextKey::CommandCenterTitle => "Command center",
-        UiTextKey::CommandCenterSubtitle => "projects / tasks / agent activity",
         UiTextKey::CommandCenterHostLive => "Host live",
         UiTextKey::CommandCenterHostLiveReadOnly => "Host live · read-only",
         UiTextKey::CommandCenterHostDisconnectedRetained => "Host disconnected · retained history",
@@ -114,16 +113,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterTasksCount => "tasks {count}",
         UiTextKey::CommandCenterQuestionsCount => "questions {count}",
         UiTextKey::CommandCenterExecutionsCount => "executions {count}",
-        UiTextKey::CommandCenterStablePositions => {
-            "Stable project positions · completed and resolved records stay in place"
-        }
-        UiTextKey::CommandCenterSelectionHint => {
-            "Select a task, question, or execution to link the lower panels"
-        }
         UiTextKey::CommandCenterNoReportedTasks => "no reported tasks",
-        UiTextKey::CommandCenterCompletedTasks => "completed {completed}/{total}",
-        UiTextKey::CommandCenterProviderPlanNotReported => "provider plan not reported",
-        UiTextKey::CommandCenterProviderTaskPlan => "provider task plan",
         UiTextKey::CommandCenterTaskAccepted => "accepted",
         UiTextKey::CommandCenterTaskRetired => "retired",
         UiTextKey::CommandCenterPlanPending => "pending",
@@ -132,9 +122,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterPlanBlocked => "blocked",
         UiTextKey::CommandCenterPlanAbandoned => "abandoned",
         UiTextKey::CommandCenterPlanUnknown => "unknown",
-        UiTextKey::CommandCenterQuestions => "Questions",
+        UiTextKey::CommandCenterQuestions => "Needs attention",
         UiTextKey::CommandCenterRecordsCount => "records {count}",
-        UiTextKey::CommandCenterNoQuestions => "No provider question records have been reported.",
+        UiTextKey::CommandCenterNoQuestions => "No unresolved questions reported.",
         UiTextKey::CommandCenterDurationHours => "{value}h",
         UiTextKey::CommandCenterDurationMinutes => "{value}m",
         UiTextKey::CommandCenterDurationSeconds => "{value}s",
@@ -182,12 +172,25 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterExecutionSummary => {
             "session summary (provider did not report execution records)"
         }
-        UiTextKey::CommandCenterNoExecutions => "No retained execution records.",
-        UiTextKey::CommandCenterExecutionRecords => "Execution records",
-        UiTextKey::CommandCenterReportedCount => "reported {count}",
-        UiTextKey::CommandCenterAgentTask => "Agent / task",
-        UiTextKey::CommandCenterState => "state",
-        UiTextKey::CommandCenterDuration => "duration",
+        UiTextKey::CommandCenterExecutionRecords => "Agent activity",
+        UiTextKey::CommandCenterNoCurrentExecutions => "No current activity.",
+        UiTextKey::CommandCenterActivityCount => "current {count}",
+        UiTextKey::CommandCenterExecutionHistoryShow => "Show execution history ({count})",
+        UiTextKey::CommandCenterExecutionHistoryHide => "Hide execution history ({count})",
+        UiTextKey::CommandCenterSessionActions => "Session actions…",
+        UiTextKey::CommandCenterHideSessionActions => "Hide session actions",
+        UiTextKey::CommandCenterShowResolvedQuestions => "Show resolved history",
+        UiTextKey::CommandCenterHideResolvedQuestions => "Hide resolved history",
+        UiTextKey::CommandCenterSelectedQuestion => "Selected question",
+        UiTextKey::CommandCenterPreviousQuestion => "Previous",
+        UiTextKey::CommandCenterNextQuestion => "Next",
+        UiTextKey::CommandCenterQuestionShortcutsHint => {
+            "Alt+↑/↓ navigate · Ctrl/⌘+Enter submit · 1–9 choose after focusing a question"
+        }
+        UiTextKey::CommandCenterActiveAgentsCount => "active {count}",
+        UiTextKey::CommandCenterPendingQuestionsCount => "to answer {count}",
+        UiTextKey::CommandCenterTaskHistoryShow => "Show task history ({count})",
+        UiTextKey::CommandCenterTaskHistoryHide => "Hide task history ({count})",
         UiTextKey::CommandCenterRoot => "root",
         UiTextKey::CommandCenterOptionalAnswerPlaceholder => "Optional additional answer",
         UiTextKey::CommandCenterPromptPlaceholder => "Send a follow-up to the selected idle agent",

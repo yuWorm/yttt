@@ -438,6 +438,8 @@ impl Render for WorkbenchView {
         }
 
         let input_owner = self.foreground_input_owner_kind();
+        let command_center_shortcuts_active = input_owner == InputOwnerKind::CommandCenter
+            && !self.command_center_input_is_focused(window, cx);
         let mut key_context = if input_owner == InputOwnerKind::KeybindingRecorder {
             gpui::KeyContext::new_with_defaults()
         } else {
@@ -450,6 +452,9 @@ impl Render for WorkbenchView {
             if input_owner == InputOwnerKind::Palette {
                 key_context.add(PALETTE_CONTEXT);
             }
+            if command_center_shortcuts_active {
+                key_context.add(COMMAND_CENTER_CONTEXT);
+            }
         }
 
         root.track_focus(&focus_handle)
@@ -460,6 +465,9 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_create_project))
             .on_action(cx.listener(Self::on_application_quit))
             .on_action(cx.listener(Self::on_command_center_toggle))
+            .on_action(cx.listener(Self::on_command_center_question_previous))
+            .on_action(cx.listener(Self::on_command_center_question_next))
+            .on_action(cx.listener(Self::on_command_center_question_submit))
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_ssh_project))
             .on_action(cx.listener(Self::on_connect_existing_host))

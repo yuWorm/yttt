@@ -213,9 +213,10 @@ use crate::{
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
-            ApplicationQuit, BindableActionId, CommandCenterToggle, ConnectExistingHost,
-            CreateProject, FileSave, FocusProjects, GIT_DIFF_CONTEXT, GitBranchSwitch,
-            GitDiffClose, GitDiffCopySelected, GitDiffOpen, GitDiffSelectNextFile,
+            ApplicationQuit, BindableActionId, COMMAND_CENTER_CONTEXT, CommandCenterQuestionNext,
+            CommandCenterQuestionPrevious, CommandCenterQuestionSubmit, CommandCenterToggle,
+            ConnectExistingHost, CreateProject, FileSave, FocusProjects, GIT_DIFF_CONTEXT,
+            GitBranchSwitch, GitDiffClose, GitDiffCopySelected, GitDiffOpen, GitDiffSelectNextFile,
             GitDiffSelectPreviousFile, GitDiffToggleStageMode, GitDiffToggleViewMode,
             GitDiffToggleWhitespace, LayoutDefaultEdit, LayoutDefaultReload, LayoutDefaultReset,
             LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,

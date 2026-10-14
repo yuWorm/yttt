@@ -1316,10 +1316,18 @@ available project. Workspace restoration distinguishes Dashboard with no open pr
 from Command center with open projects but no selection.
 Project-scoped shortcuts cannot modify a hidden project from the board.
 
-The same page shows the project/task matrix above questions, linked conversation/composer,
-and execution records. Selecting a board row only links these regions; it does not select
-that project in the sidebar. Only yttt-managed Agent scopes in the connected Host and retained
-workspace snapshots are included; this is not a machine-wide process monitor.
+The same page shows the project/task matrix above **Needs attention**, linked conversation/composer,
+and **Agent activity**. The matrix uses the available board width for up to three columns and
+shares the available height between rows; overflowing tasks scroll inside their project.
+Project positions do not reorder when Agent states change. Cards summarize reported task states,
+active Agents, and pending questions, and group tasks by their owning tab/pane.
+These counts are observations, not estimates of project completion.
+
+Completed, abandoned, and retired tasks are retained in collapsible project history. Current
+Agent activity appears before execution history. A selected historical record remains accessible
+when history is folded. Selecting a board row only links these regions; it does not select that
+project in the sidebar. Only yttt-managed Agent scopes in the connected Host and retained workspace
+snapshots are included; this is not a machine-wide process monitor.
 
 Choose **Open session** (**打开会话**) in **Linked conversation** to activate the exact
 existing project, tab, and terminal pane for the selected record. Child Agent records open
@@ -1345,8 +1353,19 @@ answered. Answers target the exact Host epoch, pane generation, Agent instance, 
 An active authenticated OMP poll channel is required. Child Ask records are read-only, and
 native approval/permission prompts must still be handled in the terminal.
 
+**Needs attention** keeps pending/submitted questions before unavailable channels and folds resolved
+history. Selecting a question title or answer option, or focusing its answer input, links the exact
+question to its conversation. A newly resolved selected question stays in its queue position until
+you choose another record; updates do not automatically advance selection or steal input focus.
+Use **Previous** / **Next**, or `Alt+Up` / `Alt+Down`, to navigate pending questions, including
+read-only questions that still need attention. Navigation brings the question into view.
+With a question title focused, `1`–`9` select answer options, and `Cmd+Enter` on macOS
+(`Ctrl+Enter` elsewhere) submits the selected request through its existing answer channel.
+These board shortcuts do not intercept typing while an answer input or follow-up composer is focused.
+Terminal termination is under **Session actions** and still requires confirmation.
+
 Disconnects retain observations but disable unavailable answer channels; unknown execution
-state is not failure or completion. Completed executions and resolved questions remain visible.
+state is not failure or completion. Completed executions and resolved questions remain in history.
 Workspace persistence retains bounded snapshots (per Agent: up to 512 task rows, 256 executions,
 256 recent messages, and 128 question records). Messages are capped at 16 KiB each and older
 messages can be evicted; this is not an unlimited transcript archive. Open questions are not

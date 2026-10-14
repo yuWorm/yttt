@@ -43,6 +43,12 @@ pub(super) struct CommandCenterState {
     live_updates_task: Option<Task<()>>,
     live_updates_closed: bool,
     live_updates_generation: u64,
+    execution_history_expanded: bool,
+    project_history_expanded: BTreeSet<String>,
+    project_matrix_width: f32,
+    question_history_expanded: bool,
+    question_scroll: gpui::ScrollHandle,
+    management_session: Option<String>,
     pub(super) pending_terminal_termination: Option<String>,
 }
 
@@ -58,6 +64,16 @@ struct CommandCenterSelection {
     terminal_session_id: String,
     execution_id: String,
     task_id: Option<String>,
+    question_request_id: Option<String>,
+    question_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CommandCenterQuestionTarget {
+    terminal_session_id: String,
+    execution_id: String,
+    request_id: String,
+    question_id: String,
 }
 
 #[derive(Default)]
@@ -65,6 +81,7 @@ struct CommandCenterQuestionDraft {
     selected_options: BTreeMap<String, BTreeSet<String>>,
     custom_inputs: HashMap<String, Entity<InputState>>,
     input_subscriptions: HashMap<String, Subscription>,
+    question_focuses: HashMap<String, gpui::FocusHandle>,
     input_locale: Option<Locale>,
 }
 
@@ -89,6 +106,22 @@ pub(super) struct CommandCenterSource {
     pub(super) terminal_session_id: String,
     snapshot: AgentSnapshot,
     operation_target: Option<CommandCenterOperationTarget>,
+}
+
+#[derive(Clone, Copy)]
+struct CommandCenterProjectMatrix {
+    columns: u16,
+    rows: u16,
+}
+
+fn command_center_project_matrix(project_count: usize, width: f32) -> CommandCenterProjectMatrix {
+    let available = (((width - 12.0) / 282.0).floor() as usize).clamp(1, 3);
+    let desired = project_count.clamp(1, 3);
+    let columns = available.min(desired);
+    CommandCenterProjectMatrix {
+        columns: columns as u16,
+        rows: project_count.max(1).div_ceil(columns) as u16,
+    }
 }
 
 impl WorkbenchView {
@@ -134,15 +167,23 @@ impl WorkbenchView {
                 .or_default()
                 .push(source);
         }
+        let project_matrix = command_center_project_matrix(
+            project_sources.len(),
+            self.command_center.project_matrix_width,
+        );
+        let measure_view = cx.entity().downgrade();
         let mut board = div()
             .id("command-center-projects")
-            .flex()
-            .flex_wrap()
+            .debug_selector(|| "command-center-project-matrix".to_string())
+            .grid()
+            .grid_cols(project_matrix.columns)
+            .grid_rows(project_matrix.rows)
             .gap(px(10.0))
+            .w_full()
+            .h_full()
             .min_w_0()
-            .min_h_0()
-            .flex_1()
-            .overflow_y_scroll()
+            .min_h(px(f32::from(project_matrix.rows) * 146.0 + 12.0))
+            .flex_none()
             .p(px(11.0));
         if project_sources.is_empty() {
             board = board.child(
@@ -203,11 +244,11 @@ impl WorkbenchView {
                     .flex()
                     .flex_wrap()
                     .items_center()
-                    .min_h(px(31.0))
-                    .py(px(4.0))
-                    .px(px(12.0))
-                    .gap_x(px(10.0))
-                    .gap_y(px(2.0))
+                    .min_h(px(28.0))
+                    .py(px(3.0))
+                    .px(px(11.0))
+                    .gap_x(px(8.0))
+                    .gap_y(px(1.0))
                     .border_b(px(1.0))
                     .border_color(theme.border)
                     .child(
@@ -215,12 +256,6 @@ impl WorkbenchView {
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(self.ui_text.get(UiTextKey::CommandCenterTitle)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(self.ui_text.get(UiTextKey::CommandCenterSubtitle)),
                     )
                     .child(
                         div()
@@ -263,37 +298,41 @@ impl WorkbenchView {
             )
             .child(
                 div()
-                    .flex_none()
+                    .id("command-center-project-viewport")
+                    .debug_selector(|| "command-center-project-viewport".to_string())
+                    .relative()
                     .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .min_h(px(23.0))
-                    .py(px(3.0))
-                    .px(px(12.0))
-                    .gap_x(px(14.0))
-                    .gap_y(px(2.0))
-                    .border_b(px(1.0))
-                    .border_color(theme.border_variant)
-                    .text_xs()
-                    .text_color(theme.text_subtle)
-                    .child(
-                        div()
-                            .whitespace_normal()
-                            .child(self.ui_text.get(UiTextKey::CommandCenterStablePositions)),
-                    )
-                    .child(
-                        div()
-                            .whitespace_normal()
-                            .child(self.ui_text.get(UiTextKey::CommandCenterSelectionHint)),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
+                    .min_w_0()
                     .min_h_0()
+                    .overflow_y_scroll()
                     .flex_basis(relative(0.63))
                     .flex_shrink(1.0)
-                    .child(board),
+                    .child(board)
+                    .child(
+                        gpui::canvas(
+                            move |bounds, _, cx| {
+                                let width = f32::from(bounds.size.width);
+                                if measure_view
+                                    .read_with(cx, |root, _| {
+                                        (root.command_center.project_matrix_width - width).abs()
+                                            > 1.0
+                                    })
+                                    .unwrap_or(false)
+                                {
+                                    let view = measure_view.clone();
+                                    cx.defer(move |cx| {
+                                        let _ = view.update(cx, |root, cx| {
+                                            root.command_center.project_matrix_width = width;
+                                            cx.notify();
+                                        });
+                                    });
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
             )
             .child(lower)
     }
@@ -477,30 +516,75 @@ impl WorkbenchView {
                 .as_ref()
                 .is_some_and(|selection| {
                     sources.iter().any(|source| {
-                        source.terminal_session_id == selection.terminal_session_id
-                            && (source
-                                .snapshot
-                                .board
-                                .executions
-                                .iter()
-                                .any(|execution| execution.id == selection.execution_id)
-                                || source.snapshot.board.tasks.iter().any(|task| {
-                                    task.execution_id == selection.execution_id
-                                        && selection.task_id.as_deref()
-                                            == Some(task.item.id.as_str())
-                                })
-                                || source.snapshot.board.questions.iter().any(|question| {
-                                    question.request.execution_id == selection.execution_id
-                                })
-                                || (selection.execution_id == source.terminal_session_id
-                                    && source.snapshot.board.executions.is_empty()))
+                        if source.terminal_session_id != selection.terminal_session_id {
+                            return false;
+                        }
+                        if let Some(request_id) = selection.question_request_id.as_deref() {
+                            return source.snapshot.board.questions.iter().any(|record| {
+                                record.request.id == request_id
+                                    && record.request.execution_id == selection.execution_id
+                                    && selection.question_id.as_deref().is_none_or(|question_id| {
+                                        record
+                                            .request
+                                            .questions
+                                            .iter()
+                                            .any(|question| question.id == question_id)
+                                    })
+                            });
+                        }
+                        source
+                            .snapshot
+                            .board
+                            .executions
+                            .iter()
+                            .any(|execution| execution.id == selection.execution_id)
+                            || source.snapshot.board.tasks.iter().any(|task| {
+                                task.execution_id == selection.execution_id
+                                    && selection.task_id.as_deref() == Some(task.item.id.as_str())
+                            })
+                            || source.snapshot.board.questions.iter().any(|question| {
+                                question.request.execution_id == selection.execution_id
+                            })
+                            || (selection.execution_id == source.terminal_session_id
+                                && source.snapshot.board.executions.is_empty())
                     })
                 });
         if selection_is_current {
             return;
         }
+        for source in sources {
+            if let Some((record, question)) = source
+                .snapshot
+                .board
+                .questions
+                .iter()
+                .filter(|record| record.state == AgentQuestionState::Pending)
+                .find_map(|record| {
+                    record
+                        .request
+                        .questions
+                        .first()
+                        .map(|question| (record, question))
+                })
+            {
+                self.command_center.selection = Some(CommandCenterSelection {
+                    terminal_session_id: source.terminal_session_id.clone(),
+                    execution_id: record.request.execution_id.clone(),
+                    task_id: None,
+                    question_request_id: Some(record.request.id.clone()),
+                    question_id: Some(question.id.clone()),
+                });
+                return;
+            }
+        }
         self.command_center.selection = sources.first().map(|source| {
-            let task = source.snapshot.board.tasks.first();
+            let task = source
+                .snapshot
+                .board
+                .tasks
+                .iter()
+                .find(|task| !command_center_task_is_history(task))
+                .or_else(|| source.snapshot.board.tasks.first());
             CommandCenterSelection {
                 terminal_session_id: source.terminal_session_id.clone(),
                 execution_id: task
@@ -515,8 +599,31 @@ impl WorkbenchView {
                     })
                     .unwrap_or_else(|| source.terminal_session_id.clone()),
                 task_id: task.map(|task| task.item.id.clone()),
+                question_request_id: None,
+                question_id: None,
             }
         });
+    }
+
+    fn command_center_session_label(&self, source: &CommandCenterSource) -> String {
+        source
+            .session_target
+            .as_ref()
+            .and_then(|target| {
+                let project = self.workspace.project(&target.project_id)?;
+                let tab = project.layout.tab(&target.tab_id)?;
+                let pane = tab.layout.find_pane(&target.pane_id)?;
+                Some(if tab.title == pane.title {
+                    tab.title.clone()
+                } else {
+                    format!("{} · {}", tab.title, pane.title)
+                })
+            })
+            .unwrap_or_else(|| {
+                self.ui_text
+                    .get(UiTextKey::CommandCenterSessionNotOpen)
+                    .to_string()
+            })
     }
 
     fn command_center_project_card(
@@ -528,18 +635,60 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let task_count = sources
+        let active_agents = sources
             .iter()
-            .map(|source| source.snapshot.board.tasks.len())
+            .map(|source| {
+                if source.snapshot.process_state != AgentProcessState::Running {
+                    return 0;
+                }
+                1 + source
+                    .snapshot
+                    .children
+                    .iter()
+                    .filter(|child| {
+                        matches!(
+                            child.turn_state,
+                            AgentTurnState::Idle
+                                | AgentTurnState::Working
+                                | AgentTurnState::Waiting
+                        )
+                    })
+                    .count()
+            })
             .sum::<usize>();
-        let completed = sources
+        let pending_questions = sources
+            .iter()
+            .flat_map(|source| source.snapshot.board.questions.iter())
+            .filter(|record| matches!(record.state, AgentQuestionState::Pending))
+            .count();
+        let mut task_status_counts = [
+            (AgentPlanStatus::Pending, 0usize),
+            (AgentPlanStatus::InProgress, 0usize),
+            (AgentPlanStatus::Completed, 0usize),
+            (AgentPlanStatus::Blocked, 0usize),
+            (AgentPlanStatus::Abandoned, 0usize),
+            (AgentPlanStatus::Unknown, 0usize),
+        ];
+        let mut task_count = 0;
+        let mut history_count = 0;
+        for task in sources
             .iter()
             .flat_map(|source| source.snapshot.board.tasks.iter())
-            .filter(|task| task.item.status == AgentPlanStatus::Completed)
-            .count();
-        let plan_missing = sources
-            .iter()
-            .any(|source| source.snapshot.board.tasks.is_empty());
+        {
+            task_count += 1;
+            if command_center_task_is_history(task) {
+                history_count += 1;
+            }
+            let status_index = match task.item.status {
+                AgentPlanStatus::Pending => 0,
+                AgentPlanStatus::InProgress => 1,
+                AgentPlanStatus::Completed => 2,
+                AgentPlanStatus::Blocked => 3,
+                AgentPlanStatus::Abandoned => 4,
+                AgentPlanStatus::Unknown => 5,
+            };
+            task_status_counts[status_index].1 += 1;
+        }
         let selected_project = self
             .command_center
             .selection
@@ -549,6 +698,54 @@ impl WorkbenchView {
                     .iter()
                     .any(|source| source.terminal_session_id == selection.terminal_session_id)
             });
+        let history_expanded = self
+            .command_center
+            .project_history_expanded
+            .contains(project_id);
+        let history_project_id = project_id.to_string();
+        let mut summary = div()
+            .flex_none()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_x(px(6.0))
+            .gap_y(px(2.0))
+            .mb(px(5.0))
+            .text_xs()
+            .text_color(theme.text_muted)
+            .child(div().child(command_center_count(
+                self.ui_text,
+                UiTextKey::CommandCenterActiveAgentsCount,
+                active_agents,
+            )))
+            .child(
+                div()
+                    .text_color(if pending_questions > 0 {
+                        theme.warning
+                    } else {
+                        theme.text_muted
+                    })
+                    .child(command_center_count(
+                        self.ui_text,
+                        UiTextKey::CommandCenterPendingQuestionsCount,
+                        pending_questions,
+                    )),
+            );
+        if task_count == 0 {
+            summary = summary
+                .child(div().child(self.ui_text.get(UiTextKey::CommandCenterNoReportedTasks)));
+        } else {
+            for (status, count) in task_status_counts {
+                if count == 0 {
+                    continue;
+                }
+                summary = summary.child(div().child(format!(
+                    "{count} {}",
+                    self.ui_text.get(command_center_plan_label(status))
+                )));
+            }
+        }
+
         let mut task_list = div()
             .id(format!("command-center-tasks:{project_id}"))
             .flex()
@@ -556,87 +753,168 @@ impl WorkbenchView {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
-        for source in sources {
-            if source.snapshot.board.tasks.is_empty() {
-                let execution_id = source.terminal_session_id.clone();
-                let session_id = source.terminal_session_id.clone();
-                let is_selected = self
-                    .command_center
-                    .selection
-                    .as_ref()
-                    .is_some_and(|selection| {
-                        selection.terminal_session_id == session_id
-                            && selection.execution_id == execution_id
-                            && selection.task_id.is_none()
-                    });
-                let summary = source.snapshot.primary_text();
-                task_list =
-                    task_list.child(
-                        div()
-                            .id(format!(
-                                "command-center-summary:{}",
-                                source.terminal_session_id
-                            ))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .min_h(px(23.0))
-                            .px(px(5.0))
-                            .gap(px(6.0))
-                            .border_l(px(2.0))
-                            .border_color(if is_selected {
-                                theme.accent
+        for history in [false, true] {
+            if history && history_count > 0 {
+                let history_project_id = history_project_id.clone();
+                let history_debug_project_id = project_id.to_string();
+                task_list = task_list.child(
+                    div()
+                        .id(format!("command-center-task-history:{project_id}"))
+                        .debug_selector(move || {
+                            format!("command-center-project-history:{history_debug_project_id}")
+                        })
+                        .cursor_pointer()
+                        .flex_none()
+                        .py(px(5.0))
+                        .px(px(5.0))
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(command_center_count(
+                            self.ui_text,
+                            if history_expanded {
+                                UiTextKey::CommandCenterTaskHistoryHide
                             } else {
-                                theme.app_background
-                            })
-                            .bg(if is_selected {
-                                theme.selection
-                            } else {
-                                theme.ghost_element_background
-                            })
-                            .on_click(cx.listener(move |root, _, _window, cx| {
-                                root.command_center_select(
-                                    session_id.clone(),
-                                    execution_id.clone(),
-                                    None,
-                                    cx,
-                                );
-                            }))
-                            .child(
-                                div()
-                                    .w(px(12.0))
-                                    .text_xs()
-                                    .text_color(command_center_turn_color(
-                                        source.snapshot.turn_state,
-                                        theme,
-                                    ))
-                                    .child(command_center_turn_symbol(source.snapshot.turn_state)),
-                            )
-                            .child(div().flex_1().min_w_0().truncate().text_xs().child(summary))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.text_subtle)
-                                    .child(source.snapshot.provider_id.to_string()),
-                            )
-                            .child(div().text_xs().text_color(theme.text_subtle).child(
-                                command_center_age(self.ui_text, source.snapshot.updated_at),
-                            )),
-                    );
-            } else {
-                for task in &source.snapshot.board.tasks {
-                    task_list =
-                        task_list.child(self.command_center_task_row(source, task, theme, cx));
+                                UiTextKey::CommandCenterTaskHistoryShow
+                            },
+                            history_count,
+                        ))
+                        .on_click(cx.listener(move |root, _, _, cx| {
+                            if !root
+                                .command_center
+                                .project_history_expanded
+                                .insert(history_project_id.clone())
+                            {
+                                root.command_center
+                                    .project_history_expanded
+                                    .remove(&history_project_id);
+                            }
+                            cx.notify();
+                        })),
+                );
+                if !history_expanded {
+                    continue;
                 }
             }
+            for source in sources {
+                let mut visible_tasks = source
+                    .snapshot
+                    .board
+                    .tasks
+                    .iter()
+                    .filter(|task| {
+                        if !history {
+                            return !command_center_task_is_history(task);
+                        }
+                        command_center_task_is_history(task)
+                            && (history_expanded
+                                || self.command_center.selection.as_ref().is_some_and(
+                                    |selection| {
+                                        selection.terminal_session_id == source.terminal_session_id
+                                            && selection.execution_id == task.execution_id
+                                            && selection.task_id.as_deref()
+                                                == Some(task.item.id.as_str())
+                                    },
+                                ))
+                    })
+                    .peekable();
+                let has_visible_tasks = visible_tasks.peek().is_some();
+                if !has_visible_tasks && (history || !source.snapshot.board.tasks.is_empty()) {
+                    continue;
+                }
+                let selection_execution_id = visible_tasks
+                    .peek()
+                    .map(|task| task.execution_id.clone())
+                    .unwrap_or_else(|| source.terminal_session_id.clone());
+                let selection_task_id = visible_tasks.peek().map(|task| task.item.id.clone());
+                let session_id = source.terminal_session_id.clone();
+                let session_label = self.command_center_session_label(source);
+                let session_selected = !has_visible_tasks
+                    && self
+                        .command_center
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| {
+                            selection.terminal_session_id == session_id
+                                && selection.execution_id == session_id
+                                && selection.task_id.is_none()
+                        });
+                let session_row = div()
+                    .id(format!(
+                        "command-center-session:{}:{history}",
+                        source.terminal_session_id
+                    ))
+                    .cursor_pointer()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .min_h(px(24.0))
+                    .px(px(5.0))
+                    .gap(px(6.0))
+                    .border_l(px(2.0))
+                    .border_color(if session_selected {
+                        theme.accent
+                    } else {
+                        theme.app_background
+                    })
+                    .bg(if session_selected {
+                        theme.selection
+                    } else {
+                        theme.ghost_element_background
+                    })
+                    .on_click(cx.listener(move |root, _, _window, cx| {
+                        root.command_center_select(
+                            session_id.clone(),
+                            selection_execution_id.clone(),
+                            selection_task_id.clone(),
+                            cx,
+                        );
+                    }))
+                    .child(
+                        div()
+                            .w(px(12.0))
+                            .text_xs()
+                            .text_color(command_center_turn_color(
+                                source.snapshot.turn_state,
+                                theme,
+                            ))
+                            .child(command_center_turn_symbol(source.snapshot.turn_state)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(session_label),
+                    )
+                    .child(
+                        div().text_xs().text_color(theme.text_subtle).child(
+                            self.ui_text
+                                .get(command_center_turn_label(source.snapshot.turn_state)),
+                        ),
+                    );
+                let mut group = div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .min_w_0()
+                    .child(session_row);
+                for task in visible_tasks {
+                    group = group.child(self.command_center_task_row(source, task, theme, cx));
+                }
+                task_list = task_list.child(group);
+            }
         }
-        div()
+
+        let debug_project_id = project_id.to_string();
+        let card = div()
+            .debug_selector(move || format!("command-center-project-card:{debug_project_id}"))
             .flex()
             .flex_col()
-            .flex_basis(relative(0.32))
-            .flex_shrink(1.0)
-            .min_w(px(250.0))
-            .h(px(184.0))
+            .min_w_0()
+            .min_h_0()
+            .h_full()
             .p(px(7.0))
             .border(px(1.0))
             .border_color(if selected_project {
@@ -644,47 +922,26 @@ impl WorkbenchView {
             } else {
                 theme.border
             })
-            .bg(theme.surface)
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .mb(px(4.0))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(project_name.to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .mb(px(4.0))
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child(if task_count == 0 {
-                        self.ui_text
-                            .get(UiTextKey::CommandCenterNoReportedTasks)
-                            .to_string()
-                    } else {
-                        command_center_completed_tasks(self.ui_text, completed, task_count)
-                    })
-                    .child(self.ui_text.get(if plan_missing {
-                        UiTextKey::CommandCenterProviderPlanNotReported
-                    } else {
-                        UiTextKey::CommandCenterProviderTaskPlan
-                    })),
-            )
-            .child(task_list)
+            .bg(theme.surface);
+        card.child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .mb(px(4.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(project_name.to_string()),
+                ),
+        )
+        .child(summary)
+        .child(task_list)
     }
 
     fn command_center_task_row(
@@ -706,11 +963,7 @@ impl WorkbenchView {
                     && selection.execution_id == execution_id
                     && selection.task_id.as_deref() == Some(task_id.as_str())
             });
-        let dimmed = task.retired
-            || matches!(
-                task.item.status,
-                AgentPlanStatus::Completed | AgentPlanStatus::Abandoned
-            );
+        let history = command_center_task_is_history(task);
         div()
             .id(format!(
                 "command-center-task:{session_id}:{execution_id}:{task_id}"
@@ -718,9 +971,9 @@ impl WorkbenchView {
             .cursor_pointer()
             .flex()
             .items_center()
-            .min_h(px(22.0))
+            .min_h(px(24.0))
             .px(px(5.0))
-            .gap(px(6.0))
+            .gap(px(5.0))
             .border_l(px(2.0))
             .border_color(if selected {
                 theme.accent
@@ -732,7 +985,7 @@ impl WorkbenchView {
             } else {
                 theme.ghost_element_background
             })
-            .opacity(if dimmed { 0.58 } else { 1.0 })
+            .opacity(if history { 0.58 } else { 1.0 })
             .on_click(cx.listener(move |root, _, _window, cx| {
                 root.command_center_select(
                     session_id.clone(),
@@ -757,23 +1010,27 @@ impl WorkbenchView {
                     .child(task.item.title.clone()),
             )
             .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.text_subtle)
-                    .child(self.ui_text.get(if task.accepted_at.is_some() {
-                        UiTextKey::CommandCenterTaskAccepted
-                    } else if task.retired {
-                        UiTextKey::CommandCenterTaskRetired
-                    } else {
-                        command_center_plan_label(task.item.status)
-                    })),
+                div().text_xs().text_color(theme.text_subtle).child(
+                    self.ui_text
+                        .get(command_center_plan_label(task.item.status)),
+                ),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.text_subtle)
-                    .child(command_center_age(self.ui_text, task.updated_at)),
-            )
+            .when(task.accepted_at.is_some(), |row| {
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_subtle)
+                        .child(self.ui_text.get(UiTextKey::CommandCenterTaskAccepted)),
+                )
+            })
+            .when(task.retired, |row| {
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_subtle)
+                        .child(self.ui_text.get(UiTextKey::CommandCenterTaskRetired)),
+                )
+            })
     }
 
     fn command_center_questions_panel(
@@ -784,28 +1041,109 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let question_count = sources
-            .iter()
-            .map(|source| source.snapshot.board.questions.len())
-            .sum::<usize>();
+        let all_records = || {
+            sources.iter().flat_map(|source| {
+                source
+                    .snapshot
+                    .board
+                    .questions
+                    .iter()
+                    .map(move |record| (source, record))
+            })
+        };
+        let question_count = all_records()
+            .filter(|(_, record)| !command_center_question_is_resolved(record.state))
+            .count();
+        let history_count = all_records()
+            .filter(|(_, record)| command_center_question_is_resolved(record.state))
+            .count();
+        let has_pending =
+            all_records().any(|(_, record)| record.state == AgentQuestionState::Pending);
+        let question_scroll = self.command_center.question_scroll.clone();
         let mut records = div()
             .id("command-center-questions")
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll();
+            .overflow_y_scroll()
+            .track_scroll(&question_scroll);
         if question_count == 0 {
-            records = records.child(command_center_empty_panel(
-                self.ui_text.get(UiTextKey::CommandCenterNoQuestions),
-                theme,
-            ));
-        } else {
-            for source in sources {
-                for record in &source.snapshot.board.questions {
-                    records = records.child(
-                        self.command_center_question_card(source, record, theme, style, window, cx),
-                    );
+            records = records.child(
+                div()
+                    .flex_none()
+                    .p(px(7.0))
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child(self.ui_text.get(UiTextKey::CommandCenterNoQuestions)),
+            );
+        }
+        // Keep the selected result in its queue position after settlement. Only an explicit
+        // selection change lets it join collapsed history; incoming updates never select a row.
+        for unavailable in [false, true] {
+            for (source, record) in all_records() {
+                if unavailable != (record.state == AgentQuestionState::Unavailable) {
+                    continue;
+                }
+                let selected = self
+                    .command_center
+                    .selection
+                    .as_ref()
+                    .is_some_and(|selection| {
+                        selection.terminal_session_id == source.terminal_session_id
+                            && selection.question_request_id.as_deref()
+                                == Some(record.request.id.as_str())
+                    });
+                if command_center_question_is_resolved(record.state) && !selected {
+                    continue;
+                }
+                records = records.child(
+                    self.command_center_question_card(source, record, theme, style, window, cx),
+                );
+            }
+        }
+        if history_count > 0 {
+            records = records.child(
+                div().flex_none().p(px(5.0)).child(
+                    yttt_button(
+                        "command-center-question-history",
+                        self.ui_text
+                            .get(if self.command_center.question_history_expanded {
+                                UiTextKey::CommandCenterHideResolvedQuestions
+                            } else {
+                                UiTextKey::CommandCenterShowResolvedQuestions
+                            }),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .on_click(cx.listener(|root, _, _, cx| {
+                        root.command_center.question_history_expanded =
+                            !root.command_center.question_history_expanded;
+                        cx.notify();
+                    })),
+                ),
+            );
+            if self.command_center.question_history_expanded {
+                for (source, record) in all_records() {
+                    if !command_center_question_is_resolved(record.state) {
+                        continue;
+                    }
+                    let selected =
+                        self.command_center
+                            .selection
+                            .as_ref()
+                            .is_some_and(|selection| {
+                                selection.terminal_session_id == source.terminal_session_id
+                                    && selection.question_request_id.as_deref()
+                                        == Some(record.request.id.as_str())
+                            });
+                    if !selected {
+                        records = records.child(self.command_center_question_card(
+                            source, record, theme, style, window, cx,
+                        ));
+                    }
                 }
             }
         }
@@ -819,6 +1157,53 @@ impl WorkbenchView {
             theme,
         )
         .flex_basis(relative(1.38 / 3.28))
+        .child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(5.0))
+                .py(px(3.0))
+                .border_b(px(1.0))
+                .border_color(theme.border_variant)
+                .child(
+                    yttt_button(
+                        "command-center-question-previous",
+                        self.ui_text.get(UiTextKey::CommandCenterPreviousQuestion),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .disabled(!has_pending)
+                    .tooltip(
+                        self.ui_text
+                            .get(UiTextKey::CommandCenterQuestionShortcutsHint),
+                    )
+                    .on_click(cx.listener(|root, _, window, cx| {
+                        root.command_center_move_selected_question(true, window, cx);
+                    })),
+                )
+                .child(
+                    yttt_button(
+                        "command-center-question-next",
+                        self.ui_text.get(UiTextKey::CommandCenterNextQuestion),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .disabled(!has_pending)
+                    .tooltip(
+                        self.ui_text
+                            .get(UiTextKey::CommandCenterQuestionShortcutsHint),
+                    )
+                    .on_click(cx.listener(|root, _, window, cx| {
+                        root.command_center_move_selected_question(false, window, cx);
+                    })),
+                ),
+        )
         .child(records)
     }
 
@@ -835,15 +1220,24 @@ impl WorkbenchView {
         let session_id = source.terminal_session_id.clone();
         let execution_id = record.request.execution_id.clone();
         let draft_key = command_center_question_key(&session_id, &request_id);
-        let selection_session_id = session_id.clone();
-        let selection_execution_id = execution_id.clone();
+        let record_question_id = record
+            .request
+            .questions
+            .first()
+            .map(|question| question.id.clone());
+        let record_target = CommandCenterQuestionTarget {
+            terminal_session_id: session_id.clone(),
+            execution_id: execution_id.clone(),
+            request_id: request_id.clone(),
+            question_id: record_question_id.clone().unwrap_or_default(),
+        };
         let selected = self
             .command_center
             .selection
             .as_ref()
             .is_some_and(|selection| {
                 selection.terminal_session_id == session_id
-                    && selection.execution_id == execution_id
+                    && selection.question_request_id.as_deref() == Some(request_id.as_str())
             });
         let capability = self.command_center_question_capability(source, record);
         let form_feedback = self.command_center.feedback.get(&draft_key).cloned();
@@ -873,10 +1267,9 @@ impl WorkbenchView {
                     .items_center()
                     .gap(px(6.0))
                     .on_click(cx.listener(move |root, _, _window, cx| {
-                        root.command_center_select(
-                            selection_session_id.clone(),
-                            selection_execution_id.clone(),
-                            None,
+                        root.command_center_select_question(
+                            record_target.clone(),
+                            record_question_id.as_deref(),
                             cx,
                         );
                     }))
@@ -910,6 +1303,21 @@ impl WorkbenchView {
             );
         for question in &record.request.questions {
             let question_id = question.id.clone();
+            let question_target = CommandCenterQuestionTarget {
+                terminal_session_id: session_id.clone(),
+                execution_id: execution_id.clone(),
+                request_id: request_id.clone(),
+                question_id: question_id.clone(),
+            };
+            let question_selected =
+                self.command_center
+                    .selection
+                    .as_ref()
+                    .is_some_and(|selection| {
+                        selection.terminal_session_id == session_id
+                            && selection.question_request_id.as_deref() == Some(request_id.as_str())
+                            && selection.question_id.as_deref() == Some(question_id.as_str())
+                    });
             let selected_options = self
                 .command_center
                 .question_drafts
@@ -917,19 +1325,88 @@ impl WorkbenchView {
                 .and_then(|draft| draft.selected_options.get(&question_id))
                 .cloned()
                 .unwrap_or_default();
-            let custom_input =
-                self.command_center_question_input(&draft_key, &question_id, window, cx);
+            let question_focus = self.command_center_question_focus(&draft_key, &question_id, cx);
+            let custom_input = self.command_center_question_input(
+                &draft_key,
+                &question_id,
+                question_target.clone(),
+                window,
+                cx,
+            );
+            let title_target = question_target.clone();
+            let title_focus = question_focus.clone();
+            let keyboard_target = question_target.clone();
             let mut question_body = div()
                 .flex()
                 .flex_col()
                 .gap(px(3.0))
+                .p(px(4.0))
+                .border_l(px(2.0))
+                .border_color(if question_selected {
+                    theme.accent
+                } else {
+                    theme.ghost_element_background
+                })
+                .bg(if question_selected {
+                    theme.selection
+                } else {
+                    theme.ghost_element_background
+                })
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .children(question.header.iter().cloned()),
-                )
-                .child(div().text_sm().child(question.question.clone()));
+                        .id(format!(
+                            "command-center-question-title:{draft_key}:{question_id}"
+                        ))
+                        .track_focus(&question_focus)
+                        .cursor_pointer()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .on_click(cx.listener(move |root, _, window, cx| {
+                            root.command_center_select_question(
+                                title_target.clone(),
+                                Some(&title_target.question_id),
+                                cx,
+                            );
+                            title_focus.focus(window, cx);
+                        }))
+                        .on_key_down(cx.listener(
+                            move |root, event: &gpui::KeyDownEvent, _window, cx| {
+                                let modifiers = event.keystroke.modifiers;
+                                if modifiers.control
+                                    || modifiers.platform
+                                    || modifiers.alt
+                                    || modifiers.function
+                                    || modifiers.shift
+                                {
+                                    return;
+                                }
+                                let Some(index) = event
+                                    .keystroke
+                                    .key
+                                    .parse::<usize>()
+                                    .ok()
+                                    .and_then(|number| number.checked_sub(1))
+                                else {
+                                    return;
+                                };
+                                if root.command_center_select_option_by_index(
+                                    &keyboard_target,
+                                    index,
+                                    cx,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            },
+                        ))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .children(question.header.iter().cloned()),
+                        )
+                        .child(div().text_sm().child(question.question.clone())),
+                );
             let multi = question.multi;
             let preview_label = self.ui_text.get(UiTextKey::CommandCenterOptionPreview);
             let mut options = div().flex().flex_wrap().gap(px(4.0));
@@ -937,6 +1414,8 @@ impl WorkbenchView {
                 let option_label = option.label.clone();
                 let option_question_id = question.id.clone();
                 let option_draft_key = draft_key.clone();
+                let option_target = question_target.clone();
+                let option_focus = question_focus.clone();
                 let selected_option = selected_options.contains(&option_label);
                 options = options.child(
                     yttt_button(
@@ -955,14 +1434,16 @@ impl WorkbenchView {
                         cx,
                     )
                     .disabled(!capability.can_answer)
-                    .on_click(cx.listener(move |root, _, _window, cx| {
-                        root.command_center_toggle_option(
+                    .on_click(cx.listener(move |root, _, window, cx| {
+                        root.command_center_select_option(
+                            option_target.clone(),
                             &option_draft_key,
                             &option_question_id,
                             option_label.clone(),
                             multi,
                             cx,
                         );
+                        option_focus.focus(window, cx);
                     })),
                 );
             }
@@ -1097,6 +1578,26 @@ impl WorkbenchView {
             .map(|task| task.item.title.clone())
             .or_else(|| execution.map(|record| record.name.clone()))
             .unwrap_or_else(|| source.snapshot.primary_text());
+        let selected_question = selection
+            .question_request_id
+            .as_deref()
+            .zip(selection.question_id.as_deref())
+            .and_then(|(request_id, question_id)| {
+                source
+                    .snapshot
+                    .board
+                    .questions
+                    .iter()
+                    .find(|record| record.request.id == request_id)
+                    .and_then(|record| {
+                        record
+                            .request
+                            .questions
+                            .iter()
+                            .find(|question| question.id == question_id)
+                    })
+                    .map(|question| question.question.clone())
+            });
         let mut messages = source
             .snapshot
             .board
@@ -1164,24 +1665,33 @@ impl WorkbenchView {
                 );
             }
         }
+        let mut header = div()
+            .flex_none()
+            .px(px(8.0))
+            .py(px(5.0))
+            .border_b(px(1.0))
+            .border_color(theme.border_variant)
+            .text_xs()
+            .text_color(theme.text_muted)
+            .child(title);
+        if let Some(question) = selected_question {
+            header = header.child(div().truncate().child(format!(
+                "{} · {question}",
+                self.ui_text.get(UiTextKey::CommandCenterSelectedQuestion),
+            )));
+        }
+        header = header.child(self.command_center_session_link(source, theme, style, cx));
         let mut panel = command_center_panel(
             self.ui_text.get(UiTextKey::CommandCenterLinkedConversation),
-            format!("{} · {}", source.project_name, execution_id),
+            format!(
+                "{} · {}",
+                source.project_name,
+                self.command_center_session_label(source)
+            ),
             theme,
         )
         .flex_basis(relative(1.12 / 3.28))
-        .child(
-            div()
-                .flex_none()
-                .px(px(8.0))
-                .py(px(5.0))
-                .border_b(px(1.0))
-                .border_color(theme.border_variant)
-                .text_xs()
-                .text_color(theme.text_muted)
-                .child(title)
-                .child(self.command_center_session_link(source, theme, style, cx)),
-        )
+        .child(header)
         .child(transcript);
         panel =
             panel.child(self.command_center_selected_actions(
@@ -1444,51 +1954,74 @@ impl WorkbenchView {
                 .terminal_panes
                 .contains_key(&source.terminal_session_id)
         {
-            let can_terminate = self.shared_mutation_allowed();
+            let management_open = self.command_center.management_session.as_deref()
+                == Some(source.terminal_session_id.as_str());
             let session_id = source.terminal_session_id.clone();
-            let requires_confirmation = can_terminate
-                && self.command_center.pending_terminal_termination.as_deref()
-                    == Some(session_id.as_str());
-            let label = self.ui_text.get(if requires_confirmation {
-                UiTextKey::CommandCenterConfirmTerminateTerminal
-            } else {
-                UiTextKey::CommandCenterTerminateTerminal
-            });
             actions = actions.child(
                 div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        yttt_button(
-                            format!("command-center-terminate:{session_id}"),
-                            label,
-                            YtttButtonVariant::Danger,
-                            theme,
-                            style,
-                            cx,
-                        )
-                        .disabled(!can_terminate)
-                        .on_click(cx.listener(
-                            move |root, _, _window, cx| {
-                                root.command_center_terminate_terminal(&session_id, cx);
-                            },
-                        )),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .w_full()
-                            .text_xs()
-                            .text_color(theme.text_subtle)
-                            .child(self.ui_text.get(if can_terminate {
-                                UiTextKey::CommandCenterTerminateHint
-                            } else {
-                                UiTextKey::CommandCenterTerminateDesktopReadOnly
-                            })),
-                    ),
+                    .id("command-center-session-actions")
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(theme.text_subtle)
+                    .child(self.ui_text.get(if management_open {
+                        UiTextKey::CommandCenterHideSessionActions
+                    } else {
+                        UiTextKey::CommandCenterSessionActions
+                    }))
+                    .on_click(cx.listener(move |root, _, _, cx| {
+                        root.command_center.management_session =
+                            (!management_open).then(|| session_id.clone());
+                        root.command_center.pending_terminal_termination = None;
+                        cx.notify();
+                    })),
             );
+            if management_open {
+                let can_terminate = self.shared_mutation_allowed();
+                let session_id = source.terminal_session_id.clone();
+                let requires_confirmation = can_terminate
+                    && self.command_center.pending_terminal_termination.as_deref()
+                        == Some(session_id.as_str());
+                let label = self.ui_text.get(if requires_confirmation {
+                    UiTextKey::CommandCenterConfirmTerminateTerminal
+                } else {
+                    UiTextKey::CommandCenterTerminateTerminal
+                });
+                actions = actions.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            yttt_button(
+                                format!("command-center-terminate:{session_id}"),
+                                label,
+                                YtttButtonVariant::Danger,
+                                theme,
+                                style,
+                                cx,
+                            )
+                            .disabled(!can_terminate)
+                            .on_click(cx.listener(
+                                move |root, _, _window, cx| {
+                                    root.command_center_terminate_terminal(&session_id, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .w_full()
+                                .text_xs()
+                                .text_color(theme.text_subtle)
+                                .child(self.ui_text.get(if can_terminate {
+                                    UiTextKey::CommandCenterTerminateHint
+                                } else {
+                                    UiTextKey::CommandCenterTerminateDesktopReadOnly
+                                })),
+                        ),
+                );
+            }
         }
         let feedback_key = format!(
             "prompt:{}:{}",
@@ -1521,6 +2054,26 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        let mut current_count = 0;
+        let mut history_count = 0;
+        for source in sources {
+            if source.snapshot.board.executions.is_empty() {
+                if source.snapshot.process_state == AgentProcessState::Exited {
+                    history_count += 1;
+                } else {
+                    current_count += 1;
+                }
+            } else {
+                for execution in &source.snapshot.board.executions {
+                    if execution.ended_at.is_some() {
+                        history_count += 1;
+                    } else {
+                        current_count += 1;
+                    }
+                }
+            }
+        }
+        let expanded = self.command_center.execution_history_expanded;
         let mut rows = div()
             .id("command-center-executions")
             .flex()
@@ -1529,73 +2082,126 @@ impl WorkbenchView {
             .min_h_0()
             .overflow_y_scroll()
             .p(px(4.0));
-        let mut reported_count = 0usize;
-        let mut has_rows = false;
-        for source in sources {
-            if source.snapshot.board.executions.is_empty() {
-                has_rows = true;
-                rows = rows.child(self.command_center_execution_row(
-                    source,
-                    None,
-                    source.terminal_session_id.clone(),
-                    self.ui_text.get(UiTextKey::CommandCenterExecutionSummary),
-                    source.snapshot.turn_state,
-                    source.snapshot.state_started_at,
-                    None,
-                    theme,
-                    cx,
-                ));
-            } else {
-                for execution in &source.snapshot.board.executions {
-                    has_rows = true;
-                    reported_count += 1;
-                    rows = rows.child(self.command_center_execution_row(
-                        source,
-                        Some(execution),
-                        execution.id.clone(),
-                        &execution.name,
-                        execution.state,
-                        execution.started_at,
-                        execution.ended_at,
-                        theme,
-                        cx,
-                    ));
+        if current_count == 0 {
+            rows = rows.child(
+                div()
+                    .p(px(6.0))
+                    .text_xs()
+                    .text_color(theme.text_subtle)
+                    .child(
+                        self.ui_text
+                            .get(UiTextKey::CommandCenterNoCurrentExecutions),
+                    ),
+            );
+        }
+        for history in [false, true] {
+            if history && history_count > 0 {
+                rows = rows.child(
+                    div()
+                        .id("command-center-execution-history")
+                        .debug_selector(|| "command-center-execution-history".to_string())
+                        .cursor_pointer()
+                        .flex_none()
+                        .py(px(5.0))
+                        .px(px(4.0))
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(command_center_count(
+                            self.ui_text,
+                            if expanded {
+                                UiTextKey::CommandCenterExecutionHistoryHide
+                            } else {
+                                UiTextKey::CommandCenterExecutionHistoryShow
+                            },
+                            history_count,
+                        ))
+                        .on_click(cx.listener(|root, _, _, cx| {
+                            root.command_center.execution_history_expanded =
+                                !root.command_center.execution_history_expanded;
+                            cx.notify();
+                        })),
+                );
+            }
+            for source in sources {
+                let selected_id = self
+                    .command_center
+                    .selection
+                    .as_ref()
+                    .filter(|selected| selected.terminal_session_id == source.terminal_session_id)
+                    .map(|selected| selected.execution_id.as_str());
+                let mut group = div().flex().flex_col().flex_none();
+                let mut has_rows = false;
+                if source.snapshot.board.executions.is_empty() {
+                    let is_history = source.snapshot.process_state == AgentProcessState::Exited;
+                    if history == is_history
+                        && (!history
+                            || expanded
+                            || selected_id == Some(source.terminal_session_id.as_str()))
+                    {
+                        has_rows = true;
+                        group = group.child(self.command_center_execution_row(
+                            source,
+                            None,
+                            source.terminal_session_id.clone(),
+                            self.ui_text.get(UiTextKey::CommandCenterExecutionSummary),
+                            source.snapshot.turn_state,
+                            source.snapshot.state_started_at,
+                            is_history.then_some(source.snapshot.updated_at),
+                            theme,
+                            cx,
+                        ));
+                    }
+                } else {
+                    for execution in &source.snapshot.board.executions {
+                        if history != execution.ended_at.is_some()
+                            || (history && !expanded && selected_id != Some(execution.id.as_str()))
+                        {
+                            continue;
+                        }
+                        has_rows = true;
+                        group = group.child(self.command_center_execution_row(
+                            source,
+                            Some(execution),
+                            execution.id.clone(),
+                            &execution.name,
+                            execution.state,
+                            execution.started_at,
+                            execution.ended_at,
+                            theme,
+                            cx,
+                        ));
+                    }
+                }
+                if has_rows {
+                    rows = rows
+                        .child(
+                            div()
+                                .flex_none()
+                                .px(px(4.0))
+                                .pt(px(4.0))
+                                .text_xs()
+                                .text_color(theme.text_subtle)
+                                .truncate()
+                                .child(format!(
+                                    "{} · {}",
+                                    source.project_name,
+                                    self.command_center_session_label(source)
+                                )),
+                        )
+                        .child(group);
                 }
             }
-        }
-        if !has_rows {
-            rows = rows.child(command_center_empty_panel(
-                self.ui_text.get(UiTextKey::CommandCenterNoExecutions),
-                theme,
-            ));
         }
         command_center_panel(
             self.ui_text.get(UiTextKey::CommandCenterExecutionRecords),
             command_center_count(
                 self.ui_text,
-                UiTextKey::CommandCenterReportedCount,
-                reported_count,
+                UiTextKey::CommandCenterActivityCount,
+                current_count,
             ),
             theme,
         )
         .flex_basis(relative(0.78 / 3.28))
-        .child(
-            div()
-                .flex_none()
-                .flex()
-                .flex_wrap()
-                .gap(px(6.0))
-                .justify_between()
-                .px(px(8.0))
-                .py(px(4.0))
-                .border_b(px(1.0))
-                .border_color(theme.border_variant)
-                .text_xs()
-                .text_color(theme.text_subtle)
-                .child(self.ui_text.get(UiTextKey::CommandCenterAgentTask))
-                .child(self.ui_text.get(UiTextKey::CommandCenterState))
-                .child(self.ui_text.get(UiTextKey::CommandCenterDuration)),
-        )
         .child(rows)
     }
 
@@ -1644,6 +2250,10 @@ impl WorkbenchView {
             .id(format!(
                 "command-center-execution:{session_id}:{execution_id}"
             ))
+            .debug_selector({
+                let id = execution_id.clone();
+                move || format!("command-center-execution-row:{id}")
+            })
             .cursor_pointer()
             .flex()
             .items_center()
@@ -1681,23 +2291,45 @@ impl WorkbenchView {
             )
             .child(
                 div()
+                    .flex_none()
+                    .whitespace_nowrap()
                     .text_xs()
                     .text_color(command_center_turn_color(state, theme))
                     .child(self.ui_text.get(command_center_turn_label(state))),
             )
             .child(
                 div()
-                    .w(px(37.0))
+                    .flex_none()
+                    .min_w(px(37.0))
+                    .text_right()
+                    .whitespace_nowrap()
                     .text_xs()
                     .text_color(theme.text_subtle)
                     .child(command_center_duration(self.ui_text, started_at, ended_at)),
             )
     }
 
+    fn command_center_question_focus(
+        &mut self,
+        draft_key: &str,
+        question_id: &str,
+        cx: &mut Context<Self>,
+    ) -> gpui::FocusHandle {
+        self.command_center
+            .question_drafts
+            .entry(draft_key.to_string())
+            .or_default()
+            .question_focuses
+            .entry(question_id.to_string())
+            .or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
     fn command_center_question_input(
         &mut self,
-        request_id: &str,
+        draft_key: &str,
         question_id: &str,
+        question_target: CommandCenterQuestionTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
@@ -1709,7 +2341,7 @@ impl WorkbenchView {
             let draft = self
                 .command_center
                 .question_drafts
-                .entry(request_id.to_string())
+                .entry(draft_key.to_string())
                 .or_default();
             let locale_changed = draft.input_locale.replace(locale) != Some(locale);
             let existing = draft.custom_inputs.get(question_id).cloned();
@@ -1732,11 +2364,19 @@ impl WorkbenchView {
                 .clean_on_escape()
         });
         let subscription =
-            cx.subscribe_in(&input, window, Self::on_command_center_question_input_event);
+            cx.subscribe_in(&input, window, move |root, input, event, window, cx| {
+                root.on_command_center_question_input_event(
+                    &question_target,
+                    input,
+                    event,
+                    window,
+                    cx,
+                );
+            });
         let draft = self
             .command_center
             .question_drafts
-            .get_mut(request_id)
+            .get_mut(draft_key)
             .expect("question draft was created");
         draft
             .custom_inputs
@@ -1749,13 +2389,20 @@ impl WorkbenchView {
 
     fn on_command_center_question_input_event(
         &mut self,
+        question_target: &CommandCenterQuestionTarget,
         _input: &Entity<InputState>,
         event: &InputEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(event, InputEvent::Change) {
-            cx.notify();
+        match event {
+            InputEvent::Focus => self.command_center_select_question(
+                question_target.clone(),
+                Some(&question_target.question_id),
+                cx,
+            ),
+            InputEvent::Change | InputEvent::Blur => cx.notify(),
+            InputEvent::PressEnter { .. } => {}
         }
     }
 
@@ -1811,13 +2458,17 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(event, InputEvent::Change)
-            && let Some(target) = self.command_center.composer_target.clone()
-        {
-            self.command_center
-                .prompt_drafts
-                .insert(target, input.read(cx).value().to_string());
-            cx.notify();
+        match event {
+            InputEvent::Change => {
+                if let Some(target) = self.command_center.composer_target.clone() {
+                    self.command_center
+                        .prompt_drafts
+                        .insert(target, input.read(cx).value().to_string());
+                }
+                cx.notify();
+            }
+            InputEvent::Focus | InputEvent::Blur => cx.notify(),
+            InputEvent::PressEnter { .. } => {}
         }
     }
 
@@ -1865,9 +2516,265 @@ impl WorkbenchView {
             terminal_session_id,
             execution_id,
             task_id,
+            question_request_id: None,
+            question_id: None,
         });
+        self.command_center.management_session = None;
         self.command_center.pending_terminal_termination = None;
         cx.notify();
+    }
+
+    fn command_center_select_question(
+        &mut self,
+        target: CommandCenterQuestionTarget,
+        question_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        self.command_center.selection = Some(CommandCenterSelection {
+            terminal_session_id: target.terminal_session_id,
+            execution_id: target.execution_id,
+            task_id: None,
+            question_request_id: Some(target.request_id),
+            question_id: question_id.map(str::to_string),
+        });
+        self.command_center.management_session = None;
+        self.command_center.pending_terminal_termination = None;
+        cx.notify();
+    }
+
+    fn command_center_select_option(
+        &mut self,
+        target: CommandCenterQuestionTarget,
+        draft_key: &str,
+        question_id: &str,
+        label: String,
+        multi: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.command_center_select_question(target, Some(question_id), cx);
+        self.command_center_toggle_option(draft_key, question_id, label, multi, cx);
+    }
+
+    fn command_center_select_option_by_index(
+        &mut self,
+        target: &CommandCenterQuestionTarget,
+        option_index: usize,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.command_center_is_active()
+            || !self
+                .command_center
+                .selection
+                .as_ref()
+                .is_some_and(|selection| {
+                    selection.terminal_session_id == target.terminal_session_id
+                        && selection.execution_id == target.execution_id
+                        && selection.question_request_id.as_deref()
+                            == Some(target.request_id.as_str())
+                        && selection.question_id.as_deref() == Some(target.question_id.as_str())
+                })
+        {
+            return false;
+        }
+        let sources = self.command_center_sources();
+        let Some(source) = sources
+            .iter()
+            .find(|source| source.terminal_session_id == target.terminal_session_id)
+        else {
+            return false;
+        };
+        let Some(record) = source.snapshot.board.questions.iter().find(|record| {
+            record.request.id == target.request_id
+                && record.request.execution_id == target.execution_id
+        }) else {
+            return false;
+        };
+        if !self
+            .command_center_question_capability(source, record)
+            .can_answer
+        {
+            return false;
+        }
+        let Some(question) = record
+            .request
+            .questions
+            .iter()
+            .find(|question| question.id == target.question_id)
+        else {
+            return false;
+        };
+        let Some(option) = question.options.get(option_index) else {
+            return false;
+        };
+        let draft_key =
+            command_center_question_key(&target.terminal_session_id, &target.request_id);
+        self.command_center_select_option(
+            target.clone(),
+            &draft_key,
+            &question.id,
+            option.label.clone(),
+            question.multi,
+            cx,
+        );
+        true
+    }
+
+    fn command_center_move_selected_question(
+        &mut self,
+        previous: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sources = self.command_center_sources();
+        self.command_center_move_selected_question_in_sources(&sources, previous, cx);
+        if let Some(selection) = &self.command_center.selection
+            && let (Some(request_id), Some(question_id)) =
+                (&selection.question_request_id, &selection.question_id)
+        {
+            let draft_key = command_center_question_key(&selection.terminal_session_id, request_id);
+            let question_id = question_id.clone();
+            self.command_center_question_focus(&draft_key, &question_id, cx)
+                .focus(window, cx);
+        }
+    }
+
+    fn command_center_move_selected_question_in_sources(
+        &mut self,
+        sources: &[CommandCenterSource],
+        previous: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let targets = || {
+            sources.iter().flat_map(|source| {
+                source
+                    .snapshot
+                    .board
+                    .questions
+                    .iter()
+                    .filter(|record| record.state == AgentQuestionState::Pending)
+                    .flat_map(move |record| {
+                        record
+                            .request
+                            .questions
+                            .iter()
+                            .map(move |question| (source, record, question))
+                    })
+            })
+        };
+        let current = self
+            .command_center
+            .selection
+            .as_ref()
+            .and_then(|selection| {
+                targets().position(|(source, record, question)| {
+                    selection.terminal_session_id == source.terminal_session_id
+                        && selection.question_request_id.as_deref()
+                            == Some(record.request.id.as_str())
+                        && selection.question_id.as_deref() == Some(question.id.as_str())
+                })
+            });
+        let next = match (current, previous) {
+            (Some(current), true) => targets().nth(current.saturating_sub(1)),
+            (Some(current), false) => targets().nth(current + 1).or_else(|| targets().last()),
+            (None, true) => targets().last(),
+            (None, false) => targets().next(),
+        };
+        let Some((source, record, question)) = next else {
+            return;
+        };
+        let target = CommandCenterQuestionTarget {
+            terminal_session_id: source.terminal_session_id.clone(),
+            execution_id: record.request.execution_id.clone(),
+            request_id: record.request.id.clone(),
+            question_id: question.id.clone(),
+        };
+        let record_index = sources
+            .iter()
+            .flat_map(|source| {
+                source
+                    .snapshot
+                    .board
+                    .questions
+                    .iter()
+                    .filter(|record| {
+                        matches!(
+                            record.state,
+                            AgentQuestionState::Pending | AgentQuestionState::Submitted
+                        )
+                    })
+                    .map(move |record| (source, record))
+            })
+            .chain(sources.iter().flat_map(|source| {
+                source
+                    .snapshot
+                    .board
+                    .questions
+                    .iter()
+                    .filter(|record| matches!(record.state, AgentQuestionState::Unavailable))
+                    .map(move |record| (source, record))
+            }))
+            .position(|(source, record)| {
+                source.terminal_session_id == target.terminal_session_id
+                    && record.request.id == target.request_id
+            });
+        self.command_center_select_question(target.clone(), Some(&target.question_id), cx);
+        if let Some(record_index) = record_index {
+            // Only explicit navigation scrolls. The toolbar is outside the scroll container.
+            self.command_center
+                .question_scroll
+                .scroll_to_item(record_index);
+        }
+    }
+
+    pub(super) fn on_command_center_question_previous(
+        &mut self,
+        _: &CommandCenterQuestionPrevious,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.command_center_is_active() || self.command_center_input_is_focused(window, cx) {
+            cx.propagate();
+            return;
+        }
+        self.command_center_move_selected_question(true, window, cx);
+    }
+
+    pub(super) fn on_command_center_question_next(
+        &mut self,
+        _: &CommandCenterQuestionNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.command_center_is_active() || self.command_center_input_is_focused(window, cx) {
+            cx.propagate();
+            return;
+        }
+        self.command_center_move_selected_question(false, window, cx);
+    }
+
+    pub(super) fn on_command_center_question_submit(
+        &mut self,
+        _: &CommandCenterQuestionSubmit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.command_center_is_active() || self.command_center_input_is_focused(window, cx) {
+            cx.propagate();
+            return;
+        }
+        let Some((terminal_session_id, request_id)) =
+            self.command_center
+                .selection
+                .as_ref()
+                .and_then(|selection| {
+                    selection.question_request_id.as_ref().map(|request_id| {
+                        (selection.terminal_session_id.clone(), request_id.clone())
+                    })
+                })
+        else {
+            return;
+        };
+        self.command_center_submit_answers(&terminal_session_id, &request_id, window, cx);
     }
 
     fn command_center_toggle_option(
@@ -2585,13 +3492,12 @@ fn command_center_count(ui_text: UiText, key: UiTextKey, count: usize) -> String
     command_center_template(ui_text.get(key), &[("count", &count)])
 }
 
-fn command_center_completed_tasks(ui_text: UiText, completed: usize, total: usize) -> String {
-    let completed = completed.to_string();
-    let total = total.to_string();
-    command_center_template(
-        ui_text.get(UiTextKey::CommandCenterCompletedTasks),
-        &[("completed", &completed), ("total", &total)],
-    )
+fn command_center_task_is_history(task: &AgentBoardTask) -> bool {
+    task.retired
+        || matches!(
+            task.item.status,
+            AgentPlanStatus::Completed | AgentPlanStatus::Abandoned
+        )
 }
 
 fn command_center_question_key(terminal_session_id: &str, request_id: &str) -> String {
@@ -2855,6 +3761,108 @@ mod tests {
         (temp, root, scope)
     }
 
+    fn question_target(request_id: &str, question_id: &str) -> CommandCenterQuestionTarget {
+        CommandCenterQuestionTarget {
+            terminal_session_id: "same-agent".into(),
+            execution_id: "run-1".into(),
+            request_id: request_id.into(),
+            question_id: question_id.into(),
+        }
+    }
+
+    fn question_record(
+        request_id: &str,
+        question_id: &str,
+        state: AgentQuestionState,
+        answerable: bool,
+    ) -> AgentQuestionRecord {
+        use yttt_agent_core::{AgentQuestion, AgentQuestionOption, AgentQuestionRequest};
+
+        AgentQuestionRecord {
+            request: AgentQuestionRequest {
+                id: request_id.into(),
+                execution_id: "run-1".into(),
+                tool_call_id: format!("tool-{request_id}"),
+                questions: vec![AgentQuestion {
+                    id: question_id.into(),
+                    question: format!("Question {question_id}"),
+                    header: None,
+                    options: vec![AgentQuestionOption {
+                        label: "Yes".into(),
+                        description: None,
+                        preview: None,
+                    }],
+                    multi: false,
+                    recommended: None,
+                }],
+                answerable,
+            },
+            state,
+            answers: Vec::new(),
+            answer_source: None,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn question_source(records: Vec<AgentQuestionRecord>) -> CommandCenterSource {
+        use yttt_agent_core::{AgentInstanceId, AgentReducer, ProviderId};
+
+        let mut snapshot = AgentReducer::new(
+            AgentInstanceId::new("same-agent").unwrap(),
+            ProviderId::from_static("omp"),
+            1,
+        )
+        .snapshot()
+        .clone();
+        snapshot.board.questions = records;
+        CommandCenterSource {
+            scope: AgentHookScope {
+                project_id: "project".into(),
+                tab_id: "tab".into(),
+                pane_id: "pane".into(),
+                generation: 1,
+            },
+            session_target: None,
+            project_name: "Project".into(),
+            terminal_session_id: "same-agent".into(),
+            snapshot,
+            operation_target: None,
+        }
+    }
+
+    #[test]
+    fn closed_or_unanswerable_questions_cannot_be_submitted() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let root = WorkbenchView::with_config_paths_for_test(paths);
+        let answers = vec![AgentQuestionAnswer {
+            question_id: "choice".into(),
+            selected_options: vec!["Yes".into()],
+            custom_input: None,
+        }];
+        let closed = question_source(vec![question_record(
+            "request-closed",
+            "choice",
+            AgentQuestionState::Answered,
+            true,
+        )]);
+        assert!(
+            root.command_center_validate_answer(&closed, "request-closed", &answers)
+                .is_err()
+        );
+        let unanswerable = question_source(vec![question_record(
+            "request-unanswerable",
+            "choice",
+            AgentQuestionState::Pending,
+            false,
+        )]);
+        assert!(
+            root.command_center_validate_answer(&unanswerable, "request-unanswerable", &answers)
+                .is_err()
+        );
+    }
+
     #[test]
     fn host_terminal_scopes_resolve_only_through_workspace_session_placements() {
         let (_temp, root, target) = session_jump_fixture();
@@ -2901,6 +3909,382 @@ mod tests {
     }
 
     #[gpui::test]
+    fn option_selection_keeps_same_agent_questions_disambiguated(cx: &mut gpui::TestAppContext) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        root.update(cx, |root, cx| {
+            let first = question_target("request-a", "choice-a");
+            let second = question_target("request-b", "choice-b");
+            root.command_center_select_option(
+                first,
+                "draft-a",
+                "choice-a",
+                "Yes".into(),
+                false,
+                cx,
+            );
+            root.command_center_select_option(
+                second,
+                "draft-b",
+                "choice-b",
+                "Yes".into(),
+                false,
+                cx,
+            );
+            let selection = root.command_center.selection.as_ref().unwrap();
+            assert_eq!(selection.terminal_session_id, "same-agent");
+            assert_eq!(selection.question_request_id.as_deref(), Some("request-b"));
+            assert_eq!(selection.question_id.as_deref(), Some("choice-b"));
+            assert!(
+                root.command_center.question_drafts["draft-a"].selected_options["choice-a"]
+                    .contains("Yes")
+            );
+            assert!(
+                root.command_center.question_drafts["draft-b"].selected_options["choice-b"]
+                    .contains("Yes")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn input_focus_selects_its_question_without_disabling_typing_or_keyboard_text_safety(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let (_temp, mut view, placement) = session_jump_fixture();
+        let source = view.command_center_sources().pop().unwrap();
+        let session_id = source.terminal_session_id;
+        let mut snapshot = source.snapshot;
+        snapshot.board.questions = vec![
+            question_record("request-a", "choice-a", AgentQuestionState::Pending, true),
+            question_record("request-b", "choice-b", AgentQuestionState::Pending, true),
+        ];
+        view.workspace
+            .record_agent_snapshot(
+                &placement.project_id,
+                &placement.tab_id,
+                &placement.pane_id,
+                snapshot,
+            )
+            .unwrap();
+        let slot = Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let root = cx.new(|_| view);
+            *output.borrow_mut() = Some(root.clone());
+            ComponentRoot::new(root, window, cx)
+        });
+        let root = slot.borrow_mut().take().unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        root.update_in(cx, |root, window, cx| {
+            window.activate_window();
+            root.command_center.question_scroll.scroll_to_item(1);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let input = root.update_in(cx, |root, window, cx| {
+            assert!(window.is_window_active());
+            let mut target = question_target("request-b", "choice-b");
+            target.terminal_session_id = session_id.clone();
+            let input = root.command_center_question_input(
+                &command_center_question_key(&session_id, "request-b"),
+                "choice-b",
+                target,
+                window,
+                cx,
+            );
+            input.read(cx).focus_handle(cx).focus(window, cx);
+            input
+        });
+        // The real InputState focus subscription must select B, not a manually invoked event.
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        root.update_in(cx, |root, window, cx| {
+            assert!(input.read(cx).focus_handle(cx).is_focused(window));
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_request_id
+                    .as_deref(),
+                Some("request-b"),
+            );
+            input.update(cx, |input, cx| {
+                input.set_value("2 remains editable", window, cx)
+            });
+            root.on_command_center_question_previous(&CommandCenterQuestionPrevious, window, cx);
+            assert_eq!(input.read(cx).value().as_str(), "2 remains editable");
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_id
+                    .as_deref(),
+                Some("choice-b"),
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn explicit_question_navigation_moves_numeric_shortcut_focus(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_temp, mut view, target) = session_jump_fixture();
+        let source = view.command_center_sources().pop().unwrap();
+        let session_id = source.terminal_session_id;
+        let mut snapshot = source.snapshot;
+        snapshot.board.questions = vec![
+            question_record("request-a", "choice-a", AgentQuestionState::Pending, true),
+            question_record("request-b", "choice-b", AgentQuestionState::Pending, true),
+        ];
+        view.workspace
+            .record_agent_snapshot(
+                &target.project_id,
+                &target.tab_id,
+                &target.pane_id,
+                snapshot,
+            )
+            .unwrap();
+        let slot = Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let root = cx.new(|_| view);
+            *output.borrow_mut() = Some(root.clone());
+            ComponentRoot::new(root, window, cx)
+        });
+        let root = slot.borrow_mut().take().unwrap();
+        root.update_in(cx, |root, window, cx| {
+            let mut first = question_target("request-a", "choice-a");
+            first.terminal_session_id = session_id.clone();
+            root.command_center_select_question(first, Some("choice-a"), cx);
+            let first_focus = root.command_center_question_focus(
+                &command_center_question_key(&session_id, "request-a"),
+                "choice-a",
+                cx,
+            );
+            first_focus.focus(window, cx);
+            root.on_command_center_question_next(&CommandCenterQuestionNext, window, cx);
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_request_id
+                    .as_deref(),
+                Some("request-b"),
+            );
+            let second_focus = root.command_center_question_focus(
+                &command_center_question_key(&session_id, "request-b"),
+                "choice-b",
+                cx,
+            );
+            assert!(
+                second_focus.is_focused(window),
+                "numeric keys must target the newly selected question"
+            );
+            assert!(!first_focus.is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn pending_question_navigation_includes_read_only_questions_without_submitting(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        let source = question_source(vec![
+            question_record("request-a", "choice-a", AgentQuestionState::Pending, true),
+            question_record("request-b", "choice-b", AgentQuestionState::Pending, true),
+            question_record(
+                "request-child",
+                "choice-child",
+                AgentQuestionState::Pending,
+                false,
+            ),
+        ]);
+        root.update(cx, |root, cx| {
+            let first = question_target("request-a", "choice-a");
+            root.command_center_select_question(first, Some("choice-a"), cx);
+            root.command_center_move_selected_question_in_sources(
+                std::slice::from_ref(&source),
+                false,
+                cx,
+            );
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_request_id
+                    .as_deref(),
+                Some("request-b")
+            );
+            root.command_center_move_selected_question_in_sources(
+                std::slice::from_ref(&source),
+                false,
+                cx,
+            );
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_request_id
+                    .as_deref(),
+                Some("request-child")
+            );
+            root.command_center_move_selected_question_in_sources(
+                std::slice::from_ref(&source),
+                true,
+                cx,
+            );
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_request_id
+                    .as_deref(),
+                Some("request-b")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn resolved_selection_is_retained_until_explicit_pending_navigation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        let source = question_source(vec![
+            question_record("request-a", "choice-a", AgentQuestionState::Answered, true),
+            question_record("request-b", "choice-b", AgentQuestionState::Pending, true),
+        ]);
+        root.update(cx, |root, cx| {
+            let resolved = question_target("request-a", "choice-a");
+            root.command_center_select_question(resolved, Some("choice-a"), cx);
+            root.command_center_ensure_selection(std::slice::from_ref(&source));
+            assert!(!root.command_center.question_history_expanded);
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_request_id
+                    .as_deref(),
+                Some("request-a")
+            );
+            root.command_center_move_selected_question_in_sources(
+                std::slice::from_ref(&source),
+                false,
+                cx,
+            );
+            assert_eq!(
+                root.command_center
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .question_request_id
+                    .as_deref(),
+                Some("request-b")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn execution_history_stays_available_without_displacing_current_activity(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let (_temp, mut view, target) = session_jump_fixture();
+        let source = view.command_center_sources().pop().unwrap();
+        let session_id = source.terminal_session_id.clone();
+        let mut snapshot = source.snapshot;
+        snapshot.board.executions.push(AgentExecutionRecord {
+            id: "running".into(),
+            parent_id: None,
+            name: "Current work".into(),
+            task: None,
+            state: AgentTurnState::Working,
+            started_at: 3,
+            updated_at: 3,
+            ended_at: None,
+        });
+        view.workspace
+            .record_agent_snapshot(
+                &target.project_id,
+                &target.tab_id,
+                &target.pane_id,
+                snapshot,
+            )
+            .unwrap();
+        let slot = Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let root = cx.new(|_| view);
+            *output.borrow_mut() = Some(root.clone());
+            ComponentRoot::new(root, window, cx)
+        });
+        let root = slot.borrow_mut().take().unwrap();
+        root.update_in(cx, |root, _, cx| {
+            root.command_center_select(session_id.clone(), "running".into(), None, cx);
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(
+            cx.debug_bounds("command-center-execution-row:running")
+                .is_some()
+        );
+        assert!(
+            cx.debug_bounds("command-center-execution-row:child-execution")
+                .is_none()
+        );
+        let history = cx.debug_bounds("command-center-execution-history").unwrap();
+        cx.simulate_click(history.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let child = cx
+            .debug_bounds("command-center-execution-row:child-execution")
+            .unwrap();
+        cx.simulate_click(child.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let history = cx.debug_bounds("command-center-execution-history").unwrap();
+        cx.simulate_click(history.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(
+            cx.debug_bounds("command-center-execution-row:child-execution")
+                .is_some()
+        );
+        root.update_in(cx, |root, _, cx| {
+            assert!(!root.command_center.execution_history_expanded);
+            assert_eq!(
+                root.command_center.selection.as_ref().unwrap().execution_id,
+                "child-execution",
+            );
+            root.command_center_select(session_id, "running".into(), None, cx);
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(
+            cx.debug_bounds("command-center-execution-row:child-execution")
+                .is_none()
+        );
+        assert!(
+            cx.debug_bounds("command-center-execution-row:running")
+                .is_some()
+        );
+    }
+
+    #[gpui::test]
     fn explicit_session_link_focuses_exact_hosting_pane_and_preserves_drafts(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -2916,7 +4300,13 @@ mod tests {
         let root = slot.borrow_mut().take().unwrap();
         root.update_in(cx, |root, window, cx| {
             let source = root.command_center_sources().pop().unwrap();
-            let answer = root.command_center_question_input("request", "choice", window, cx);
+            let answer = root.command_center_question_input(
+                "request",
+                "choice",
+                question_target("request", "choice"),
+                window,
+                cx,
+            );
             answer.update(cx, |input, cx| input.set_value("Answer draft", window, cx));
             let prompt = root.command_center_composer_input("follow-up", window, cx);
             prompt.update(cx, |input, cx| input.set_value("Prompt draft", window, cx));
@@ -2950,7 +4340,13 @@ mod tests {
                 Some(scope.pane_id.as_str())
             );
             root.select_command_center();
-            let answer = root.command_center_question_input("request", "choice", window, cx);
+            let answer = root.command_center_question_input(
+                "request",
+                "choice",
+                question_target("request", "choice"),
+                window,
+                cx,
+            );
             let prompt = root.command_center_composer_input("follow-up", window, cx);
             assert_eq!(answer.read(cx).value().as_str(), "Answer draft");
             assert_eq!(prompt.read(cx).value().as_str(), "Prompt draft");
@@ -3036,7 +4432,13 @@ mod tests {
         let root = slot.borrow_mut().take().unwrap();
         root.update_in(cx, |root, window, cx| {
             root.set_language(LanguageSetting::English).unwrap();
-            let answer = root.command_center_question_input("request", "choice", window, cx);
+            let answer = root.command_center_question_input(
+                "request",
+                "choice",
+                question_target("request", "choice"),
+                window,
+                cx,
+            );
             answer.update(cx, |input, cx| input.set_value("保留我的回答", window, cx));
             let prompt = root.command_center_composer_input("first", window, cx);
             prompt.update(cx, |input, cx| {
@@ -3044,7 +4446,13 @@ mod tests {
             });
 
             root.set_language(LanguageSetting::Chinese).unwrap();
-            let answer = root.command_center_question_input("request", "choice", window, cx);
+            let answer = root.command_center_question_input(
+                "request",
+                "choice",
+                question_target("request", "choice"),
+                window,
+                cx,
+            );
             let prompt = root.command_center_composer_input("first", window, cx);
             assert_eq!(answer.read(cx).value().as_str(), "保留我的回答");
             assert_eq!(prompt.read(cx).value().as_str(), "Keep this follow-up");
@@ -3058,7 +4466,13 @@ mod tests {
             assert_eq!(restored.read(cx).value().as_str(), "Keep this follow-up");
             let other = root.command_center_composer_input("second", window, cx);
             assert_eq!(other.read(cx).value().as_str(), "第二个执行的草稿");
-            let answer = root.command_center_question_input("request", "choice", window, cx);
+            let answer = root.command_center_question_input(
+                "request",
+                "choice",
+                question_target("request", "choice"),
+                window,
+                cx,
+            );
             assert_eq!(answer.read(cx).value().as_str(), "保留我的回答");
         });
     }
