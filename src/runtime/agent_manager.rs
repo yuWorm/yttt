@@ -611,7 +611,7 @@ mod tests {
     use std::{os::unix::fs::MetadataExt as _, process::Command};
 
     use tempfile::TempDir;
-    use yttt_agent_core::{AgentReducer, AgentViewState, ProviderId};
+    use yttt_agent_core::{AgentReducer, ProviderId};
     use yttt_core::model::ids::TerminalSessionId;
     use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
 
