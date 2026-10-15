@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 修复调度中心多 Agent 与 Shell 内启动 Agent 的展示：用提供方和会话名称标识 Agent，单独显示 Tab／Pane 位置；在线主 Agent 与运行中子 Agent 分开统计，区分本轮结束、进程退出、观测中断和非实时记录。在线会话不再随已完成任务折叠，空的失联记录移入历史。
+- Fix Dispatch center identity and lifecycle display for multiple Agents and shell-launched sessions. Separate provider/session identity from terminal location, count online roots and active children independently, and distinguish finished turns, exited processes, lost observations, and retained snapshots. Keep running sessions selectable outside completed history and move empty disconnected observations into history.
+
 ## 0.3.13 - 2026-10-14
 
 - 发布 Agent 状态恢复修复：进程重识别保留有序投递进度，OMP 定期确认活动，未知状态与空闲分开展示。

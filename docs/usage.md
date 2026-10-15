@@ -1339,8 +1339,15 @@ and height follow the available area, not the project count: fewer than six proj
 unused slots, and the seventh project starts a third row reached by scrolling the matrix.
 The lower panels stay in place; overflowing tasks scroll separately inside their project.
 Project positions do not reorder when Agent states change. Cards summarize reported task states,
-active Agents, and pending questions, and group tasks by their owning tab/pane.
-These counts are observations, not estimates of project completion.
+online root Agents, active children, and pending questions. Online counts require a live Host
+snapshot and a running Agent process; children are counted separately when working or waiting.
+Retained snapshots are not counted as online. These observations are not project-completion estimates.
+
+Session headings identify the provider and reported session title (or task title), with the owning
+tab/pane on a separate secondary line. An OMP started inside a Shell tab is therefore labeled as
+Oh My Pi, not as a Shell Agent. Sessions with the same provider retain distinct terminal targets.
+Agent status separates **online · turn finished** from **exited**, **observation lost**, and
+**retained · not live**; a finished turn does not imply an exited process.
 
 Each task row shows tokens from its associated execution record: **Run … tok** (Chinese:
 **执行 … tok**), or **Last req. … tok** for Claude's last-request measurements. **Tokens —**
@@ -1360,9 +1367,13 @@ are not invented. Shared task labels are prepared once per execution, and toolti
 are resolved from current observations only on hover.
 
 Active (working or blocked), pending, and unknown-status tasks appear before completed history,
-preserving provider order within each group. Completed,
-abandoned, and retired tasks are retained in collapsible project history. Current Agent activity
-appears before execution history. A selected historical record remains accessible when history is
+preserving provider order within each group. Completed, abandoned, and retired tasks are retained
+in collapsible project history. A running Agent with only historical work keeps a selectable
+session row outside that history; selecting it prefers the current or most recent root execution.
+Empty ended or disconnected observations move into history rather than appearing as current unknown
+work. The project history count includes tasks, independent usage records, and these session-only
+observations. Historical task headings do not repeat the Agent's current turn status.
+Current Agent activity appears before execution history. A selected historical record remains accessible when history is
 folded. Selecting a board row only links these regions; it does not select that project in the
 sidebar. Only yttt-managed Agent scopes in the connected Host and retained workspace snapshots
 are included; this is not a machine-wide process monitor.

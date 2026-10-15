@@ -14,8 +14,8 @@ use gpui_component::{
 };
 use yttt_agent_core::{
     AgentBoardCommand, AgentBoardTask, AgentExecutionRecord, AgentExecutionTelemetry,
-    AgentMessageRole, AgentPlanStatus, AgentProcessState, AgentQuestionAnswer, AgentQuestionRecord,
-    AgentQuestionState, AgentSnapshot, AgentTurnState,
+    AgentExitReason, AgentMessageRole, AgentPlanStatus, AgentProcessState, AgentQuestionAnswer,
+    AgentQuestionRecord, AgentQuestionState, AgentSnapshot, AgentTurnState,
 };
 use yttt_client_core::{ClientEvent, ConnectionState};
 use yttt_protocol::{
@@ -593,6 +593,14 @@ impl WorkbenchView {
     }
 
     fn command_center_session_label(&self, source: &CommandCenterSource) -> String {
+        format!(
+            "{} · {}",
+            command_center_agent_label(&source.snapshot),
+            self.command_center_session_location(source),
+        )
+    }
+
+    fn command_center_session_location(&self, source: &CommandCenterSource) -> String {
         source
             .session_target
             .as_ref()
@@ -622,27 +630,32 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let active_agents = sources
+        let host_live = self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .is_some_and(|runtime| matches!(runtime.state(), ConnectionState::Ready { .. }));
+        let (online_agents, active_children) = sources
             .iter()
-            .map(|source| {
-                if source.snapshot.process_state != AgentProcessState::Running {
-                    return 0;
-                }
-                1 + source
+            .filter(|source| {
+                host_live
+                    && source.operation_target.is_some()
+                    && source.snapshot.process_state == AgentProcessState::Running
+            })
+            .fold((0, 0), |(roots, children), source| {
+                let active = source
                     .snapshot
                     .children
                     .iter()
                     .filter(|child| {
                         matches!(
                             child.turn_state,
-                            AgentTurnState::Idle
-                                | AgentTurnState::Working
-                                | AgentTurnState::Waiting
+                            AgentTurnState::Working | AgentTurnState::Waiting
                         )
                     })
-                    .count()
-            })
-            .sum::<usize>();
+                    .count();
+                (roots + 1, children + active)
+            });
         let pending_questions = sources
             .iter()
             .flat_map(|source| source.snapshot.board.questions.iter())
@@ -685,6 +698,15 @@ impl WorkbenchView {
             .flat_map(|usage| &usage.independent)
             .filter(|execution| command_center_execution_priority(execution) == 3)
             .count();
+        history_count += sources
+            .iter()
+            .zip(&source_usage)
+            .filter(|(source, usage)| {
+                source.snapshot.process_state == AgentProcessState::Exited
+                    && source.snapshot.board.tasks.is_empty()
+                    && usage.independent.is_empty()
+            })
+            .count();
         let selected_project = self
             .command_center
             .selection
@@ -711,8 +733,8 @@ impl WorkbenchView {
             .text_color(theme.text_muted)
             .child(div().child(command_center_count(
                 self.ui_text,
-                UiTextKey::CommandCenterActiveAgentsCount,
-                active_agents,
+                UiTextKey::CommandCenterOnlineAgentsCount,
+                online_agents,
             )))
             .child(
                 div()
@@ -727,6 +749,13 @@ impl WorkbenchView {
                         pending_questions,
                     )),
             );
+        if active_children > 0 {
+            summary = summary.child(div().child(command_center_count(
+                self.ui_text,
+                UiTextKey::CommandCenterActiveChildrenCount,
+                active_children,
+            )));
+        }
         if task_count == 0 {
             summary = summary
                 .child(div().child(self.ui_text.get(UiTextKey::CommandCenterNoReportedTasks)));
@@ -810,9 +839,7 @@ impl WorkbenchView {
                 let has_visible_executions = visible_executions.peek().is_some();
                 if !has_visible_tasks
                     && !has_visible_executions
-                    && (priority != 0
-                        || !source.snapshot.board.tasks.is_empty()
-                        || !usage.independent.is_empty())
+                    && command_center_session_summary_priority(source, usage) != Some(priority)
                 {
                     continue;
                 }
@@ -824,19 +851,35 @@ impl WorkbenchView {
                             .peek()
                             .map(|execution| execution.id.clone())
                     })
+                    .or_else(|| {
+                        source
+                            .snapshot
+                            .board
+                            .executions
+                            .iter()
+                            .filter(|execution| execution.parent_id.is_none())
+                            .max_by_key(|execution| {
+                                (execution.ended_at.is_none(), execution.updated_at)
+                            })
+                            .or_else(|| source.snapshot.board.executions.last())
+                            .map(|execution| execution.id.clone())
+                    })
                     .unwrap_or_else(|| source.terminal_session_id.clone());
                 let selection_task_id = visible_tasks.peek().map(|task| task.item.id.clone());
                 let session_id = source.terminal_session_id.clone();
-                let session_label = self.command_center_session_label(source);
-                let session_selected = !has_visible_tasks
-                    && !has_visible_executions
-                    && self
-                        .command_center
+                let agent_label = command_center_agent_label(&source.snapshot);
+                let session_location = self.command_center_session_location(source);
+                let (status_label, status_state) = command_center_agent_status(
+                    &source.snapshot,
+                    host_live && source.operation_target.is_some(),
+                );
+                let show_status = !history || (!has_visible_tasks && !has_visible_executions);
+                let session_selected =
+                    self.command_center
                         .selection
                         .as_ref()
                         .is_some_and(|selection| {
                             selection.terminal_session_id == session_id
-                                && selection.execution_id == session_id
                                 && selection.task_id.is_none()
                         });
                 let session_row = div()
@@ -844,6 +887,12 @@ impl WorkbenchView {
                         "command-center-session:{}:{priority}",
                         source.terminal_session_id
                     ))
+                    .debug_selector(|| {
+                        format!(
+                            "command-center-session:{}:{priority}",
+                            source.terminal_session_id
+                        )
+                    })
                     .cursor_pointer()
                     .flex_none()
                     .flex()
@@ -874,27 +923,47 @@ impl WorkbenchView {
                         div()
                             .w(px(12.0))
                             .text_xs()
-                            .text_color(command_center_turn_color(
-                                source.snapshot.turn_state,
-                                theme,
-                            ))
-                            .child(command_center_turn_symbol(source.snapshot.turn_state)),
+                            .text_color(if show_status {
+                                command_center_turn_color(status_state, theme)
+                            } else {
+                                theme.text_subtle
+                            })
+                            .child(if show_status {
+                                command_center_turn_symbol(status_state)
+                            } else {
+                                ""
+                            }),
                     )
                     .child(
                         div()
                             .min_w_0()
                             .flex_1()
-                            .truncate()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(session_label),
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(agent_label),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(theme.text_subtle)
+                                    .child(session_location),
+                            ),
                     )
-                    .child(
-                        div().text_xs().text_color(theme.text_subtle).child(
-                            self.ui_text
-                                .get(command_center_turn_label(source.snapshot.turn_state)),
-                        ),
-                    );
+                    .when(show_status, |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(command_center_turn_color(status_state, theme))
+                                .child(self.ui_text.get(status_label)),
+                        )
+                    });
                 let mut group = div()
                     .flex()
                     .flex_col()
@@ -2389,6 +2458,17 @@ impl WorkbenchView {
                 && self.terminal.host_runtime.as_ref().is_some_and(|runtime| {
                     matches!(runtime.state(), ConnectionState::Ready { .. })
                 });
+        let (status_label, status_state) = if execution.is_none() {
+            command_center_agent_status(
+                &source.snapshot,
+                source.operation_target.is_some()
+                    && self.terminal.host_runtime.as_ref().is_some_and(|runtime| {
+                        matches!(runtime.state(), ConnectionState::Ready { .. })
+                    }),
+            )
+        } else {
+            (command_center_turn_label(state), state)
+        };
         let elapsed = execution
             .and_then(|record| record.telemetry.duration_ms)
             .map(|millis| command_center_format_duration(self.ui_text, millis))
@@ -2467,8 +2547,8 @@ impl WorkbenchView {
                             .flex_none()
                             .whitespace_nowrap()
                             .text_xs()
-                            .text_color(command_center_turn_color(state, theme))
-                            .child(self.ui_text.get(command_center_turn_label(state))),
+                            .text_color(command_center_turn_color(status_state, theme))
+                            .child(self.ui_text.get(status_label)),
                     )
                     .child(
                         div()
@@ -3698,6 +3778,94 @@ fn command_center_task_priority(task: &AgentBoardTask) -> u8 {
     }
 }
 
+fn command_center_agent_label(snapshot: &AgentSnapshot) -> String {
+    let provider = BuiltinAgent::ALL
+        .into_iter()
+        .find(|agent| agent.id() == snapshot.provider_id.as_str())
+        .map(BuiltinAgent::display_name)
+        .unwrap_or(snapshot.provider_id.as_str());
+    let title = snapshot
+        .session
+        .as_ref()
+        .and_then(|session| session.title.as_deref())
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| snapshot.task.as_ref().map(|task| task.title.as_str()));
+    match title
+        .map(str::trim)
+        .filter(|title| !title.is_empty() && *title != provider)
+    {
+        Some(title) => format!("{provider} · {title}"),
+        None => provider.to_string(),
+    }
+}
+
+fn command_center_agent_status(
+    snapshot: &AgentSnapshot,
+    live: bool,
+) -> (UiTextKey, AgentTurnState) {
+    if snapshot.process_state == AgentProcessState::Exited {
+        return if snapshot
+            .process_exit
+            .is_none_or(|exit| exit.reason == AgentExitReason::Disconnected)
+        {
+            (
+                UiTextKey::CommandCenterAgentDisconnected,
+                AgentTurnState::Unknown,
+            )
+        } else {
+            (
+                UiTextKey::CommandCenterAgentExited,
+                AgentTurnState::Interrupted,
+            )
+        };
+    }
+    if !live {
+        return (
+            UiTextKey::CommandCenterAgentRetained,
+            AgentTurnState::Unknown,
+        );
+    }
+    if snapshot.process_state != AgentProcessState::Running {
+        return (
+            UiTextKey::CommandCenterAgentStarting,
+            AgentTurnState::Unknown,
+        );
+    }
+    let label = match snapshot.turn_state {
+        AgentTurnState::Idle => UiTextKey::CommandCenterAgentOnlineIdle,
+        AgentTurnState::Working => UiTextKey::CommandCenterAgentOnlineWorking,
+        AgentTurnState::Waiting => UiTextKey::CommandCenterAgentOnlineWaiting,
+        AgentTurnState::Completed => UiTextKey::CommandCenterAgentOnlineCompleted,
+        AgentTurnState::Failed => UiTextKey::CommandCenterAgentOnlineFailed,
+        AgentTurnState::Interrupted => UiTextKey::CommandCenterAgentOnlineInterrupted,
+        AgentTurnState::Unknown => UiTextKey::CommandCenterAgentOnlineUnknown,
+    };
+    (label, snapshot.turn_state)
+}
+
+// A live session remains visible after all its work becomes history. An empty, ended
+// observation belongs to history instead of masquerading as current unknown work.
+fn command_center_session_summary_priority(
+    source: &CommandCenterSource,
+    usage: &CommandCenterProjectUsage<'_>,
+) -> Option<u8> {
+    if source.snapshot.process_state == AgentProcessState::Exited {
+        return (source.snapshot.board.tasks.is_empty() && usage.independent.is_empty())
+            .then_some(3);
+    }
+    let has_current_work = source
+        .snapshot
+        .board
+        .tasks
+        .iter()
+        .any(|task| !command_center_task_is_history(task))
+        || usage
+            .independent
+            .iter()
+            .any(|execution| command_center_execution_priority(execution) != 3);
+    (!has_current_work).then_some(0)
+}
+
 struct CommandCenterProjectUsage<'a> {
     task_labels: HashMap<&'a str, SharedString>,
     independent: Vec<&'a AgentExecutionRecord>,
@@ -4193,6 +4361,117 @@ fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_presence_distinguishes_finished_turns_exit_and_lost_observation() {
+        let (_, view, _) = session_jump_fixture();
+        let mut snapshot = view.command_center_sources().pop().unwrap().snapshot;
+        snapshot.process_state = AgentProcessState::Running;
+        snapshot.turn_state = AgentTurnState::Completed;
+        assert_eq!(
+            command_center_agent_status(&snapshot, true).0,
+            UiTextKey::CommandCenterAgentOnlineCompleted,
+        );
+        assert_eq!(
+            command_center_agent_status(&snapshot, false).0,
+            UiTextKey::CommandCenterAgentRetained,
+        );
+        snapshot.process_state = AgentProcessState::Exited;
+        snapshot.process_exit = Some(yttt_agent_core::AgentProcessExit {
+            code: None,
+            reason: AgentExitReason::Disconnected,
+        });
+        assert_eq!(
+            command_center_agent_status(&snapshot, true).0,
+            UiTextKey::CommandCenterAgentDisconnected,
+        );
+        snapshot.process_exit = Some(yttt_agent_core::AgentProcessExit {
+            code: Some(0),
+            reason: AgentExitReason::Completed,
+        });
+        assert_eq!(
+            command_center_agent_status(&snapshot, true).0,
+            UiTextKey::CommandCenterAgentExited,
+        );
+    }
+
+    #[gpui::test]
+    fn completed_shell_agents_remain_selectable_outside_collapsed_history(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let (_temp, mut view, target) = session_jump_fixture();
+        let mut snapshot = view.command_center_sources().pop().unwrap().snapshot;
+        snapshot.process_state = AgentProcessState::Running;
+        snapshot.turn_state = AgentTurnState::Completed;
+        snapshot.board.executions[0].parent_id = None;
+        snapshot.board.tasks = vec![usage_task("done", AgentPlanStatus::Completed)];
+        for pane in [&target.pane_id, "shell"] {
+            view.workspace
+                .record_agent_snapshot(&target.project_id, &target.tab_id, pane, snapshot.clone())
+                .unwrap();
+        }
+        snapshot.mark_disconnected();
+        snapshot.board = Default::default();
+        view.workspace
+            .record_agent_snapshot(&target.project_id, "other", "agent:pane", snapshot)
+            .unwrap();
+        let slot = Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let root = cx.new(|_| view);
+            *output.borrow_mut() = Some(root.clone());
+            ComponentRoot::new(root, window, cx)
+        });
+        let root = slot.borrow_mut().take().unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let history = cx
+            .debug_bounds("command-center-project-history:target:project")
+            .unwrap();
+        let sessions = [
+            (
+                "target:project:conversation:one:agent:pane",
+                "command-center-session:target:project:conversation:one:agent:pane:0",
+                "command-center-task:target:project:conversation:one:agent:pane:child-execution:done",
+            ),
+            (
+                "target:project:conversation:one:shell",
+                "command-center-session:target:project:conversation:one:shell:0",
+                "command-center-task:target:project:conversation:one:shell:child-execution:done",
+            ),
+        ];
+        for (session_id, row_selector, task_selector) in sessions {
+            let row = cx
+                .debug_bounds(row_selector)
+                .expect("a running agent must remain visible after its last task finishes");
+            assert!(row.bottom() <= history.top());
+            assert!(cx.debug_bounds(task_selector).is_none());
+            cx.simulate_click(row.center(), gpui::Modifiers::none());
+            cx.run_until_parked();
+            root.read_with(cx, |view, _| {
+                let selection = view.command_center.selection.as_ref().unwrap();
+                assert_eq!(selection.terminal_session_id, session_id);
+                assert_eq!(selection.execution_id, "child-execution");
+                assert!(selection.task_id.is_none());
+            });
+        }
+        assert!(
+            cx.debug_bounds("command-center-session:target:project:other:agent:pane:0")
+                .is_none()
+        );
+        cx.simulate_click(history.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(
+            cx.debug_bounds("command-center-session:target:project:other:agent:pane:3")
+                .is_some()
+        );
+        for (_, row_selector, task_selector) in sessions {
+            assert!(cx.debug_bounds(row_selector).is_some());
+            assert!(cx.debug_bounds(task_selector).is_some());
+        }
+    }
 
     fn usage_task(id: &str, status: AgentPlanStatus) -> AgentBoardTask {
         AgentBoardTask {
