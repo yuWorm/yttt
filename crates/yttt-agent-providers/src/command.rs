@@ -110,7 +110,8 @@ impl AgentProvider for OpenCodeProvider {
         event: ProviderHookEvent<'_>,
     ) -> Result<Vec<AgentEventKind>, ProviderError> {
         match event.name {
-            "board_event" | "child_started" | "child_updated" | "child_finished" => {
+            "board_event" | "child_started" | "child_updated" | "child_finished"
+            | "token_usage" => {
                 return OmpProvider.normalize_hook(event);
             }
             _ => {}
@@ -162,6 +163,9 @@ impl AgentProvider for PiProvider {
         &self,
         event: ProviderHookEvent<'_>,
     ) -> Result<Vec<AgentEventKind>, ProviderError> {
+        if event.name == "token_usage" {
+            return Err(ProviderError::UnsupportedEvent(event.name.to_string()));
+        }
         OmpProvider.normalize_hook(event)
     }
 }
@@ -995,6 +999,45 @@ mod tests {
     }
 
     #[test]
+    fn token_usage_is_open_code_only_among_non_omp_providers() {
+        let payload = json!({
+            "usage": {
+                "id": "opencode:session-1:message:message-1",
+                "parent_id": null,
+                "tokens": 0,
+                "includes_children": false,
+                "partial": false
+            }
+        });
+        let events = OpenCodeProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "token_usage",
+                payload: &payload,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[..],
+            [AgentEventKind::TokenUsage { usage }]
+                if usage.id == "opencode:session-1:message:message-1" && usage.tokens == 0
+        ));
+
+        for provider in [
+            &ClaudeProvider as &dyn yttt_agent_core::AgentProvider,
+            &CodexProvider,
+            &GrokProvider,
+            &PiProvider,
+        ] {
+            let error = provider
+                .normalize_hook(ProviderHookEvent {
+                    name: "token_usage",
+                    payload: &payload,
+                })
+                .unwrap_err();
+            assert!(matches!(error, ProviderError::UnsupportedEvent(_)));
+        }
+    }
+
+    #[test]
     fn claude_maps_prompt_tool_wait_and_stop() {
         let prompt = json!({ "prompt": "Fix the hook transport" });
         let events = ClaudeProvider
@@ -1226,6 +1269,12 @@ mod tests {
                 && telemetry.context_tokens.is_none()
                 && telemetry.self_estimated_completion.is_none()
         )));
+        assert!(
+            !result_events
+                .iter()
+                .any(|event| matches!(event, AgentEventKind::TokenUsage { .. })),
+            "Claude Agent tool totals describe one final request but have no stable non-overlapping billing subject",
+        );
     }
 
     #[test]

@@ -25,7 +25,7 @@ use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
     ClientRequest, ConnectionChannel, ControlMessage, HostEvent, HostResponse, ProtocolFailure,
     Request, ResourceCatalog, Response, ServerEvent, TerminalInteractiveMessage,
-    agent::{AgentSnapshotCursor, AgentSnapshotUpdate},
+    agent::{AgentSnapshotCursor, AgentSnapshotUpdate, ProjectTokenUsage},
     terminal::{TerminalInput, TerminalProcessState, TerminalStreamUpdate},
 };
 use yttt_transport::{
@@ -94,6 +94,7 @@ pub enum ClientEvent {
     TerminalUnavailable(TerminalSessionId),
     ResourceCatalogUpdated(Arc<ResourceCatalog>),
     AgentSnapshotUpdated(Box<AgentSnapshotUpdate>),
+    ProjectTokenUsageUpdated(Box<ProjectTokenUsage>),
 }
 
 pub struct ClientCore {
@@ -110,6 +111,7 @@ struct ClientCoreInner {
     known_sessions: Arc<RwLock<HashSet<TerminalSessionId>>>,
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
+    project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
     next_request_id: Arc<AtomicU64>,
     data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
     shutdown: watch::Sender<bool>,
@@ -194,6 +196,7 @@ struct ClientSessionContext {
     known_sessions: Arc<RwLock<HashSet<TerminalSessionId>>>,
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
+    project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     deferred_terminal_events: Arc<Mutex<HashMap<TerminalSessionId, HostEvent>>>,
@@ -219,6 +222,7 @@ impl ClientCore {
         let known_sessions = Arc::new(RwLock::new(HashSet::new()));
         let catalog = Arc::new(RwLock::new(None));
         let agent_snapshots = Arc::new(RwLock::new(HashMap::new()));
+        let project_token_usage = Arc::new(RwLock::new(HashMap::new()));
         let next_request_id = Arc::new(AtomicU64::new(1));
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
         let control = Arc::new(RwLock::new(None));
@@ -238,6 +242,7 @@ impl ClientCore {
             known_sessions.clone(),
             catalog.clone(),
             agent_snapshots.clone(),
+            project_token_usage.clone(),
             next_request_id.clone(),
             diagnostics.clone(),
             shutdown.clone(),
@@ -254,6 +259,7 @@ impl ClientCore {
             catalog,
             next_request_id,
             agent_snapshots,
+            project_token_usage,
             data_channels,
             shutdown,
             diagnostics,
@@ -348,6 +354,14 @@ impl ClientCore {
             agent_address_key(&left.scope).cmp(&agent_address_key(&right.scope))
         });
         snapshots
+    }
+
+    pub fn project_token_usage(&self, project_id: &str) -> Option<ProjectTokenUsage> {
+        self.inner
+            .project_token_usage
+            .read()
+            .get(project_id)
+            .cloned()
     }
 
     pub fn enqueue_request(&self, body: Request) -> Result<PendingClientRequest, ClientCoreError> {
@@ -456,6 +470,7 @@ async fn run_supervisor(
     known_sessions: Arc<RwLock<HashSet<TerminalSessionId>>>,
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
+    project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     shutdown_tx: watch::Sender<bool>,
@@ -531,6 +546,7 @@ async fn run_supervisor(
             known_sessions: known_sessions.clone(),
             catalog: catalog.clone(),
             agent_snapshots: agent_snapshots.clone(),
+            project_token_usage: project_token_usage.clone(),
             next_request_id: next_request_id.clone(),
             diagnostics: diagnostics.clone(),
             deferred_terminal_events: deferred_terminal_events.clone(),
@@ -1118,6 +1134,13 @@ async fn connected_state_event_session(
                 if let ServerEvent::ProfileControl(status) = &event.body {
                     update_profile_control(&context.control, status);
                 }
+                if let ServerEvent::ProjectTokenUsage(summary) = &event.body {
+                    apply_project_token_usage(
+                        summary.clone(),
+                        &context.project_token_usage,
+                        &context.events,
+                    );
+                }
                 if matches!(
                     &event.body,
                     ServerEvent::ResourceCatalogChanged
@@ -1178,6 +1201,7 @@ fn handle_response(
     let known_sessions = &context.known_sessions;
     let catalog = &context.catalog;
     let agent_snapshots = &context.agent_snapshots;
+    let project_token_usage = &context.project_token_usage;
     let reconnect = matches!(&pending, PendingRequest::ReconnectCatalog);
     match pending {
         PendingRequest::User(reply) => {
@@ -1211,8 +1235,13 @@ fn handle_response(
                 Ok(Response::Resources(resources)) => {
                     catalog.write().replace(Arc::new(resources.clone()));
                 }
-                Ok(Response::AgentSnapshots { snapshots, .. }) => {
+                Ok(Response::AgentSnapshots {
+                    snapshots,
+                    project_token_usage: summaries,
+                    ..
+                }) => {
                     apply_agent_snapshots(snapshots.clone(), agent_snapshots, events);
+                    apply_project_token_usage_batch(summaries.clone(), project_token_usage, events);
                 }
                 _ => {}
             }
@@ -1233,8 +1262,14 @@ fn handle_response(
             Vec::new()
         }
         PendingRequest::AgentSnapshots => {
-            if let Ok(Response::AgentSnapshots { snapshots, .. }) = result {
+            if let Ok(Response::AgentSnapshots {
+                snapshots,
+                project_token_usage: summaries,
+                ..
+            }) = result
+            {
                 apply_agent_snapshots(snapshots, agent_snapshots, events);
+                apply_project_token_usage_batch(summaries, project_token_usage, events);
             }
             Vec::new()
         }
@@ -1546,6 +1581,36 @@ fn apply_agent_snapshots(
         if applied {
             let _ = events.send(ClientEvent::AgentSnapshotUpdated(Box::new(update)));
         }
+    }
+}
+
+fn apply_project_token_usage_batch(
+    summaries: Vec<ProjectTokenUsage>,
+    usage: &Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
+    events: &broadcast::Sender<ClientEvent>,
+) {
+    for summary in summaries {
+        apply_project_token_usage(summary, usage, events);
+    }
+}
+
+fn apply_project_token_usage(
+    summary: ProjectTokenUsage,
+    usage: &Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
+    events: &broadcast::Sender<ClientEvent>,
+) {
+    let applied = {
+        let mut usage = usage.write();
+        match usage.get(&summary.project_id) {
+            Some(current) if current.updated_at >= summary.updated_at => false,
+            _ => {
+                usage.insert(summary.project_id.clone(), summary.clone());
+                true
+            }
+        }
+    };
+    if applied {
+        let _ = events.send(ClientEvent::ProjectTokenUsageUpdated(Box::new(summary)));
     }
 }
 

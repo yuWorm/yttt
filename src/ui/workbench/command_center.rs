@@ -11,6 +11,7 @@ use gpui::{
 use gpui_component::{
     Disableable as _,
     input::{InputEvent, InputState},
+    spinner::Spinner,
 };
 use yttt_agent_core::{
     AgentBoardCommand, AgentBoardTask, AgentExecutionRecord, AgentExecutionTelemetry,
@@ -47,6 +48,7 @@ pub(super) struct CommandCenterState {
     execution_history_expanded: bool,
     project_history_expanded: BTreeSet<String>,
     project_viewport_height: f32,
+    project_viewport_width: f32,
     question_history_expanded: bool,
     question_scroll: gpui::ScrollHandle,
     management_session: Option<String>,
@@ -146,12 +148,18 @@ impl WorkbenchView {
             .sum::<usize>();
 
         let mut project_sources = BTreeMap::<(String, String), Vec<&CommandCenterSource>>::new();
+        for project in self.workspace.opened_projects() {
+            project_sources
+                .entry((project.id.to_string(), project.layout.project.name.clone()))
+                .or_default();
+        }
         for source in &sources {
             project_sources
                 .entry((source.scope.project_id.clone(), source.project_name.clone()))
                 .or_default()
                 .push(source);
         }
+        let project_count = project_sources.len();
         let project_rows = project_sources.len().div_ceil(3).max(2);
         // Keep six fixed slots regardless of project count. Additional rows extend the
         // scrollable content instead of shrinking the cards already visible.
@@ -255,7 +263,7 @@ impl WorkbenchView {
                         command_center_count(
                             self.ui_text,
                             UiTextKey::CommandCenterProjectsCount,
-                            sources_project_count(&sources),
+                            project_count,
                         ),
                     ))
                     .child(div().text_xs().text_color(theme.text_muted).child(
@@ -299,10 +307,14 @@ impl WorkbenchView {
                         gpui::canvas(
                             move |bounds, _, cx| {
                                 let height = f32::from(bounds.size.height);
+                                let width = f32::from(bounds.size.width);
                                 if measure_view
                                     .read_with(cx, |root, _| {
                                         (root.command_center.project_viewport_height - height).abs()
                                             > 1.0
+                                            || (root.command_center.project_viewport_width - width)
+                                                .abs()
+                                                > 1.0
                                     })
                                     .unwrap_or(false)
                                 {
@@ -310,6 +322,7 @@ impl WorkbenchView {
                                     cx.defer(move |cx| {
                                         let _ = view.update(cx, |root, cx| {
                                             root.command_center.project_viewport_height = height;
+                                            root.command_center.project_viewport_width = width;
                                             cx.notify();
                                         });
                                     });
@@ -669,13 +682,11 @@ impl WorkbenchView {
             (AgentPlanStatus::Abandoned, 0usize),
             (AgentPlanStatus::Unknown, 0usize),
         ];
-        let mut task_count = 0;
         let mut history_count = 0;
         for task in sources
             .iter()
             .flat_map(|source| source.snapshot.board.tasks.iter())
         {
-            task_count += 1;
             if command_center_task_is_history(task) {
                 history_count += 1;
             }
@@ -721,55 +732,99 @@ impl WorkbenchView {
             .project_history_expanded
             .contains(project_id);
         let history_project_id = project_id.to_string();
-        let mut summary = div()
-            .flex_none()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_x(px(6.0))
-            .gap_y(px(2.0))
-            .mb(px(5.0))
-            .text_xs()
-            .text_color(theme.text_muted)
-            .child(div().child(command_center_count(
-                self.ui_text,
-                UiTextKey::CommandCenterOnlineAgentsCount,
-                online_agents,
-            )))
-            .child(
-                div()
-                    .text_color(if pending_questions > 0 {
-                        theme.warning
-                    } else {
-                        theme.text_muted
-                    })
-                    .child(command_center_count(
-                        self.ui_text,
-                        UiTextKey::CommandCenterPendingQuestionsCount,
-                        pending_questions,
-                    )),
-            );
-        if active_children > 0 {
-            summary = summary.child(div().child(command_center_count(
-                self.ui_text,
-                UiTextKey::CommandCenterActiveChildrenCount,
-                active_children,
-            )));
+        // Keep attention-worthy counts first. Extra counts remain available in the
+        // summary tooltip instead of pushing the project name out of a narrow card.
+        let mut counts = Vec::new();
+        if pending_questions > 0 {
+            counts.push((
+                IconName::TriangleAlert,
+                pending_questions,
+                theme.warning,
+                command_center_count(
+                    self.ui_text,
+                    UiTextKey::CommandCenterPendingQuestionsCount,
+                    pending_questions,
+                ),
+            ));
         }
-        if task_count == 0 {
-            summary = summary
-                .child(div().child(self.ui_text.get(UiTextKey::CommandCenterNoReportedTasks)));
-        } else {
-            for (status, count) in task_status_counts {
-                if count == 0 {
-                    continue;
-                }
-                summary = summary.child(div().child(format!(
-                    "{count} {}",
-                    self.ui_text.get(command_center_plan_label(status))
-                )));
+        if online_agents > 0 {
+            counts.push((
+                IconName::Bot,
+                online_agents,
+                theme.accent,
+                command_center_count(
+                    self.ui_text,
+                    UiTextKey::CommandCenterOnlineAgentsCount,
+                    online_agents,
+                ),
+            ));
+        }
+        if active_children > 0 {
+            counts.push((
+                IconName::Network,
+                active_children,
+                theme.accent,
+                command_center_count(
+                    self.ui_text,
+                    UiTextKey::CommandCenterActiveChildrenCount,
+                    active_children,
+                ),
+            ));
+        }
+        for index in [1, 3, 0, 2, 4, 5] {
+            let (status, count) = task_status_counts[index];
+            if count > 0 {
+                counts.push((
+                    command_center_plan_icon(status),
+                    count,
+                    command_center_plan_color(status, theme),
+                    format!(
+                        "{count} {}",
+                        self.ui_text.get(command_center_plan_label(status))
+                    ),
+                ));
             }
         }
+        let summary_details = counts
+            .iter()
+            .map(|(_, _, _, label)| label.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let card_width = (self.command_center.project_viewport_width - 42.0) / 3.0;
+        let visible_counts = ((card_width - 250.0) / 36.0).max(0.0) as usize;
+        let mut summary = div()
+            .id("project-summary")
+            .role(gpui::Role::Label)
+            .aria_label(summary_details.clone())
+            .tooltip(command_center_tooltip(summary_details))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(7.0))
+            .text_xs()
+            .text_color(theme.text_muted);
+        for (icon, count, color, label) in counts.iter().take(visible_counts) {
+            summary = summary.child(
+                div()
+                    .id(format!("summary-count:{label}"))
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .tooltip(command_center_tooltip(label.clone()))
+                    .child(Icon::new(icon.clone()).size(px(12.0)).text_color(*color))
+                    .child(command_center_compact_count(*count as u64)),
+            );
+        }
+        if counts.len() > visible_counts {
+            summary = summary.child(format!("+{}", counts.len() - visible_counts));
+        }
+        let project_usage = self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.project_token_usage(project_id));
+        let (usage_label, usage_details) =
+            command_center_project_tokens(self.ui_text, project_usage.as_ref());
 
         let mut task_list = div()
             .id(format!("command-center-tasks:{project_id}"))
@@ -790,18 +845,35 @@ impl WorkbenchView {
                             format!("command-center-project-history:{history_debug_project_id}")
                         })
                         .cursor_pointer()
-                        .flex_none()
-                        .py(px(5.0))
-                        .px(px(5.0))
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(command_center_count(
+                        .role(gpui::Role::Button)
+                        .aria_label(command_center_count(
                             self.ui_text,
                             if history_expanded {
                                 UiTextKey::CommandCenterTaskHistoryHide
                             } else {
                                 UiTextKey::CommandCenterTaskHistoryShow
                             },
+                            history_count,
+                        ))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .py(px(4.0))
+                        .px(px(5.0))
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(
+                            Icon::new(if history_expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(px(11.0)),
+                        )
+                        .child(command_center_count(
+                            self.ui_text,
+                            UiTextKey::CommandCenterHistoryCompact,
                             history_count,
                         ))
                         .on_click(cx.listener(move |root, _, _, cx| {
@@ -873,6 +945,16 @@ impl WorkbenchView {
                     &source.snapshot,
                     host_live && source.operation_target.is_some(),
                 );
+                let session_title = command_center_session_title(&source.snapshot)
+                    .filter(|title| !agent_label.eq_ignore_ascii_case(title));
+                let session_caption = match session_title {
+                    Some(title) => format!("{session_location} · {title}"),
+                    None => session_location.clone(),
+                };
+                let session_details = format!(
+                    "{agent_label}\n{session_location}\n{}",
+                    self.ui_text.get(status_label)
+                );
                 let show_status = !history || (!has_visible_tasks && !has_visible_executions);
                 let session_selected =
                     self.command_center
@@ -893,6 +975,9 @@ impl WorkbenchView {
                             source.terminal_session_id
                         )
                     })
+                    .role(gpui::Role::Button)
+                    .aria_label(session_details.clone())
+                    .tooltip(command_center_tooltip(session_details))
                     .cursor_pointer()
                     .flex_none()
                     .flex()
@@ -919,50 +1004,34 @@ impl WorkbenchView {
                             cx,
                         );
                     }))
-                    .child(
-                        div()
-                            .w(px(12.0))
-                            .text_xs()
-                            .text_color(if show_status {
-                                command_center_turn_color(status_state, theme)
-                            } else {
-                                theme.text_subtle
-                            })
-                            .child(if show_status {
-                                command_center_turn_symbol(status_state)
-                            } else {
-                                ""
-                            }),
-                    )
+                    .child(agent_type_icon(
+                        format!("project-provider:{}:{priority}", source.terminal_session_id)
+                            .into(),
+                        source.snapshot.provider_id.as_str(),
+                        theme,
+                    ))
                     .child(
                         div()
                             .min_w_0()
                             .flex_1()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(agent_label),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(theme.text_subtle)
-                                    .child(session_location),
-                            ),
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(if history {
+                                theme.text_subtle
+                            } else {
+                                theme.text_muted
+                            })
+                            .child(session_caption),
                     )
                     .when(show_status, |row| {
-                        row.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(command_center_turn_color(status_state, theme))
-                                .child(self.ui_text.get(status_label)),
-                        )
+                        row.child(command_center_state_icon(
+                            "session-state".into(),
+                            self.ui_text.get(status_label).into(),
+                            status_state,
+                            status_state == AgentTurnState::Working,
+                            theme,
+                        ))
                     });
                 let mut group = div()
                     .flex()
@@ -974,7 +1043,7 @@ impl WorkbenchView {
                     group = group.child(self.command_center_task_row(
                         source,
                         task,
-                        &usage.task_labels[task.execution_id.as_str()],
+                        usage.task_labels[task.execution_id.as_str()].as_ref(),
                         theme,
                         cx,
                     ));
@@ -1039,15 +1108,37 @@ impl WorkbenchView {
                 .mb(px(4.0))
                 .child(
                     div()
+                        .id("project-name")
+                        .role(gpui::Role::Label)
+                        .aria_label(project_name.to_string())
+                        .tooltip(command_center_tooltip(project_name.to_string()))
                         .min_w_0()
                         .flex_1()
                         .truncate()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(project_name.to_string()),
+                )
+                .child(summary)
+                .child(
+                    div()
+                        .id("project-token-usage")
+                        .debug_selector(|| format!("command-center-project-tokens:{project_id}"))
+                        .role(gpui::Role::Label)
+                        .aria_label(usage_details.clone())
+                        .tooltip(command_center_tooltip(usage_details))
+                        .flex_none()
+                        .text_xs()
+                        .text_color(
+                            if project_usage.as_ref().is_some_and(|usage| usage.partial) {
+                                theme.warning
+                            } else {
+                                theme.text_subtle
+                            },
+                        )
+                        .child(usage_label),
                 ),
         )
-        .child(summary)
         .child(task_list)
     }
 
@@ -1055,7 +1146,7 @@ impl WorkbenchView {
         &self,
         source: &CommandCenterSource,
         task: &AgentBoardTask,
-        usage_label: &SharedString,
+        usage_label: Option<&SharedString>,
         theme: WorkbenchTheme,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
@@ -1072,11 +1163,26 @@ impl WorkbenchView {
                     && selection.task_id.as_deref() == Some(task_id.as_str())
             });
         let history = command_center_task_is_history(task);
+        let animate = !history
+            && task.item.status == AgentPlanStatus::InProgress
+            && command_center_agent_status(
+                &source.snapshot,
+                source.operation_target.is_some()
+                    && self.terminal.host_runtime.as_ref().is_some_and(|runtime| {
+                        matches!(runtime.state(), ConnectionState::Ready { .. })
+                    }),
+            )
+            .1 == AgentTurnState::Working;
+        let status_label = self
+            .ui_text
+            .get(command_center_plan_label(task.item.status));
         div()
             .id(format!(
                 "command-center-task:{session_id}:{execution_id}:{task_id}"
             ))
             .debug_selector(|| format!("command-center-task:{session_id}:{execution_id}:{task_id}"))
+            .role(gpui::Role::Button)
+            .aria_label(format!("{} · {status_label}", task.item.title))
             .cursor_pointer()
             .flex()
             .items_center()
@@ -1105,10 +1211,26 @@ impl WorkbenchView {
             }))
             .child(
                 div()
-                    .w(px(12.0))
-                    .text_xs()
-                    .text_color(command_center_plan_color(task.item.status, theme))
-                    .child(command_center_plan_symbol(task.item.status)),
+                    .id("task-state")
+                    .role(gpui::Role::Image)
+                    .aria_label(status_label)
+                    .tooltip(command_center_tooltip(status_label.to_string()))
+                    .flex_none()
+                    .w(px(14.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(if animate {
+                        Spinner::new()
+                            .with_size(px(11.0))
+                            .color(theme.accent.into())
+                            .into_any_element()
+                    } else {
+                        Icon::new(command_center_plan_icon(task.item.status))
+                            .size(px(11.0))
+                            .text_color(command_center_plan_color(task.item.status, theme))
+                            .into_any_element()
+                    }),
             )
             .child(
                 div()
@@ -1118,26 +1240,22 @@ impl WorkbenchView {
                     .text_xs()
                     .child(task.item.title.clone()),
             )
-            .child(
-                div()
-                    .id("task-usage")
-                    .flex_none()
-                    .text_xs()
-                    .text_color(theme.text_subtle)
-                    .child(usage_label.clone())
-                    .tooltip(self.command_center_usage_tooltip(
-                        source,
-                        &task.execution_id,
-                        true,
-                        cx,
-                    )),
-            )
-            .child(
-                div().text_xs().text_color(theme.text_subtle).child(
-                    self.ui_text
-                        .get(command_center_plan_label(task.item.status)),
-                ),
-            )
+            .when_some(usage_label, |row, usage_label| {
+                row.child(
+                    div()
+                        .id("task-usage")
+                        .flex_none()
+                        .text_xs()
+                        .text_color(theme.text_subtle)
+                        .child(usage_label.clone())
+                        .tooltip(self.command_center_usage_tooltip(
+                            source,
+                            &task.execution_id,
+                            true,
+                            cx,
+                        )),
+                )
+            })
             .when(task.accepted_at.is_some(), |row| {
                 row.child(
                     div()
@@ -3738,14 +3856,6 @@ fn command_center_empty_panel(message: &str, theme: WorkbenchTheme) -> Div {
         )
 }
 
-fn sources_project_count(sources: &[CommandCenterSource]) -> usize {
-    sources
-        .iter()
-        .map(|source| source.scope.project_id.as_str())
-        .collect::<BTreeSet<_>>()
-        .len()
-}
-
 fn command_center_template(template: &str, replacements: &[(&str, &str)]) -> String {
     let mut rendered = template.to_string();
     for &(name, value) in replacements {
@@ -3784,12 +3894,7 @@ fn command_center_agent_label(snapshot: &AgentSnapshot) -> String {
         .find(|agent| agent.id() == snapshot.provider_id.as_str())
         .map(BuiltinAgent::display_name)
         .unwrap_or(snapshot.provider_id.as_str());
-    let title = snapshot
-        .session
-        .as_ref()
-        .and_then(|session| session.title.as_deref())
-        .filter(|title| !title.trim().is_empty())
-        .or_else(|| snapshot.task.as_ref().map(|task| task.title.as_str()));
+    let title = command_center_session_title(snapshot);
     match title
         .map(str::trim)
         .filter(|title| !title.is_empty() && *title != provider)
@@ -3797,6 +3902,17 @@ fn command_center_agent_label(snapshot: &AgentSnapshot) -> String {
         Some(title) => format!("{provider} · {title}"),
         None => provider.to_string(),
     }
+}
+
+fn command_center_session_title(snapshot: &AgentSnapshot) -> Option<&str> {
+    snapshot
+        .session
+        .as_ref()
+        .and_then(|session| session.title.as_deref())
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| snapshot.task.as_ref().map(|task| task.title.as_str()))
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
 }
 
 fn command_center_agent_status(
@@ -3867,24 +3983,24 @@ fn command_center_session_summary_priority(
 }
 
 struct CommandCenterProjectUsage<'a> {
-    task_labels: HashMap<&'a str, SharedString>,
+    task_labels: HashMap<&'a str, Option<SharedString>>,
     independent: Vec<&'a AgentExecutionRecord>,
 }
 
 impl<'a> CommandCenterProjectUsage<'a> {
     fn new(ui_text: UiText, source: &'a CommandCenterSource) -> Self {
-        let unknown = SharedString::from(ui_text.get(UiTextKey::CommandCenterTaskUsageUnknown));
         let mut task_labels: HashMap<_, _> = source
             .snapshot
             .board
             .tasks
             .iter()
-            .map(|task| (task.execution_id.as_str(), unknown.clone()))
+            .map(|task| (task.execution_id.as_str(), None))
             .collect();
         let mut independent = Vec::new();
         for execution in &source.snapshot.board.executions {
             if let Some(label) = task_labels.get_mut(execution.id.as_str()) {
-                *label = command_center_task_usage(ui_text, source, Some(execution)).into();
+                *label =
+                    command_center_task_usage(ui_text, source, Some(execution)).map(Into::into);
             } else if execution.telemetry.tokens.is_some()
                 || execution.telemetry.input_tokens.is_some()
                 || execution.telemetry.output_tokens.is_some()
@@ -3918,20 +4034,108 @@ fn command_center_task_usage(
     ui_text: UiText,
     source: &CommandCenterSource,
     execution: Option<&AgentExecutionRecord>,
-) -> String {
-    let Some(tokens) = execution.and_then(|record| record.telemetry.tokens) else {
-        return ui_text
-            .get(UiTextKey::CommandCenterTaskUsageUnknown)
-            .to_string();
-    };
-    command_center_template(
+) -> Option<String> {
+    let tokens = execution.and_then(|record| record.telemetry.tokens)?;
+    Some(command_center_template(
         ui_text.get(if source.snapshot.provider_id.as_str() == "claude" {
             UiTextKey::CommandCenterTaskLastRequestUsage
         } else {
             UiTextKey::CommandCenterTaskExecutionUsage
         }),
         &[("value", &command_center_compact_count(tokens))],
+    ))
+}
+
+fn command_center_tooltip(
+    label: String,
+) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    move |window, cx| {
+        yttt_ui::primitives::tooltip::yttt_tooltip(
+            label.clone(),
+            crate::ui::theme::current_workbench_theme(cx),
+            crate::ui::theme::current_ui_style(cx),
+        )
+        .build(window, cx)
+    }
+}
+
+fn command_center_project_tokens(
+    ui_text: UiText,
+    usage: Option<&yttt_agent_core::ProjectTokenUsage>,
+) -> (String, String) {
+    let Some(usage) = usage.filter(|usage| usage.tokens.is_some()) else {
+        return (
+            "— tok".into(),
+            ui_text
+                .get(UiTextKey::CommandCenterProjectUsageUnreported)
+                .into(),
+        );
+    };
+    let tokens = usage.tokens.unwrap();
+    let label = format!(
+        "{}{} tok",
+        command_center_compact_count(tokens),
+        if usage.partial { "*" } else { "" }
+    );
+    let detail = command_center_template(
+        ui_text.get(if usage.partial {
+            UiTextKey::CommandCenterProjectUsagePartial
+        } else {
+            UiTextKey::CommandCenterProjectUsageComplete
+        }),
+        &[
+            ("tokens", &tokens.to_string()),
+            ("reported", &usage.reported_sources.to_string()),
+            ("observed", &usage.observed_sources.to_string()),
+        ],
+    );
+    (
+        label,
+        format!(
+            "{detail}\n{}",
+            ui_text.get(UiTextKey::CommandCenterProjectUsageScope)
+        ),
     )
+}
+
+fn command_center_state_icon(
+    id: SharedString,
+    label: SharedString,
+    state: AgentTurnState,
+    animate: bool,
+    theme: WorkbenchTheme,
+) -> gpui::AnyElement {
+    let color = command_center_turn_color(state, theme);
+    let glyph = if animate && state == AgentTurnState::Working {
+        Spinner::new()
+            .with_size(px(11.0))
+            .color(color.into())
+            .into_any_element()
+    } else {
+        Icon::new(match state {
+            AgentTurnState::Working => IconName::LoaderCircle,
+            AgentTurnState::Idle => IconName::Pause,
+            AgentTurnState::Waiting => IconName::TriangleAlert,
+            AgentTurnState::Completed => IconName::CircleCheck,
+            AgentTurnState::Failed | AgentTurnState::Interrupted => IconName::CircleX,
+            AgentTurnState::Unknown => IconName::Info,
+        })
+        .size(px(11.0))
+        .text_color(color)
+        .into_any_element()
+    };
+    div()
+        .id(id)
+        .role(gpui::Role::Image)
+        .aria_label(label.clone())
+        .tooltip(command_center_tooltip(label.to_string()))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(14.0))
+        .child(glyph)
+        .into_any_element()
 }
 
 fn command_center_question_key(terminal_session_id: &str, request_id: &str) -> String {
@@ -4238,14 +4442,14 @@ fn command_center_plan_label(status: AgentPlanStatus) -> UiTextKey {
     }
 }
 
-fn command_center_plan_symbol(status: AgentPlanStatus) -> &'static str {
+fn command_center_plan_icon(status: AgentPlanStatus) -> IconName {
     match status {
-        AgentPlanStatus::Pending => "○",
-        AgentPlanStatus::InProgress => "●",
-        AgentPlanStatus::Completed => "✓",
-        AgentPlanStatus::Blocked => "?",
-        AgentPlanStatus::Abandoned => "—",
-        AgentPlanStatus::Unknown => "◇",
+        AgentPlanStatus::Pending => IconName::Pause,
+        AgentPlanStatus::InProgress => IconName::LoaderCircle,
+        AgentPlanStatus::Completed => IconName::CircleCheck,
+        AgentPlanStatus::Blocked => IconName::TriangleAlert,
+        AgentPlanStatus::Abandoned => IconName::CircleX,
+        AgentPlanStatus::Unknown => IconName::Info,
     }
 }
 
@@ -4269,18 +4473,6 @@ fn command_center_turn_label(state: AgentTurnState) -> UiTextKey {
         AgentTurnState::Failed => UiTextKey::CommandCenterTurnFailed,
         AgentTurnState::Interrupted => UiTextKey::CommandCenterTurnInterrupted,
         AgentTurnState::Unknown => UiTextKey::CommandCenterTurnUnknown,
-    }
-}
-
-fn command_center_turn_symbol(state: AgentTurnState) -> &'static str {
-    match state {
-        AgentTurnState::Idle => "○",
-        AgentTurnState::Working => "●",
-        AgentTurnState::Waiting => "?",
-        AgentTurnState::Completed => "✓",
-        AgentTurnState::Failed => "!",
-        AgentTurnState::Interrupted => "—",
-        AgentTurnState::Unknown => "◇",
     }
 }
 
@@ -4344,6 +4536,7 @@ fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
     match event {
         ClientEvent::Connection(_)
         | ClientEvent::AgentSnapshotUpdated(_)
+        | ClientEvent::ProjectTokenUsageUpdated(_)
         | ClientEvent::ResourceCatalogUpdated(_)
         | ClientEvent::TerminalUnavailable(_) => true,
         ClientEvent::Server(event) => matches!(
@@ -4621,11 +4814,13 @@ mod tests {
         source.snapshot.board.executions[0].telemetry.tokens = Some(100_000);
         source.snapshot.board.tasks.push(task);
         let usage = CommandCenterProjectUsage::new(view.ui_text, &source);
-        assert_eq!(
-            usage.task_labels["child-execution"].as_ref(),
-            view.ui_text.get(UiTextKey::CommandCenterTaskUsageUnknown)
-        );
+        assert!(usage.task_labels["child-execution"].is_none());
         assert_eq!(usage.independent[0].id, "unrelated-run");
+        source.snapshot.board.executions[0].id = "child-execution".into();
+        source.snapshot.board.executions[0].telemetry.tokens = Some(0);
+        let usage = CommandCenterProjectUsage::new(view.ui_text, &source);
+        assert!(usage.task_labels["child-execution"].is_some());
+        assert!(usage.independent.is_empty());
     }
 
     #[gpui::test]

@@ -3186,6 +3186,7 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     let Response::AgentSnapshots {
         snapshots: observer_replay,
         has_more: false,
+        ..
     } = observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: Vec::new(),
@@ -3227,6 +3228,7 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     let Response::AgentSnapshots {
         snapshots: second_replay,
         has_more: false,
+        ..
     } = second_observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: Vec::new(),
@@ -3241,6 +3243,7 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     let Response::AgentSnapshots {
         snapshots: current,
         has_more: false,
+        ..
     } = observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: vec![AgentSnapshotCursor {
@@ -3313,6 +3316,7 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     let Response::AgentSnapshots {
         snapshots: after_exit,
         has_more: false,
+        ..
     } = observer
         .request(Request::ReadAgentSnapshots {
             acknowledged: Vec::new(),

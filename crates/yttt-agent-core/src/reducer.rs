@@ -418,6 +418,11 @@ impl AgentReducer {
                     }
                 }
             }
+            AgentEventKind::TokenUsage { .. } => {
+                // Token observations have Host-owned accounting semantics and
+                // intentionally do not touch lifecycle snapshot state.
+                return false;
+            }
             AgentEventKind::ChildBoard { child_id, event } => {
                 if !self
                     .snapshot

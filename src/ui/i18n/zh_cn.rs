@@ -111,7 +111,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterTasksCount => "{count} 个任务",
         UiTextKey::CommandCenterQuestionsCount => "{count} 个问题",
         UiTextKey::CommandCenterExecutionsCount => "{count} 条执行记录",
-        UiTextKey::CommandCenterNoReportedTasks => "未报告任务",
         UiTextKey::CommandCenterTaskAccepted => "已接受",
         UiTextKey::CommandCenterTaskRetired => "已退役",
         UiTextKey::CommandCenterPlanPending => "待处理",
@@ -164,7 +163,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterExecutionUsage => "执行用量 · 非单项 Todo 消耗",
         UiTextKey::CommandCenterTaskExecutionUsage => "执行 {value} tok",
         UiTextKey::CommandCenterTaskLastRequestUsage => "末次 {value} tok",
-        UiTextKey::CommandCenterTaskUsageUnknown => "Token —",
         UiTextKey::CommandCenterTaskUsageHint => {
             "这是关联执行的用量，不是单个计划条目的独立消耗。同一执行下的任务共享此数据，不可相加。"
         }
@@ -213,6 +211,19 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterPendingQuestionsCount => "待回答 {count}",
         UiTextKey::CommandCenterTaskHistoryShow => "展开历史记录（{count}）",
         UiTextKey::CommandCenterTaskHistoryHide => "收起历史记录（{count}）",
+        UiTextKey::CommandCenterHistoryCompact => "历史 · {count}",
+        UiTextKey::CommandCenterProjectUsageUnreported => {
+            "项目累计 Token：尚无可累计的用量上报。未上报不等于 0。"
+        }
+        UiTextKey::CommandCenterProjectUsagePartial => {
+            "项目累计 Token：至少 {tokens} · 部分覆盖（{reported}/{observed} 个观测来源已上报）"
+        }
+        UiTextKey::CommandCenterProjectUsageComplete => {
+            "项目累计 Token：{tokens} · 已覆盖全部 {observed} 个已知计量来源"
+        }
+        UiTextKey::CommandCenterProjectUsageScope => {
+            "累计提供方已上报的历史与新用量，按稳定来源去重并排除主子重叠；关闭会话、裁剪历史或重启不会清零。覆盖仅针对已知计量来源，不代表完整会话或项目自创建以来的总消耗；离线时保留最后记录。"
+        }
         UiTextKey::CommandCenterDurationHours => "{value}小时",
         UiTextKey::CommandCenterDurationMinutes => "{value}分钟",
         UiTextKey::CommandCenterDurationSeconds => "{value}秒",

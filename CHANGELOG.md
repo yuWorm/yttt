@@ -4,8 +4,10 @@
 
 - 工作区历史改为可搜索的 picker：展示保存的项目名称、路径和最近保存时间，支持方向键选择、回车／点击打开、Esc 关闭；完整日期和 ID 收入悬停详情，“从历史移除”收进次要菜单并保留删除确认。
 - Replace the workspace history dialog with a searchable picker showing saved project names, paths, and last-saved dates. Support keyboard selection, Enter/click to open, and Escape to dismiss; expose full timestamps and IDs on hover, with confirmed history removal in the secondary menu.
-- 修复调度中心多 Agent 与 Shell 内启动 Agent 的展示：用提供方和会话名称标识 Agent，单独显示 Tab／Pane 位置；在线主 Agent 与运行中子 Agent 分开统计，区分本轮结束、进程退出、观测中断和非实时记录。在线会话不再随已完成任务折叠，空的失联记录移入历史。
-- Fix Dispatch center identity and lifecycle display for multiple Agents and shell-launched sessions. Separate provider/session identity from terminal location, count online roots and active children independently, and distinguish finished turns, exited processes, lost observations, and retained snapshots. Keep running sessions selectable outside completed history and move empty disconnected observations into history.
+- 调度中心项目卡片改为单行项目名、非零图标统计和累计 Token；窄卡片收拢额外统计，Agent 提供方使用图标并保留 Tab／会话辨识，只有确认工作中的状态使用动画。历史行移除重复状态及未上报的 Token 占位，悬停和无障碍标签保留完整信息。
+- Compact Dispatch project cards into one-line names, nonzero icon counters and cumulative tokens. Collapse excess counters on narrow cards, use provider icons with tab/session identity, animate only confirmed live work, and remove repeated historical statuses and missing task-usage placeholders while retaining hover and accessible details.
+- 新增 Host 持久化项目 Token 账本：稳定来源去重、累计高水位和主子覆盖去重，关闭会话、裁剪历史、重启均不清零；明确标识部分及未上报用量，不将 Todo 共享遥测相加。资源协议升级为 17，桌面、Host、远端 Server 与 CLI 需同步更新；运行中的 Agent 需重载更新后的扩展。
+- Add a durable Host-owned project token ledger with stable billing identities, cumulative high-water marks and parent/child overlap handling. Totals survive closed sessions, bounded history and restarts; partial/unreported coverage is explicit and shared Todo telemetry is never summed. Bump the resource protocol to 17; update Desktop, Host, remote Server and CLI together and reload running Agent extensions.
 
 ## 0.3.13 - 2026-10-14
 

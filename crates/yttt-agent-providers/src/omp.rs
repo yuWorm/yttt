@@ -1,9 +1,9 @@
 use serde_json::Value;
 use yttt_agent_core::{
     AgentAction, AgentBoardEvent, AgentEventKind, AgentProvider, AgentSessionMetadata, AgentTask,
-    AgentTaskSource, AgentTurnState, ChildAgentDescriptor, ChildAgentUpdate, ProviderDescriptor,
-    ProviderError, ProviderHookEvent, ProviderId, ProviderResumeCommand, TurnOutcome,
-    WaitingReason,
+    AgentTaskSource, AgentTokenUsage, AgentTurnState, ChildAgentDescriptor, ChildAgentUpdate,
+    ProviderDescriptor, ProviderError, ProviderHookEvent, ProviderId, ProviderResumeCommand,
+    TurnOutcome, WaitingReason,
 };
 
 pub const OMP_PROVIDER_ID: &str = "omp";
@@ -124,6 +124,7 @@ impl AgentProvider for OmpProvider {
                         .unwrap_or("completed"),
                 )?,
             }],
+            "token_usage" => vec![token_usage(payload)?],
             name => return Err(ProviderError::UnsupportedEvent(name.to_string())),
         };
         Ok(events)
@@ -193,6 +194,47 @@ fn action_started(payload: &Value) -> Result<Vec<AgentEventKind>, ProviderError>
     )
     .ok_or_else(|| ProviderError::InvalidPayload("toolName cannot be empty".to_string()))?;
     Ok(vec![AgentEventKind::ActionStarted { action }])
+}
+
+fn token_usage(payload: &Value) -> Result<AgentEventKind, ProviderError> {
+    let usage = payload
+        .get("usage")
+        .ok_or_else(|| ProviderError::InvalidPayload("usage is required".to_string()))?;
+    let parent_id = match usage.get("parent_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(ProviderError::InvalidPayload(
+                    "usage.parent_id cannot be empty".to_string(),
+                ));
+            }
+            Some(value.to_string())
+        }
+        Some(_) => {
+            return Err(ProviderError::InvalidPayload(
+                "usage.parent_id must be a string or null".to_string(),
+            ));
+        }
+    };
+    let tokens = usage
+        .get("tokens")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ProviderError::InvalidPayload("usage.tokens is required".to_string()))?;
+    let includes_children = bool_field(usage, "includes_children").ok_or_else(|| {
+        ProviderError::InvalidPayload("usage.includes_children is required".to_string())
+    })?;
+    let partial = bool_field(usage, "partial")
+        .ok_or_else(|| ProviderError::InvalidPayload("usage.partial is required".to_string()))?;
+    Ok(AgentEventKind::TokenUsage {
+        usage: AgentTokenUsage {
+            id: required_string_field(usage, "id")?,
+            parent_id,
+            tokens,
+            includes_children,
+            partial,
+        },
+    })
 }
 fn required_string_field(payload: &Value, name: &str) -> Result<String, ProviderError> {
     string_field(payload, name)
@@ -432,6 +474,50 @@ mod tests {
                 outcome: TurnOutcome::Failed,
             }]
         );
+    }
+
+    #[test]
+    fn normalizes_nested_token_usage_without_synthesizing_missing_values() {
+        let payload = json!({
+            "usage": {
+                "id": "omp:session-1:message:entry-1",
+                "parent_id": null,
+                "tokens": 0,
+                "includes_children": false,
+                "partial": false
+            }
+        });
+        let events = OmpProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "token_usage",
+                payload: &payload,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[..],
+            [AgentEventKind::TokenUsage { usage }]
+                if usage.id == "omp:session-1:message:entry-1"
+                    && usage.parent_id.is_none()
+                    && usage.tokens == 0
+                    && !usage.includes_children
+                    && !usage.partial
+        ));
+
+        let missing_tokens = json!({
+            "usage": {
+                "id": "omp:session-1:message:entry-2",
+                "parent_id": null,
+                "includes_children": false,
+                "partial": false
+            }
+        });
+        let error = OmpProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "token_usage",
+                payload: &missing_tokens,
+            })
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidPayload(_)));
     }
     #[test]
     fn normalizes_structured_board_events() {

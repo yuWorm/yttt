@@ -42,6 +42,7 @@ fn context(connector: SharedConnector) -> (ClientSessionContext, watch::Sender<b
             known_sessions: Arc::default(),
             catalog: Arc::default(),
             agent_snapshots: Arc::default(),
+            project_token_usage: Arc::default(),
             next_request_id: Arc::new(AtomicU64::new(1)),
             diagnostics: Arc::default(),
             deferred_terminal_events: Arc::default(),
@@ -516,6 +517,34 @@ async fn expired_queued_request_is_rejected_before_transmission() {
     assert!(task.await.unwrap().is_none());
 }
 
+#[test]
+fn project_token_usage_cache_updates_without_agent_snapshots() {
+    let usage = Arc::new(RwLock::new(HashMap::new()));
+    let (events, mut received) = broadcast::channel(EVENT_CAPACITY);
+    let summary = ProjectTokenUsage {
+        project_id: "project".to_string(),
+        tokens: Some(0),
+        partial: false,
+        reported_sources: 1,
+        observed_sources: 1,
+        updated_at: 4,
+    };
+    apply_project_token_usage(summary.clone(), &usage, &events);
+    assert_eq!(usage.read().get("project"), Some(&summary));
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        ClientEvent::ProjectTokenUsageUpdated(update) if *update == summary
+    ));
+
+    let stale = ProjectTokenUsage {
+        tokens: Some(99),
+        updated_at: 3,
+        ..summary
+    };
+    apply_project_token_usage(stale, &usage, &events);
+    assert!(received.try_recv().is_err());
+    assert_eq!(usage.read()["project"].tokens, Some(0));
+}
 #[tokio::test(start_paused = true)]
 async fn slow_frame_write_can_exceed_timeout_while_making_progress() {
     use tokio::io::AsyncReadExt;

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+pub use yttt_agent_core::ProjectTokenUsage;
 use yttt_agent_core::{AgentBoardCommand, AgentInstanceId, AgentSnapshot};
 use yttt_core::model::ids::TerminalSessionId;
 

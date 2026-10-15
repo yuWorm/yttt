@@ -79,6 +79,36 @@ impl fmt::Display for ProviderId {
 #[error("invalid provider id: {0}")]
 pub struct ProviderIdError(String);
 
+/// A cumulative provider billing counter for one stable provider-scoped subject.
+///
+/// `tokens` is never a delta. When `includes_children` is set, the subject's
+/// counter overlaps any descendants named by `parent_id`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTokenUsage {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub tokens: u64,
+    pub includes_children: bool,
+    pub partial: bool,
+}
+
+/// Cached token accounting for one project across known provider billing sources.
+///
+/// A non-partial summary covers all explicitly observed billing subjects, not a
+/// provider session's complete history or project lifetime. `tokens` is `None`
+/// when no source supplied a token counter; a reported zero is `Some(0)`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTokenUsage {
+    pub project_id: String,
+    pub tokens: Option<u64>,
+    pub partial: bool,
+    /// Known billing sources that supplied an accepted token counter.
+    pub reported_sources: u64,
+    /// Known billing sources, including unavailable or unsupported source gaps.
+    pub observed_sources: u64,
+    pub updated_at: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentProcessState {

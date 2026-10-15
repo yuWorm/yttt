@@ -15,9 +15,9 @@ pub use board::{
 pub use event::AgentEventKind;
 pub use model::{
     AgentAction, AgentExitReason, AgentIdError, AgentInstanceId, AgentProcessExit,
-    AgentProcessState, AgentSessionMetadata, AgentTask, AgentTaskSource, AgentTurnState,
-    AgentViewState, ChildAgentDescriptor, ChildAgentSnapshot, ChildAgentUpdate, ProviderId,
-    ProviderIdError, TurnOutcome, WaitingReason,
+    AgentProcessState, AgentSessionMetadata, AgentTask, AgentTaskSource, AgentTokenUsage,
+    AgentTurnState, AgentViewState, ChildAgentDescriptor, ChildAgentSnapshot, ChildAgentUpdate,
+    ProjectTokenUsage, ProviderId, ProviderIdError, TurnOutcome, WaitingReason,
 };
 pub use provider::{
     AgentProvider, ProviderDescriptor, ProviderError, ProviderHookEvent, ProviderResumeCommand,
@@ -702,5 +702,26 @@ mod tests {
         );
         assert!(resumed.snapshot().task.is_none());
         assert_eq!(resumed.snapshot().primary_text(), "omp");
+    }
+
+    #[test]
+    fn token_usage_observation_does_not_change_reducer_state() {
+        let mut reducer = reducer();
+        let before = reducer.snapshot().clone();
+
+        assert!(!reducer.apply(
+            1,
+            AgentEventKind::TokenUsage {
+                usage: AgentTokenUsage {
+                    id: "request-1".to_string(),
+                    parent_id: None,
+                    tokens: 42,
+                    includes_children: false,
+                    partial: false,
+                },
+            },
+            10,
+        ));
+        assert_eq!(reducer.snapshot(), &before);
     }
 }

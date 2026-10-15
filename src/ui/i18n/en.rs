@@ -113,7 +113,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterTasksCount => "tasks {count}",
         UiTextKey::CommandCenterQuestionsCount => "questions {count}",
         UiTextKey::CommandCenterExecutionsCount => "executions {count}",
-        UiTextKey::CommandCenterNoReportedTasks => "no reported tasks",
         UiTextKey::CommandCenterTaskAccepted => "accepted",
         UiTextKey::CommandCenterTaskRetired => "retired",
         UiTextKey::CommandCenterPlanPending => "pending",
@@ -186,7 +185,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::CommandCenterTaskExecutionUsage => "Run {value} tok",
         UiTextKey::CommandCenterTaskLastRequestUsage => "Last req. {value} tok",
-        UiTextKey::CommandCenterTaskUsageUnknown => "Tokens —",
         UiTextKey::CommandCenterTaskUsageHint => {
             "Usage belongs to the associated execution, not this individual plan item. Items sharing an execution share these metrics; do not add them together."
         }
@@ -235,6 +233,19 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandCenterPendingQuestionsCount => "to answer {count}",
         UiTextKey::CommandCenterTaskHistoryShow => "Show history records ({count})",
         UiTextKey::CommandCenterTaskHistoryHide => "Hide history records ({count})",
+        UiTextKey::CommandCenterHistoryCompact => "History · {count}",
+        UiTextKey::CommandCenterProjectUsageUnreported => {
+            "Project tokens: no accumulable usage reported. Missing usage is not zero."
+        }
+        UiTextKey::CommandCenterProjectUsagePartial => {
+            "Project tokens: at least {tokens} · partial coverage ({reported}/{observed} observed sources reported)"
+        }
+        UiTextKey::CommandCenterProjectUsageComplete => {
+            "Project tokens: {tokens} · all {observed} known billing sources covered"
+        }
+        UiTextKey::CommandCenterProjectUsageScope => {
+            "Accumulates reported historical and new usage, deduplicating stable sources and excluding parent/child overlap. Closing sessions, trimming history and restarting do not reset it. Coverage describes known billing sources, not complete sessions or project lifetime; offline values are retained observations."
+        }
         UiTextKey::CommandCenterRoot => "root",
         UiTextKey::CommandCenterOptionalAnswerPlaceholder => "Optional additional answer",
         UiTextKey::CommandCenterPromptPlaceholder => "Send a follow-up to the selected idle agent",

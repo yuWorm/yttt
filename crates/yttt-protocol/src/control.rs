@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId, ProjectId, TerminalSessionId};
 
 use crate::{
-    agent::{AgentCommandRequest, AgentSnapshotCursor, AgentSnapshotUpdate},
+    agent::{AgentCommandRequest, AgentSnapshotCursor, AgentSnapshotUpdate, ProjectTokenUsage},
     project::{ProjectChange, ProjectRequest, ProjectResponse},
     ssh::{
         CredentialAnswer, CredentialChallenge, RemoteCommandRequest, RemoteCommandResponse,
@@ -386,6 +386,7 @@ pub enum Response {
     Project(ProjectResponse),
     AgentSnapshots {
         snapshots: Vec<AgentSnapshotUpdate>,
+        project_token_usage: Vec<ProjectTokenUsage>,
         has_more: bool,
     },
     Applied,
@@ -445,6 +446,7 @@ pub enum ServerEvent {
         requester: ClientInstanceId,
         reason: TerminalControlDeniedReason,
     },
+    ProjectTokenUsage(ProjectTokenUsage),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

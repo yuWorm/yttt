@@ -718,11 +718,13 @@ export default function (pi: ExtensionAPI) {
 	let currentRoot: RootExecution | undefined;
 	let historyExecutionId: string | undefined;
 	let historyExecutionSent = false;
+	let rootUsageReplaySessionId: string | undefined;
 	const childExecutions = new Map<string, ChildExecution>();
 	const childRunCounts = new Map<string, number>();
 	const childQuestions = new Map<string, ChildQuestion>();
 	const sentMessageIds = new Set<string>();
 	const sentChildMessageIds = new Set<string>();
+	const sentRootUsageIds = new Set<string>();
 
 	const resetSession = (ctx: ExtensionContext) => {
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -731,11 +733,13 @@ export default function (pi: ExtensionAPI) {
 		currentRoot = undefined;
 		historyExecutionId = `history:${sessionId}`;
 		historyExecutionSent = false;
+		rootUsageReplaySessionId = undefined;
 		childExecutions.clear();
 		childRunCounts.clear();
 		childQuestions.clear();
 		sentMessageIds.clear();
 		sentChildMessageIds.clear();
+		sentRootUsageIds.clear();
 	};
 
 	const board = (ctx: StatusContext, event: JsonRecord) => send("board_event", { board: event }, ctx);
@@ -826,6 +830,44 @@ export default function (pi: ExtensionAPI) {
 	const messageId = (ctx: ExtensionContext, message: unknown, timestamp: number): string =>
 		`message:${ctx.sessionManager.getSessionId()}:${messageRole(message) ?? "unknown"}:${timestamp}:${hash(messageText(message)?.text ?? "")}`;
 
+	const reportPersistedRootUsage = (ctx: ExtensionContext, entry: JsonRecord) => {
+		if (entry.type !== "message") return;
+		const message = asRecord(entry.message);
+		if (messageRole(message) !== "assistant") return;
+		const entryId = asString(entry.id)?.trim();
+		const totalTokens = nonNegativeInteger(asRecord(message?.usage)?.totalTokens);
+		if (!entryId || totalTokens === undefined) return;
+		const id = `omp:${ctx.sessionManager.getSessionId()}:message:${entryId}`;
+		if (sentRootUsageIds.has(id)) return;
+		sentRootUsageIds.add(id);
+		send(
+			"token_usage",
+			{
+				usage: { id, parent_id: null, tokens: totalTokens, includes_children: false, partial: false },
+			},
+			ctx,
+		);
+	};
+
+	const replayPersistedRootUsage = (ctx: ExtensionContext) => {
+		for (const candidate of ctx.sessionManager.getBranch()) {
+			const entry = asRecord(candidate);
+			if (entry) reportPersistedRootUsage(ctx, entry);
+		}
+	};
+
+	const schedulePersistedRootUsageReplay = (ctx: ExtensionContext) => {
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (rootUsageReplaySessionId === sessionId) return;
+		rootUsageReplaySessionId = sessionId;
+		const timer = setTimeout(() => {
+			if (rootUsageReplaySessionId === sessionId) rootUsageReplaySessionId = undefined;
+			if (!statusContext || ctx.sessionManager.getSessionId() !== sessionId) return;
+			replayPersistedRootUsage(ctx);
+		}, 0);
+		timer.unref();
+	};
+
 	const backfill = (ctx: ExtensionContext) => {
 		resetSession(ctx);
 		const branch = ctx.sessionManager.getBranch();
@@ -864,6 +906,7 @@ export default function (pi: ExtensionAPI) {
 				todoExecutionId = activeExecutionId ?? ensureHistoryExecution(ctx, timestampFromEntry(entry, Date.now()));
 			}
 			if (entry.type !== "message" || !messageRole(entry.message)) continue;
+			reportPersistedRootUsage(ctx, entry);
 			messages.push({
 				entry,
 				executionId: activeExecutionId ?? ensureHistoryExecution(ctx, timestampFromEntry(entry, Date.now())),
@@ -1231,6 +1274,7 @@ export default function (pi: ExtensionAPI) {
 				? root.id
 				: ensureHistoryExecution(ctx, fallback);
 		emitMessage(ctx, event.message, executionId, id, sentMessageIds, fallback);
+		if (role === "assistant") schedulePersistedRootUsageReplay(ctx);
 	});
 	pi.on("tool_call", (event, ctx) =>
 		send(
@@ -1347,6 +1391,8 @@ export default function (pi: ExtensionAPI) {
 		Object.assign(child.telemetry, progressTelemetry(event.progress, Date.now()));
 		child.currentAction = progressAction(event.progress);
 		updateChild(ctx, child, statusForChild(event.progress.status), false);
+		// Native progress resets for every follow-up, while sessionFile is reused.
+		// Without a stable invocation ID it is execution telemetry, not durable billing.
 		send(
 			"child_updated",
 			{

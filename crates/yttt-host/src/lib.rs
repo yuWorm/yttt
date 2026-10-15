@@ -14,6 +14,7 @@ mod ssh_runtime;
 pub mod terminal;
 mod terminal_data;
 pub use terminal_data::SharedTerminalUpdate;
+mod token_usage;
 mod workspace;
 pub use workspace::WorkspaceService;
 
@@ -306,7 +307,7 @@ where
             let _ = diagnostics_sink_for_task.record(&snapshot);
         }
     });
-    let agent_hooks = HostAgentHookRuntime::start(host_epoch)?;
+    let agent_hooks = HostAgentHookRuntime::start_in(host_epoch, &bootstrap.state_root)?;
     tokio::spawn(agent_processes::run(
         runtime.clone(),
         agent_hooks.clone(),
@@ -1469,6 +1470,7 @@ async fn serve_state_event_connection(
     let mut unexpected_input = [0];
     let mut ssh_events = context.ssh.subscribe();
     let mut agent_hook_events = context.agent_hooks.subscribe();
+    let mut token_usage_events = context.agent_hooks.subscribe_token_usage();
     let mut project_events = context.projects.subscribe();
     let mut runtime_events = context.runtime.subscribe();
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
@@ -1490,6 +1492,14 @@ async fn serve_state_event_connection(
             &mut stream,
             context,
             ServerEvent::AgentSnapshot(Box::new(update)),
+        )
+        .await?;
+    }
+    for summary in context.agent_hooks.project_token_usage() {
+        send_host_state_event(
+            &mut stream,
+            context,
+            ServerEvent::ProjectTokenUsage(summary),
         )
         .await?;
     }
@@ -1670,6 +1680,23 @@ async fn serve_state_event_connection(
                         &mut stream,
                         context,
                         ServerEvent::AgentSnapshot(Box::new(update)),
+                    )
+                    .await?;
+                }
+            }
+            event = token_usage_events.recv() => {
+                let summaries = match event {
+                    Ok(summary) => vec![summary],
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        context.agent_hooks.project_token_usage()
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return Err(()),
+                };
+                for summary in summaries {
+                    send_host_state_event(
+                        &mut stream,
+                        context,
+                        ServerEvent::ProjectTokenUsage(summary),
                     )
                     .await?;
                 }
@@ -2606,6 +2633,7 @@ async fn handle_request(
             let (snapshots, has_more) = agent_hooks.snapshot_page(&acknowledged);
             Ok(Response::AgentSnapshots {
                 snapshots,
+                project_token_usage: agent_hooks.project_token_usage(),
                 has_more,
             })
         }

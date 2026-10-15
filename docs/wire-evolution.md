@@ -14,7 +14,12 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 16`。v16 为执行记录追加缺省为空的 `telemetry`
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 17`。v17 为 `AgentSnapshots` 追加独立的
+  `project_token_usage` 汇总，并追加 `ProjectTokenUsage` 服务端事件；即使没有 Agent 快照，
+  Client 仍同步项目累计计量。`TokenUsage` 不改变 Agent 生命周期；Host 按稳定来源持久化
+  高水位并排除主子重叠，覆盖标识只描述已知计量来源，不代表完整会话历史。
+  桌面 Client、Host、远端 Server 与 CLI 需同步更新。
+  v16 为执行记录追加缺省为空的 `telemetry`
   与 `current_action`；未上报不等于零。费用使用整数微美元，自估完成度仅接受 0–100，
   不作为人工验收或项目进度。保留记录与实时快照共用这一结构；迟到的已确认执行结果只补充
   遥测，不重启已结束执行。Client、Host、远端 Server 与 CLI 需同步更新。

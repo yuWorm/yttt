@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgentAction, AgentBoardEvent, AgentSessionMetadata, AgentTask, ChildAgentDescriptor,
-    ChildAgentUpdate, TurnOutcome, WaitingReason,
+    AgentAction, AgentBoardEvent, AgentSessionMetadata, AgentTask, AgentTokenUsage,
+    ChildAgentDescriptor, ChildAgentUpdate, TurnOutcome, WaitingReason,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,5 +55,10 @@ pub enum AgentEventKind {
     ChildBoard {
         child_id: String,
         event: AgentBoardEvent,
+    },
+    /// A cumulative provider billing observation. Accounting is Host-owned and
+    /// intentionally does not alter the lifecycle reducer snapshot.
+    TokenUsage {
+        usage: AgentTokenUsage,
     },
 }

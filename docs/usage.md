@@ -1348,23 +1348,36 @@ and **Agent activity**. The matrix keeps a fixed three-column, two-row viewport.
 and height follow the available area, not the project count: fewer than six projects leave
 unused slots, and the seventh project starts a third row reached by scrolling the matrix.
 The lower panels stay in place; overflowing tasks scroll separately inside their project.
-Project positions do not reorder when Agent states change. Cards summarize reported task states,
-online root Agents, active children, and pending questions. Online counts require a live Host
-snapshot and a running Agent process; children are counted separately when working or waiting.
+Project positions do not reorder when Agent states change. Each card keeps its project name,
+nonzero icon counters, and cumulative project tokens on one line. Narrow cards collapse excess
+counters into a hover summary instead of displacing the name. Counters summarize reported task
+states, online root Agents, active children, and pending questions. Online counts require a live
+Host snapshot and a running Agent process; children are counted separately when working or waiting.
 Retained snapshots are not counted as online. These observations are not project-completion estimates.
 
-Session headings identify the provider and reported session title (or task title), with the owning
-tab/pane on a separate secondary line. An OMP started inside a Shell tab is therefore labeled as
-Oh My Pi, not as a Shell Agent. Sessions with the same provider retain distinct terminal targets.
-Agent status separates **online · turn finished** from **exited**, **observation lost**, and
-**retained · not live**; a finished turn does not imply an exited process.
+Session headings use the provider's icon alongside the owning tab/pane and reported session title
+(or task title). An OMP started inside a Shell tab retains the OMP icon, not a Shell Agent identity.
+Sessions with the same provider retain distinct terminal targets. Hover details and accessible
+labels retain the full provider, location, and status. Status is icon-only in the card; only
+confirmed live work animates. Idle, waiting, completed turns, exited processes, lost observations,
+and retained records remain distinct. Historical groups do not repeat a current working status.
 
-Each task row shows tokens from its associated execution record: **Run … tok** (Chinese:
-**执行 … tok**), or **Last req. … tok** for Claude's last-request measurements. **Tokens —**
-means no reported value, while a reported zero remains **0**. Hover the value for exact counts
-and available input/output/cache tokens, cost, and duration. This is execution-associated
-usage, not a per-todo spend allocation: tasks sharing an execution share its metrics and
-must not be summed. No unrelated run or session total is used as a fallback.
+The project header's **… tok** is a Host-persisted cumulative counter, separate from Todo telemetry.
+An asterisk (**…* tok**) marks partial coverage; **— tok** means no accumulable usage has been reported,
+not zero. Hover for exact tokens and reported/known-source coverage. Stable provider billing IDs
+deduplicate replay and reconnects; lower cumulative reports cannot reduce the total. Inclusive
+parent counters cover descendants instead of being added twice. Closing sessions, pruning board
+history, or restarting the Host does not reset the ledger; open projects retain their total even
+without current Agent snapshots. “Covered” describes known billing subjects, not complete session
+history or the project's lifetime. Unsupported sources and explicitly partial counters remain
+visible as incomplete coverage. An unreported source is never fabricated as zero.
+
+Task rows show tokens only when their associated execution reports them: **Run … tok** (Chinese:
+**执行 … tok**), or **Last req. … tok** for Claude's last-request measurements. Missing task values
+are omitted; an explicitly reported zero remains visible. Hover the value for exact counts and
+available input/output/cache tokens, cost, and duration. This is execution-associated usage, not
+a per-todo spend allocation: tasks sharing an execution share its metrics and must not be summed.
+No unrelated run or session total is used as a fallback.
 
 Executions with reported usage but no directly associated Todo appear separately inside
 their owning session's project card under **Execution usage · not per Todo**. This includes
@@ -1402,7 +1415,7 @@ Provider capabilities are deliberately different:
 
 | Provider | Native Dispatch center observations |
 | --- | --- |
-| OMP | Todo phases/items, root and direct-child executions, messages, Ask; direct-child model, aggregate tokens, context usage/window, requests, tool calls, elapsed time, cost, and optional self-estimated completion. |
+| OMP | Todo phases/items, root and direct-child executions, messages, Ask; persisted root assistant usage feeds the project ledger. Direct-child model, per-invocation aggregate tokens, context usage/window, requests, tool calls, elapsed time, cost, and optional self-estimated completion remain execution telemetry. |
 | Claude Code | Prompt-scoped root/child lifecycle, child-specific actions/waiting, confirmed `TaskCreate`/`TaskUpdate` changes, and foreground Agent-result model/usage/duration/tool counts when reported. |
 | Codex | Turn-scoped root/child lifecycle and child-specific tool/approval/input activity from native hooks. No fabricated completion percentage or usage counters. |
 | OpenCode | Verified descendant session tree, native activity/waiting, assistant-message model, input/output/cache tokens and cost observed by the plugin. |
@@ -1419,16 +1432,24 @@ OMP's percentage is the Agent's own optional estimate, not verified task/project
 yttt only forwards existing `completionPercent` values: it does not trigger probes or model
 requests. OMP 18.10.4's extension API exposes direct task children, not the separate nested
 observability bus; nested descendants are not guessed or attributed to the root. Its progress
-events expose aggregate tokens, not input/output/cache splits, and do not provide a run generation;
-same-child follow-ups rely on the native EventBus's ordered lifecycle starts.
+events expose per-invocation aggregate tokens (excluding cache reads), not input/output/cache
+splits. Those counters reset for follow-ups while `sessionFile` is reused, and the SDK does not
+provide a stable invocation ID. They therefore remain execution telemetry, not project billing;
+observed OMP children make project coverage partial. Root assistant usage uses persisted session
+entry IDs and replays the full retained branch, independently of the 256-message display bound.
 
 Claude Code's foreground Agent `totalTokens` and `usage` describe the **final API request**,
-not cumulative run usage; the UI explicitly labels this scope. Its duration and tool count
-describe the run. Records require native `session_id` plus `prompt_id` (Claude) or `turn_id`
+not cumulative run usage; the UI explicitly labels this scope. These results do not expose a
+stable non-overlapping billing identity and are not added to the project ledger. Its duration and
+tool count describe the run. Records require native `session_id` plus `prompt_id` (Claude) or `turn_id`
 (Codex); older payloads lacking these identifiers retain status-only observations. Precondition
 `TaskCreated`/`TaskCompleted` hooks are not treated as successful mutations.
-OpenCode usage is deduplicated by assistant-message identity and accumulated only from messages
-observed by this plugin, not presented as complete pre-attachment history.
+OpenCode project usage uses stable native session/message IDs, including verified children,
+independent of plugin delivery/run IDs. Input, output, cache-read and cache-write counters are
+accumulated without counting reasoning tokens twice; incomplete components mark partial coverage.
+This describes messages observed by the plugin, not complete pre-attachment history.
+Claude, Codex, Pi and Grok sessions without a proven billing source remain unreported; they are
+not converted to zero or estimated from terminal text.
 
 Durations prefer reported elapsed time and otherwise use observed timestamps; disconnected or
 retained records do not keep aging as live runs. Task completion still has a separate **Accept**

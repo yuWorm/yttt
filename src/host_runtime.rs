@@ -677,6 +677,13 @@ impl DesktopHostRuntime {
         self.client.agent_snapshots()
     }
 
+    pub fn project_token_usage(
+        &self,
+        project_id: &str,
+    ) -> Option<yttt_protocol::agent::ProjectTokenUsage> {
+        self.client.project_token_usage(project_id)
+    }
+
     pub fn terminal_start_request(
         &self,
         spec: TerminalSpawnSpec,

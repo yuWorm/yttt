@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     io::{self, Read as _, Write as _},
     net::{TcpListener, TcpStream},
+    path::Path,
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
@@ -19,10 +20,10 @@ use tokio::sync::broadcast;
 use yttt_agent_core::{
     AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentBoardCommand, AgentBoardEvent, AgentEventKind,
     AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider,
-    AgentQuestionState, AgentReducer, ProviderId,
+    AgentQuestionState, AgentReducer, AgentTokenUsage, ProjectTokenUsage, ProviderId,
 };
 use yttt_agent_providers::{
-    CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, builtin_providers,
+    CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, OMP_PROVIDER_ID, OPENCODE_PROVIDER_ID, builtin_providers,
     sessions::{GrokSessionKind, grok_session_kind},
 };
 use yttt_core::model::ids::TerminalSessionId;
@@ -35,7 +36,10 @@ use yttt_protocol::{
     terminal::TerminalSpawnSpec,
 };
 
-use crate::agent_processes::DetectedAgentProcess;
+use crate::{
+    agent_processes::DetectedAgentProcess,
+    token_usage::{TokenUsageLedger, TokenUsageLedgerError},
+};
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -77,6 +81,7 @@ impl From<&AgentHookScope> for AgentAddress {
     }
 }
 
+#[derive(Clone)]
 struct AgentRecord {
     scope: AgentHookScope,
     terminal_session_id: TerminalSessionId,
@@ -87,6 +92,7 @@ struct AgentRecord {
     child_session_ids: VecDeque<String>,
     script_delivery_ids: VecDeque<String>,
     terminal_exited: bool,
+    token_usage_observed: bool,
     question_polls: HashMap<String, u64>,
 }
 
@@ -114,6 +120,7 @@ enum AgentProcessAction {
     },
 }
 
+#[derive(Clone)]
 struct AgentDeliveryState {
     stream_id: String,
     accepted_sequence: u64,
@@ -123,6 +130,7 @@ struct AgentDeliveryState {
     active_stream_validated: bool,
 }
 
+#[derive(Clone)]
 struct IgnoredDeliveryStream {
     stream_id: String,
     accepted_sequence: u64,
@@ -134,6 +142,7 @@ struct HookDeliveryMetadata {
     sequence: u64,
 }
 
+#[derive(Clone)]
 struct HookApplication {
     provider_id: ProviderId,
     events: Vec<AgentEventKind>,
@@ -152,6 +161,8 @@ struct AgentState {
     terminal_exits: Mutex<HashMap<AgentHookScope, AgentProcessExit>>,
     process_observations: Mutex<HashMap<TerminalSessionId, AgentProcessObservation>>,
     events: broadcast::Sender<AgentSnapshotUpdate>,
+    token_usage: Arc<TokenUsageLedger>,
+    token_usage_events: broadcast::Sender<ProjectTokenUsage>,
 }
 
 pub struct HostAgentHookRuntime {
@@ -163,7 +174,20 @@ pub struct HostAgentHookRuntime {
 }
 
 impl HostAgentHookRuntime {
+    #[cfg(test)]
     pub fn start(host_epoch: u64) -> io::Result<Arc<Self>> {
+        Self::start_with_ledger(host_epoch, Arc::new(TokenUsageLedger::memory()))
+    }
+
+    pub fn start_in(host_epoch: u64, state_root: impl AsRef<Path>) -> io::Result<Arc<Self>> {
+        let ledger = TokenUsageLedger::open(state_root).map_err(io::Error::other)?;
+        Self::start_with_ledger(host_epoch, Arc::new(ledger))
+    }
+
+    fn start_with_ledger(
+        host_epoch: u64,
+        token_usage: Arc<TokenUsageLedger>,
+    ) -> io::Result<Arc<Self>> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -175,6 +199,7 @@ impl HostAgentHookRuntime {
         let secret = Arc::new(secret);
         let endpoint: Arc<str> = format!("http://127.0.0.1:{port}").into();
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let (token_usage_events, _) = broadcast::channel(EVENT_CAPACITY);
         let providers = builtin_providers()
             .into_iter()
             .map(|provider| (provider.descriptor().id.to_string(), provider))
@@ -188,6 +213,8 @@ impl HostAgentHookRuntime {
             terminal_exits: Mutex::new(HashMap::new()),
             process_observations: Mutex::new(HashMap::new()),
             events,
+            token_usage,
+            token_usage_events,
         });
         let shutdown = Arc::new(AtomicBool::new(false));
         let (connection_tx, connection_rx) = mpsc::sync_channel(CONNECTION_QUEUE_CAPACITY);
@@ -250,7 +277,18 @@ impl HostAgentHookRuntime {
             .terminal_exits
             .lock()
             .retain(|candidate, _| AgentAddress::from(candidate) != address);
-        self.state.records.lock().remove(&address);
+        if let Some(retired) = self.state.records.lock().remove(&address)
+            && !retired.token_usage_observed
+            && let Some(source_id) = retired.provider_session_id
+            && let Ok(Some(summary)) = self.state.token_usage.observe_gap(
+                &retired.scope.project_id,
+                &retired.reducer.snapshot().provider_id,
+                &source_id,
+                now_millis(),
+            )
+        {
+            let _ = self.state.token_usage_events.send(summary);
+        }
         self.state
             .process_observations
             .lock()
@@ -304,6 +342,7 @@ impl HostAgentHookRuntime {
         let mut terminal_exits = self.state.terminal_exits.lock();
         terminal_exits.extend(exited_scopes.into_iter().map(|scope| (scope, exit)));
         let mut updates = Vec::new();
+        let mut usage_gaps = Vec::new();
         let mut records = self.state.records.lock();
         for record in records.values_mut().filter(|record| {
             &record.terminal_session_id == session_id && record.scope.generation == session_epoch
@@ -313,6 +352,15 @@ impl HostAgentHookRuntime {
                 .reducer
                 .process_exited(record.scope.generation, exit, now)
             {
+                if !record.token_usage_observed
+                    && let Some(source_id) = record.provider_session_id.clone()
+                {
+                    usage_gaps.push((
+                        record.scope.project_id.clone(),
+                        record.reducer.snapshot().provider_id.clone(),
+                        source_id,
+                    ));
+                }
                 updates.push(snapshot_update(self.state.host_epoch, record));
             }
         }
@@ -320,6 +368,15 @@ impl HostAgentHookRuntime {
         drop(terminal_exits);
         for update in updates {
             let _ = self.state.events.send(update);
+        }
+        for (project_id, provider_id, source_id) in usage_gaps {
+            if let Ok(Some(summary)) =
+                self.state
+                    .token_usage
+                    .observe_gap(&project_id, &provider_id, &source_id, now)
+            {
+                let _ = self.state.token_usage_events.send(summary);
+            }
         }
     }
 
@@ -419,6 +476,7 @@ impl HostAgentHookRuntime {
         }
         let now = now_millis();
         let mut updates = Vec::new();
+        let mut usage_gaps = Vec::new();
         let terminal_exits = self.state.terminal_exits.lock();
         let mut records = self.state.records.lock();
         for action in actions {
@@ -454,14 +512,32 @@ impl HostAgentHookRuntime {
                             .iter()
                             .min_by_key(|(_, record)| record.reducer.snapshot().updated_at)
                             .map(|(address, _)| address.clone());
-                        if let Some(oldest) = oldest {
-                            records.remove(&oldest);
+                        if let Some(oldest) = oldest
+                            && let Some(evicted) = records.remove(&oldest)
+                            && !evicted.token_usage_observed
+                            && let Some(source_id) = evicted.provider_session_id
+                        {
+                            usage_gaps.push((
+                                evicted.scope.project_id,
+                                evicted.reducer.snapshot().provider_id.clone(),
+                                source_id,
+                            ));
                         }
                     }
                     let mut reducer =
                         AgentReducer::new(AgentInstanceId::random(), provider_id, now);
                     reducer.process_starting(scope.generation, now);
                     reducer.process_started(scope.generation, now);
+                    if let Some(previous) = records.get(&address)
+                        && !previous.token_usage_observed
+                        && let Some(source_id) = previous.provider_session_id.clone()
+                    {
+                        usage_gaps.push((
+                            previous.scope.project_id.clone(),
+                            previous.reducer.snapshot().provider_id.clone(),
+                            source_id,
+                        ));
+                    }
                     if let Some(previous) = records.get_mut(&address) {
                         reducer.retain_board(previous.reducer.take_board(), now);
                     }
@@ -477,6 +553,7 @@ impl HostAgentHookRuntime {
                             child_session_ids: VecDeque::new(),
                             script_delivery_ids,
                             terminal_exited: false,
+                            token_usage_observed: false,
                             question_polls: HashMap::new(),
                         },
                     );
@@ -523,6 +600,15 @@ impl HostAgentHookRuntime {
                         AgentProcessExit { code: None, reason },
                         now,
                     ) {
+                        if !record.token_usage_observed
+                            && let Some(source_id) = record.provider_session_id.clone()
+                        {
+                            usage_gaps.push((
+                                record.scope.project_id.clone(),
+                                record.reducer.snapshot().provider_id.clone(),
+                                source_id,
+                            ));
+                        }
                         updates.push(snapshot_update(self.state.host_epoch, record));
                     }
                 }
@@ -532,6 +618,15 @@ impl HostAgentHookRuntime {
         drop(terminal_exits);
         for update in updates {
             let _ = self.state.events.send(update);
+        }
+        for (project_id, provider_id, source_id) in usage_gaps {
+            if let Ok(Some(summary)) =
+                self.state
+                    .token_usage
+                    .observe_gap(&project_id, &provider_id, &source_id, now)
+            {
+                let _ = self.state.token_usage_events.send(summary);
+            }
         }
     }
 
@@ -706,6 +801,14 @@ impl HostAgentHookRuntime {
         Ok(())
     }
 
+    pub fn project_token_usage(&self) -> Vec<ProjectTokenUsage> {
+        self.state.token_usage.summaries()
+    }
+
+    pub fn subscribe_token_usage(&self) -> broadcast::Receiver<ProjectTokenUsage> {
+        self.state.token_usage_events.subscribe()
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<AgentSnapshotUpdate> {
         self.state.events.subscribe()
     }
@@ -792,7 +895,12 @@ struct DeliveryApplication {
 }
 
 enum HookApplicationOutcome {
-    Applied(bool),
+    Applied {
+        changed: bool,
+        provider_id: ProviderId,
+        usage: Vec<AgentTokenUsage>,
+        gaps: Vec<String>,
+    },
     Ignored,
 }
 
@@ -826,6 +934,7 @@ fn handle_connection(mut stream: TcpStream, state: &AgentState) {
         Err(HttpRequestError::Unauthorized) => (403, "Forbidden", Vec::new()),
         Err(HttpRequestError::NotFound) => (404, "Not Found", Vec::new()),
         Err(HttpRequestError::Invalid) => (400, "Bad Request", Vec::new()),
+        Err(HttpRequestError::Unavailable) => (503, "Service Unavailable", Vec::new()),
     };
     if body.is_empty() {
         let _ = write!(
@@ -854,6 +963,10 @@ struct DecodedHookRequest {
 
 fn incoming_provider_is_compatibility_duplicate(current: &str, incoming: &str) -> bool {
     current == GROK_PROVIDER_ID && incoming == CLAUDE_PROVIDER_ID
+}
+
+fn provider_reports_token_usage(provider_id: &ProviderId) -> bool {
+    matches!(provider_id.as_str(), OMP_PROVIDER_ID | OPENCODE_PROVIDER_ID)
 }
 fn ingest_request(
     state: &AgentState,
@@ -892,7 +1005,10 @@ fn ingest_request(
     } else {
         None
     };
-    let parent_session_id = payload_parent_session_id(&request.payload);
+    // `token_usage.parentId` identifies a billing subject, not an Agent session.
+    let parent_session_id = (request.event != "token_usage")
+        .then(|| payload_parent_session_id(&request.payload))
+        .flatten();
     let application = HookApplication {
         provider_id: provider.descriptor().id,
         session_id,
@@ -908,8 +1024,9 @@ fn ingest_request(
     let address = AgentAddress::from(&request.scope);
     let terminal_exit = state.terminal_exits.lock().get(&request.scope).copied();
     let now = now_millis();
-    let (update, outcome) = {
+    let (update, outcome, usage_updates) = {
         let mut records = state.records.lock();
+        let mut evicted_records = Vec::new();
         if records
             .get(&address)
             .is_some_and(|record| record.scope.generation > request.scope.generation)
@@ -920,7 +1037,9 @@ fn ingest_request(
             .get(&address)
             .is_some_and(|record| record.scope != request.scope)
         {
-            records.remove(&address);
+            if let Some(previous) = records.remove(&address) {
+                evicted_records.push(previous);
+            }
         }
         if !records.contains_key(&address) {
             if records.len() >= MAX_AGENT_RECORDS {
@@ -928,8 +1047,10 @@ fn ingest_request(
                     .iter()
                     .min_by_key(|(_, record)| record.reducer.snapshot().updated_at)
                     .map(|(address, _)| address.clone());
-                if let Some(oldest) = oldest {
-                    records.remove(&oldest);
+                if let Some(oldest) = oldest
+                    && let Some(evicted) = records.remove(&oldest)
+                {
+                    evicted_records.push(evicted);
                 }
             }
             records.insert(
@@ -946,13 +1067,16 @@ fn ingest_request(
         let record = records
             .get_mut(&address)
             .expect("Agent record was inserted");
+        let had_token_usage = record.token_usage_observed;
+        let was_exited = record.reducer.snapshot().process_state == AgentProcessState::Exited;
+        let mut staged = record.clone();
         if let Some(delivery_id) = request.script_delivery_id
-            && !remember_script_delivery(record, delivery_id)
+            && !remember_script_delivery(&mut staged, delivery_id)
         {
             return Ok(HookIngestOutcome::Unsequenced);
         }
         let (applications, outcome, new_stream_id) = if let Some(delivery) = request.delivery {
-            let delivery = queue_delivery(&mut record.delivery, delivery, application)?;
+            let delivery = queue_delivery(&mut staged.delivery, delivery, application)?;
             (
                 delivery.applications,
                 HookIngestOutcome::Sequenced {
@@ -966,23 +1090,30 @@ fn ingest_request(
         };
         let mut changed = false;
         let mut has_accepted_application = false;
+        let mut accepted_usage = Vec::new();
         for application in applications {
             match apply_hook_application(
-                record,
+                &mut staged,
                 request.scope.generation,
                 application,
                 terminal_exit,
                 now,
             ) {
-                HookApplicationOutcome::Applied(applied) => {
+                HookApplicationOutcome::Applied {
+                    changed: applied,
+                    provider_id,
+                    usage,
+                    gaps,
+                } => {
                     has_accepted_application = true;
                     changed |= applied;
+                    accepted_usage.push((provider_id, usage, gaps));
                 }
                 HookApplicationOutcome::Ignored => {}
             }
         }
         if let Some(stream_id) = new_stream_id {
-            let delivery_state = record
+            let delivery_state = staged
                 .delivery
                 .as_mut()
                 .expect("new delivery stream has delivery state");
@@ -992,13 +1123,99 @@ fn ingest_request(
                 remember_ignored_stream(delivery_state, stream_id);
             }
         }
+        let mut usage_updates = Vec::new();
+        if has_accepted_application {
+            for evicted in evicted_records {
+                if !evicted.token_usage_observed
+                    && let Some(source_id) = evicted.provider_session_id.as_deref()
+                    && let Some(summary) = state
+                        .token_usage
+                        .observe_gap(
+                            &evicted.scope.project_id,
+                            &evicted.reducer.snapshot().provider_id,
+                            source_id,
+                            now,
+                        )
+                        .map_err(ledger_failure)?
+                {
+                    usage_updates.push(summary);
+                }
+            }
+        }
+        for (provider_id, usage, gaps) in accepted_usage {
+            for source_id in gaps {
+                if let Some(summary) = state
+                    .token_usage
+                    .observe_gap(&request.scope.project_id, &provider_id, &source_id, now)
+                    .map_err(ledger_failure)?
+                {
+                    usage_updates.push(summary);
+                }
+            }
+            if usage.is_empty() {
+                continue;
+            }
+            staged.token_usage_observed = true;
+            for usage in usage {
+                if let Some(summary) = state
+                    .token_usage
+                    .observe(
+                        &request.scope.project_id,
+                        &provider_id,
+                        &usage.id,
+                        &usage,
+                        now,
+                    )
+                    .map_err(ledger_failure)?
+                {
+                    usage_updates.push(summary);
+                }
+            }
+        }
+        if has_accepted_application
+            && !staged.token_usage_observed
+            && !provider_reports_token_usage(&staged.reducer.snapshot().provider_id)
+            && let Some(source_id) = staged.provider_session_id.as_deref()
+            && let Some(summary) = state
+                .token_usage
+                .observe_gap(
+                    &request.scope.project_id,
+                    &staged.reducer.snapshot().provider_id,
+                    source_id,
+                    now,
+                )
+                .map_err(ledger_failure)?
+        {
+            usage_updates.push(summary);
+        } else if !had_token_usage
+            && !staged.token_usage_observed
+            && !was_exited
+            && staged.reducer.snapshot().process_state == AgentProcessState::Exited
+            && let Some(source_id) = staged.provider_session_id.as_deref()
+            && let Some(summary) = state
+                .token_usage
+                .observe_gap(
+                    &request.scope.project_id,
+                    &staged.reducer.snapshot().provider_id,
+                    source_id,
+                    now,
+                )
+                .map_err(ledger_failure)?
+        {
+            usage_updates.push(summary);
+        }
+        *record = staged;
         (
             changed.then(|| snapshot_update(state.host_epoch, record)),
             outcome,
+            usage_updates,
         )
     };
     if let Some(update) = update {
         let _ = state.events.send(update);
+    }
+    for usage in usage_updates {
+        let _ = state.token_usage_events.send(usage);
     }
     Ok(outcome)
 }
@@ -1082,6 +1299,7 @@ fn new_hook_record(
         child_session_ids: VecDeque::new(),
         script_delivery_ids: VecDeque::new(),
         terminal_exited: terminal_exit.is_some(),
+        token_usage_observed: false,
         question_polls: HashMap::new(),
     }
 }
@@ -1153,6 +1371,9 @@ fn is_child_event(event: &AgentEventKind) -> bool {
         AgentEventKind::Board {
             event: AgentBoardEvent::Execution { execution }
         } if execution.parent_id.is_some()
+    ) || matches!(
+        event,
+        AgentEventKind::TokenUsage { usage } if usage.parent_id.is_some()
     )
 }
 
@@ -1163,6 +1384,15 @@ fn apply_hook_application(
     terminal_exit: Option<AgentProcessExit>,
     now: u64,
 ) -> HookApplicationOutcome {
+    let provider_id = application.provider_id.clone();
+    let usage = application
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEventKind::TokenUsage { usage } => Some(usage.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let root_session_started = application
         .events
         .iter()
@@ -1221,11 +1451,19 @@ fn apply_hook_application(
     {
         return HookApplicationOutcome::Ignored;
     }
+    let current_provider_id = record.reducer.snapshot().provider_id.clone();
     if record.terminal_exited {
-        return HookApplicationOutcome::Applied(false);
+        if current_provider_id != application.provider_id {
+            return HookApplicationOutcome::Ignored;
+        }
+        return HookApplicationOutcome::Applied {
+            changed: false,
+            provider_id,
+            usage,
+            gaps: Vec::new(),
+        };
     }
 
-    let current_provider_id = record.reducer.snapshot().provider_id.clone();
     let process_exited = record.reducer.snapshot().process_state == AgentProcessState::Exited;
     if !root_session_started && current_provider_id != application.provider_id {
         return HookApplicationOutcome::Ignored;
@@ -1271,14 +1509,38 @@ fn apply_hook_application(
             _ => {}
         }
     }
-    HookApplicationOutcome::Applied(
+    // OMP child progress resets on follow-up but has no stable invocation identity.
+    // Record the unavailable source even if a buffered batch also finishes the child.
+    let gaps = if provider_id.as_str() == OMP_PROVIDER_ID {
         application
+            .events
+            .iter()
+            .filter_map(|event| {
+                let AgentEventKind::ChildStarted { child } = event else {
+                    return None;
+                };
+                let session_id = record.provider_session_id.as_deref()?;
+                Some(format!(
+                    "child:{}:{session_id}:{}",
+                    session_id.len(),
+                    child.id
+                ))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    HookApplicationOutcome::Applied {
+        changed: application
             .events
             .into_iter()
             .fold(false, |changed, event| {
                 changed | record.reducer.apply(generation, event, now)
             }),
-    )
+        provider_id,
+        usage,
+        gaps,
+    }
 }
 
 fn remember_child_session(record: &mut AgentRecord, session_id: &str) {
@@ -1313,6 +1575,7 @@ fn restart_hook_record(
     record.reducer = reducer;
     record.provider_session_id = None;
     record.terminal_exited = terminal_exit.is_some();
+    record.token_usage_observed = false;
 }
 
 fn queue_delivery(
@@ -1493,7 +1756,15 @@ enum HttpRequestError {
     Invalid,
     Unauthorized,
     NotFound,
+    Unavailable,
     Conflict(AgentHookAcknowledgement),
+}
+
+fn ledger_failure(error: TokenUsageLedgerError) -> HttpRequestError {
+    match error {
+        TokenUsageLedgerError::Invalid(_) => HttpRequestError::Invalid,
+        TokenUsageLedgerError::Io(_) => HttpRequestError::Unavailable,
+    }
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpRequestError> {
@@ -1821,6 +2092,164 @@ mod tests {
         let mut request = unsequenced_request(scope, "omp", event, payload);
         request.script_delivery_id = Some(delivery_id.to_string());
         request
+    }
+
+    #[test]
+    fn accepted_usage_survives_agent_closure_and_host_reopen() {
+        let state = tempfile::tempdir().unwrap();
+        let runtime = HostAgentHookRuntime::start_in(7, state.path()).unwrap();
+        let mut terminal = spec("usage-terminal", "usage-terminal");
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let mut updates = runtime.subscribe_token_usage();
+        let usage = serde_json::json!({
+            "sessionId": "session-a",
+            "usage": {
+                "id": "omp:session-a:message:one",
+                "parent_id": null,
+                "tokens": 12,
+                "includes_children": false,
+                "partial": false,
+            },
+        });
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "omp", "token_usage", usage.clone()),
+        )
+        .unwrap();
+        assert_eq!(updates.try_recv().unwrap().tokens, Some(12));
+        let mut lower = usage;
+        lower["usage"]["tokens"] = Value::from(5);
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "omp", "token_usage", lower),
+        )
+        .unwrap();
+        assert!(updates.try_recv().is_err());
+        runtime.terminal_exited(&terminal.session_id, 1, Some(0));
+        drop(runtime);
+
+        let reopened = HostAgentHookRuntime::start_in(8, state.path()).unwrap();
+        let summary = reopened
+            .project_token_usage()
+            .into_iter()
+            .find(|summary| summary.project_id == "project")
+            .unwrap();
+        assert_eq!(summary.tokens, Some(12));
+        assert_eq!(summary.reported_sources, 1);
+        assert_eq!(summary.observed_sources, 1);
+    }
+    #[test]
+    fn recognized_unsupported_session_is_partial_before_exit() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("unsupported-usage", "unsupported-usage");
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let mut updates = runtime.subscribe_token_usage();
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "SessionStart",
+                serde_json::json!({ "session_id": "claude-session" }),
+            ),
+        )
+        .unwrap();
+        let summary = updates.try_recv().unwrap();
+        assert_eq!(summary.tokens, None);
+        assert!(summary.partial);
+        assert_eq!(summary.reported_sources, 0);
+        assert_eq!(summary.observed_sources, 1);
+    }
+
+    #[test]
+    fn omp_child_without_stable_billing_identity_keeps_project_partial() {
+        let state = tempfile::tempdir().unwrap();
+        let runtime = HostAgentHookRuntime::start_in(7, state.path()).unwrap();
+        let scope = runtime.secure_terminal_environment(&mut spec("omp-child-usage", "pane"), 1);
+        for (event, payload) in [
+            (
+                "session_start",
+                serde_json::json!({"sessionId":"root-session"}),
+            ),
+            (
+                "token_usage",
+                serde_json::json!({
+                    "sessionId":"root-session",
+                    "usage":{"id":"root-message","parent_id":null,"tokens":12,"includes_children":false,"partial":false}
+                }),
+            ),
+            (
+                "child_started",
+                serde_json::json!({"sessionId":"root-session","childId":"worker"}),
+            ),
+            (
+                "child_finished",
+                serde_json::json!({"sessionId":"root-session","childId":"worker","outcome":"completed"}),
+            ),
+            (
+                "child_started",
+                serde_json::json!({"sessionId":"root-session","childId":"worker"}),
+            ),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "omp", event, payload),
+            )
+            .unwrap();
+        }
+        drop(runtime);
+        let reopened = HostAgentHookRuntime::start_in(8, state.path()).unwrap();
+        let summary = reopened.project_token_usage().pop().unwrap();
+        assert_eq!(summary.tokens, Some(12));
+        assert!(summary.partial);
+        assert_eq!(summary.reported_sources, 1);
+        assert_eq!(summary.observed_sources, 2);
+    }
+
+    #[test]
+    fn evicted_unreported_source_stays_partial_after_reopen() {
+        let state = tempfile::tempdir().unwrap();
+        let runtime = HostAgentHookRuntime::start_in(7, state.path()).unwrap();
+        let now = now_millis();
+        {
+            let mut records = runtime.state.records.lock();
+            for index in 0..MAX_AGENT_RECORDS {
+                let scope = AgentHookScope {
+                    project_id: "project".to_string(),
+                    tab_id: format!("tab-{index}"),
+                    pane_id: format!("pane-{index}"),
+                    generation: 1,
+                };
+                let mut record = new_hook_record(
+                    scope.clone(),
+                    TerminalSessionId::new(format!("terminal-{index}")),
+                    ProviderId::from_static("omp"),
+                    None,
+                    now.saturating_add(index as u64),
+                );
+                record.provider_session_id = Some(format!("provider-session-{index}"));
+                records.insert(AgentAddress::from(&scope), record);
+            }
+        }
+        runtime.apply_process_actions(vec![AgentProcessAction::Start {
+            terminal_session_id: TerminalSessionId::new("replacement-terminal"),
+            scope: AgentHookScope {
+                project_id: "project".to_string(),
+                tab_id: "replacement-tab".to_string(),
+                pane_id: "replacement-pane".to_string(),
+                generation: 1,
+            },
+            provider_id: ProviderId::from_static("omp"),
+        }]);
+        let summary = runtime.project_token_usage().pop().unwrap();
+        assert_eq!(summary.tokens, None);
+        assert!(summary.partial);
+        assert_eq!(summary.reported_sources, 0);
+        assert_eq!(summary.observed_sources, 1);
+        drop(runtime);
+
+        let reopened = HostAgentHookRuntime::start_in(8, state.path()).unwrap();
+        assert_eq!(reopened.project_token_usage(), vec![summary]);
     }
 
     #[test]

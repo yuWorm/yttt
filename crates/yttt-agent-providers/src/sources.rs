@@ -439,6 +439,7 @@ export const YtttAgentStatusPlugin = async ({ client }) => {
   let rootModel;
   let nextRunSequence = 1;
   const telemetryFields = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_microusd"];
+  const tokenFields = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"];
 
   function remember(info) {
     const id = infoId(info);
@@ -570,6 +571,31 @@ export const YtttAgentStatusPlugin = async ({ client }) => {
     boundedSet(messageRuns, `${run.sessionId}\u0000${messageId}`, run.id, MAX_MESSAGE_CACHE);
   }
 
+  function reportMessageUsage(run, messageId, usage) {
+    let tokens = 0;
+    let observed = false;
+    let partial = false;
+    for (const field of tokenFields) {
+      const value = integer(usage[field]);
+      if (value === undefined) {
+        partial = true;
+        continue;
+      }
+      observed = true;
+      tokens += value;
+    }
+    if (!observed || !Number.isSafeInteger(tokens)) return;
+    void post("token_usage", {
+      usage: {
+        id: `opencode:${run.sessionId}:message:${messageId}`,
+        parent_id: null,
+        tokens,
+        includes_children: false,
+        partial,
+      },
+    });
+  }
+
   function aggregateTelemetry(run, message, observedAt) {
     const messageId = text(message?.id);
     if (!messageId || run.settledMessageIds.has(messageId)) return false;
@@ -620,6 +646,7 @@ export const YtttAgentStatusPlugin = async ({ client }) => {
       if (observed && Number.isSafeInteger(total)) telemetry[field] = total;
     }
     run.telemetry = telemetry;
+    reportMessageUsage(run, messageId, next);
     rememberMessage(run, messageId);
     return true;
   }

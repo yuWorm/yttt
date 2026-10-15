@@ -199,33 +199,43 @@ try {
 	]);
 	let exposeLateChild = false;
 	const loadedSessionIds: string[] = [];
-	const plugin = await YtttAgentStatusPlugin({
-		client: {
-			session: {
-				list: async () => [sessions.get("attached-root"), sessions.get("next-root"), sessions.get("other-root")],
-				status: async () => ({
-					"attached-root": { type: "busy" },
-					"next-root": { type: "idle" },
-					"other-root": { type: "idle" },
-					child: { type: "idle" },
-					grandchild: { type: "idle" },
-				}),
-				get: async ({ path: requestPath }: { path: { id: string } }) => {
-					loadedSessionIds.push(requestPath.id);
-					return sessions.get(requestPath.id);
-				},
-				children: async ({ path: requestPath }: { path: { id: string } }) => {
-					const children = [...sessions.values()].filter(info =>
-						info.parentID === requestPath.id && (info.id !== "late-child" || exposeLateChild),
-					);
-					return requestPath.id === "attached-root"
-						? [...children, sessions.get("spoof-child")]
-						: children;
-				},
+	const openCodeClient = {
+		session: {
+			list: async () => [sessions.get("attached-root"), sessions.get("next-root"), sessions.get("other-root")],
+			status: async () => ({
+				"attached-root": { type: "busy" },
+				"next-root": { type: "idle" },
+				"other-root": { type: "idle" },
+				child: { type: "idle" },
+				grandchild: { type: "idle" },
+			}),
+			get: async ({ path: requestPath }: { path: { id: string } }) => {
+				loadedSessionIds.push(requestPath.id);
+				return sessions.get(requestPath.id);
+			},
+			children: async ({ path: requestPath }: { path: { id: string } }) => {
+				const children = [...sessions.values()].filter(info =>
+					info.parentID === requestPath.id && (info.id !== "late-child" || exposeLateChild),
+				);
+				return requestPath.id === "attached-root"
+					? [...children, sessions.get("spoof-child")]
+					: children;
 			},
 		},
-	});
+	};
+	const plugin = await YtttAgentStatusPlugin({ client: openCodeClient });
 	const openCodeEvents = () => [...delivered.values()].filter(delivery => delivery.path === "/hook/opencode");
+	const openCodeTokenUsages = () => {
+		const usages: Record<string, unknown>[] = [];
+		for (const delivery of openCodeEvents()) {
+			if (delivery.event !== "token_usage") continue;
+			const usage = delivery.payload.usage;
+			if (usage && typeof usage === "object" && !Array.isArray(usage)) {
+				usages.push(usage as Record<string, unknown>);
+			}
+		}
+		return usages;
+	};
 	const boardExecutions = (): Record<string, unknown>[] => openCodeEvents().flatMap(delivery => {
 		const board = delivery.payload.board;
 		if (!board || typeof board !== "object" || (board as Record<string, unknown>).kind !== "execution") return [];
@@ -285,6 +295,53 @@ try {
 	};
 	await plugin.event({ event: { type: "message.updated", properties: { info: childAssistant } } });
 	await plugin.event({ event: { type: "message.updated", properties: { info: childAssistant } } });
+	const rootAssistant = {
+		id: "root-assistant",
+		sessionID: "attached-root",
+		role: "assistant",
+		providerID: "openai",
+		modelID: "gpt-5.6",
+		time: { created: 1_550, completed: 1_650 },
+		tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 1 } },
+	};
+	const missingAssistantUsage = {
+		id: "child-assistant-missing-usage",
+		sessionID: "child",
+		role: "assistant",
+		providerID: "openai",
+		modelID: "gpt-5.6",
+		time: { created: 1_650, completed: 1_700 },
+	};
+	await plugin.event({ event: { type: "message.updated", properties: { info: rootAssistant } } });
+	await plugin.event({ event: { type: "message.updated", properties: { info: missingAssistantUsage } } });
+	const childUsageId = "opencode:child:message:child-assistant";
+	const rootUsageId = "opencode:attached-root:message:root-assistant";
+	await waitFor(
+		() => openCodeTokenUsages().some(usage => usage.id === childUsageId) &&
+			openCodeTokenUsages().some(usage => usage.id === rootUsageId),
+		"OpenCode did not report native assistant usage",
+	);
+	assert.deepEqual(
+		openCodeTokenUsages()
+			.filter(usage => usage.id === childUsageId || usage.id === rootUsageId)
+			.map(usage => ({
+				id: usage.id,
+				tokens: usage.tokens,
+				includes_children: usage.includes_children,
+				partial: usage.partial,
+				parent_id: usage.parent_id,
+			})),
+		[
+			{ id: childUsageId, tokens: 199, includes_children: false, partial: false, parent_id: null },
+			{ id: rootUsageId, tokens: 19, includes_children: false, partial: false, parent_id: null },
+		],
+		"OpenCode usage must use one native message identity per exclusive request",
+	);
+	assert.equal(
+		openCodeTokenUsages().some(usage => usage.id === "opencode:child:message:child-assistant-missing-usage"),
+		false,
+		"OpenCode messages without native usage must remain unreported rather than becoming zero",
+	);
 	await plugin.event({
 		event: {
 			type: "message.part.updated",
@@ -351,7 +408,7 @@ try {
 	assert.equal(grandchildExecution.parent_id, childExecution.id, "grandchild execution must point to its real parent execution");
 	assert.equal(childExecution.task, "Investigate the tree");
 	assert.equal(childExecution.state, "completed");
-	assert.equal(childExecution.ended_at, 1_600, "the latest official assistant/session timestamp must be retained");
+	assert.equal(childExecution.ended_at, missingAssistantUsage.time.completed, "the latest official assistant/session timestamp must be retained");
 	const childTelemetry = childExecution.telemetry as Record<string, unknown>;
 	assert.deepEqual(
 		{
@@ -427,6 +484,68 @@ try {
 	);
 
 	await plugin.event({ event: { type: "session.status", properties: { sessionID: "usage-child", status: { type: "busy" } } } });
+	const zeroUsageMessage = {
+		id: "usage-zero",
+		sessionID: "usage-child",
+		role: "assistant",
+		providerID: "openai",
+		modelID: "cache-model",
+		time: { created: 2_050, completed: 2_051 },
+		cost: 0,
+		tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+	};
+	const usageOnlyUpdate = {
+		...zeroUsageMessage,
+		tokens: { input: 2, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+	};
+	const missingUsageMessage = {
+		id: "usage-missing",
+		sessionID: "usage-child",
+		role: "assistant",
+		providerID: "openai",
+		modelID: "cache-model",
+		time: { created: 2_052, completed: 2_053 },
+	};
+	const partialUsageMessage = {
+		id: "usage-partial",
+		sessionID: "usage-child",
+		role: "assistant",
+		providerID: "openai",
+		modelID: "cache-model",
+		time: { created: 2_054, completed: 2_055 },
+		tokens: { input: 3 },
+	};
+	await plugin.event({ event: { type: "message.updated", properties: { info: zeroUsageMessage } } });
+	await plugin.event({ event: { type: "message.updated", properties: { info: usageOnlyUpdate } } });
+	await plugin.event({ event: { type: "message.updated", properties: { info: usageOnlyUpdate } } });
+	await plugin.event({ event: { type: "message.updated", properties: { info: missingUsageMessage } } });
+	await plugin.event({ event: { type: "message.updated", properties: { info: partialUsageMessage } } });
+	const zeroUsageId = "opencode:usage-child:message:usage-zero";
+	const partialUsageId = "opencode:usage-child:message:usage-partial";
+	await waitFor(
+		() => openCodeTokenUsages().filter(usage => usage.id === zeroUsageId).length === 2 &&
+			openCodeTokenUsages().some(usage => usage.id === partialUsageId),
+		"OpenCode usage-only counter update was not delivered",
+	);
+	assert.deepEqual(
+		openCodeTokenUsages()
+			.filter(usage => usage.id === zeroUsageId)
+			.map(usage => ({ tokens: usage.tokens, partial: usage.partial })),
+		[{ tokens: 0, partial: false }, { tokens: 2, partial: false }],
+		"OpenCode zero is valid, later native usage updates are cumulative per message, and duplicate delivery is ignored",
+	);
+	assert.deepEqual(
+		openCodeTokenUsages()
+			.filter(usage => usage.id === partialUsageId)
+			.map(usage => ({ tokens: usage.tokens, partial: usage.partial })),
+		[{ tokens: 3, partial: true }],
+		"partially populated native OpenCode usage must retain only known components and mark coverage partial",
+	);
+	assert.equal(
+		openCodeTokenUsages().some(usage => usage.id === "opencode:usage-child:message:usage-missing"),
+		false,
+		"OpenCode missing usage must not be represented by a zero counter",
+	);
 	for (let index = 0; index < 513; index += 1) {
 		await plugin.event({
 			event: {
@@ -449,7 +568,7 @@ try {
 	await waitFor(
 		() => boardExecutions().some(execution =>
 			execution.name === "Usage child" &&
-			(execution.telemetry as Record<string, unknown>).input_tokens === 513),
+			(execution.telemetry as Record<string, unknown>).input_tokens === 518),
 		"OpenCode usage aggregation dropped totals when its per-message cache evicted",
 	);
 	await plugin.event({
@@ -472,7 +591,7 @@ try {
 	await Bun.sleep(25);
 	assert.equal(
 		(boardExecutions().filter(execution => execution.name === "Usage child").at(-1)?.telemetry as Record<string, unknown>).input_tokens,
-		513,
+		518,
 		"a replayed evicted usage message must not change the settled aggregate",
 	);
 
@@ -624,6 +743,27 @@ try {
 		console.error = originalError;
 		process.env.YTTT_AGENT_HOOK_SCOPE = "same-scope";
 	}
+	const streamsBeforeReload = new Set(openCodeEvents().map(delivery => delivery.streamId));
+	const ReloadedOpenCodePlugin = new Function(
+		`${openCodeSource.replace("export const YtttAgentStatusPlugin", "const YtttAgentStatusPlugin")}\nreturn YtttAgentStatusPlugin;`,
+	)();
+	const reloadedOpenCode = await ReloadedOpenCodePlugin({ client: openCodeClient });
+	await waitFor(
+		() => openCodeEvents().some(
+			delivery => delivery.event === "session_busy" && !streamsBeforeReload.has(delivery.streamId),
+		),
+		"reloaded OpenCode plugin did not attach the active root",
+	);
+	await reloadedOpenCode.event({ event: { type: "message.updated", properties: { info: childAssistant } } });
+	await waitFor(
+		() => openCodeTokenUsages().filter(usage => usage.id === childUsageId).length === 2,
+		"reloaded OpenCode plugin did not replay the native message billing identity",
+	);
+	assert.equal(
+		openCodeTokenUsages().filter(usage => usage.id === childUsageId).length,
+		2,
+		"replayed OpenCode usage must retain the message identity instead of the delivery stream id",
+	);
 
 	// Legacy OSC transport needs the same ownership rule as HTTP.
 	delete process.env.YTTT_AGENT_HOOK_ENDPOINT;
@@ -656,7 +796,7 @@ try {
 		["session_start", "pi-root"], ["agent_start", "pi-root"], ["session_shutdown", "pi-root"],
 	], "OSC child and duplicate copies must not publish root lifecycle events");
 
-	console.log("PASS: OpenCode root filtering/attachment/switching and Pi duplicate/reload lifecycle preserve ordered deduplicated delivery");
+	console.log("PASS: OpenCode message-identity token usage, root filtering/attachment/switching, and Pi duplicate/reload lifecycle preserve ordered delivery");
 } finally {
 	server.stop(true);
 }
