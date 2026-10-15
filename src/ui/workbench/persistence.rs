@@ -730,119 +730,27 @@ impl WorkbenchView {
         Ok(())
     }
 
-    fn open_workspace_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use gpui_component::WindowExt as _;
-        let Some(runtime) = self.terminal.host_runtime.clone() else {
-            return;
-        };
-        let task = cx.background_spawn({
-            let runtime = runtime.clone();
-            async move { runtime.workspace_request(WorkspaceRequest::List) }
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            let _ = this.update_in(cx, |root, window, cx| {
-                let entries = match result {
-                    Ok(WorkspaceResponse::Workspaces(mut entries)) => {
-                        entries.retain(|entry| !runtime.workspace_has_view(&entry.workspace_id));
-                        entries.sort_by_key(|entry| std::cmp::Reverse(entry.saved_millis));
-                        entries
-                    }
-                    result => {
-                        root.set_workspace_persistence_error(format!(
-                            "Cannot load workspace history: {result:?}"
-                        ));
-                        cx.notify();
-                        return;
-                    }
-                };
-                let owner = cx.entity().downgrade();
-                let appearance = root.theme_runtime();
-                window.open_dialog(cx, move |dialog, _, cx| {
-                    let mut list = div()
-                        .id("workspace-history-list")
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .max_h(px(400.0))
-                        .overflow_y_scroll();
-                    if entries.is_empty() {
-                        list = list.child("没有已关闭的工作区");
-                    }
-                    for (index, entry) in entries.iter().enumerate() {
-                        let id = entry.workspace_id.clone();
-                        let error_owner = owner.clone();
-                        let mut row = div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().flex_1().child(entry.name.clone()))
-                            .child(
-                                yttt_button(
-                                    ("history-open", index),
-                                    "打开",
-                                    YtttButtonVariant::Secondary,
-                                    appearance.ui,
-                                    appearance.style,
-                                    cx,
-                                )
-                                .on_click(move |_, window, cx| {
-                                    match crate::ui::app::open_history_workspace(id.clone(), cx) {
-                                        Ok(()) => window.close_dialog(cx),
-                                        Err(error) => {
-                                            let _ = error_owner.update(cx, |root, cx| {
-                                                root.set_workspace_persistence_error(
-                                                    error.to_string(),
-                                                );
-                                                cx.notify();
-                                            });
-                                        }
-                                    }
-                                }),
-                            );
-                        if !entry.restore_on_startup && runtime.is_controller() {
-                            let entry = entry.clone();
-                            let owner = owner.clone();
-                            row = row.child(
-                                yttt_button(
-                                    ("history-forget", index),
-                                    "删除历史…",
-                                    YtttButtonVariant::Ghost,
-                                    appearance.ui,
-                                    appearance.style,
-                                    cx,
-                                )
-                                .on_click(move |_, window, cx| {
-                                    let _ = owner.update(cx, |root, cx| {
-                                        root.forget_workspace_history(entry.clone(), window, cx);
-                                    });
-                                }),
-                            );
-                        }
-                        list = list.child(row);
-                    }
-                    dialog.title("工作区历史").child(list)
-                });
-            });
-        })
-        .detach();
-    }
-
-    fn forget_workspace_history(
+    pub(super) fn forget_workspace_history(
         &mut self,
         entry: yttt_protocol::workspace::WorkspaceSummary,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui_component::WindowExt as _;
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             return;
         };
+        if !runtime.is_controller() || entry.restore_on_startup {
+            return;
+        }
+        let workspace_id = entry.workspace_id.clone();
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            "删除工作区历史？",
-            Some("此操作删除保存的布局和未保存草稿，不删除项目文件或 Agent 历史。"),
-            &["取消", "删除"],
+            self.ui_text.get(UiTextKey::WorkspaceHistoryRemoveTitle),
+            Some(self.ui_text.get(UiTextKey::WorkspaceHistoryRemoveWarning)),
+            &[
+                self.ui_text.get(UiTextKey::Cancel),
+                self.ui_text.get(UiTextKey::WorkspaceHistoryRemove),
+            ],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -861,15 +769,15 @@ impl WorkbenchView {
                     })
                 })
                 .await;
-            let _ = this.update_in(cx, |root, window, cx| {
+            let _ = this.update_in(cx, |root, _window, cx| {
                 match result {
                     Ok(WorkspaceResponse::Forgotten { .. }) => {
-                        window.close_dialog(cx);
-                        root.open_workspace_history(window, cx);
+                        root.remove_workspace_history_entry(&workspace_id);
                     }
-                    result => root.set_workspace_persistence_error(format!(
-                        "Cannot delete workspace history: {result:?}"
-                    )),
+                    result => {
+                        root.palette.workspace_history.error =
+                            Some(format!("Cannot remove workspace history: {result:?}"))
+                    }
                 }
                 cx.notify();
             });

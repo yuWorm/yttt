@@ -334,6 +334,14 @@ impl Render for WorkbenchView {
                             })
                         },
                     ));
+                } else if active_palette.kind == PaletteKind::WorkspaceHistory {
+                    root = root.child(self.workspace_history_overlay(
+                        &active_palette,
+                        &items,
+                        &query_input,
+                        window,
+                        cx,
+                    ));
                 } else {
                     root = root.child(palette_overlay(
                         &active_palette,

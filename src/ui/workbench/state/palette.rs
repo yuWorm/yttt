@@ -16,6 +16,7 @@ use crate::{
 pub(in super::super) struct PaletteControllerState {
     pub(in super::super) active_palette: Option<ActivePalette>,
     pub(in super::super) recent_projects: Vec<RecentProject>,
+    pub(in super::super) workspace_history: super::super::workspace_history::WorkspaceHistoryState,
     pub(in super::super) input: Option<Entity<InputState>>,
     pub(in super::super) input_subscription: Option<Subscription>,
     pub(in super::super) input_needs_focus: bool,
@@ -50,6 +51,7 @@ impl PaletteControllerState {
         Self {
             active_palette: None,
             recent_projects,
+            workspace_history: Default::default(),
             input: None,
             input_subscription: None,
             input_needs_focus: false,

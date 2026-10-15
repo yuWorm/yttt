@@ -73,10 +73,20 @@ With **Restore last session** enabled, startup restores only workspaces left ope
 application quit, not every workspace ever saved. Each window restores its Host-confirmed
 projects, terminal/file tabs, split layout and active work items before starting terminal views.
 Explicitly closing a window removes it from startup restoration; its nonempty snapshot remains
-in workspace history. **Restore Last Session** lets you select a historical workspace in a
-separate window or explicitly delete a closed record. Empty closed records are reclaimed
-automatically. Nonempty layouts and drafts are never silently evicted when the 128-record limit
-is reached. Older records without startup membership remain available in history.
+in workspace history. **Restore Last Session** opens a searchable workspace picker. It shows
+saved project names and paths instead of raw workspace IDs, ordered by **Last saved** (this is
+the snapshot's save time, not an inferred last-opened time). Recent dates use Today/Yesterday
+and local time; hover a row for its full timestamp, paths, and workspace ID. Missing dates
+remain explicitly unknown.
+
+Search matches workspace names, project paths, and IDs. Use Up/Down to select, Enter or a
+row click to open the workspace in a separate window, and Escape to dismiss. Workspaces
+already open in this Client are omitted. The row's **… → Remove from history** action is
+available only to the controller for closed records and asks for confirmation: it removes
+the saved layout and unsaved drafts, not project files or Agent history. Removing a record
+keeps the current search. Empty closed records are reclaimed automatically. Nonempty layouts
+and drafts are never silently evicted when the 128-record limit is reached. Older records
+without startup membership remain available in history.
 Closing every window leaves the next startup empty, even if recent projects or legacy state exist.
 Disabling restoration, opening a directory, or opening an empty window does not implicitly reopen
 history. An explicit remote connection still opens that Host's current workspaces.

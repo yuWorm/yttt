@@ -11468,6 +11468,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "block",
+ "chrono",
  "cocoa 0.26.0",
  "dunce",
  "flume 0.12.0",

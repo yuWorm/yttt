@@ -130,7 +130,7 @@ where
     )
 }
 
-fn picker_header(
+pub(crate) fn picker_header(
     query_input: &Entity<InputState>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
@@ -275,6 +275,7 @@ fn picker_item_icon(kind: PaletteKind, item_id: &str) -> Option<IconName> {
         PaletteKind::Tab if item_id.starts_with("file:") => Some(IconName::File),
         PaletteKind::Tab => Some(IconName::SquareTerminal),
         PaletteKind::GitBranch => Some(IconName::Network),
+        PaletteKind::WorkspaceHistory => Some(IconName::FolderClosed),
     }
 }
 

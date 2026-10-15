@@ -37,6 +37,7 @@ perf-metrics = ["yttt-terminal/perf-metrics"]
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dunce = "1"
 fs2 = "0.4"
 parking_lot = "0.12"

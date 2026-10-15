@@ -29,6 +29,7 @@ pub enum PaletteKind {
     Tab,
     Pane,
     GitBranch,
+    WorkspaceHistory,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

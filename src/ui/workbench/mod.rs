@@ -63,6 +63,7 @@ mod surface;
 mod update;
 mod vim_controller;
 mod work_area;
+mod workspace_history;
 use auxiliary_windows::{AuxiliaryWindowKind, AuxiliaryWindows};
 use command_center::CommandCenterState;
 use dialogs::*;
@@ -418,6 +419,7 @@ fn palette_input_scope_id(kind: PaletteKind) -> &'static str {
         PaletteKind::Tab => "palette.tab",
         PaletteKind::Pane => "palette.pane",
         PaletteKind::GitBranch => "palette.git_branch",
+        PaletteKind::WorkspaceHistory => "palette.workspace_history",
     }
 }
 

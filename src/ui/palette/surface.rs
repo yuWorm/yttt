@@ -37,5 +37,6 @@ pub fn palette_input_placeholder(kind: PaletteKind, ui_text: &UiText) -> &'stati
         PaletteKind::Tab => ui_text.get(UiTextKey::PalettePlaceholderTab),
         PaletteKind::Pane => ui_text.get(UiTextKey::PalettePlaceholderPane),
         PaletteKind::GitBranch => ui_text.get(UiTextKey::PalettePlaceholderGitBranch),
+        PaletteKind::WorkspaceHistory => ui_text.get(UiTextKey::WorkspaceHistorySearch),
     }
 }

@@ -14,6 +14,14 @@ impl WorkbenchView {
         if was_file_finder && kind != PaletteKind::File {
             self.cancel_file_finder_tasks();
         }
+        if self
+            .palette
+            .active_palette
+            .as_ref()
+            .is_some_and(|palette| palette.kind == PaletteKind::WorkspaceHistory)
+        {
+            self.palette.workspace_history = Default::default();
+        }
         self.palette.active_palette = Some(ActivePalette::new(kind));
         self.reset_palette_input();
         self.palette.scroll_handle = ScrollHandle::new();
@@ -52,6 +60,14 @@ impl WorkbenchView {
             .is_some_and(|palette| palette.kind == PaletteKind::File)
         {
             self.cancel_file_finder_tasks();
+        }
+        if self
+            .palette
+            .active_palette
+            .as_ref()
+            .is_some_and(|palette| palette.kind == PaletteKind::WorkspaceHistory)
+        {
+            self.palette.workspace_history = Default::default();
         }
         self.palette.active_palette = None;
         self.reset_palette_input();
@@ -207,6 +223,12 @@ impl WorkbenchView {
                 self.queue_git_branch_switch(&item.id);
                 return Ok(());
             }
+            PaletteKind::WorkspaceHistory => {
+                if let Some(cx) = cx {
+                    self.confirm_workspace_history(&item.id, cx);
+                }
+                return Ok(());
+            }
         }
 
         self.close_palette();
@@ -263,6 +285,13 @@ impl WorkbenchView {
                 }
             }
             PaletteKind::GitBranch => self.git_branch_palette_items(),
+            PaletteKind::WorkspaceHistory => self
+                .palette
+                .workspace_history
+                .entries
+                .iter()
+                .map(|entry| entry.item.clone())
+                .collect(),
         }
     }
 
