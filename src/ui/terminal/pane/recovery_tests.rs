@@ -168,6 +168,15 @@ fn open_pane<'a>(
     runtime: Arc<DesktopHostRuntime>,
     root: &Path,
 ) -> (Entity<TerminalPaneView>, &'a mut VisualTestContext) {
+    open_pane_with_command(cx, runtime, root, COMMAND)
+}
+
+fn open_pane_with_command<'a>(
+    cx: &'a mut TestAppContext,
+    runtime: Arc<DesktopHostRuntime>,
+    root: &Path,
+    command: &str,
+) -> (Entity<TerminalPaneView>, &'a mut VisualTestContext) {
     runtime
         .request_blocking_typed(Request::Project(ProjectRequest::Register {
             project_id: ProjectId::new("recovery-project"),
@@ -193,7 +202,7 @@ fn open_pane<'a>(
             id: "shell".into(),
             title: "Shell".into(),
             command: "/bin/sh".into(),
-            args: vec!["-c".into(), COMMAND.into()],
+            args: vec!["-c".into(), command.into()],
             execution_mode: TerminalExecutionMode::Command,
             exit_behavior: ProcessExitBehavior::ManualRestart,
             kind: PaneKind::Shell,
@@ -227,6 +236,33 @@ fn send_input(pane: &Entity<TerminalPaneView>, cx: &mut VisualTestContext) {
     });
 }
 
+fn received_input_count(root: &Path, input: &str) -> usize {
+    // portable-pty sends a newline before EOF when its writer closes. The old
+    // process may record it during termination; it is not user input.
+    fs::read_to_string(root.join("inputs")).map_or(0, |recorded| {
+        recorded.lines().filter(|line| *line == input).count()
+    })
+}
+
+#[gpui::test]
+fn immediate_process_exit_is_finalized_after_spawn(cx: &mut TestAppContext) {
+    let host = RecoveryHost::start();
+    let runtime = host.client("first");
+    let (pane, cx) = open_pane_with_command(cx, runtime.clone(), host.root.path(), "exit 7");
+    pump_until(cx, "immediate exit finalized", |cx| {
+        cx.read(|app| pane.read(app).exit_emitted)
+    });
+    cx.read(|app| {
+        let pane = pane.read(app);
+        assert!(!pane.is_running());
+        assert!(pane.terminal.is_none());
+    });
+    pump_until(cx, "exited session acknowledged", |_| {
+        catalog(&runtime).terminals.is_empty()
+    });
+    runtime.shutdown_client();
+}
+
 #[gpui::test]
 fn reclaiming_profile_restores_existing_pane_input_and_close(cx: &mut TestAppContext) {
     let host = RecoveryHost::start();
@@ -234,7 +270,11 @@ fn reclaiming_profile_restores_existing_pane_input_and_close(cx: &mut TestAppCon
     let second = host.client("second");
     let (pane, cx) = open_pane(cx, first.clone(), host.root.path());
     pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+        cx.read(|app| pane.read(app).is_running())
+            && fs::read_to_string(host.root.path().join("starts"))
+                .ok()
+                .as_deref()
+                == Some("start\n")
     });
     let original = catalog(&first).terminals.remove(0);
     second
@@ -270,10 +310,7 @@ fn reclaiming_profile_restores_existing_pane_input_and_close(cx: &mut TestAppCon
     });
     send_input(&pane, cx);
     pump_until(cx, "input reaches original process", |_| {
-        fs::read_to_string(host.root.path().join("inputs"))
-            .ok()
-            .as_deref()
-            == Some("x\n")
+        received_input_count(host.root.path(), "x") == 1
     });
     let restored = catalog(&first);
     assert_eq!(restored.terminals.len(), 1);
@@ -299,7 +336,11 @@ fn unavailable_pane_reconnects_when_session_reappears_without_spawning(cx: &mut 
     let runtime = host.client("first");
     let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
     pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+        cx.read(|app| pane.read(app).is_running())
+            && fs::read_to_string(host.root.path().join("starts"))
+                .ok()
+                .as_deref()
+                == Some("start\n")
     });
     let original = catalog(&runtime).terminals.remove(0);
     runtime
@@ -354,10 +395,7 @@ fn unavailable_pane_reconnects_when_session_reappears_without_spawning(cx: &mut 
     });
     send_input(&pane, cx);
     pump_until(cx, "input reaches replacement", |_| {
-        fs::read_to_string(host.root.path().join("inputs"))
-            .ok()
-            .as_deref()
-            == Some("x\n")
+        received_input_count(host.root.path(), "x") == 1
     });
     assert_eq!(
         fs::read_to_string(host.root.path().join("starts")).unwrap(),
@@ -378,7 +416,11 @@ fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut T
     let runtime = host.client("first");
     let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
     pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+        cx.read(|app| pane.read(app).is_running())
+            && fs::read_to_string(host.root.path().join("starts"))
+                .ok()
+                .as_deref()
+                == Some("start\n")
     });
     let original = catalog(&runtime).terminals.remove(0);
     pump_until(cx, "initial terminal metadata", |_| {
@@ -420,7 +462,32 @@ fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut T
         "start\n"
     );
 
-    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.retry_terminal(window, cx)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.retry_terminal(window, cx);
+            // A new subscription can receive the old mirror before the spawn reply.
+            pane.handle_host_viewport_metadata(
+                &final_metadata,
+                &runtime,
+                &original.session_id,
+                pane.generation,
+                cx,
+            );
+            assert!(pane.terminal.is_some(), "old exit cleared the replacement");
+            pane.handle_host_event(
+                ClientEvent::TerminalUnavailable(original.session_id.clone()),
+                runtime.clone(),
+                &original.session_id,
+                pane.generation,
+                window,
+                cx,
+            );
+            assert!(
+                pane.terminal.is_some(),
+                "old catalog removal cleared the replacement"
+            );
+        });
+    });
     pump_until(cx, "explicit replacement terminal", |cx| {
         cx.read(|app| pane.read(app).is_running())
             && fs::read_to_string(host.root.path().join("starts"))
@@ -431,12 +498,30 @@ fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut T
     let replacement = catalog(&runtime).terminals.remove(0);
     assert_eq!(replacement.session_id, original.session_id);
     assert_ne!(replacement.session_epoch, original.session_epoch);
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.handle_host_viewport_metadata(
+                &final_metadata,
+                &runtime,
+                &original.session_id,
+                pane.generation,
+                cx,
+            );
+            assert!(pane.is_running(), "old exit stopped the replacement");
+            pane.handle_host_event(
+                ClientEvent::TerminalUnavailable(original.session_id.clone()),
+                runtime.clone(),
+                &original.session_id,
+                pane.generation,
+                window,
+                cx,
+            );
+            assert!(pane.is_running(), "old removal stopped the replacement");
+        });
+    });
     send_input(&pane, cx);
     pump_until(cx, "replacement accepts input", |_| {
-        fs::read_to_string(host.root.path().join("inputs"))
-            .ok()
-            .as_deref()
-            == Some("x\n")
+        received_input_count(host.root.path(), "x") == 1
     });
     runtime
         .terminate_many_confirmed(vec![original.session_id])
@@ -453,7 +538,11 @@ fn missing_terminal_waits_for_control_without_automatically_replaying(cx: &mut T
     let runtime = host.client("first");
     let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
     pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+        cx.read(|app| pane.read(app).is_running())
+            && fs::read_to_string(host.root.path().join("starts"))
+                .ok()
+                .as_deref()
+                == Some("start\n")
     });
     let original = catalog(&runtime).terminals.remove(0);
     runtime
@@ -532,7 +621,11 @@ fn rejected_input_during_publication_recovers_without_restarting_process(cx: &mu
     let runtime = host.client("controller");
     let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
     pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+        cx.read(|app| pane.read(app).is_running())
+            && fs::read_to_string(host.root.path().join("starts"))
+                .ok()
+                .as_deref()
+                == Some("start\n")
     });
     let original = catalog(&runtime).terminals.remove(0);
     runtime.begin_exit_publication();
@@ -543,10 +636,7 @@ fn rejected_input_during_publication_recovers_without_restarting_process(cx: &mu
     runtime.cancel_exit_publication();
     send_input(&pane, cx);
     pump_until(cx, "input after publication cancelled", |_| {
-        fs::read_to_string(host.root.path().join("inputs"))
-            .ok()
-            .as_deref()
-            == Some("x\n")
+        received_input_count(host.root.path(), "x") == 1
     });
     assert_eq!(
         fs::read_to_string(host.root.path().join("starts")).unwrap(),

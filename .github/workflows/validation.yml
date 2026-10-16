@@ -23,8 +23,6 @@ jobs:
   linux:
     name: Linux workspace
     runs-on: ubuntu-24.04
-    env:
-      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -122,8 +120,6 @@ jobs:
   macos:
     name: macOS UI and watchers
     runs-on: macos-15
-    env:
-      CARGO_BUILD_TARGET: aarch64-apple-darwin
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -145,8 +141,6 @@ jobs:
   windows:
     name: Windows core contracts
     runs-on: windows-2025
-    env:
-      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
     steps:
       - name: Check out source
         uses: actions/checkout@v7

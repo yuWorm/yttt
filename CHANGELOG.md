@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.16 - 2026-10-16
+
+- 本版包含未成功发布的 0.3.14 与 0.3.15 改动，详见下方对应条目。资源协议仍为 18；桌面、Host、远端 Server 与 CLI 需同步更新，并重载运行中的 Agent 扩展。
+- Include the unpublished 0.3.14 and 0.3.15 changes listed below. Resource protocol remains 18; upgrade Desktop, Host, remote Server, and CLI together and reload running Agent extensions.
+- 修复 macOS 发布验证：不再全局覆盖 Cargo 目标目录，开发包脚本可正确找到原生调试程序；保留有界编译缓存与中转 artifact 自动清理。
+- Fix macOS release validation by removing the global Cargo target override so the development bundle finds the native debug executable; retain bounded compiler caching and staging artifact cleanup.
+- 修复终端替换启动竞态：旧会话退出与延迟移除事件不再清掉新会话视图，启动响应后补齐已到达的退出状态。恢复测试等待完整启动标记，并区分 PTY 关闭换行与用户输入。
+- Fix terminal replacement races: stale exit and removal events no longer clear the new viewport, and reconcile early process exits after the start reply. Recovery tests wait for complete startup markers and distinguish PTY shutdown newlines from user input.
+
 ## 0.3.15 - 2026-10-16
 
 - 本版同时交付未成功发布的 0.3.14 改动：本机与远端 Host 恢复、调度中心与持久化 Token 用量等，详见下方 0.3.14 条目。资源协议为 18，桌面、Host、远端 Server 与 CLI 需同步更新，并重载运行中的 Agent 扩展。

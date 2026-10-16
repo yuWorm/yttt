@@ -1185,6 +1185,17 @@ impl TerminalPaneView {
                     }
                 }
                 if matches!(pane.lifecycle, PaneLifecycle::Running) {
+                    // Metadata may arrive before the reply establishes the session epoch.
+                    // Reconcile it now so a short-lived process still finalizes its exit.
+                    if let Some(metadata) = request_runtime.terminal_metadata(&session_id) {
+                        pane.handle_host_viewport_metadata(
+                            &metadata,
+                            &request_runtime,
+                            &session_id,
+                            generation,
+                            cx,
+                        );
+                    }
                     pane.recover_host_terminal(&request_runtime, window, cx);
                 }
             });
@@ -1272,7 +1283,8 @@ impl TerminalPaneView {
         generation: u64,
         cx: &mut Context<Self>,
     ) {
-        if self.generation != generation {
+        if self.generation != generation || self.host_session_epoch != Some(metadata.session_epoch)
+        {
             return;
         }
         if self.agent_session_title.is_none()
@@ -1313,6 +1325,18 @@ impl TerminalPaneView {
         }
         match event {
             ClientEvent::TerminalUnavailable(unavailable) if unavailable == *session_id => {
+                // Removal events carry no session epoch. While a start/attach is
+                // pending, its reply determines whether the new binding exists.
+                if matches!(self.lifecycle, PaneLifecycle::Starting)
+                    || runtime.resource_catalog().is_some_and(|catalog| {
+                        catalog
+                            .terminals
+                            .iter()
+                            .any(|placement| placement.session_id == *session_id)
+                    })
+                {
+                    return;
+                }
                 self.set_terminal_lost(
                     "Terminal session is no longer present in the Host catalog".to_string(),
                     cx,
@@ -1449,7 +1473,9 @@ impl TerminalPaneView {
         generation: u64,
         cx: &mut Context<Self>,
     ) {
-        if !accepts_process_exit(self.generation, generation, self.exit_emitted) {
+        if !accepts_process_exit(self.generation, generation, self.exit_emitted)
+            || self.host_session_epoch != Some(session_epoch)
+        {
             return;
         }
         self.exit_emitted = true;
