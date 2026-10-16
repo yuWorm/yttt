@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.14 - 2026-10-16
+
 - 修复未连接远程时的错误恢复提示：Agent 观测时间戳不再标记工作区未发布；恢复入口按实际草稿、设置与可执行状态显示。恢复副本分版本保存，未处理内容不被覆盖，已确认发布的副本保留归档。
 - Fix spurious local workspace recovery: Agent observation timestamps no longer mark a workspace dirty. Recovery actions reflect available drafts/settings and valid state; unresolved copies are versioned without replacement, and confirmed copies remain archived.
 - 本机原控制者短暂断线后可在无其他 owner／交接时原子恢复控制；不抢占其他客户端。Host 主动发布交接超时，删除工作区后及时释放项目引用。资源协议升至 18，桌面、Host、远端 Server 与 CLI 需同步更新。
@@ -14,8 +16,8 @@
 - Replace the workspace history dialog with a searchable picker showing saved project names, paths, and last-saved dates. Support keyboard selection, Enter/click to open, and Escape to dismiss; expose full timestamps and IDs on hover, with confirmed history removal in the secondary menu.
 - 调度中心项目卡片改为单行项目名、非零图标统计和累计 Token；窄卡片收拢额外统计，Agent 提供方使用图标并保留 Tab／会话辨识，只有确认工作中的状态使用动画。历史行移除重复状态及未上报的 Token 占位，悬停和无障碍标签保留完整信息。
 - Compact Dispatch project cards into one-line names, nonzero icon counters and cumulative tokens. Collapse excess counters on narrow cards, use provider icons with tab/session identity, animate only confirmed live work, and remove repeated historical statuses and missing task-usage placeholders while retaining hover and accessible details.
-- 新增 Host 持久化项目 Token 账本：稳定来源去重、累计高水位和主子覆盖去重，关闭会话、裁剪历史、重启均不清零；明确标识部分及未上报用量，不将 Todo 共享遥测相加。资源协议升级为 17，桌面、Host、远端 Server 与 CLI 需同步更新；运行中的 Agent 需重载更新后的扩展。
-- Add a durable Host-owned project token ledger with stable billing identities, cumulative high-water marks and parent/child overlap handling. Totals survive closed sessions, bounded history and restarts; partial/unreported coverage is explicit and shared Todo telemetry is never summed. Bump the resource protocol to 17; update Desktop, Host, remote Server and CLI together and reload running Agent extensions.
+- 新增 Host 持久化项目 Token 账本：稳定来源去重、累计高水位和主子覆盖去重，关闭会话、裁剪历史、重启均不清零；明确标识部分及未上报用量，不将 Todo 共享遥测相加。桌面、Host、远端 Server 与 CLI 需同步更新至资源协议 18；运行中的 Agent 需重载更新后的扩展。
+- Add a durable Host-owned project token ledger with stable billing identities, cumulative high-water marks and parent/child overlap handling. Totals survive closed sessions, bounded history and restarts; partial/unreported coverage is explicit and shared Todo telemetry is never summed. Update Desktop, Host, remote Server and CLI together to resource protocol 18 and reload running Agent extensions.
 
 ## 0.3.13 - 2026-10-14
 
