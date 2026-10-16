@@ -18,7 +18,7 @@ pub const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
 
 #[derive(Debug)]
 pub enum AgentSnapshotEvent {
-    Update(AgentSnapshotUpdate),
+    Update(Box<AgentSnapshotUpdate>),
     Reset { host_epoch: u64 },
 }
 
@@ -53,12 +53,12 @@ impl AgentSnapshotClient {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .pop_front()
         {
-            return Some(AgentSnapshotEvent::Update(update));
+            return Some(AgentSnapshotEvent::Update(Box::new(update)));
         }
         loop {
             match self.events.recv_async().await.ok()? {
                 ClientEvent::AgentSnapshotUpdated(update) => {
-                    return Some(AgentSnapshotEvent::Update(*update));
+                    return Some(AgentSnapshotEvent::Update(update));
                 }
                 ClientEvent::AgentSnapshotsReset { host_epoch } => {
                     return Some(AgentSnapshotEvent::Reset { host_epoch });

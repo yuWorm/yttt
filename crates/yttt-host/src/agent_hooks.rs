@@ -1036,10 +1036,9 @@ fn ingest_request(
         if records
             .get(&address)
             .is_some_and(|record| record.scope != request.scope)
+            && let Some(previous) = records.remove(&address)
         {
-            if let Some(previous) = records.remove(&address) {
-                evicted_records.push(previous);
-            }
+            evicted_records.push(previous);
         }
         if !records.contains_key(&address) {
             if records.len() >= MAX_AGENT_RECORDS {

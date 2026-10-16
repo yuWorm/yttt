@@ -691,7 +691,7 @@ fn subject_total<'a>(
         .into_iter()
         .flatten()
         .fold(0_u64, |total, child| {
-            total.saturating_add(subject_total(*child, project, children, visited))
+            total.saturating_add(subject_total(child, project, children, visited))
         });
     if subject.includes_children {
         subject.tokens.max(descendants)

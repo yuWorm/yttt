@@ -141,8 +141,29 @@ Build packages on their native platforms with `scripts/build-macos-dmg.sh`,
 `scripts/build-windows-installer.ps1`, and `scripts/build-linux-tar.sh`. Prepare a release
 with `python3 scripts/prepare_release.py <version>` (or `--repair-current` when repairing
 an existing version section), then run `python3 scripts/test_release_tools.py`.
-Review the manifest, lockfile, changelog, and README before tagging; wait for the required
-validation workflow on the release commit. The tag workflow validates that exact tag before
-building and publishing packages, Server binaries, update metadata, and checksums.
+Review the manifest, lockfile, changelog, and README before tagging; wait for **Build**
+to succeed on the release commit on the default branch. Release reuses only a successful
+default-branch push Build for the exact same SHA; otherwise it runs full validation.
+All packages and Server binaries must succeed before publishing update metadata and checksums.
+
+CI restores a local `sccache` snapshot keyed by OS, architecture, toolchain, and lockfile.
+Only successful default-branch Build jobs save snapshots, with a 1 GiB disk limit and an
+upload size guard; PRs and tags are restore-only. No `target/`, incremental state, or
+downloaded source trees are uploaded. Debug/test symbols are disabled only in CI;
+release optimization settings and local development builds are unchanged. The three
+Build platforms use at most 3 GiB of uncompressed snapshots per dependency generation;
+older generations remain subject to GitHub's separate default 10 GiB repository cache
+limit and eviction. Do not raise the repository cache limit for this workflow.
+The first build is cold; cache hits do not eliminate linking or test execution.
+Linux ARM64 and Intel macOS Server builds have no matching default-branch cache writer.
+
+Release staging artifacts and smoke metrics expire after one day. After successful
+publication, a separate job deletes only that run's `release-*` staging artifacts,
+not GitHub Release assets. Failed releases retain staging artifacts for one day;
+after expiry, rerun all packaging jobs rather than only the failed publish job.
+Historical artifacts are not deleted automatically by this change. GitHub Free lists
+500 MB of artifact storage (shared with Packages), separately from the 10 GiB cache
+allowance; short retention does not guarantee an account-wide storage ceiling.
+See [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
 </details>

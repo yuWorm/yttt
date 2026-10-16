@@ -57,6 +57,12 @@ pub struct RemoteConnectCancellation {
     sender: tokio::sync::watch::Sender<bool>,
 }
 
+impl Default for RemoteConnectCancellation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RemoteConnectCancellation {
     pub fn new() -> Self {
         let (sender, _) = tokio::sync::watch::channel(false);

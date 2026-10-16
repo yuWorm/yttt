@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.15 - 2026-10-16
+
+- 本版同时交付未成功发布的 0.3.14 改动：本机与远端 Host 恢复、调度中心与持久化 Token 用量等，详见下方 0.3.14 条目。资源协议为 18，桌面、Host、远端 Server 与 CLI 需同步更新，并重载运行中的 Agent 扩展。
+- Also ship the changes from the unsuccessful 0.3.14 release, including local/remote Host recovery, Dispatch Center updates, and persisted token usage; see the 0.3.14 entries below. Resource protocol is 18: upgrade Desktop, Host, remote Server, and CLI together, and reload running Agent extensions.
+- 修复 Host、ClientCore、远程取消与 Agent 事件中的发布 Clippy 错误；Host epoch 状态以借用结构集中传递，实时快照保留现有 Box，保持换代清理语义。
+- Fix release Clippy errors in Host, ClientCore, remote cancellation, and Agent events; group borrowed epoch state and retain boxed live snapshots without changing reset behavior.
+- CI 引入每平台最多 1 GiB 的编译缓存，仅默认分支 Build 写入；发布复用同提交的成功 Build 验证。中转 artifact 保留 1 天，发布成功后删除本次中转副本，不影响正式 Release 附件。
+- Add bounded compiler caching with default-branch-only writes and exact-commit Build validation reuse. Expire staging artifacts after one day and delete the current run's staging copies after publication, preserving Release assets.
+
 ## 0.3.14 - 2026-10-16
 
 - 修复未连接远程时的错误恢复提示：Agent 观测时间戳不再标记工作区未发布；恢复入口按实际草稿、设置与可执行状态显示。恢复副本分版本保存，未处理内容不被覆盖，已确认发布的副本保留归档。

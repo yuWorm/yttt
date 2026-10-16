@@ -375,14 +375,16 @@ fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
 
     install_host_epoch(
         2,
-        &context.current_host_epoch,
-        &context.terminal_state,
-        &context.catalog,
-        &context.agent_snapshots,
-        &context.project_token_usage,
-        &context.deferred_terminal_events,
-        &context.control,
-        &context.events,
+        &HostEpochState {
+            current_host_epoch: &context.current_host_epoch,
+            terminal_state: &context.terminal_state,
+            catalog: &context.catalog,
+            agent_snapshots: &context.agent_snapshots,
+            project_token_usage: &context.project_token_usage,
+            deferred_terminal_events: &context.deferred_terminal_events,
+            profile_control: &context.control,
+            events: &context.events,
+        },
     );
     assert!(context.agent_snapshots.read().is_empty());
     assert!(context.terminal_state.read().mirrors.is_empty());

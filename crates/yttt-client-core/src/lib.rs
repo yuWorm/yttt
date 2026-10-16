@@ -642,17 +642,17 @@ async fn run_supervisor(
             }
         }
     };
-    install_host_epoch(
-        lanes.host.host_epoch,
-        &host_epoch,
-        &terminal_state,
-        &catalog,
-        &agent_snapshots,
-        &project_token_usage,
-        &deferred_terminal_events,
-        &profile_control,
-        &events,
-    );
+    let epoch_state = HostEpochState {
+        current_host_epoch: &host_epoch,
+        terminal_state: &terminal_state,
+        catalog: &catalog,
+        agent_snapshots: &agent_snapshots,
+        project_token_usage: &project_token_usage,
+        deferred_terminal_events: &deferred_terminal_events,
+        profile_control: &profile_control,
+        events: &events,
+    };
+    install_host_epoch(lanes.host.host_epoch, &epoch_state);
     identity.host_epoch_hint = Some(lanes.host.host_epoch);
     update_profile_control(
         &profile_control,
@@ -782,17 +782,7 @@ async fn run_supervisor(
             };
             let result = match result {
                 Ok(mut new_lanes) => {
-                    install_host_epoch(
-                        new_lanes.host.host_epoch,
-                        &host_epoch,
-                        &terminal_state,
-                        &catalog,
-                        &agent_snapshots,
-                        &project_token_usage,
-                        &deferred_terminal_events,
-                        &profile_control,
-                        &events,
-                    );
+                    install_host_epoch(new_lanes.host.host_epoch, &epoch_state);
                     if should_reacquire_local_control(
                         &local_control_recovery,
                         was_controller,
@@ -2158,17 +2148,28 @@ fn set_state(
     let _ = events.send(ClientEvent::Connection(next));
 }
 
-fn install_host_epoch(
-    next_host_epoch: u64,
-    current_host_epoch: &RwLock<Option<u64>>,
-    terminal_state: &RwLock<TerminalState>,
-    catalog: &RwLock<Option<Arc<ResourceCatalog>>>,
-    agent_snapshots: &RwLock<HashMap<String, AgentSnapshotUpdate>>,
-    project_token_usage: &RwLock<HashMap<String, ProjectTokenUsage>>,
-    deferred_terminal_events: &Mutex<HashMap<TerminalSessionId, HostEvent>>,
-    profile_control: &RwLock<Option<yttt_protocol::session::ControlStatus>>,
-    events: &broadcast::Sender<ClientEvent>,
-) {
+struct HostEpochState<'a> {
+    current_host_epoch: &'a RwLock<Option<u64>>,
+    terminal_state: &'a RwLock<TerminalState>,
+    catalog: &'a RwLock<Option<Arc<ResourceCatalog>>>,
+    agent_snapshots: &'a RwLock<HashMap<String, AgentSnapshotUpdate>>,
+    project_token_usage: &'a RwLock<HashMap<String, ProjectTokenUsage>>,
+    deferred_terminal_events: &'a Mutex<HashMap<TerminalSessionId, HostEvent>>,
+    profile_control: &'a RwLock<Option<yttt_protocol::session::ControlStatus>>,
+    events: &'a broadcast::Sender<ClientEvent>,
+}
+
+fn install_host_epoch(next_host_epoch: u64, state: &HostEpochState<'_>) {
+    let HostEpochState {
+        current_host_epoch,
+        terminal_state,
+        catalog,
+        agent_snapshots,
+        project_token_usage,
+        deferred_terminal_events,
+        profile_control,
+        events,
+    } = state;
     let mut current_host_epoch = current_host_epoch.write();
     match *current_host_epoch {
         Some(current) if current == next_host_epoch => {}

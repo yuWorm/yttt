@@ -134,7 +134,23 @@ cargo run -- /path/to/project
 `scripts/build-windows-installer.ps1` 或 `scripts/build-linux-tar.sh` 构建安装包。
 发布前运行 `python3 scripts/prepare_release.py <version>`；修复已有版本章节时使用
 `--repair-current`，然后运行 `python3 scripts/test_release_tools.py`。
-创建标签前检查清单、锁文件、更新日志与 README，并等待发布提交上的必需验证通过。
-标签工作流会再次验证该标签对应的提交，再构建并发布安装包、Server 程序、更新元数据与校验和。
+创建标签前检查清单、锁文件、更新日志与 README，并等待默认分支上发布提交的 **Build** 成功。
+Release 只复用同一 SHA、默认分支 push 触发且已成功的 Build；否则完整执行验证。
+所有安装包与 Server 构建成功后，才发布更新元数据与校验和。
+
+CI 使用按系统、架构、工具链及锁文件区分的本地 `sccache` 快照。
+只有成功的默认分支 Build 写缓存：磁盘上限 1 GiB，上传前再次检查大小；PR 和标签只读取。
+不上传 `target/`、增量编译状态或下载的依赖源码。仅 CI 关闭 debug/test 调试符号，
+不修改 release 优化设置及本地开发配置。三个 Build 平台每代依赖的未压缩快照合计不超过 3 GiB；
+旧代缓存仍受 GitHub 默认每仓库 10 GiB 的独立缓存额度及淘汰策略约束，不要为此提高仓库缓存上限。
+第一次仍是冷构建；命中缓存也不能省掉链接和测试执行。Linux ARM64、Intel macOS Server
+没有对应的默认分支缓存写入任务。
+
+发布中转 artifact 和冒烟指标保留 1 天。发布成功后，独立任务只删除本次运行的 `release-*`
+中转 artifact，不删除正式 Release 附件。失败发布的中转包保留 1 天；
+过期后需重跑全部打包任务，不能只重跑 publish。此改动不会自动删除历史 artifact。
+GitHub Free 列出的 artifact 额度为 500 MB（与 Packages 共享），与 10 GiB 缓存额度分开；
+缩短保留期不等于保证整个账户永远低于额度。
+参见 [GitHub Actions 计费说明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
 
 </details>

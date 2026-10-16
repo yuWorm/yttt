@@ -1,0 +1,33 @@
+name: Bounded Rust compiler cache
+description: Restore a 1 GiB compiler cache; only default-branch Build jobs save it.
+outputs:
+  key:
+    description: Immutable snapshot key
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+  hit:
+    description: Whether the exact snapshot already exists
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Configure compiler cache
+      shell: bash
+      run: |
+        echo "SCCACHE_DIR=$RUNNER_TEMP/yttt-sccache" >> "$GITHUB_ENV"
+        echo 'SCCACHE_CACHE_SIZE=1G' >> "$GITHUB_ENV"
+        echo 'CARGO_INCREMENTAL=0' >> "$GITHUB_ENV"
+        echo 'CARGO_PROFILE_DEV_DEBUG=0' >> "$GITHUB_ENV"
+        echo 'CARGO_PROFILE_TEST_DEBUG=0' >> "$GITHUB_ENV"
+        echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+    - name: Restore compiler cache
+      id: restore
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/yttt-sccache
+        key: yttt-sccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+        restore-keys: |
+          yttt-sccache-v1-${{ runner.os }}-${{ runner.arch }}-
+    - name: Install compiler cache
+      uses: mozilla-actions/sccache-action@v0.0.11
+      with:
+        version: v0.16.0

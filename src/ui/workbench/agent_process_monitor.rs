@@ -35,7 +35,7 @@ impl WorkbenchView {
                         .update_in(cx, |view, window, cx| {
                             let changed = match event {
                                 AgentSnapshotEvent::Update(update) => {
-                                    view.apply_host_agent_snapshot(update, window, cx)
+                                    view.apply_host_agent_snapshot(*update, window, cx)
                                 }
                                 AgentSnapshotEvent::Reset { host_epoch } => {
                                     view.reset_host_agent_epoch(host_epoch)

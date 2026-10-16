@@ -47,6 +47,10 @@ jobs:
           rustup show active-toolchain
           rustup target add "${{ matrix.target }}"
 
+      - name: Restore bounded Rust compiler cache
+        id: rust-cache
+        uses: ./.github/actions/rust-cache
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -117,6 +121,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-reopen-smoke
+          retention-days: 1
           path: |
             target/package-smoke/reopen-smoke/summary.json
             target/package-smoke/reopen-smoke/**/run.json
@@ -197,5 +202,29 @@ jobs:
               throw "Inno Setup smoke uninstall failed with exit code $($uninstall.ExitCode)"
             }
           }
+
+      - name: Flush and enforce compiler cache size limit
+        id: cache-size
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        shell: bash
+        run: |
+          sccache --stop-server
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          cache = Path(os.environ["SCCACHE_DIR"])
+          size = sum(path.stat().st_size for path in cache.rglob("*") if path.is_file())
+          cacheable = size <= 1024 ** 3
+          print(f"Compiler cache: {size} bytes; upload allowed: {cacheable}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"cacheable={str(cacheable).lower()}\n")
+          PY
+
+      - name: Save compiler cache from default branch only
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.rust-cache.outputs.hit != 'true' && steps.cache-size.outputs.cacheable == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/yttt-sccache
+          key: ${{ steps.rust-cache.outputs.key }}
 
 

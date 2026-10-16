@@ -13,6 +13,11 @@ on:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -24,6 +29,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       ref: ${{ steps.version.outputs.ref }}
+      validated: ${{ steps.build.outputs.result }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@v7
@@ -51,19 +57,64 @@ jobs:
             --validate-changelog-only
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ref=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$head_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Find successful default-branch Build for this exact commit
+        id: build
+        uses: actions/github-script@v8
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: 'build.yml',
+              head_sha: process.env.RELEASE_SHA,
+              branch: context.payload.repository.default_branch,
+              event: 'push', status: 'success', per_page: 1,
+            });
+            const run = data.workflow_runs.find(run =>
+              run.head_sha === process.env.RELEASE_SHA &&
+              run.head_repository?.full_name === `${owner}/${repo}` &&
+              run.conclusion === 'success'
+            );
+            core.info(run ? `Reusing successful Build: ${run.html_url}` : 'Running full release validation');
+            return Boolean(run);
+
   validation:
     name: Validation
     needs: metadata
+    if: needs.metadata.outputs.validated != 'true'
     uses: ./.github/workflows/validation.yml
     with:
       ref: ${{ needs.metadata.outputs.ref }}
 
+  validation-gate:
+    name: Require validated release commit
+    if: ${{ !cancelled() }}
+    needs: [metadata, validation]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require fresh validation or exact-commit Build success
+        env:
+          METADATA_RESULT: ${{ needs.metadata.result }}
+          REUSED_BUILD: ${{ needs.metadata.outputs.validated }}
+          VALIDATION_RESULT: ${{ needs.validation.result }}
+        run: |
+          test "$METADATA_RESULT" = success
+          if [ "$REUSED_BUILD" = true ]; then
+            test "$VALIDATION_RESULT" = skipped
+          else
+            test "$VALIDATION_RESULT" = success
+          fi
+
 
   macos:
     name: Package macOS DMG
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
     needs:
       - metadata
-      - validation
+      - validation-gate
     runs-on: macos-15
     steps:
       - name: Check out release tag
@@ -77,6 +128,9 @@ jobs:
           rustup show active-toolchain
           rustup target add aarch64-apple-darwin
 
+      - name: Restore bounded Rust compiler cache
+        uses: ./.github/actions/rust-cache
+
       - name: Build DMG
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
@@ -86,14 +140,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-macos
+          retention-days: 1
           path: dist/*.dmg
           if-no-files-found: error
 
   windows:
     name: Package Windows installer
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
     needs:
       - metadata
-      - validation
+      - validation-gate
     runs-on: windows-2025
     steps:
       - name: Check out release tag
@@ -106,6 +162,9 @@ jobs:
         run: |
           rustup show active-toolchain
           rustup target add x86_64-pc-windows-msvc
+
+      - name: Restore bounded Rust compiler cache
+        uses: ./.github/actions/rust-cache
 
       - name: Install Inno Setup
         shell: powershell
@@ -121,14 +180,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-windows
+          retention-days: 1
           path: dist/*.exe
           if-no-files-found: error
 
   linux:
     name: Package Linux tarball
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
     needs:
       - metadata
-      - validation
+      - validation-gate
     runs-on: ubuntu-24.04
     steps:
       - name: Check out release tag
@@ -141,6 +202,9 @@ jobs:
         run: |
           rustup show active-toolchain
           rustup target add x86_64-unknown-linux-gnu
+
+      - name: Restore bounded Rust compiler cache
+        uses: ./.github/actions/rust-cache
 
       - name: Install Linux build dependencies
         run: |
@@ -174,14 +238,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-linux
+          retention-days: 1
           path: dist/*.tar.gz
           if-no-files-found: error
 
   server:
     name: Package headless Server (${{ matrix.platform }}-${{ matrix.arch }})
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
     needs:
       - metadata
-      - validation
+      - validation-gate
     strategy:
       fail-fast: false
       matrix:
@@ -203,6 +269,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.metadata.outputs.ref }}
+      - name: Activate pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Restore bounded Rust compiler cache
+        uses: ./.github/actions/rust-cache
       - name: Build headless Server
         run: cargo build --locked --release -p yttt-server
       - name: Package Server binary
@@ -216,14 +286,16 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: release-server-${{ matrix.platform }}-${{ matrix.arch }}
+          retention-days: 1
           path: dist/yttt-server-*
           if-no-files-found: error
 
   publish:
     name: Publish GitHub release
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.server.result == 'success' }}
     needs:
       - metadata
-      - validation
+      - validation-gate
       - macos
       - windows
       - linux
@@ -275,3 +347,24 @@ jobs:
             --latest \
             --title "$RELEASE_TAG" \
             --notes-file release-notes.md
+
+  cleanup:
+    name: Delete published staging artifacts
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Delete only this run's release staging artifacts
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner, repo, run_id: context.runId, per_page: 100,
+            });
+            for (const artifact of artifacts.filter(a => a.name.startsWith('release-'))) {
+              await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: artifact.id });
+              core.info(`Deleted staging artifact ${artifact.name}; Release assets are unchanged`);
+            }
