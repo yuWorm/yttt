@@ -10,6 +10,8 @@
 - Fix macOS release validation by removing the global Cargo target override so the development bundle finds the native debug executable; retain bounded compiler caching and staging artifact cleanup.
 - 修复终端替换启动竞态：旧会话退出与延迟移除事件不再清掉新会话视图，启动响应后补齐已到达的退出状态。恢复测试等待完整启动标记，并区分 PTY 关闭换行与用户输入。
 - Fix terminal replacement races: stale exit and removal events no longer clear the new viewport, and reconcile early process exits after the start reply. Recovery tests wait for complete startup markers and distinguish PTY shutdown newlines from user input.
+- 修复 Host 滚动往返测试的时序前提：等待输出完成与足够历史行后再断言精确滚动位置，避免将正常的边界截断误判为失败。
+- Fix the Host scroll round-trip test's readiness barrier: wait for completed output and sufficient history before asserting the exact offset, rather than mistaking valid boundary clamping for a failure.
 
 ## 0.3.15 - 2026-10-16
 

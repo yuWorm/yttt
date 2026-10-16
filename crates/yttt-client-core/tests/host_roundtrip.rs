@@ -2270,6 +2270,7 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
                 "printf '\\033]2;host-title\\007%s\\nready\\n' \"$YTTT_HOST_TEST\"; ",
                 "IFS= read -r line; printf 'input:%s\\n' \"$line\"; sleep 1; ",
                 "i=1; while [ \"$i\" -le 80 ]; do printf 'line-%s\\n' \"$i\"; i=$((i+1)); done; ",
+                "printf '\\033]2;host-output-complete\\007'; ",
                 "sleep 30"
             )
             .to_string(),
@@ -2399,7 +2400,11 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
         loop {
             if client
                 .terminal_snapshot(&session_id)
-                .is_some_and(|viewport| viewport.geometry == resized && viewport.history_size > 0)
+                .is_some_and(|viewport| {
+                    viewport.geometry == resized
+                        && viewport.history_size >= 5
+                        && viewport.modes.title.as_deref() == Some("host-output-complete")
+                })
             {
                 break;
             }
