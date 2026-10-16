@@ -21,7 +21,10 @@ use yttt_ui::primitives::{
 };
 
 use crate::{
-    remote_host::{RemoteConnectEvent, RemoteConnectStatus, RemoteControlOwner, RemoteEnvironment},
+    remote_host::{
+        RemoteConnectCancellation, RemoteConnectEvent, RemoteConnectStatus, RemoteControlOwner,
+        RemoteEnvironment,
+    },
     remote_launch::RemoteLaunch,
 };
 
@@ -85,6 +88,7 @@ struct RemoteConnectView {
     replacement_credentials: Option<gpui::Entity<gpui_component::input::InputState>>,
     remember_replacement: bool,
     event_sender: Option<flume::Sender<RemoteConnectEvent>>,
+    cancellation: Option<RemoteConnectCancellation>,
 }
 
 enum ConnectPrompt {
@@ -138,6 +142,7 @@ impl RemoteConnectView {
             replacement_credentials: None,
             remember_replacement: false,
             event_sender: None,
+            cancellation: None,
         }
     }
 
@@ -208,6 +213,8 @@ impl RemoteConnectView {
         self.status_detail = None;
         let (events, receiver) = flume::unbounded();
         self.event_sender = Some(events.clone());
+        let cancellation = RemoteConnectCancellation::new();
+        self.cancellation = Some(cancellation.clone());
         let launch = self.launch.clone();
         let connect = cx.background_executor().spawn(async move {
             if let Some((credential_id, secret)) = host_credential {
@@ -217,7 +224,7 @@ impl RemoteConnectView {
                     &secret,
                 )?;
             }
-            crate::remote_host::connect(launch, events)
+            crate::remote_host::connect(launch, events, cancellation)
         });
 
         self.listen_for_events(receiver, cx);
@@ -471,6 +478,9 @@ impl RemoteConnectView {
         }
         self.cancelled = true;
         self.connecting = false;
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
+        }
         self.reject_prompts();
         if cx.has_global::<crate::remote_restore::RemoteRestoreGlobal>()
             && let Err(error) = cx

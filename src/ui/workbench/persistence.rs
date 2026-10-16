@@ -104,7 +104,7 @@ pub(super) struct WorkspacePersistenceState {
     host_close_confirmed: bool,
     last_error: Option<String>,
     resource_loss_message: Option<String>,
-    recoverable_draft_path: Option<PathBuf>,
+    recovery: Option<WorkspaceRecovery>,
     pending_settings_recovery: Option<PendingSettingsRecovery>,
     recovered_settings_recovery: Option<PendingSettingsRecovery>,
 }
@@ -135,7 +135,7 @@ impl Default for WorkspacePersistenceState {
             pending_editor_snapshot: None,
             last_error: None,
             resource_loss_message: None,
-            recoverable_draft_path: None,
+            recovery: None,
             pending_settings_recovery: None,
             recovered_settings_recovery: None,
             close_flush_requested: false,
@@ -294,6 +294,31 @@ struct RecoverableDraftContent {
     content: Vec<u8>,
 }
 
+struct WorkspaceRecovery {
+    path: PathBuf,
+    snapshot: serde_json::Value,
+    draft_projects: HashSet<ProjectId>,
+    pending_settings: Option<PendingSettingsRecovery>,
+}
+
+impl WorkspaceRecovery {
+    fn new(path: PathBuf, draft: RecoverableWorkspaceDraft) -> Self {
+        let draft_projects = draft.snapshot["documents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|document| document["draft_ref"].is_object())
+            .filter_map(|document| document["project_id"].as_str().map(ProjectId::new))
+            .collect();
+        Self {
+            path,
+            snapshot: draft.snapshot,
+            draft_projects,
+            pending_settings: draft.pending_settings,
+        }
+    }
+}
+
 struct PreparedRemoteRestore {
     snapshot: RemoteWorkspaceSnapshot,
     server_snapshot: serde_json::Value,
@@ -401,26 +426,43 @@ impl WorkbenchView {
         {
             self.workspace_persistence.recovered_settings_recovery = None;
         }
-        let Some(path) = self.workspace_persistence.recoverable_draft_path.clone() else {
+        let Some(path) = self
+            .workspace_persistence
+            .recovery
+            .as_ref()
+            .map(|recovery| recovery.path.clone())
+        else {
             return;
         };
+        let update_path = path.clone();
         let task = cx.background_spawn(async move {
-            let mut draft = load_recoverable_workspace_draft(&path)?;
+            let mut draft = load_recoverable_workspace_draft(&update_path)?;
             if draft.pending_settings.as_ref() == Some(&recovery) {
                 draft.pending_settings = None;
-                save_recoverable_workspace_draft(&path, &draft)?;
+                save_recoverable_workspace_draft(&update_path, &draft)?;
+                return Ok(true);
             }
-            Ok::<_, String>(())
+            Ok::<_, String>(false)
         });
         cx.spawn(async move |this, cx| {
-            if let Err(error) = task.await {
-                let _ = this.update(cx, |root, cx| {
-                    root.set_workspace_persistence_error(format!(
+            let result = task.await;
+            let _ = this.update(cx, |root, cx| {
+                match result {
+                    Ok(true) => {
+                        if let Some(recovery) = root.workspace_persistence.recovery.as_mut()
+                            && recovery.path == path
+                        {
+                            recovery.pending_settings = None;
+                        }
+                        root.retire_confirmed_workspace_recovery();
+                    }
+                    Ok(false) => {}
+                    Err(error) => root.set_workspace_persistence_error(format!(
                         "Device-private settings recovery could not be cleared: {error}"
-                    ));
-                    cx.notify();
-                });
-            }
+                    )),
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -432,6 +474,89 @@ impl WorkbenchView {
             .recovered_settings_recovery
             .take()
             .map(|recovery| (recovery.candidate, recovery.confirmed))
+    }
+
+    fn can_recover_device_drafts(&self) -> bool {
+        matches!(
+            self.workspace_persistence.mode,
+            WorkspacePersistenceMode::Active | WorkspacePersistenceMode::Observer
+        ) && !self.workspace_persistence.control_request_in_flight
+            && !self.workspace_persistence.commit_in_flight
+            && self.workspace_persistence.pending_document_restores == 0
+            && self
+                .workspace_persistence
+                .recovery
+                .as_ref()
+                .is_some_and(|recovery| {
+                    recovery.pending_settings.is_some()
+                        || recovery
+                            .draft_projects
+                            .iter()
+                            .any(|id| self.workspace.project(id).is_some())
+                })
+    }
+
+    fn can_recover_full_workspace(
+        &self,
+        runtime: &crate::host_runtime::DesktopHostRuntime,
+        cx: &Context<Self>,
+    ) -> bool {
+        runtime.shared_editing_enabled()
+            && matches!(
+                self.workspace_persistence.mode,
+                WorkspacePersistenceMode::Active | WorkspacePersistenceMode::RestoreFailed
+            )
+            && !self.workspace_persistence.control_request_in_flight
+            && !self.workspace_persistence.commit_in_flight
+            && self.workspace_persistence.pending_document_restores == 0
+            && self
+                .workspace_persistence
+                .recovery
+                .as_ref()
+                .is_some_and(|recovery| {
+                    !self.has_unpublished_workspace_snapshot(cx)
+                        || (self.workspace_persistence.mode
+                            == WorkspacePersistenceMode::RestoreFailed
+                            && (self.workspace_persistence.revision.is_none()
+                                || self.build_remote_workspace_snapshot(cx).is_ok_and(
+                                    |(snapshot, _)| {
+                                        workspace_snapshots_match(&snapshot, &recovery.snapshot)
+                                    },
+                                ))
+                            && (self
+                                .workspace_persistence
+                                .pending_settings_recovery
+                                .is_none()
+                                || self.workspace_persistence.pending_settings_recovery
+                                    == recovery.pending_settings))
+                })
+    }
+
+    fn retire_confirmed_workspace_recovery(&mut self) {
+        let Some(recovery) = self.workspace_persistence.recovery.as_ref() else {
+            return;
+        };
+        if recovery.pending_settings.is_some()
+            || !self.workspace_snapshot_is_published(&recovery.snapshot)
+        {
+            return;
+        }
+        if let Err(error) = archive_recoverable_workspace_draft(&recovery.path) {
+            self.set_workspace_persistence_error(error);
+            return;
+        }
+        self.workspace_persistence.recovery = None;
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return;
+        };
+        if let Some(id) = self
+            .workspace_persistence
+            .view
+            .as_ref()
+            .map(|view| view.id().clone())
+        {
+            self.discover_recoverable_workspace_draft(&runtime, &id);
+        }
     }
 
     pub(super) fn profile_control_banner(&self, cx: &mut Context<Self>) -> Div {
@@ -460,7 +585,7 @@ impl WorkbenchView {
             self.ui_text.get(UiTextKey::ProfileControlRestoreFailed)
         } else if self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost {
             self.ui_text.get(UiTextKey::ProfileControlLost)
-        } else if self.workspace_persistence.recoverable_draft_path.is_some() {
+        } else if self.workspace_persistence.recovery.is_some() {
             self.ui_text
                 .get(UiTextKey::RemoteDeviceDraftRecoveryAvailable)
         } else if status.transfer.is_some() {
@@ -519,7 +644,7 @@ impl WorkbenchView {
                 ),
             );
         }
-        if self.workspace_persistence.recoverable_draft_path.is_some() {
+        if self.can_recover_device_drafts() {
             banner = banner.child(
                 yttt_button(
                     "recover-device-drafts",
@@ -533,6 +658,8 @@ impl WorkbenchView {
                     root.restore_recoverable_workspace_drafts(window, cx)
                 })),
             );
+        }
+        if self.can_recover_full_workspace(&runtime, cx) {
             banner = banner.child(
                 yttt_button(
                     "recover-full-workspace",
@@ -642,12 +769,12 @@ impl WorkbenchView {
                         .ok_or("Workspace is unavailable")?
                         .id();
                     let scope = recoverable_workspace_scope(runtime, workspace_id)?;
-                    let path = root
+                    let recovery = root
                         .workspace_persistence
-                        .recoverable_draft_path
+                        .recovery
                         .as_ref()
                         .ok_or("No saved recovery workspace")?;
-                    let draft = load_recoverable_workspace_draft(path)?;
+                    let draft = load_recoverable_workspace_draft(&recovery.path)?;
                     root.restore_saved_workspace(draft, scope, window, cx)
                 })();
                 if let Err(error) = result {
@@ -668,10 +795,17 @@ impl WorkbenchView {
     ) -> Result<(), String> {
         if self.workspace_persistence.commit_in_flight
             || self.workspace_persistence.control_request_in_flight
+            || self.workspace_persistence.pending_document_restores != 0
         {
             return Err(
                 "Wait for the current workspace operation before restoring saved recovery".into(),
             );
+        }
+        if !matches!(
+            self.workspace_persistence.mode,
+            WorkspacePersistenceMode::Active | WorkspacePersistenceMode::RestoreFailed
+        ) {
+            return Err("Reconcile the Host workspace before restoring saved recovery".into());
         }
         let current = self.build_remote_workspace_snapshot(cx);
         let unpublished = self
@@ -679,14 +813,14 @@ impl WorkbenchView {
             .pending_settings_recovery
             .is_some()
             || current.as_ref().map_or(true, |(snapshot, _)| {
-                self.workspace_persistence.last_committed_snapshot.as_ref() != Some(snapshot)
+                !self.workspace_snapshot_is_published(snapshot)
             });
         let replaces_failed_restore = self.workspace_persistence.mode
             == WorkspacePersistenceMode::RestoreFailed
             && (self.workspace_persistence.revision.is_none()
-                || current
-                    .as_ref()
-                    .is_ok_and(|(snapshot, _)| *snapshot == draft.snapshot))
+                || current.as_ref().is_ok_and(|(snapshot, _)| {
+                    workspace_snapshots_match(snapshot, &draft.snapshot)
+                }))
             && (self
                 .workspace_persistence
                 .pending_settings_recovery
@@ -973,7 +1107,7 @@ impl WorkbenchView {
             let preserves_local_drafts = self.workspace_persistence.mode
                 == WorkspacePersistenceMode::Active
                 || (self.workspace_persistence.mode == WorkspacePersistenceMode::Observer
-                    && self.workspace_persistence.recoverable_draft_path.is_some());
+                    && self.workspace_persistence.recovery.is_some());
             if preserves_local_drafts {
                 let unpublished = self.has_unpublished_workspace_snapshot(cx);
                 self.workspace_persistence.pending_commit = None;
@@ -982,7 +1116,7 @@ impl WorkbenchView {
                     self.preserve_unpublished_workspace_drafts(
                         &runtime,
                         &workspace_id,
-                        if self.workspace_persistence.recoverable_draft_path.is_some() {
+                        if self.workspace_persistence.recovery.is_some() {
                             "Recovered Device-private drafts remain local while this Client observes"
                         } else {
                             "Host control was forced to another Client"
@@ -1077,9 +1211,8 @@ impl WorkbenchView {
                     .workspace_persistence
                     .pending_settings_recovery
                     .is_none()
-                && publication.is_ok_and(|snapshot| {
-                    self.workspace_persistence.last_committed_snapshot.as_ref() == Some(&snapshot.0)
-                })
+                && publication
+                    .is_ok_and(|snapshot| self.workspace_snapshot_is_published(&snapshot.0))
                 && !self.workspace_persistence.commit_in_flight
                 && self.workspace_persistence.pending_commit.is_none();
             if let Some(view) = &self.workspace_persistence.view {
@@ -1267,7 +1400,7 @@ impl WorkbenchView {
                     Ok(Some(prepared))
                         if root.workspace_persistence.revision.is_none() || !preserve_local
                             || root.build_remote_workspace_snapshot(cx).is_ok_and(|snapshot| {
-                                snapshot.0 == prepared.server_snapshot
+                                workspace_snapshots_match(&snapshot.0, &prepared.server_snapshot)
                             }) =>
                     {
                         root.install_remote_workspace_restore(prepared, window, cx);
@@ -1399,6 +1532,7 @@ impl WorkbenchView {
         self.workspace_persistence.last_committed_snapshot = Some(prepared.server_snapshot);
         self.workspace_persistence.pending_commit = None;
         self.clear_workspace_persistence_error();
+        self.retire_confirmed_workspace_recovery();
         self.workspace_persistence.pending_document_restores = prepared.snapshot.documents.len();
         self.workspace_persistence.pending_editor_snapshot = Some(prepared.snapshot.editor.clone());
         self.workspace_persistence.mode = WorkspacePersistenceMode::Restoring;
@@ -1657,6 +1791,12 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.workspace_persistence.control_request_in_flight
+            || self.workspace_persistence.commit_in_flight
+            || self.workspace_persistence.pending_document_restores != 0
+        {
+            return;
+        }
         if !matches!(
             self.workspace_persistence.mode,
             WorkspacePersistenceMode::Active | WorkspacePersistenceMode::Observer
@@ -1666,7 +1806,12 @@ impl WorkbenchView {
             );
             return;
         }
-        let Some(path) = self.workspace_persistence.recoverable_draft_path.clone() else {
+        let Some(path) = self
+            .workspace_persistence
+            .recovery
+            .as_ref()
+            .map(|recovery| recovery.path.clone())
+        else {
             return;
         };
         let Some(runtime) = self.terminal.host_runtime.clone() else {
@@ -1771,12 +1916,12 @@ impl WorkbenchView {
             self.spawn_remote_document_restore(document, window, cx);
             recovered += 1;
         }
-        if recovered == 0 {
+        if recovered == 0 && settings_recovery.is_none() {
             self.set_workspace_persistence_error(
                 "No Device-private drafts match projects currently open from this Host workspace"
                     .to_string(),
             );
-        } else {
+        } else if recovered != 0 {
             self.set_workspace_persistence_error(format!(
                 "Recovering {recovered} Device-private draft{} without replacing the Host workspace{}",
                 if recovered == 1 { "" } else { "s" },
@@ -1819,26 +1964,46 @@ impl WorkbenchView {
                 return;
             }
         };
-        if !path.exists() {
-            return;
-        }
-        match load_recoverable_workspace_draft(&path) {
-            Ok(draft) if draft.scope == scope => {
-                self.workspace_persistence.recovered_settings_recovery =
-                    draft.pending_settings.clone();
-                self.workspace_persistence.recoverable_draft_path = Some(path);
-            }
-            Ok(_) => {
-                self.set_workspace_persistence_error(
-                    "Local draft recovery scope does not match this Host workspace".to_string(),
-                );
-            }
+        let paths = match recoverable_workspace_draft_files(&path) {
+            Ok(paths) => paths,
             Err(error) => {
                 self.set_workspace_persistence_error(format!(
-                    "Local draft recovery could not be read: {error}"
+                    "Local draft recovery could not be listed: {error}"
                 ));
+                return;
+            }
+        };
+        self.workspace_persistence.recovery = None;
+        for path in paths {
+            match load_recoverable_workspace_draft(&path) {
+                Ok(draft) if draft.scope == scope => {
+                    if draft.pending_settings.is_none()
+                        && self.workspace_snapshot_is_published(&draft.snapshot)
+                    {
+                        if let Err(error) = archive_recoverable_workspace_draft(&path) {
+                            self.set_workspace_persistence_error(error);
+                            return;
+                        }
+                        continue;
+                    }
+                    self.workspace_persistence.recovery = Some(WorkspaceRecovery::new(path, draft));
+                    return;
+                }
+                Ok(_) => self.set_workspace_persistence_error(
+                    "Local draft recovery scope does not match this Host workspace".to_string(),
+                ),
+                Err(error) => self.set_workspace_persistence_error(format!(
+                    "Local draft recovery could not be read: {error}"
+                )),
             }
         }
+    }
+
+    fn workspace_snapshot_is_published(&self, snapshot: &serde_json::Value) -> bool {
+        self.workspace_persistence
+            .last_committed_snapshot
+            .as_ref()
+            .is_some_and(|published| workspace_snapshots_match(published, snapshot))
     }
 
     fn has_unpublished_workspace_snapshot(&self, cx: &Context<Self>) -> bool {
@@ -1848,7 +2013,7 @@ impl WorkbenchView {
             || self
                 .build_remote_workspace_snapshot(cx)
                 .map_or(true, |snapshot| {
-                    self.workspace_persistence.last_committed_snapshot.as_ref() != Some(&snapshot.0)
+                    !self.workspace_snapshot_is_published(&snapshot.0)
                 })
     }
 
@@ -1868,6 +2033,27 @@ impl WorkbenchView {
                 return false;
             }
         };
+        if self
+            .workspace_persistence
+            .pending_settings_recovery
+            .is_none()
+            && self.workspace_snapshot_is_published(&snapshot)
+        {
+            return true;
+        }
+        if self
+            .workspace_persistence
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| {
+                workspace_snapshots_match(&recovery.snapshot, &snapshot)
+                    && recovery.pending_settings
+                        == self.workspace_persistence.pending_settings_recovery
+                    && recovery.path.is_file()
+            })
+        {
+            return true;
+        }
         let path = match recoverable_workspace_draft_path(&self.config_paths, runtime, workspace_id)
         {
             Ok(Some(path)) => path,
@@ -1907,9 +2093,12 @@ impl WorkbenchView {
                 .collect(),
             pending_settings: self.workspace_persistence.pending_settings_recovery.clone(),
         };
-        match save_recoverable_workspace_draft(&path, &draft) {
-            Ok(()) => {
-                self.workspace_persistence.recoverable_draft_path = Some(path);
+        match preserve_recoverable_workspace_draft(&path, &draft) {
+            Ok(saved_path) => {
+                if self.workspace_persistence.recovery.is_none() {
+                    self.workspace_persistence.recovery =
+                        Some(WorkspaceRecovery::new(saved_path, draft));
+                }
                 self.set_workspace_persistence_error(format!(
                     "{reason}; unpublished edits were saved to Device-private recovery storage and will not replace the Host workspace automatically"
                 ));
@@ -2082,7 +2271,7 @@ impl WorkbenchView {
         };
         if !self.workspace_persistence.commit_in_flight
             && self.workspace_persistence.pending_commit.is_none()
-            && self.workspace_persistence.last_committed_snapshot.as_ref() == Some(&current.0)
+            && self.workspace_snapshot_is_published(&current.0)
         {
             self.close_published_workspace(window, cx);
             return false;
@@ -2138,7 +2327,7 @@ impl WorkbenchView {
             }
         };
         if self.workspace_persistence.pending_commit.is_none()
-            && self.workspace_persistence.last_committed_snapshot.as_ref() == Some(&current.0)
+            && self.workspace_snapshot_is_published(&current.0)
         {
             self.workspace_persistence.close_flush_requested = false;
             self.close_published_workspace(window, cx);
@@ -2296,7 +2485,7 @@ impl WorkbenchView {
                     return;
                 }
             };
-            if self.workspace_persistence.last_committed_snapshot.as_ref() == Some(&snapshot) {
+            if self.workspace_snapshot_is_published(&snapshot) {
                 return;
             }
             let bytes = match serde_json::to_vec(&snapshot) {
@@ -2438,6 +2627,7 @@ impl WorkbenchView {
                                 Some(snapshot.into_value());
                             root.workspace_persistence.pending_commit = None;
                             root.clear_workspace_persistence_error();
+                            root.retire_confirmed_workspace_recovery();
                         }
                         Ok(response) => {
                             root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
@@ -2682,6 +2872,34 @@ impl WorkbenchView {
     }
 }
 
+// Observation timestamps describe Host liveness, not an unpublished workspace edit.
+// Keep substantive Agent/session metadata and every layout/document field comparable.
+fn workspace_snapshots_match(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    fn matches(left: &serde_json::Value, right: &serde_json::Value, agent: bool) -> bool {
+        match (left, right) {
+            (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+                left.iter().all(|(key, value)| {
+                    (agent && key == "updated_at")
+                        || right
+                            .get(key)
+                            .is_some_and(|other| matches(value, other, key == "agent_snapshot"))
+                }) && right
+                    .keys()
+                    .all(|key| (agent && key == "updated_at") || left.contains_key(key))
+            }
+            (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(left, right)| matches(left, right, false))
+            }
+            _ => left == right,
+        }
+    }
+    matches(left, right, false)
+}
+
 fn remove_load_message(load_error: Option<String>, message: &str) -> Option<String> {
     let error = load_error?;
     if error == message {
@@ -2743,13 +2961,93 @@ fn recoverable_workspace_draft_file(root: &Path, scope: &RecoverableWorkspaceSco
     root.join("draft-recovery").join(format!("{digest}.json"))
 }
 
+fn recoverable_workspace_draft_files(base: &Path) -> io::Result<Vec<PathBuf>> {
+    let Some(parent) = base.parent() else {
+        return Ok(Vec::new());
+    };
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let stem = base
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let prefix = format!("{stem}-");
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path != base && !(name.starts_with(&prefix) && name.ends_with(".json")) {
+            continue;
+        }
+        if entry.file_type()?.is_file() {
+            files.push((entry.metadata()?.modified()?, path));
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    Ok(files.into_iter().map(|(_, path)| path).collect())
+}
+
+fn preserve_recoverable_workspace_draft(
+    base: &Path,
+    draft: &RecoverableWorkspaceDraft,
+) -> Result<PathBuf, String> {
+    let stem = base
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or("Local recovery file has no valid identity")?;
+    let path = base.with_file_name(format!("{stem}-{}.json", uuid::Uuid::new_v4()));
+    let source = serde_json::to_vec(draft)
+        .map_err(|error| format!("could not encode local recovery drafts: {error}"))?;
+    write_device_private_file(&path, &source, false)
+        .map_err(|error| format!("could not preserve {}: {error}", path.display()))?;
+    Ok(path)
+}
+
+fn archive_recoverable_workspace_draft(path: &Path) -> Result<(), String> {
+    let archive = || -> io::Result<()> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| io::Error::other("recovery has no directory"))?;
+        let history = parent.join("resolved");
+        fs::create_dir_all(&history)?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| io::Error::other("recovery has no filename"))?;
+        let destination = history.join(name);
+        let destination = if destination.try_exists()? {
+            history.join(format!(
+                "{}-{}",
+                uuid::Uuid::new_v4(),
+                name.to_string_lossy()
+            ))
+        } else {
+            destination
+        };
+        // Publish without replacing an earlier archive, including legacy fixed-name backups.
+        fs::hard_link(path, &destination)?;
+        fs::remove_file(path)?;
+        #[cfg(unix)]
+        {
+            fs::File::open(&history)?.sync_all()?;
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    };
+    archive().map_err(|error| format!("could not archive confirmed recovery: {error}"))
+}
+
 fn save_recoverable_workspace_draft(
     path: &Path,
     draft: &RecoverableWorkspaceDraft,
 ) -> Result<(), String> {
     let source = serde_json::to_vec(draft)
         .map_err(|error| format!("could not encode local recovery drafts: {error}"))?;
-    write_device_private_file(path, &source)
+    write_device_private_file(path, &source, true)
         .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
@@ -2804,7 +3102,7 @@ fn load_recoverable_workspace_draft(path: &Path) -> Result<RecoverableWorkspaceD
     Ok(draft)
 }
 
-fn write_device_private_file(path: &Path, source: &[u8]) -> io::Result<()> {
+fn write_device_private_file(path: &Path, source: &[u8], overwrite: bool) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -2818,7 +3116,13 @@ fn write_device_private_file(path: &Path, source: &[u8]) -> io::Result<()> {
         .tempfile_in(parent)?;
     temporary.write_all(source)?;
     temporary.as_file_mut().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
+    if overwrite {
+        temporary.persist(path).map_err(|error| error.error)?;
+    } else {
+        temporary
+            .persist_noclobber(path)
+            .map_err(|error| error.error)?;
+    }
 
     #[cfg(unix)]
     fs::File::open(parent)?.sync_all()?;
@@ -4186,6 +4490,51 @@ mod tests {
     }
 
     #[gpui::test]
+    fn agent_observation_time_does_not_require_workspace_recovery(cx: &mut gpui::TestAppContext) {
+        use yttt_agent_core::{AgentInstanceId, AgentReducer, AgentSessionMetadata, ProviderId};
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let mut workspace = Workspace::new();
+        let project = workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::new("observation-time"),
+                    ProjectLocation::local(temp.path().to_path_buf()),
+                ),
+                dev_fixture_layout(),
+            )
+            .unwrap();
+        let mut agent =
+            AgentReducer::new(AgentInstanceId::random(), ProviderId::from_static("omp"), 1)
+                .snapshot()
+                .clone();
+        workspace
+            .record_agent_snapshot(&project, "dev", "shell", agent.clone())
+            .unwrap();
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        root.update(cx, |root, cx| {
+            root.reconcile_project_work_area(&project);
+            root.workspace_persistence.last_committed_snapshot =
+                Some(root.build_remote_workspace_snapshot(cx).unwrap().0);
+            agent.updated_at = 2;
+            root.workspace
+                .record_agent_snapshot(&project, "dev", "shell", agent.clone())
+                .unwrap();
+            assert!(!root.has_unpublished_workspace_snapshot(cx));
+
+            agent.session = Some(AgentSessionMetadata {
+                session_id: Some("new-resumable-session".into()),
+                ..Default::default()
+            });
+            root.workspace
+                .record_agent_snapshot(&project, "dev", "shell", agent)
+                .unwrap();
+            assert!(root.has_unpublished_workspace_snapshot(cx));
+        });
+    }
+
+    #[gpui::test]
     fn settings_only_draft_prevents_a_clean_workspace_handoff(cx: &mut gpui::TestAppContext) {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
@@ -4213,6 +4562,106 @@ mod tests {
             environment_id: environment_id.to_string(),
             workspace_id: WorkspaceId::new(workspace_id).unwrap(),
         }
+    }
+
+    #[test]
+    fn later_recovery_cannot_replace_an_unresolved_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let recovery_scope = scope("desktop", "host-a", "workspace-a");
+        let base = recoverable_workspace_draft_file(root.path(), &recovery_scope);
+        let mut original = RecoverableWorkspaceDraft {
+            schema_version: RECOVERABLE_WORKSPACE_DRAFT_SCHEMA_VERSION,
+            scope: recovery_scope,
+            host_epoch: Some(1),
+            snapshot: serde_json::to_value(RemoteWorkspaceSnapshot::empty()).unwrap(),
+            drafts: Vec::new(),
+            pending_settings: Some(PendingSettingsRecovery {
+                candidate: serde_json::json!({"editor": {"tab_size": 8}}),
+                confirmed: serde_json::json!({"editor": {"tab_size": 4}}),
+            }),
+        };
+        // Existing single-file recovery must survive the first versioned save as well.
+        save_recoverable_workspace_draft(&base, &original).unwrap();
+        let first = preserve_recoverable_workspace_draft(&base, &original).unwrap();
+        original.pending_settings = None;
+        let second = preserve_recoverable_workspace_draft(&base, &original).unwrap();
+        for path in [&base, &first] {
+            let saved = load_recoverable_workspace_draft(path).unwrap();
+            assert_eq!(
+                saved.pending_settings.unwrap().candidate,
+                serde_json::json!({"editor": {"tab_size": 8}})
+            );
+        }
+        assert!(
+            load_recoverable_workspace_draft(&second)
+                .unwrap()
+                .pending_settings
+                .is_none()
+        );
+        archive_recoverable_workspace_draft(&second).unwrap();
+        let pending = recoverable_workspace_draft_files(&base).unwrap();
+        assert!(pending.contains(&base) && pending.contains(&first));
+        assert!(!pending.contains(&second));
+        let archived = second
+            .parent()
+            .unwrap()
+            .join("resolved")
+            .join(second.file_name().unwrap());
+        assert_eq!(
+            load_recoverable_workspace_draft(&archived)
+                .unwrap()
+                .host_epoch,
+            Some(1)
+        );
+        archive_recoverable_workspace_draft(&base).unwrap();
+        save_recoverable_workspace_draft(&base, &original).unwrap();
+        archive_recoverable_workspace_draft(&base).unwrap();
+        let legacy_archive = base
+            .parent()
+            .unwrap()
+            .join("resolved")
+            .join(base.file_name().unwrap());
+        assert_eq!(
+            load_recoverable_workspace_draft(&legacy_archive)
+                .unwrap()
+                .pending_settings
+                .unwrap()
+                .candidate,
+            serde_json::json!({"editor": {"tab_size": 8}})
+        );
+    }
+
+    #[gpui::test]
+    fn recovery_actions_require_matching_content_and_a_reconciled_workspace(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        root.update(cx, |root, cx| {
+            root.workspace_persistence.mode = WorkspacePersistenceMode::Active;
+            root.workspace_persistence.recovery = Some(WorkspaceRecovery {
+                path: temp.path().join("pending.json"),
+                snapshot: root.build_remote_workspace_snapshot(cx).unwrap().0,
+                draft_projects: HashSet::from([ProjectId::new("not-open")]),
+                pending_settings: None,
+            });
+            assert!(!root.can_recover_device_drafts());
+            root.workspace_persistence
+                .recovery
+                .as_mut()
+                .unwrap()
+                .pending_settings = Some(PendingSettingsRecovery {
+                candidate: serde_json::json!({"editor": {"tab_size": 8}}),
+                confirmed: serde_json::json!({"editor": {"tab_size": 4}}),
+            });
+            assert!(root.can_recover_device_drafts());
+            root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+            assert!(!root.can_recover_device_drafts());
+            root.workspace_persistence.mode = WorkspacePersistenceMode::Active;
+            root.workspace_persistence.pending_document_restores = 1;
+            assert!(!root.can_recover_device_drafts());
+        });
     }
 
     #[test]

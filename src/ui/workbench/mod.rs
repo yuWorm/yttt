@@ -624,6 +624,11 @@ impl WorkbenchView {
         }
         self.terminal.host_runtime = runtime.clone();
         self.terminal.agent_process_monitor_task = None;
+        self.terminal.host_agent_epoch =
+            runtime.as_ref().and_then(|runtime| match runtime.state() {
+                yttt_client_core::ConnectionState::Ready { host_epoch, .. } => Some(host_epoch),
+                _ => None,
+            });
         self.terminal.pending_host_agent_snapshots.clear();
         self.agent_manager.set_snapshot_client(
             runtime

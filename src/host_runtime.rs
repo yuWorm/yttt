@@ -121,6 +121,44 @@ fn shared_editing_available(
         && is_controller
         && !transfer_in_progress
 }
+async fn forward_client_events(
+    mut events: tokio::sync::broadcast::Receiver<ClientEvent>,
+    sender: flume::Sender<ClientEvent>,
+    latest_agents: impl Fn() -> Option<(u64, Vec<yttt_protocol::agent::AgentSnapshotUpdate>)>,
+) {
+    loop {
+        match events.recv().await {
+            Ok(event) => {
+                if sender.send_async(event).await.is_err() {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                // A quiet Agent's final update may be the one that was dropped.
+                // Replay the authoritative cache, not just the surviving ring entries.
+                if let Some((host_epoch, snapshots)) = latest_agents() {
+                    if sender
+                        .send_async(ClientEvent::AgentSnapshotsReset { host_epoch })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    for snapshot in snapshots {
+                        if sender
+                            .send_async(ClientEvent::AgentSnapshotUpdated(Box::new(snapshot)))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
 
 impl DesktopHostRuntime {
     pub fn start(profile: AppProfile) -> Result<Arc<Self>, DesktopHostRuntimeError> {
@@ -157,6 +195,7 @@ impl DesktopHostRuntime {
                 yttt_protocol::session::ProfileControlRequest::RequestControl,
             )))?;
         }
+        client.enable_local_control_recovery();
         let environment = match runtime.block_on(client.request(Request::Workspace(
             yttt_protocol::workspace::WorkspaceRequest::Environment,
         )))? {
@@ -639,19 +678,18 @@ impl DesktopHostRuntime {
 
     pub fn events(&self) -> flume::Receiver<ClientEvent> {
         let (sender, receiver) = flume::bounded(256);
-        let mut events = self.client.subscribe_events();
+        let events = self.client.subscribe_events();
+        let client = Arc::downgrade(&self.client);
         self.runtime.spawn(async move {
-            loop {
-                match events.recv().await {
-                    Ok(event) => {
-                        if sender.send_async(event).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
+            forward_client_events(events, sender, move || {
+                let client = client.upgrade()?;
+                let host_epoch = match client.state() {
+                    ConnectionState::Ready { host_epoch, .. } => host_epoch,
+                    _ => client.control_status()?.context.host_epoch,
+                };
+                Some((host_epoch, client.agent_snapshots()))
+            })
+            .await;
         });
         receiver
     }
@@ -983,6 +1021,67 @@ mod tests {
     };
     use yttt_core::model::ids::{HostId, ProfileId, ProjectId};
     use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalProcessState};
+
+    #[tokio::test]
+    async fn lag_recovers_a_quiet_agents_final_snapshot() {
+        use yttt_agent_core::{AgentInstanceId, AgentReducer, ProviderId};
+        use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
+        let snapshot = |session: &str, sequence| AgentSnapshotUpdate {
+            scope: AgentHookScope {
+                project_id: "project".into(),
+                tab_id: session.into(),
+                pane_id: "pane".into(),
+                generation: 1,
+            },
+            terminal_session_id: TerminalSessionId::new(session),
+            host_epoch: 2,
+            sequence,
+            snapshot: AgentReducer::new(
+                AgentInstanceId::random(),
+                ProviderId::from_static("omp"),
+                1,
+            )
+            .snapshot()
+            .clone(),
+        };
+        let quiet = snapshot("quiet", 7);
+        let noisy = snapshot("noisy", 20);
+        let (broadcast, events) = tokio::sync::broadcast::channel(2);
+        broadcast
+            .send(ClientEvent::AgentSnapshotUpdated(Box::new(quiet.clone())))
+            .unwrap();
+        for sequence in 1..=20 {
+            broadcast
+                .send(ClientEvent::AgentSnapshotUpdated(Box::new(snapshot(
+                    "noisy", sequence,
+                ))))
+                .unwrap();
+        }
+        drop(broadcast);
+        let (sender, receiver) = flume::bounded(1);
+        let bridge = tokio::spawn(async move {
+            forward_client_events(events, sender, || {
+                Some((2, vec![quiet.clone(), noisy.clone()]))
+            })
+            .await;
+        });
+        let mut latest = std::collections::HashMap::new();
+        let mut epoch = None;
+        while let Ok(event) = receiver.recv_async().await {
+            match event {
+                ClientEvent::AgentSnapshotsReset { host_epoch } => epoch = Some(host_epoch),
+                ClientEvent::AgentSnapshotUpdated(update) => {
+                    let sequence = latest.entry(update.terminal_session_id).or_insert(0);
+                    *sequence = (*sequence).max(update.sequence);
+                }
+                _ => {}
+            }
+        }
+        bridge.await.unwrap();
+        assert_eq!(epoch, Some(2));
+        assert_eq!(latest.get(&TerminalSessionId::new("quiet")), Some(&7));
+        assert_eq!(latest.get(&TerminalSessionId::new("noisy")), Some(&20));
+    }
 
     fn spec() -> TerminalSpawnSpec {
         TerminalSpawnSpec {

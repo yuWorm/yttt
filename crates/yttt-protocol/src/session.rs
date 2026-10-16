@@ -57,4 +57,8 @@ pub enum ProfileControlRequest {
         transfer_id: String,
     },
     Release,
+    /// Atomically restores a disconnected local controller only while control is unowned.
+    ReacquireIfUnowned {
+        context: ControlContext,
+    },
 }

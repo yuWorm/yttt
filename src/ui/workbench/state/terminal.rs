@@ -30,6 +30,7 @@ pub(in super::super) struct TerminalControllerState {
     pub(in super::super) terminal_pane_subscriptions: HashMap<String, Subscription>,
     pub(in super::super) host_runtime: Option<Arc<DesktopHostRuntime>>,
     pub(in super::super) agent_process_monitor_task: Option<Task<()>>,
+    pub(in super::super) host_agent_epoch: Option<u64>,
     pub(in super::super) pending_host_agent_snapshots:
         HashMap<TerminalSessionId, AgentSnapshotUpdate>,
 }
@@ -49,6 +50,7 @@ impl TerminalControllerState {
             terminal_pane_subscriptions: HashMap::new(),
             host_runtime: None,
             agent_process_monitor_task: None,
+            host_agent_epoch: None,
             pending_host_agent_snapshots: HashMap::new(),
         }
     }

@@ -38,9 +38,7 @@ impl ProfileControl {
     }
 
     pub fn status(&self, host_epoch: u64) -> ControlStatus {
-        let mut state = self.state.lock();
-        expire_preparation(&mut state);
-        snapshot(&state, host_epoch)
+        snapshot(&self.state.lock(), host_epoch)
     }
 
     pub fn authorize(
@@ -63,16 +61,32 @@ impl ProfileControl {
         authorize_owner(&self.state.lock(), client)
     }
 
+    pub(crate) fn preparation_deadline_millis(&self) -> Option<u64> {
+        self.state
+            .lock()
+            .pending
+            .as_ref()
+            .filter(|pending| pending.wire.phase == TransferPhase::Preparing)
+            .map(|pending| pending.wire.deadline_millis)
+    }
+
+    pub(crate) fn expire_preparation(&self) -> bool {
+        expire_preparation_if_due(&mut self.state.lock())
+    }
+
     /// Preparation does not hold the mutation fence: the old Client must still flush.
     /// The returned transfer ID requires the caller to drain the fence before finish().
     pub fn request(
         &self,
         client: &ClientInstanceId,
+        host_epoch: u64,
         request: ProfileControlRequest,
     ) -> Result<Option<String>, ProtocolFailure> {
         let mut state = self.state.lock();
-        expire_preparation(&mut state);
-        if !matches!(request, ProfileControlRequest::Status) {
+        if !matches!(
+            request,
+            ProfileControlRequest::Status | ProfileControlRequest::ReacquireIfUnowned { .. }
+        ) {
             state.revision = state.revision.saturating_add(1);
         }
         match request {
@@ -110,6 +124,21 @@ impl ProfileControl {
                 });
                 Ok((phase == TransferPhase::Fencing).then_some(id))
             }
+            ProfileControlRequest::ReacquireIfUnowned { context } => {
+                if context.host_epoch != host_epoch || context.control_epoch != state.epoch {
+                    return Ok(None);
+                }
+                if state.owner.is_some() || state.pending.is_some() {
+                    return Ok(None);
+                }
+                state.revision = state.revision.saturating_add(1);
+                state.epoch = state
+                    .epoch
+                    .checked_add(1)
+                    .expect("profile control epoch exhausted");
+                state.owner = Some(client.clone());
+                Ok(None)
+            }
             ProfileControlRequest::Ready {
                 transfer_id,
                 revisions,
@@ -121,8 +150,11 @@ impl ProfileControl {
                         "only the previous controller can publish transfer readiness",
                     ));
                 }
-                if pending.wire.phase == TransferPhase::Fencing {
-                    return Err(error(FailureCode::Conflict, "transfer is already fencing"));
+                if pending.wire.phase != TransferPhase::Preparing {
+                    return Err(error(
+                        FailureCode::Conflict,
+                        "profile transfer is no longer accepting automatic readiness",
+                    ));
                 }
                 if revisions.len() > 128 {
                     return Err(error(
@@ -288,13 +320,16 @@ fn matching<'a>(
         })
 }
 
-fn expire_preparation(state: &mut State) {
+fn expire_preparation_if_due(state: &mut State) -> bool {
     if let Some(pending) = &mut state.pending
         && pending.wire.phase == TransferPhase::Preparing
         && crate::now_millis() >= pending.wire.deadline_millis
     {
         pending.wire.phase = TransferPhase::ForceConfirmationRequired;
         state.revision = state.revision.saturating_add(1);
+        true
+    } else {
+        false
     }
 }
 
@@ -320,7 +355,7 @@ mod tests {
 
     fn acquire(control: &ProfileControl, client: &ClientInstanceId) {
         let id = control
-            .request(client, ProfileControlRequest::RequestControl)
+            .request(client, 1, ProfileControlRequest::RequestControl)
             .unwrap()
             .unwrap();
         control.finish(&id, |_| true).unwrap();
@@ -334,7 +369,7 @@ mod tests {
         acquire(&control, &a);
         let old = control.status(7).context;
         control
-            .request(&b, ProfileControlRequest::RequestControl)
+            .request(&b, 1, ProfileControlRequest::RequestControl)
             .unwrap();
         control.authorize(&a, old, 7).unwrap();
         assert!(control.authorize(&b, old, 7).is_err());
@@ -343,6 +378,7 @@ mod tests {
             control
                 .request(
                     &b,
+                    1,
                     ProfileControlRequest::ConfirmForce {
                         transfer_id: transfer.id.clone()
                     }
@@ -352,6 +388,7 @@ mod tests {
         control
             .request(
                 &a,
+                1,
                 ProfileControlRequest::Ready {
                     transfer_id: transfer.id.clone(),
                     revisions: vec![],
@@ -375,12 +412,13 @@ mod tests {
         acquire(&control, &a);
         let before = control.status(9);
         control
-            .request(&b, ProfileControlRequest::RequestControl)
+            .request(&b, 1, ProfileControlRequest::RequestControl)
             .unwrap();
         let transfer = control.status(9).transfer.unwrap();
         control
             .request(
                 &a,
+                1,
                 ProfileControlRequest::Ready {
                     transfer_id: transfer.id.clone(),
                     revisions: vec![],
@@ -402,7 +440,7 @@ mod tests {
         let b = ClientInstanceId::new("b");
         acquire(&control, &a);
         control
-            .request(&b, ProfileControlRequest::RequestControl)
+            .request(&b, 1, ProfileControlRequest::RequestControl)
             .unwrap();
         control
             .state
@@ -412,6 +450,7 @@ mod tests {
             .unwrap()
             .wire
             .deadline_millis = 0;
+        assert!(control.expire_preparation());
         let status = control.status(1);
         assert_eq!(status.owner, Some(a));
         let transfer = status.transfer.unwrap();
@@ -420,6 +459,7 @@ mod tests {
         let id = control
             .request(
                 &b,
+                1,
                 ProfileControlRequest::ConfirmForce {
                     transfer_id: transfer.id,
                 },

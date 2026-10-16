@@ -4535,6 +4535,7 @@ fn command_center_answers_text(record: &AgentQuestionRecord) -> String {
 fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
     match event {
         ClientEvent::Connection(_)
+        | ClientEvent::AgentSnapshotsReset { .. }
         | ClientEvent::AgentSnapshotUpdated(_)
         | ClientEvent::ProjectTokenUsageUpdated(_)
         | ClientEvent::ResourceCatalogUpdated(_)

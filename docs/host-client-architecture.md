@@ -208,6 +208,9 @@ prepaint 只转换 damage row；未变化 row 的 render generation、text shapi
 保持不变。title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按
 `session_id` 过滤后才进入 GPUI，避免 continuously-ready 的 viewport 或无关事件消费者占用
 前台 executor。
+绘制阶段若 mailbox 的 redraw 标记再次置位，只请求下一 animation frame，不在当前 effects flush
+中立即 defer/notify；必须让 foreground consumer 有机会消费已排队快照，避免重连时重复绘制饿死
+状态更新和桌面控制请求。
 
 ## 6. 资源目录
 
@@ -225,10 +228,13 @@ delta 和按需 checkpoint 同步。
 
 `AgentSnapshotUpdate.terminal_session_id` 是 Agent 状态关联当前客户端布局的唯一资源键。Client 必须先用它找到当前 terminal pane，再取得本地 `project_id/tab_id/pane_id`；Hook scope 中的 `tab_id` / `pane_id` 不是客户端布局键。若 pane 尚未恢复，Client 保留该 session 的最新 snapshot，待 placement 出现后再应用。
 Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epoch, generation, sequence)` 合并最新值，不能让有界事件队列在 UI 暂停消费时静默丢失最终状态。Agent 进程存活但尚无权威 snapshot 只表示状态未知，UI 显示 `Stale`，不能推断为 `Working`。
+事件桥发生 lag 时重放 Client 最新 Agent 缓存，补回安静 Agent 被挤掉的最终更新；重复或旧游标不覆盖新状态。
+Host epoch 切换先清空 live Agent／项目计量缓存并发布 reset，再进入 Ready；Desktop 将旧 Agent 标为
+失联，保留会话恢复信息，拒绝迟到的旧 epoch 快照。
 Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须同时匹配 session ID 和 epoch。
 旧 PTY 延迟退出不能结束已经重开的 Agent，失败的 spawn 也只清理自身预备 hook scope。
 
-连接成功或重连成功后，`ClientCore` 第一项内部请求是 `ListResources`。此后 Host 只发送
+连接成功或重连成功，完成控制状态握手及有条件的本机控制恢复后，第一项资源对账请求是 `ListResources`。此后 Host 只发送
 `ResourceCatalogChanged` invalidation；Client 合并重复通知并异步刷新一次 catalog。
 只读 lifecycle 状态查询的连接关闭不发布资源目录变更；control 连接关闭释放资源控制权时仍发布。
 终端启动、重试与批量关闭另行读取权威 catalog，避免根据过期缓存决定创建或关闭的目标。
@@ -251,6 +257,10 @@ Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须
 正常交接冻结所有窗口编辑及输入，等待在途设置与草稿提交，聚合所有 Ready revision 后由 Host
 核验。五秒超时只转为需要强制确认；取消或保存失败保留原 owner 和未发布编辑。
 强制确认只恢复最后持久版本；旧 Client 重连仍是观察者，不能重放排队 mutation。
+Preparing 的截止时间由 Host 主循环主动推进并发布状态，不依赖下一次 Status 查询；过期后的 Ready
+不能绕过强制确认。本机 Desktop 可显式启用无竞争重连恢复：只有断线前为控制者且重新认证后确认
+owner 和 transfer 均为空，才发送带当前控制上下文的 `ReacquireIfUnowned`。Host 原子复核后授予控制，
+其他控制者或交接优先；远程 Client 不启用此策略，也不重放用户 mutation。
 
 HostBootstrap 显式传入原 `config_root`，不根据 Server descriptor 猜路径。共享配置 RPC 只允许
 已知配置文件与 `projects`、`themes`、`agent-providers` 子树，拒绝设备状态、密钥和 symlink 越界。
@@ -267,6 +277,7 @@ Windows 分隔符会在回传时重新拆为协议 segments，不附加本机盘
 每个 workspace 有原子 CAS manifest（最大 1 MiB）和独立不可变草稿正文。正文每份最大 6 MiB，
 每 workspace 最大 64 MiB；先持久化正文，再提交引用它的 manifest，最后确认幂等操作结果。
 启动回收未引用正文和已关闭的空记录；非空历史只由显式 `Forget` 删除。旧记录缺省不进入自动恢复集合。
+`Forget` 和空记录自动回收确认后，同步重算项目工作区引用；不再引用的项目不能继续阻塞 Host 空闲退出。
 持久 `workspace-history-initialized` 标记防止清空窗口后重新导入 legacy 状态；尚未初始化的 Host 仍可迁移旧数据。
 旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。
 本机自动恢复只消费 `restore_on_startup` 集合；关闭自动恢复或显式项目启动先归档未打开的旧成员。
@@ -278,6 +289,10 @@ ControlLost 冻结 mutation，显式选择 Host/local 快照前保留完整 Devi
 Host 快照可成功解析，但必须获取新的 CAS baseline。提交确认必须匹配当前 Host epoch 和控制上下文。
 提交发送前也核验已安装的控制上下文；错过完整交接后，即使 revision 未变也必须重新对账资源。
 PTY 丢失不删除 terminal/file tab、分组或布局。Client 只重建干净 shell 或恢复 Agent 会话，不重放任意命令。
+工作区脏状态比较只忽略 `AgentSnapshot.updated_at` 观测时间，仍保留会话、任务、布局、文档与设置差异。
+Device recovery 使用独立版本文件，不覆盖未处理副本；Host 确认内容已发布且无待恢复设置后移入
+`draft-recovery/resolved`，不删除正文。旧单文件副本仍可发现。草稿恢复仅在有匹配项目草稿或设置时显示；
+完整恢复要求控制权及可安全替换的工作区状态，ControlLost 必须先对账。
 
 独立 `yttt-server` 的 descriptor 只导出 SSH `work.sock`/工作 token。status、stop-if-idle、
 ensure 的管理连接仍使用另一个本机 socket/token；关闭桌面 TLS 不关闭 SSH 工作会话。
@@ -518,6 +533,8 @@ Disconnected -> Connecting -> Ready
 - 底层连接建立最多等待 30 s，应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
 - interactive 通道每 5 s 发送一次 Ping，15 s 内没有对应响应即触发重连；它不排在文件／Git 请求之后。旧 Host 返回 InvalidRequest 也可确认通道存活，无需更改协议版本。
 - terminal-data 最多并行建立 4 条连接；终端移出 catalog、凭据被永久拒绝或 Client 关闭时退出 worker。重复启用已有订阅不发送状态通知，不中断当前帧读取。
+- 每个 terminal-data worker 有独立 generation；校验 Host epoch、当前订阅成员及 worker generation
+  与更新 mirror／发布事件处于同一临界区。旧 worker 的数据、退出及迟到停止响应不能影响替代 worker。
 - control/interactive reader 随所属连接 future 取消而退出；Host 的 state-events 和 terminal-data 在对端关闭时释放，即使当前没有输出。
 - Host 最多保留 64 个认证 Client 会话，包括最多 16 个闲置会话。闲置会话最多保留 5 分钟，保留窗口内可继续使用请求日志；活动会话不参与淘汰。
 - 重连成功：更新 host epoch/connection sequence，立即请求 catalog 并重新对账 checkpoint；Host epoch 变化时清除旧 mirror 与 data worker。补快照与 attach/viewport 响应统一检查 session epoch 和 sequence，旧快照不得覆盖较新的镜像；相同 sequence 仍允许主动切换历史视口。
@@ -528,6 +545,10 @@ Disconnected -> Connecting -> Ready
 - 工作区恢复时，若 Host 确认保存的 OMP 会话不存在，则同一 pane 自动启动新 OMP，包括原来在 shell 中启动的 OMP；已有存活终端仍只 attach。历史查询错误或其他 resume 失败保留原会话，不视为会话缺失。
 - Host 确认 `AcknowledgeTerminalExit` 后，Client 将 durable placement 写为 `Closed`，不得留下指向已回收进程的 `Bound`。
 - handshake 的身份、profile、build 或认证失败属于 fatal `HostLost`，不能无限重试到错误 Host。
+- SSH 凭据缺失／绑定错误、认证或 Host key 拒绝，以及不可恢复的本机密钥配置错误同样是永久错误。
+- 连接取消贯穿 SSH attempt、部署、ensure、环境初始化和控制确认；关闭窗口不等于选择“观察”。
+  取消中断 SSH 并阻止后续上传／发布／启动。已阻塞的 HTTP 读取只能等待其底层超时，但不阻塞
+  取消返回，结束后也不得进入下一部署阶段。
 - 用户请求不会跨连接自动重放。
 - 持久化 Agent snapshot 在 Host catalog reconciliation 前统一降级为 `Exited/Stale`；只有
   当前 Host 的 live snapshot 能恢复 `Running/Working`。terminal `Exited` 必须清除对应 pane

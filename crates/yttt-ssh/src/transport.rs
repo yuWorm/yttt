@@ -470,6 +470,26 @@ impl TransportService {
         self.start_connect(request).await?.wait().await
     }
 
+    pub async fn connect_cancellable(
+        &self,
+        request: ConnectRequest,
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> Result<ConnectionEpoch, TransportError> {
+        if *cancellation.borrow_and_update() {
+            return Err(TransportError::Cancelled);
+        }
+        let connection_id = request.connection_id.clone();
+        let attempt = self.start_connect(request).await?;
+        let epoch = attempt.epoch();
+        tokio::select! {
+            result = attempt.wait() => result,
+            _ = cancellation.wait_for(|cancelled| *cancelled) => {
+                let _ = self.disconnect_attempt(connection_id, epoch).await;
+                Err(TransportError::Cancelled)
+            }
+        }
+    }
+
     pub async fn disconnect(&self, connection_id: ConnectionId) -> Result<(), TransportError> {
         self.disconnect_inner(connection_id, None).await
     }
@@ -2248,6 +2268,8 @@ pub enum TransportError {
     NotConnected,
     #[error("SSH request timed out")]
     RequestTimedOut,
+    #[error("SSH connection attempt was cancelled")]
+    Cancelled,
     #[error("SSH request was superseded by a newer connection attempt")]
     Superseded,
     #[error("SSH connection failed: {0}")]
@@ -2276,6 +2298,23 @@ pub enum TransportError {
     Russh(#[from] russh::Error),
 }
 
+impl TransportError {
+    pub fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::AuthenticationRejected
+                | Self::Agent(_)
+                | Self::CredentialMissing(_)
+                | Self::Credential(_)
+                | Self::CredentialBindingMismatch(_)
+                | Self::MissingVerifiedHostKey
+                | Self::PrivateKey { .. }
+                | Self::HostKeyStore(_)
+                | Self::HostKeyRejected
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2300,6 +2339,89 @@ mod tests {
         };
         let output = format!("{authentication:?}");
         assert!(!output.contains("top-secret"));
+    }
+
+    #[test]
+    fn credential_and_host_key_failures_are_permanent() {
+        for error in [
+            TransportError::AuthenticationRejected,
+            TransportError::Agent("agent unavailable".to_string()),
+            TransportError::CredentialMissing(CredentialId::new("saved-password")),
+            TransportError::Credential("credential store unavailable".to_string()),
+            TransportError::CredentialBindingMismatch(CredentialId::new("saved-password")),
+            TransportError::MissingVerifiedHostKey,
+            TransportError::PrivateKey {
+                path: PathBuf::from("/missing/id_ed25519"),
+                message: "not found".to_string(),
+            },
+            TransportError::HostKeyStore("invalid record".to_string()),
+            TransportError::HostKeyRejected,
+        ] {
+            assert!(error.is_permanent(), "{error}");
+        }
+        for error in [
+            TransportError::Cancelled,
+            TransportError::Connection("network unavailable".to_string()),
+            TransportError::RequestTimedOut,
+        ] {
+            assert!(!error.is_permanent(), "{error}");
+        }
+    }
+
+    #[test]
+    fn cancelled_connect_aborts_an_in_flight_ssh_attempt() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let service = TransportService::start(
+            std::env::temp_dir().join("yttt-ssh-cancelled-connect-host-keys.toml"),
+        )
+        .unwrap();
+        let events = service.events();
+        let (cancel, mut cancellation) = watch::channel(false);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let result = runtime.block_on(async {
+            let cancel_task = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                cancel.send_replace(true);
+            });
+            let result = service
+                .connect_cancellable(
+                    ConnectRequest {
+                        connection_id: ConnectionId::new("cancelled-connect"),
+                        endpoint: SshEndpoint {
+                            host: "127.0.0.1".to_string(),
+                            port,
+                            user: "nobody".to_string(),
+                        },
+                        authentication: Authentication::Password {
+                            secret: Zeroizing::new("unused".to_string()),
+                            save_as: None,
+                        },
+                        reconnect: false,
+                    },
+                    &mut cancellation,
+                )
+                .await;
+            cancel_task.await.unwrap();
+            result
+        });
+
+        assert!(matches!(result, Err(TransportError::Cancelled)));
+        let states = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                TransportEvent::StateChanged(status) => Some(status.state),
+                TransportEvent::HostKeyChallenge(_) | TransportEvent::CredentialSaved { .. } => {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(states.contains(&ConnectionState::Connecting));
+        assert!(states.contains(&ConnectionState::Disconnected));
+        drop(listener);
     }
 
     #[test]

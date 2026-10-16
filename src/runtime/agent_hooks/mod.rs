@@ -16,6 +16,12 @@ pub const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
     "YTTT_AGENT_HOOK_SCOPE",
 ];
 
+#[derive(Debug)]
+pub enum AgentSnapshotEvent {
+    Update(AgentSnapshotUpdate),
+    Reset { host_epoch: u64 },
+}
+
 #[derive(Clone)]
 pub struct AgentSnapshotClient {
     initial: Arc<Mutex<VecDeque<AgentSnapshotUpdate>>>,
@@ -40,18 +46,23 @@ impl AgentSnapshotClient {
         }
     }
 
-    pub async fn recv(&self) -> Option<AgentSnapshotUpdate> {
+    pub async fn recv(&self) -> Option<AgentSnapshotEvent> {
         if let Some(update) = self
             .initial
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .pop_front()
         {
-            return Some(update);
+            return Some(AgentSnapshotEvent::Update(update));
         }
         loop {
             match self.events.recv_async().await.ok()? {
-                ClientEvent::AgentSnapshotUpdated(update) => return Some(*update),
+                ClientEvent::AgentSnapshotUpdated(update) => {
+                    return Some(AgentSnapshotEvent::Update(*update));
+                }
+                ClientEvent::AgentSnapshotsReset { host_epoch } => {
+                    return Some(AgentSnapshotEvent::Reset { host_epoch });
+                }
                 _ => continue,
             }
         }
@@ -118,14 +129,14 @@ mod tests {
         drop(sender);
 
         futures_lite::future::block_on(async {
-            assert_eq!(
-                client.recv().await.unwrap().terminal_session_id.as_str(),
-                "initial"
-            );
-            assert_eq!(
-                client.recv().await.unwrap().terminal_session_id.as_str(),
-                "live"
-            );
+            let Some(AgentSnapshotEvent::Update(initial)) = client.recv().await else {
+                panic!("expected initial snapshot");
+            };
+            assert_eq!(initial.terminal_session_id.as_str(), "initial");
+            let Some(AgentSnapshotEvent::Update(live)) = client.recv().await else {
+                panic!("expected live snapshot");
+            };
+            assert_eq!(live.terminal_session_id.as_str(), "live");
             assert!(client.recv().await.is_none());
         });
     }

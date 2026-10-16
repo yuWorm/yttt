@@ -14,7 +14,11 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 17`。v17 为 `AgentSnapshots` 追加独立的
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 18`。v18 追加
+  `ProfileControlRequest::ReacquireIfUnowned { context }`：仅本机入口可用，Host 原子检查
+  Host/control epoch、无 owner、无交接，拒绝时返回未改变的控制状态；不能强制接管。
+  桌面 Client、Host、远端 Server 与 CLI 需同步更新。
+  v17 为 `AgentSnapshots` 追加独立的
   `project_token_usage` 汇总，并追加 `ProjectTokenUsage` 服务端事件；即使没有 Agent 快照，
   Client 仍同步项目累计计量。`TokenUsage` 不改变 Agent 生命周期；Host 按稳定来源持久化
   高水位并排除主子重叠，覆盖标识只描述已知计量来源，不代表完整会话历史。

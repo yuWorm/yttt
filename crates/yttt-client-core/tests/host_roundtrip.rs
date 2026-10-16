@@ -1102,6 +1102,13 @@ async fn sixel_pixels_survive_host_reattach_and_clear_through_the_semantic_strea
         })
         .await
         .unwrap();
+    // Reattachment starts after the Host acknowledges control release, not just local shutdown.
+    first
+        .request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::Release,
+        ))
+        .await
+        .unwrap();
     first.shutdown().await;
     drop(first);
 
@@ -1233,6 +1240,12 @@ async fn kitty_animation_advances_without_output_and_survives_reattach_until_del
         .request(Request::DetachTerminal {
             session_id: session_id.clone(),
         })
+        .await
+        .unwrap();
+    first
+        .request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::Release,
+        ))
         .await
         .unwrap();
     first.shutdown().await;
@@ -4232,6 +4245,12 @@ async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output()
         .request(Request::DetachTerminal {
             session_id: session_id.clone(),
         })
+        .await
+        .unwrap();
+    first
+        .request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::Release,
+        ))
         .await
         .unwrap();
     first.shutdown().await;

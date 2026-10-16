@@ -50,6 +50,54 @@ pub enum RemoteConnectStatus {
     },
 }
 
+const CONNECT_CANCELLED: &str = "remote connection cancelled";
+
+#[derive(Clone)]
+pub struct RemoteConnectCancellation {
+    sender: tokio::sync::watch::Sender<bool>,
+}
+
+impl RemoteConnectCancellation {
+    pub fn new() -> Self {
+        let (sender, _) = tokio::sync::watch::channel(false);
+        Self { sender }
+    }
+
+    pub fn cancel(&self) {
+        self.sender.send_replace(true);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        *self.sender.borrow()
+    }
+
+    fn check(&self, events: &flume::Sender<RemoteConnectEvent>) -> Result<(), String> {
+        if self.is_cancelled() || events.is_disconnected() {
+            self.cancel();
+            return Err(CONNECT_CANCELLED.to_string());
+        }
+        Ok(())
+    }
+
+    async fn cancelled(&self, events: &flume::Sender<RemoteConnectEvent>) {
+        let mut cancelled = self.sender.subscribe();
+        loop {
+            if self.is_cancelled() || events.is_disconnected() {
+                self.cancel();
+                return;
+            }
+            tokio::select! {
+                result = cancelled.changed() => {
+                    if result.is_err() || *cancelled.borrow() {
+                        return;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RemoteControlOwner {
     pub environment_id: String,
@@ -133,6 +181,29 @@ impl ConnectionCredentials {
     }
 }
 
+fn ssh_transport_error(error: yttt_ssh::TransportError) -> yttt_transport::TransportError {
+    let message = error.to_string();
+    if error.is_permanent() {
+        yttt_transport::TransportError::Permanent(message)
+    } else {
+        yttt_transport::TransportError::Other(message)
+    }
+}
+
+fn send_status(
+    events: &flume::Sender<RemoteConnectEvent>,
+    cancellation: &RemoteConnectCancellation,
+    status: RemoteConnectStatus,
+) -> Result<(), String> {
+    cancellation.check(events)?;
+    events
+        .send(RemoteConnectEvent::Status(status))
+        .map_err(|_| {
+            cancellation.cancel();
+            CONNECT_CANCELLED.to_string()
+        })
+}
+
 struct RemoteConnector {
     service: TransportService,
     credentials: Arc<ConnectionCredentials>,
@@ -161,11 +232,11 @@ impl TransportConnector for RemoteConnector {
             self.service
                 .connect(self.credentials.request(true))
                 .await
-                .map_err(|error| yttt_transport::TransportError::Other(error.to_string()))?;
+                .map_err(ssh_transport_error)?;
             let service = self.service.clone();
             let id = self.credentials.connection.id.clone();
             let server = self.server.clone();
-            tokio::task::spawn_blocking(move || ensure_server(&service, id, &server))
+            tokio::task::spawn_blocking(move || ensure_server(&service, id, &server, None))
                 .await
                 .map_err(|error| yttt_transport::TransportError::Other(error.to_string()))?
                 .map_err(yttt_transport::TransportError::Other)?;
@@ -177,10 +248,12 @@ impl TransportConnector for RemoteConnector {
 pub fn connect(
     launch: RemoteLaunch,
     events: flume::Sender<RemoteConnectEvent>,
+    cancellation: RemoteConnectCancellation,
 ) -> Result<RemoteEnvironment, String> {
+    cancellation.check(&events)?;
     let label = launch.target.label();
     match &launch.target {
-        RemoteTarget::SshServer { .. } => connect_ssh(launch, events, label),
+        RemoteTarget::SshServer { .. } => connect_ssh(launch, events, cancellation, label),
         RemoteTarget::ExistingHost {
             address,
             connection_info,
@@ -193,9 +266,7 @@ pub fn connect(
             {
                 return Err("Imported Host identity or certificate fingerprint is invalid".into());
             }
-            let _ = events.send(RemoteConnectEvent::Status(
-                RemoteConnectStatus::VerifyingHost,
-            ));
+            send_status(&events, &cancellation, RemoteConnectStatus::VerifyingHost)?;
             let connector = SharedConnector::new(
                 yttt_transport_tls::TlsConnector::new(
                     address.clone(),
@@ -231,12 +302,14 @@ pub fn connect(
                 channel: ConnectionChannel::Control,
                 terminal_session_id: None,
             };
+            cancellation.check(&events)?;
             initialize_environment(
                 runtime,
                 connector,
                 identity,
                 AuthToken::from_bytes(connection_info.work_secret),
                 events,
+                cancellation,
                 label,
             )
         }
@@ -246,6 +319,7 @@ pub fn connect(
 fn connect_ssh(
     mut launch: RemoteLaunch,
     events: flume::Sender<RemoteConnectEvent>,
+    cancellation: RemoteConnectCancellation,
     label: String,
 ) -> Result<RemoteEnvironment, String> {
     let RemoteTarget::SshServer {
@@ -263,6 +337,7 @@ fn connect_ssh(
         passphrase: passphrase.take().map(Zeroizing::new),
         save_password_as: save_password_as.clone(),
     });
+    cancellation.check(&events)?;
     let config = launch.local_profile.config_paths();
     let service = TransportService::start_with_credential_namespace(
         config.ssh_host_keys_file(),
@@ -272,6 +347,7 @@ fn connect_ssh(
     let ssh_events = service.events();
     let ui_events = events.clone();
     let saved_connection = credentials.connection.clone();
+    let event_cancellation = cancellation.clone();
     std::thread::Builder::new()
         .name("yttt-remote-ssh-events".to_string())
         .spawn(move || {
@@ -282,17 +358,27 @@ fn connect_ssh(
                             .send(RemoteConnectEvent::HostKey(challenge))
                             .is_err()
                         {
+                            event_cancellation.cancel();
                             break;
                         }
                     }
                     TransportEvent::StateChanged(status) => {
-                        let _ =
-                            ui_events.send(RemoteConnectEvent::Status(RemoteConnectStatus::Ssh {
+                        if ui_events
+                            .send(RemoteConnectEvent::Status(RemoteConnectStatus::Ssh {
                                 state: status.state,
                                 error: status.error,
-                            }));
+                            }))
+                            .is_err()
+                        {
+                            event_cancellation.cancel();
+                            break;
+                        }
                     }
                     TransportEvent::CredentialSaved { credential, .. } => {
+                        if event_cancellation.is_cancelled() || ui_events.is_disconnected() {
+                            event_cancellation.cancel();
+                            break;
+                        }
                         if let Ok(mut connections) =
                             crate::config::ssh::load_ssh_connections(&config)
                             && let Some(connection) = connections
@@ -325,17 +411,62 @@ fn connect_ssh(
         .thread_name("yttt-remote-client")
         .build()
         .map_err(|error| error.to_string())?;
+    cancellation.check(&events)?;
     runtime
-        .block_on(service.connect(credentials.request(false)))
+        .block_on(async {
+            let mut cancellation_state = cancellation.sender.subscribe();
+            let connect =
+                service.connect_cancellable(credentials.request(false), &mut cancellation_state);
+            tokio::pin!(connect);
+            tokio::select! {
+                result = &mut connect => result,
+                _ = cancellation.cancelled(&events) => connect.await,
+            }
+        })
         .map_err(|error| error.to_string())?;
-    let _ = events.send(RemoteConnectEvent::Status(
-        RemoteConnectStatus::CheckingServer,
-    ));
-    let server = deploy_server(&service, &credentials.connection)?;
-    let _ = events.send(RemoteConnectEvent::Status(
-        RemoteConnectStatus::StartingHost,
-    ));
-    let descriptor = ensure_server(&service, credentials.connection.id.clone(), &server)?;
+    send_status(&events, &cancellation, RemoteConnectStatus::CheckingServer)?;
+    let deployment_service = service.clone();
+    let deployment_connection = credentials.connection.clone();
+    let deployment_cancellation = cancellation.clone();
+    let deployment_events = events.clone();
+    let server = match run_cancellable_blocking(&runtime, &cancellation, &events, move || {
+        deploy_server(
+            &deployment_service,
+            &deployment_connection,
+            &deployment_cancellation,
+            &deployment_events,
+        )
+    }) {
+        Ok(server) => server,
+        Err(error) => {
+            if cancellation.is_cancelled() {
+                let _ = runtime.block_on(service.disconnect(credentials.connection.id.clone()));
+            }
+            return Err(error);
+        }
+    };
+    send_status(&events, &cancellation, RemoteConnectStatus::StartingHost)?;
+    let ensure_service = service.clone();
+    let ensure_id = credentials.connection.id.clone();
+    let ensure_cancellation = cancellation.clone();
+    let ensure_server_path = server.clone();
+    let ensure_events = events.clone();
+    let descriptor = match run_cancellable_blocking(&runtime, &cancellation, &events, move || {
+        ensure_server(
+            &ensure_service,
+            ensure_id,
+            &ensure_server_path,
+            Some((&ensure_cancellation, &ensure_events)),
+        )
+    }) {
+        Ok(descriptor) => descriptor,
+        Err(error) => {
+            if cancellation.is_cancelled() {
+                let _ = runtime.block_on(service.disconnect(credentials.connection.id.clone()));
+            }
+            return Err(error);
+        }
+    };
     if descriptor.resource_protocol != yttt_protocol::RESOURCE_PROTOCOL_VERSION
         || descriptor.lifecycle_protocol != yttt_protocol::LIFECYCLE_PROTOCOL_VERSION
     {
@@ -344,6 +475,7 @@ fn connect_ssh(
                 .to_string(),
         );
     }
+    cancellation.check(&events)?;
     let connector = SharedConnector::new(RemoteConnector {
         service,
         credentials: credentials.clone(),
@@ -374,7 +506,39 @@ fn connect_ssh(
         channel: ConnectionChannel::Control,
         terminal_session_id: None,
     };
-    initialize_environment(runtime, connector, identity, token, events, label)
+    initialize_environment(
+        runtime,
+        connector,
+        identity,
+        token,
+        events,
+        cancellation,
+        label,
+    )
+}
+
+fn run_cancellable_blocking<T: Send + 'static>(
+    runtime: &tokio::runtime::Runtime,
+    cancellation: &RemoteConnectCancellation,
+    events: &flume::Sender<RemoteConnectEvent>,
+    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    cancellation.check(events)?;
+    // A cancelled blocking HTTP read may outlive this connection attempt. Do not put it
+    // on this Runtime's blocking pool: dropping the Runtime would wait for it anyway.
+    let (sender, result) = flume::bounded(1);
+    std::thread::Builder::new()
+        .name("yttt-remote-deploy".into())
+        .spawn(move || {
+            let _ = sender.send(operation());
+        })
+        .map_err(|error| error.to_string())?;
+    runtime.block_on(async {
+        tokio::select! {
+            result = result.recv_async() => result.map_err(|error| error.to_string())?,
+            _ = cancellation.cancelled(events) => Err(CONNECT_CANCELLED.to_string()),
+        }
+    })
 }
 
 fn initialize_environment(
@@ -383,28 +547,39 @@ fn initialize_environment(
     identity: ClientIdentity,
     token: AuthToken,
     events: flume::Sender<RemoteConnectEvent>,
+    cancellation: RemoteConnectCancellation,
     label: String,
 ) -> Result<RemoteEnvironment, String> {
-    let client = Arc::new(
-        runtime
-            .block_on(ClientCore::connect(
-                connector.clone(),
-                identity.clone(),
-                token.clone(),
-            ))
-            .map_err(|error| error.to_string())?,
-    );
-    let environment = match runtime
-        .block_on(client.request(Request::Workspace(WorkspaceRequest::Environment)))
-        .map_err(|error| error.to_string())?
-    {
+    cancellation.check(&events)?;
+    let client = Arc::new(runtime.block_on(async {
+        let connect = ClientCore::connect(connector.clone(), identity.clone(), token.clone());
+        tokio::pin!(connect);
+        tokio::select! {
+            result = &mut connect => result.map_err(|error| error.to_string()),
+            _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
+        }
+    })?);
+    let environment = match runtime.block_on(async {
+        cancellation.check(&events)?;
+        tokio::select! {
+            result = client.request(Request::Workspace(WorkspaceRequest::Environment)) => {
+                result.map_err(|error| error.to_string())
+            }
+            _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
+        }
+    })? {
         Response::Workspace(WorkspaceResponse::Environment(environment)) => environment,
         _ => return Err("unexpected Host environment response".into()),
     };
-    let index = match runtime
-        .block_on(client.request(Request::Workspace(WorkspaceRequest::List)))
-        .map_err(|error| error.to_string())?
-    {
+    let index = match runtime.block_on(async {
+        cancellation.check(&events)?;
+        tokio::select! {
+            result = client.request(Request::Workspace(WorkspaceRequest::List)) => {
+                result.map_err(|error| error.to_string())
+            }
+            _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
+        }
+    })? {
         Response::Workspace(WorkspaceResponse::Workspaces(index)) => index,
         _ => return Err("unexpected Host workspace index".into()),
     };
@@ -417,15 +592,26 @@ fn initialize_environment(
         workspace_count: index.len(),
         client_id: control.owner.as_ref().map(ToString::to_string),
     };
-    let take_control = confirm_transfer(&events, takeover_owner.clone(), false).is_ok();
+    let take_control = confirm_transfer(&events, &cancellation, takeover_owner.clone(), false)?;
     let request_control = |request| -> Result<yttt_protocol::session::ControlStatus, String> {
-        match runtime
-            .block_on(client.request(Request::ProfileControl(request)))
-            .map_err(|error| error.to_string())?
-        {
+        cancellation.check(&events)?;
+        let response = runtime.block_on(async {
+            tokio::select! {
+                result = client.request(Request::ProfileControl(request)) => {
+                    result.map_err(|error| error.to_string())
+                }
+                _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
+            }
+        })?;
+        match response {
             Response::ProfileControl(status) => Ok(status),
             _ => Err("unexpected profile control response".to_string()),
         }
+    };
+    let cancel_transfer = |transfer_id| {
+        let _ = client.enqueue_request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::Cancel { transfer_id },
+        ));
     };
     if take_control {
         control = request_control(yttt_protocol::session::ProfileControlRequest::RequestControl)?;
@@ -436,40 +622,52 @@ fn initialize_environment(
             let transfer = control.transfer.as_ref().ok_or_else(|| {
                 "profile transfer was cancelled; the previous Client retains its work".to_string()
             })?;
-            if events.is_disconnected() {
-                let _ = request_control(yttt_protocol::session::ProfileControlRequest::Cancel {
-                    transfer_id: transfer.id.clone(),
-                });
-                return Err("remote connection window closed".to_string());
+            if let Err(error) = cancellation.check(&events) {
+                cancel_transfer(transfer.id.clone());
+                return Err(error);
             }
             if transfer.phase == yttt_protocol::session::TransferPhase::ForceConfirmationRequired {
-                if confirm_transfer(
+                match confirm_transfer(
                     &events,
+                    &cancellation,
                     RemoteControlOwner {
                         client_id: transfer.previous_owner.as_ref().map(ToString::to_string),
                         ..takeover_owner.clone()
                     },
                     true,
-                )
-                .is_err()
-                {
-                    let _ =
-                        request_control(yttt_protocol::session::ProfileControlRequest::Cancel {
-                            transfer_id: transfer.id.clone(),
-                        });
-                    break;
+                ) {
+                    Ok(true) => {
+                        control = request_control(
+                            yttt_protocol::session::ProfileControlRequest::ConfirmForce {
+                                transfer_id: transfer.id.clone(),
+                            },
+                        )?;
+                    }
+                    Ok(false) => {
+                        cancel_transfer(transfer.id.clone());
+                        break;
+                    }
+                    Err(error) => {
+                        cancel_transfer(transfer.id.clone());
+                        return Err(error);
+                    }
                 }
-                control = request_control(
-                    yttt_protocol::session::ProfileControlRequest::ConfirmForce {
-                        transfer_id: transfer.id.clone(),
-                    },
-                )?;
             } else {
-                std::thread::sleep(Duration::from_millis(100));
+                let wait = runtime.block_on(async {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => Ok(()),
+                        _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
+                    }
+                });
+                if let Err(error) = wait {
+                    cancel_transfer(transfer.id.clone());
+                    return Err(error);
+                }
                 control = request_control(yttt_protocol::session::ProfileControlRequest::Status)?;
             }
         }
     }
+    cancellation.check(&events)?;
     let config_root = environment
         .config_root
         .to_client_path()
@@ -481,6 +679,7 @@ fn initialize_environment(
         environment.clone(),
         true,
     ));
+    cancellation.check(&events)?;
     crate::config::storage::bind_environment(storage.clone()).map_err(|error| error.to_string())?;
     let config_paths =
         AppConfigPaths::from_host_config_dir(config_root, environment.project_config.clone())
@@ -489,6 +688,7 @@ fn initialize_environment(
         .home
         .to_client_path()
         .map_err(|error| error.to_string())?;
+    cancellation.check(&events)?;
     let host = DesktopHostRuntime::from_remote(
         runtime,
         client,
@@ -512,11 +712,21 @@ fn ensure_server(
     service: &TransportService,
     id: yttt_core::model::ids::ConnectionId,
     server: &str,
+    cancellation: Option<(
+        &RemoteConnectCancellation,
+        &flume::Sender<RemoteConnectEvent>,
+    )>,
 ) -> Result<ServerDescriptor, String> {
+    let check_cancelled = || match cancellation {
+        Some((cancellation, events)) => cancellation.check(events),
+        None => Ok(()),
+    };
+    check_cancelled()?;
     let root = service.sftp_project(
         id,
         RemotePathBuf::new("/").map_err(|error| error.to_string())?,
     );
+    check_cancelled()?;
     let mut output = root
         .run_command(
             server,
@@ -555,14 +765,19 @@ fn decode_token(hex: &str) -> Result<AuthToken, String> {
 fn deploy_server(
     service: &TransportService,
     connection: &SshConnectionConfig,
+    cancellation: &RemoteConnectCancellation,
+    events: &flume::Sender<RemoteConnectEvent>,
 ) -> Result<String, String> {
+    cancellation.check(events)?;
     let root = service.sftp_project(
         connection.id.clone(),
         RemotePathBuf::new("/").map_err(|error| error.to_string())?,
     );
+    cancellation.check(events)?;
     let platform = root
         .run_command("uname", vec!["-s".to_string()])
         .map_err(|error| error.to_string())?;
+    cancellation.check(events)?;
     let architecture = root
         .run_command("uname", vec!["-m".to_string()])
         .map_err(|error| error.to_string())?;
@@ -580,6 +795,7 @@ fn deploy_server(
         other => return Err(format!("unsupported remote Server architecture: {other}")),
     };
     let target = format!("{platform}-{architecture}");
+    cancellation.check(events)?;
     let home = root
         .run_command("sh", vec!["-c".into(), "cd \"$HOME\" && pwd -P".into()])
         .map_err(|error| error.to_string())?;
@@ -599,13 +815,15 @@ fn deploy_server(
         env!("CARGO_PKG_VERSION")
     );
     let server = format!("{directory}/yttt-server");
+    cancellation.check(events)?;
     let present = root
         .run_command("test", vec!["-x".to_string(), server.clone()])
         .map_err(|error| error.to_string())?;
     if present.success() {
         return Ok(server);
     }
-    let bytes = server_bytes(&target)?;
+    let bytes = server_bytes(&target, cancellation, events)?;
+    cancellation.check(events)?;
     let created = root
         .run_command(
             "sh",
@@ -626,6 +844,7 @@ fn deploy_server(
     let upload = format!("{directory}/.yttt-server-{}.tmp", uuid::Uuid::new_v4());
     let relative = RemoteRelativePathBuf::new(upload.trim_start_matches('/'))
         .map_err(|error| error.to_string())?;
+    cancellation.check(events)?;
     match root
         .save_file(relative, bytes, None, false, MAX_SERVER_BYTES)
         .map_err(|error| error.to_string())?
@@ -633,6 +852,7 @@ fn deploy_server(
         yttt_ssh::RemoteSaveOutcome::Saved(_) => {}
         _ => return Err("Server upload conflicted with another writer".to_string()),
     }
+    cancellation.check(events)?;
     let published = root
         .run_command(
             "sh",
@@ -653,8 +873,16 @@ fn deploy_server(
     }
     Ok(server)
 }
+
 const MAX_SERVER_BYTES: u64 = 128 * 1024 * 1024;
-fn server_bytes(target: &str) -> Result<Vec<u8>, String> {
+const MAX_SERVER_READ_BYTES: usize = 128 * 1024 * 1024 + 1;
+
+fn server_bytes(
+    target: &str,
+    cancellation: &RemoteConnectCancellation,
+    events: &flume::Sender<RemoteConnectEvent>,
+) -> Result<Vec<u8>, String> {
+    cancellation.check(events)?;
     let filename = format!("yttt-server-{}-{target}", env!("CARGO_PKG_VERSION"));
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let adjacent = executable
@@ -676,24 +904,23 @@ fn server_bytes(target: &str) -> Result<Vec<u8>, String> {
         .or_else(|| adjacent.is_file().then_some(adjacent))
         .or_else(|| (native == target && bundled.is_file()).then_some(bundled));
     if let Some(path) = local {
+        cancellation.check(events)?;
         let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
         if file.metadata().map_err(|error| error.to_string())?.len() > MAX_SERVER_BYTES {
             return Err("Server binary exceeds upload limit".to_string());
         }
-        let mut bytes = Vec::new();
-        file.take(MAX_SERVER_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        return Ok(bytes);
+        return read_server_bytes(file, cancellation, events);
     }
     let base = format!(
         "https://github.com/yuWorm/yttt/releases/download/v{}",
         env!("CARGO_PKG_VERSION")
     );
+    cancellation.check(events)?;
     let http = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
         .map_err(|error| error.to_string())?;
+    cancellation.check(events)?;
     let sums = http
         .get(format!("{base}/SHA256SUMS"))
         .send()
@@ -701,6 +928,7 @@ fn server_bytes(target: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("cannot obtain Server checksums: {error}"))?
         .text()
         .map_err(|error| error.to_string())?;
+    cancellation.check(events)?;
     let expected = sums
         .lines()
         .find_map(|line| {
@@ -709,28 +937,55 @@ fn server_bytes(target: &str) -> Result<Vec<u8>, String> {
             (parts.next()? == filename).then_some(hash)
         })
         .ok_or_else(|| format!("release does not contain a checksum for {filename}"))?;
+    cancellation.check(events)?;
     let response = http
         .get(format!("{base}/{filename}"))
         .send()
         .and_then(|response| response.error_for_status())
         .map_err(|error| format!("cannot download remote Server: {error}"))?;
-    let mut bytes = Vec::new();
-    response
-        .take(MAX_SERVER_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    if bytes.len() as u64 > MAX_SERVER_BYTES || format!("{:x}", Sha256::digest(&bytes)) != expected
-    {
+    let bytes = read_server_bytes(response, cancellation, events)?;
+    if format!("{:x}", Sha256::digest(&bytes)) != expected {
         return Err("remote Server download failed checksum or size validation".to_string());
+    }
+    Ok(bytes)
+}
+
+fn read_server_bytes(
+    mut reader: impl Read,
+    cancellation: &RemoteConnectCancellation,
+    events: &flume::Sender<RemoteConnectEvent>,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        cancellation.check(events)?;
+        let remaining = MAX_SERVER_READ_BYTES.saturating_sub(bytes.len());
+        if remaining == 0 {
+            return Err("Server binary exceeds upload limit".to_string());
+        }
+        let chunk_len = remaining.min(buffer.len());
+        let read = reader
+            .read(&mut buffer[..chunk_len])
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    cancellation.check(events)?;
+    if bytes.len() as u64 > MAX_SERVER_BYTES {
+        return Err("Server binary exceeds upload limit".to_string());
     }
     Ok(bytes)
 }
 
 fn confirm_transfer(
     events: &flume::Sender<RemoteConnectEvent>,
+    cancellation: &RemoteConnectCancellation,
     owner: RemoteControlOwner,
     force: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    cancellation.check(events)?;
     let (answer, receiver) = flume::bounded(1);
     events
         .send(RemoteConnectEvent::Takeover {
@@ -738,13 +993,142 @@ fn confirm_transfer(
             force,
             answer,
         })
-        .map_err(|_| "remote connection window closed".to_string())?;
-    if receiver
-        .recv()
-        .map_err(|_| "profile transfer cancelled".to_string())?
-    {
-        Ok(())
-    } else {
-        Err("profile transfer cancelled".to_string())
+        .map_err(|_| {
+            cancellation.cancel();
+            CONNECT_CANCELLED.to_string()
+        })?;
+    let answer = loop {
+        cancellation.check(events)?;
+        match receiver.recv_timeout(Duration::from_millis(25)) {
+            Ok(answer) => break answer,
+            Err(flume::RecvTimeoutError::Timeout) => continue,
+            Err(flume::RecvTimeoutError::Disconnected) => {
+                cancellation.cancel();
+                return Err(CONNECT_CANCELLED.to_string());
+            }
+        }
+    };
+    cancellation.check(events)?;
+    Ok(answer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn owner() -> RemoteControlOwner {
+        RemoteControlOwner {
+            environment_id: "environment".to_string(),
+            profile_id: "profile".to_string(),
+            workspace_count: 0,
+            client_id: None,
+        }
+    }
+
+    #[test]
+    fn cancelled_phase_does_not_start_a_remote_side_effect() {
+        let cancellation = RemoteConnectCancellation::new();
+        cancellation.cancel();
+        let (events, _receiver) = flume::unbounded();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let ran = Arc::new(AtomicBool::new(false));
+        let operation_ran = ran.clone();
+
+        let result = run_cancellable_blocking(&runtime, &cancellation, &events, move || {
+            operation_ran.store(true, Ordering::Release);
+            Ok(())
+        });
+
+        assert_eq!(result, Err(CONNECT_CANCELLED.to_string()));
+        assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn cancellation_releases_the_runtime_before_a_blocked_download_finishes() {
+        let cancellation = RemoteConnectCancellation::new();
+        let worker_cancellation = cancellation.clone();
+        let (started, start) = flume::bounded(1);
+        let (release, blocked) = flume::bounded(1);
+        let (finished, result) = flume::bounded(1);
+        let worker = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let (events, _receiver) = flume::unbounded();
+            let outcome =
+                run_cancellable_blocking(&runtime, &worker_cancellation, &events, move || {
+                    started.send(()).unwrap();
+                    blocked.recv().unwrap();
+                    Ok(())
+                });
+            drop(runtime);
+            finished.send(outcome).unwrap();
+        });
+        start.recv_timeout(Duration::from_secs(2)).unwrap();
+        cancellation.cancel();
+        let outcome = result.recv_timeout(Duration::from_secs(2));
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(outcome.unwrap(), Err(CONNECT_CANCELLED.to_string()));
+    }
+
+    #[test]
+    fn cancellation_interrupts_an_unanswered_transfer_prompt() {
+        let cancellation = RemoteConnectCancellation::new();
+        let worker_cancellation = cancellation.clone();
+        let (events, receiver) = flume::unbounded();
+        let (finished, result) = flume::bounded(1);
+        let worker = std::thread::spawn(move || {
+            let outcome = confirm_transfer(&events, &worker_cancellation, owner(), false);
+            finished.send(outcome).unwrap();
+        });
+        // Keep the prompt (and answer sender) alive: cancellation must not need a UI reply.
+        let prompt = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        cancellation.cancel();
+        let outcome = result.recv_timeout(Duration::from_secs(2));
+        drop(prompt);
+        worker.join().unwrap();
+        assert_eq!(outcome.unwrap(), Err(CONNECT_CANCELLED.to_string()));
+    }
+
+    #[test]
+    fn explicit_observe_is_distinct_from_connection_cancellation() {
+        let cancellation = RemoteConnectCancellation::new();
+        let (events, receiver) = flume::unbounded();
+        let answer = std::thread::spawn(move || {
+            let RemoteConnectEvent::Takeover { answer, .. } = receiver.recv().unwrap() else {
+                panic!("expected takeover prompt")
+            };
+            answer.send(false).unwrap();
+            receiver
+        });
+
+        assert_eq!(
+            confirm_transfer(&events, &cancellation, owner(), false),
+            Ok(false)
+        );
+        answer.join().unwrap();
+
+        let cancellation = RemoteConnectCancellation::new();
+        let (events, receiver) = flume::unbounded();
+        let cancelled = cancellation.clone();
+        let answer = std::thread::spawn(move || {
+            let RemoteConnectEvent::Takeover { answer, .. } = receiver.recv().unwrap() else {
+                panic!("expected takeover prompt")
+            };
+            cancelled.cancel();
+            answer.send(false).unwrap();
+        });
+
+        assert_eq!(
+            confirm_transfer(&events, &cancellation, owner(), false),
+            Err(CONNECT_CANCELLED.to_string())
+        );
+        answer.join().unwrap();
     }
 }

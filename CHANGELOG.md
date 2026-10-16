@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- 修复未连接远程时的错误恢复提示：Agent 观测时间戳不再标记工作区未发布；恢复入口按实际草稿、设置与可执行状态显示。恢复副本分版本保存，未处理内容不被覆盖，已确认发布的副本保留归档。
+- Fix spurious local workspace recovery: Agent observation timestamps no longer mark a workspace dirty. Recovery actions reflect available drafts/settings and valid state; unresolved copies are versioned without replacement, and confirmed copies remain archived.
+- 本机原控制者短暂断线后可在无其他 owner／交接时原子恢复控制；不抢占其他客户端。Host 主动发布交接超时，删除工作区后及时释放项目引用。资源协议升至 18，桌面、Host、远端 Server 与 CLI 需同步更新。
+- Restore a former local controller after transient disconnect only through an atomic unowned/no-transfer check. Publish transfer deadlines proactively and release project references after workspace removal. Resource protocol is now 18; upgrade Desktop, Host, remote Server and CLI together.
+- 终端数据按 Host epoch 和 worker generation 隔离；Host 换代清理 live Agent 缓存并保留会话信息，事件桥 lag 后补齐最新状态。SSH 永久错误停止重试，取消贯穿连接、部署、启动与控制确认，不再把取消当成观察模式。
+- Fence terminal data by Host epoch and worker generation, reset live Agent caches while retaining resume metadata, and reconcile the latest Agent state after event lag. Stop retrying permanent SSH failures and propagate cancellation through connection, deployment, startup and control prompts without treating cancellation as Observe.
+- 修复重连后终端重绘饿死主线程：绘制期间发现待消费快照时安排下一帧，不再在同一轮 effects 中立即反复重绘，保留状态消费与桌面控制响应。
+- Prevent terminal repaint starvation after reconnect: schedule the next animation frame for queued snapshots instead of repeatedly redrawing in the same effects flush, allowing state updates and desktop control requests to progress.
 - 工作区历史改为可搜索的 picker：展示保存的项目名称、路径和最近保存时间，支持方向键选择、回车／点击打开、Esc 关闭；完整日期和 ID 收入悬停详情，“从历史移除”收进次要菜单并保留删除确认。
 - Replace the workspace history dialog with a searchable picker showing saved project names, paths, and last-saved dates. Support keyboard selection, Enter/click to open, and Escape to dismiss; expose full timestamps and IDs on hover, with confirmed history removal in the secondary menu.
 - 调度中心项目卡片改为单行项目名、非零图标统计和累计 Token；窄卡片收拢额外统计，Agent 提供方使用图标并保留 Tab／会话辨识，只有确认工作中的状态使用动画。历史行移除重复状态及未上报的 Token 占位，悬停和无障碍标签保留完整信息。

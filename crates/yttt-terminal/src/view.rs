@@ -4173,16 +4173,11 @@ impl Render for TerminalView {
                             paint_completed,
                             paint_completed.saturating_duration_since(paint_started),
                         );
-                        // A parser update can arrive after prepaint clears the redraw gate.
-                        // Defer the follow-up notification until this paint is complete so
-                        // GPUI cannot absorb it into the frame currently being submitted.
+                        // Let the foreground semantic consumer run before another frame.
+                        // An immediate deferred notify can repaint forever while the queued
+                        // viewport keeps rearming the gate inside this same effects flush.
                         if event_mailbox_for_paint.redraw_pending() {
-                            let terminal = terminal.clone();
-                            window.defer(cx, move |_window, cx| {
-                                terminal.update(cx, |_terminal, terminal_cx| {
-                                    terminal_cx.notify();
-                                });
-                            });
+                            window.request_animation_frame();
                         }
 
                         if hint_active {
@@ -4560,6 +4555,43 @@ mod tests {
                 2
             );
             assert_eq!(terminal.diagnostics_snapshot().gpui_wakeups, 1);
+        });
+    }
+
+    #[gpui::test]
+    fn repaint_yields_to_a_semantic_update_queued_before_paint(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(RecordingWriter::default(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal
+                .semantic_updates
+                .sender
+                .try_send(PendingSemanticUpdate {
+                    update: Arc::new(TerminalStreamUpdate::Snapshot(semantic_viewport(7))),
+                    received_at: Instant::now(),
+                })
+                .unwrap();
+            terminal.event_mailbox.request_redraw();
+            cx.notify();
+        });
+        // Paint before the async event consumer is polled. This must return rather than
+        // recursively repainting the still-queued viewport in App::flush_effects.
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(
+                terminal
+                    .read(cx)
+                    .semantic_viewport
+                    .lock()
+                    .viewport
+                    .as_ref()
+                    .unwrap()
+                    .sequence,
+                7
+            );
         });
     }
 

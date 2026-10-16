@@ -8,7 +8,7 @@ use std::{
     hash::{Hash, Hasher},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -30,7 +30,7 @@ use yttt_protocol::{
 };
 use yttt_transport::{
     AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, SharedConnector,
-    TransportConnector, TransportStream, client_handshake, receive_control,
+    TransportConnector, TransportError, TransportStream, client_handshake, receive_control,
     receive_control_observed, receive_state_event, receive_terminal_interactive, send_control,
     send_terminal_interactive,
 };
@@ -93,8 +93,55 @@ pub enum ClientEvent {
     TerminalUpdated(Arc<TerminalStreamUpdate>),
     TerminalUnavailable(TerminalSessionId),
     ResourceCatalogUpdated(Arc<ResourceCatalog>),
+    AgentSnapshotsReset { host_epoch: u64 },
     AgentSnapshotUpdated(Box<AgentSnapshotUpdate>),
     ProjectTokenUsageUpdated(Box<ProjectTokenUsage>),
+}
+
+struct TerminalDataChannel {
+    generation: u64,
+    desired: watch::Sender<bool>,
+}
+
+#[derive(Default)]
+struct TerminalState {
+    host_epoch: Option<u64>,
+    next_worker_generation: u64,
+    mirrors: HashMap<TerminalSessionId, TerminalMirror>,
+    known_sessions: HashSet<TerminalSessionId>,
+    data_channels: HashMap<TerminalSessionId, TerminalDataChannel>,
+}
+
+#[derive(Default)]
+struct LocalControlRecovery {
+    enabled: AtomicBool,
+    eligible: AtomicBool,
+}
+
+impl LocalControlRecovery {
+    fn observe(
+        &self,
+        status: &yttt_protocol::session::ControlStatus,
+        client_id: &yttt_core::model::ids::ClientInstanceId,
+    ) {
+        self.eligible
+            .store(status.owner.as_ref() == Some(client_id), Ordering::Release);
+    }
+
+    fn can_recover(&self) -> bool {
+        self.enabled.load(Ordering::Acquire) && self.eligible.load(Ordering::Acquire)
+    }
+}
+
+fn should_reacquire_local_control(
+    local_control_recovery: &LocalControlRecovery,
+    was_controller: bool,
+    status: &yttt_protocol::session::ControlStatus,
+) -> bool {
+    local_control_recovery.can_recover()
+        && was_controller
+        && status.owner.is_none()
+        && status.transfer.is_none()
 }
 
 pub struct ClientCore {
@@ -106,25 +153,24 @@ struct ClientCoreInner {
     interactive_commands: mpsc::Sender<ClientCommand>,
     events: broadcast::Sender<ClientEvent>,
     state: watch::Receiver<ConnectionState>,
-    mirrors: Arc<RwLock<HashMap<TerminalSessionId, TerminalMirror>>>,
+    terminal_state: Arc<RwLock<TerminalState>>,
     supervisor: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    known_sessions: Arc<RwLock<HashSet<TerminalSessionId>>>,
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
     next_request_id: Arc<AtomicU64>,
-    data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
     shutdown: watch::Sender<bool>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
+    local_control_recovery: Arc<LocalControlRecovery>,
     client_id: yttt_core::model::ids::ClientInstanceId,
 }
 
 impl Drop for ClientCoreInner {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
-        for desired in self.data_channels.read().values() {
-            let _ = desired.send(false);
+        for channel in self.terminal_state.read().data_channels.values() {
+            let _ = channel.desired.send(false);
         }
         if let Some(supervisor) = self.supervisor.lock().take() {
             supervisor.abort();
@@ -140,11 +186,75 @@ struct ClientCommand {
     deadline: tokio::time::Instant,
 }
 
+struct TerminalWorkerFence {
+    session_id: TerminalSessionId,
+    host_epoch: u64,
+    generation: u64,
+}
+
+enum PendingTerminalStops {
+    None,
+    One(TerminalWorkerFence),
+    Many(Vec<TerminalWorkerFence>),
+}
+
+impl PendingTerminalStops {
+    fn stop_all(&self, terminal_state: &RwLock<TerminalState>) {
+        match self {
+            Self::None => {}
+            Self::One(fence) => stop_terminal_data_channel_if_current(
+                terminal_state,
+                &fence.session_id,
+                fence.host_epoch,
+                fence.generation,
+            ),
+            Self::Many(fences) => {
+                for fence in fences {
+                    stop_terminal_data_channel_if_current(
+                        terminal_state,
+                        &fence.session_id,
+                        fence.host_epoch,
+                        fence.generation,
+                    );
+                }
+            }
+        }
+    }
+
+    fn stop_for(&self, terminal_state: &RwLock<TerminalState>, session_id: &TerminalSessionId) {
+        match self {
+            Self::None => {}
+            Self::One(fence) if fence.session_id == *session_id => {
+                stop_terminal_data_channel_if_current(
+                    terminal_state,
+                    &fence.session_id,
+                    fence.host_epoch,
+                    fence.generation,
+                );
+            }
+            Self::One(_) => {}
+            Self::Many(fences) => {
+                for fence in fences
+                    .iter()
+                    .filter(|fence| fence.session_id == *session_id)
+                {
+                    stop_terminal_data_channel_if_current(
+                        terminal_state,
+                        &fence.session_id,
+                        fence.host_epoch,
+                        fence.generation,
+                    );
+                }
+            }
+        }
+    }
+}
+
 pub struct PendingClientRequest {
     response: oneshot::Receiver<Result<Response, ClientCoreError>>,
     deadline: tokio::time::Instant,
-    stopped_session: Option<TerminalSessionId>,
-    data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
+    terminal_stops: PendingTerminalStops,
+    terminal_state: Arc<RwLock<TerminalState>>,
 }
 
 impl PendingClientRequest {
@@ -158,17 +268,13 @@ impl PendingClientRequest {
             Response::TerminalDetached
                 | Response::TerminalTerminated(_)
                 | Response::TerminalExitAcknowledged
-        ) && let Some(session_id) = self.stopped_session
-            && let Some(desired) = self.data_channels.read().get(&session_id)
-        {
-            let _ = desired.send(false);
+        ) {
+            self.terminal_stops.stop_all(&self.terminal_state);
         }
         if let Response::TerminalsTerminated { results } = &response {
-            let channels = self.data_channels.read();
             for result in results.iter().filter(|result| result.result.is_ok()) {
-                if let Some(desired) = channels.get(&result.session_id) {
-                    let _ = desired.send(false);
-                }
+                self.terminal_stops
+                    .stop_for(&self.terminal_state, &result.session_id);
             }
         }
         Ok(response)
@@ -188,12 +294,12 @@ struct ClientSessionContext {
     checkpoint_requests: mpsc::Sender<TerminalSessionId>,
     catalog_requests: mpsc::Sender<()>,
     events: broadcast::Sender<ClientEvent>,
-    mirrors: Arc<RwLock<HashMap<TerminalSessionId, TerminalMirror>>>,
+    terminal_state: Arc<RwLock<TerminalState>>,
     connector: SharedConnector,
     identity: ClientIdentity,
+    host_epoch: u64,
+    current_host_epoch: Arc<RwLock<Option<u64>>>,
     token: AuthToken,
-    data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
-    known_sessions: Arc<RwLock<HashSet<TerminalSessionId>>>,
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
@@ -202,6 +308,7 @@ struct ClientSessionContext {
     deferred_terminal_events: Arc<Mutex<HashMap<TerminalSessionId, HostEvent>>>,
     shutdown: watch::Receiver<bool>,
     control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
+    local_control_recovery: Arc<LocalControlRecovery>,
 }
 
 impl ClientCore {
@@ -216,16 +323,16 @@ impl ClientCore {
         let (interactive_tx, interactive_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let (state_tx, state_rx) = watch::channel(ConnectionState::Connecting);
-        let data_channels = Arc::new(RwLock::new(HashMap::new()));
+        let terminal_state = Arc::new(RwLock::new(TerminalState::default()));
         let (shutdown, _) = watch::channel(false);
-        let mirrors = Arc::new(RwLock::new(HashMap::new()));
-        let known_sessions = Arc::new(RwLock::new(HashSet::new()));
+        let host_epoch = Arc::new(RwLock::new(None));
         let catalog = Arc::new(RwLock::new(None));
         let agent_snapshots = Arc::new(RwLock::new(HashMap::new()));
         let project_token_usage = Arc::new(RwLock::new(HashMap::new()));
         let next_request_id = Arc::new(AtomicU64::new(1));
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
         let control = Arc::new(RwLock::new(None));
+        let local_control_recovery = Arc::new(LocalControlRecovery::default());
         let (initial_tx, initial_rx) = oneshot::channel();
         let supervisor = tokio::spawn(run_supervisor(
             connector.clone(),
@@ -237,9 +344,8 @@ impl ClientCore {
             checkpoint_rx,
             events.clone(),
             state_tx,
-            mirrors.clone(),
-            data_channels.clone(),
-            known_sessions.clone(),
+            terminal_state.clone(),
+            host_epoch,
             catalog.clone(),
             agent_snapshots.clone(),
             project_token_usage.clone(),
@@ -248,22 +354,22 @@ impl ClientCore {
             shutdown.clone(),
             initial_tx,
             control.clone(),
+            local_control_recovery.clone(),
         ));
         let inner = Arc::new(ClientCoreInner {
             commands: command_tx,
             interactive_commands: interactive_tx,
             events,
             state: state_rx,
-            mirrors,
-            known_sessions,
+            terminal_state,
             catalog,
             next_request_id,
             agent_snapshots,
             project_token_usage,
-            data_channels,
             shutdown,
             diagnostics,
             control,
+            local_control_recovery,
             client_id: identity.client_instance_id.clone(),
             supervisor: Mutex::new(Some(supervisor)),
         });
@@ -295,6 +401,20 @@ impl ClientCore {
             .is_some_and(|status| status.owner.as_ref() == Some(self.client_id()))
     }
 
+    /// Permits this local client to recover control only after it reconnects as
+    /// the prior controller and the Host still has no owner or transfer.
+    pub fn enable_local_control_recovery(&self) {
+        self.inner
+            .local_control_recovery
+            .enabled
+            .store(true, Ordering::Release);
+        if let Some(status) = self.inner.control.read().as_ref() {
+            self.inner
+                .local_control_recovery
+                .observe(status, self.client_id());
+        }
+    }
+
     pub fn diagnostics(&self) -> ClientPipelineDiagnosticsSnapshot {
         self.inner.diagnostics.snapshot()
     }
@@ -312,8 +432,9 @@ impl ClientCore {
         session_id: &TerminalSessionId,
     ) -> Option<yttt_protocol::terminal::SemanticViewport> {
         self.inner
-            .mirrors
+            .terminal_state
             .read()
+            .mirrors
             .get(session_id)
             .map(|mirror| mirror.viewport().clone())
     }
@@ -323,15 +444,17 @@ impl ClientCore {
         session_id: &TerminalSessionId,
     ) -> Option<TerminalMirrorMetadata> {
         self.inner
-            .mirrors
+            .terminal_state
             .read()
+            .mirrors
             .get(session_id)
             .map(TerminalMirror::metadata)
     }
 
     pub fn terminal_snapshots(&self) -> Vec<yttt_protocol::terminal::SemanticViewport> {
-        let mirrors = self.inner.mirrors.read();
-        let mut snapshots = mirrors
+        let terminal_state = self.inner.terminal_state.read();
+        let mut snapshots = terminal_state
+            .mirrors
             .values()
             .map(|mirror| mirror.viewport().clone())
             .collect::<Vec<_>>();
@@ -340,7 +463,13 @@ impl ClientCore {
     }
 
     pub fn known_terminal_ids(&self) -> Vec<TerminalSessionId> {
-        self.inner.known_sessions.read().iter().cloned().collect()
+        self.inner
+            .terminal_state
+            .read()
+            .known_sessions
+            .iter()
+            .cloned()
+            .collect()
     }
 
     pub fn resource_catalog(&self) -> Option<Arc<ResourceCatalog>> {
@@ -369,19 +498,14 @@ impl ClientCore {
             return Err(ClientCoreError::NotConnected);
         }
         let timeout = Self::request_timeout(&body);
-        let stopped_session = match &body {
-            Request::DetachTerminal { session_id }
-            | Request::TerminateTerminal { session_id, .. }
-            | Request::AcknowledgeTerminalExit { session_id, .. } => Some(session_id.clone()),
-            _ => None,
-        };
+        let terminal_stops = terminal_stops_for_request(&self.inner.terminal_state.read(), &body);
         let (reply, response) = oneshot::channel();
         self.enqueue_command(body, Some(reply))?;
         Ok(PendingClientRequest {
             response,
             deadline: tokio::time::Instant::now() + timeout,
-            stopped_session,
-            data_channels: self.inner.data_channels.clone(),
+            terminal_stops,
+            terminal_state: self.inner.terminal_state.clone(),
         })
     }
 
@@ -437,8 +561,8 @@ impl ClientCore {
 
     pub async fn shutdown(&self) {
         let _ = self.inner.shutdown.send(true);
-        for desired in self.inner.data_channels.read().values() {
-            let _ = desired.send(false);
+        for channel in self.inner.terminal_state.read().data_channels.values() {
+            let _ = channel.desired.send(false);
         }
         let supervisor = self.inner.supervisor.lock().take();
         if let Some(supervisor) = supervisor {
@@ -465,9 +589,8 @@ async fn run_supervisor(
     mut checkpoint_rx: mpsc::Receiver<TerminalSessionId>,
     events: broadcast::Sender<ClientEvent>,
     state: watch::Sender<ConnectionState>,
-    mirrors: Arc<RwLock<HashMap<TerminalSessionId, TerminalMirror>>>,
-    data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
-    known_sessions: Arc<RwLock<HashSet<TerminalSessionId>>>,
+    terminal_state: Arc<RwLock<TerminalState>>,
+    host_epoch: Arc<RwLock<Option<u64>>>,
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
@@ -476,9 +599,11 @@ async fn run_supervisor(
     shutdown_tx: watch::Sender<bool>,
     initial: oneshot::Sender<Result<(), String>>,
     profile_control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
+    local_control_recovery: Arc<LocalControlRecovery>,
 ) {
     let _shutdown_guard = ShutdownOnDrop(shutdown_tx.clone());
     let mut shutdown = shutdown_tx.subscribe();
+    let deferred_terminal_events = Arc::new(Mutex::new(HashMap::new()));
     let mut initial_attempt = 0;
     let mut lanes = loop {
         set_state(&state, &events, ConnectionState::Connecting);
@@ -517,8 +642,26 @@ async fn run_supervisor(
             }
         }
     };
+    install_host_epoch(
+        lanes.host.host_epoch,
+        &host_epoch,
+        &terminal_state,
+        &catalog,
+        &agent_snapshots,
+        &project_token_usage,
+        &deferred_terminal_events,
+        &profile_control,
+        &events,
+    );
     identity.host_epoch_hint = Some(lanes.host.host_epoch);
-    *profile_control.write() = Some(lanes.control_status.clone());
+    update_profile_control(
+        &profile_control,
+        &lanes.control_status,
+        &host_epoch,
+        lanes.host.host_epoch,
+        &identity.client_instance_id,
+        &local_control_recovery,
+    );
     set_state(
         &state,
         &events,
@@ -528,7 +671,6 @@ async fn run_supervisor(
         },
     );
     let _ = initial.send(Ok(()));
-    let deferred_terminal_events = Arc::new(Mutex::new(HashMap::new()));
     let (catalog_requests, mut catalog_rx) = mpsc::channel(1);
     let mut attempt = 0_u32;
     let data_connects = Arc::new(Semaphore::new(4));
@@ -538,12 +680,12 @@ async fn run_supervisor(
             checkpoint_requests: checkpoint_requests.clone(),
             catalog_requests: catalog_requests.clone(),
             events: events.clone(),
-            mirrors: mirrors.clone(),
+            terminal_state: terminal_state.clone(),
             connector: connector.clone(),
             identity: identity.clone(),
+            host_epoch: lanes.host.host_epoch,
+            current_host_epoch: host_epoch.clone(),
             token: token.clone(),
-            data_channels: data_channels.clone(),
-            known_sessions: known_sessions.clone(),
             catalog: catalog.clone(),
             agent_snapshots: agent_snapshots.clone(),
             project_token_usage: project_token_usage.clone(),
@@ -552,6 +694,7 @@ async fn run_supervisor(
             deferred_terminal_events: deferred_terminal_events.clone(),
             shutdown: shutdown.clone(),
             control: profile_control.clone(),
+            local_control_recovery: local_control_recovery.clone(),
         };
         let disconnected = {
             let control = connected_control_session(
@@ -593,6 +736,9 @@ async fn run_supervisor(
             set_state(&state, &events, ConnectionState::Disconnected);
             return;
         };
+        let was_controller = profile_control.read().as_ref().is_some_and(|status| {
+            status.owner.as_ref() == Some(&identity.client_instance_id) && status.transfer.is_none()
+        });
         attempt = attempt.saturating_add(1);
         diagnostics.record_reconnect();
         *profile_control.write() = None;
@@ -634,17 +780,52 @@ async fn run_supervisor(
                     return;
                 }
             };
+            let result = match result {
+                Ok(mut new_lanes) => {
+                    install_host_epoch(
+                        new_lanes.host.host_epoch,
+                        &host_epoch,
+                        &terminal_state,
+                        &catalog,
+                        &agent_snapshots,
+                        &project_token_usage,
+                        &deferred_terminal_events,
+                        &profile_control,
+                        &events,
+                    );
+                    if should_reacquire_local_control(
+                        &local_control_recovery,
+                        was_controller,
+                        &new_lanes.control_status,
+                    ) {
+                        reacquire_local_control(
+                            &mut new_lanes.control,
+                            &identity,
+                            new_lanes.control_status.context,
+                        )
+                        .await
+                        .map(|status| {
+                            new_lanes.control_status = status;
+                            new_lanes
+                        })
+                    } else {
+                        Ok(new_lanes)
+                    }
+                }
+                result => result,
+            };
             match result {
                 Ok(new_lanes) => {
-                    if identity.host_epoch_hint != Some(new_lanes.host.host_epoch) {
-                        mirrors.write().clear();
-                        for (_, desired) in data_channels.write().drain() {
-                            let _ = desired.send(false);
-                        }
-                    }
                     lanes = new_lanes;
                     identity.host_epoch_hint = Some(lanes.host.host_epoch);
-                    *profile_control.write() = Some(lanes.control_status.clone());
+                    update_profile_control(
+                        &profile_control,
+                        &lanes.control_status,
+                        &host_epoch,
+                        lanes.host.host_epoch,
+                        &identity.client_instance_id,
+                        &local_control_recovery,
+                    );
                     attempt = 0;
                     set_state(
                         &state,
@@ -749,11 +930,50 @@ async fn establish(
     let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect())
         .await
         .map_err(|_| ConnectFailure::Retry("Host transport connection timed out".into()))?
-        .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+        .map_err(|error| match error {
+            TransportError::Permanent(message) => ConnectFailure::Fatal(message),
+            error => ConnectFailure::Retry(error.to_string()),
+        })?;
     let host = client_handshake(&mut stream, identity, token)
         .await
         .map_err(ConnectFailure::from)?;
     Ok((stream, host))
+}
+
+async fn reacquire_local_control(
+    control: &mut TransportStream,
+    identity: &ClientIdentity,
+    context: yttt_protocol::session::ControlContext,
+) -> Result<yttt_protocol::session::ControlStatus, ConnectFailure> {
+    const REACQUIRE_REQUEST_ID: u64 = u64::MAX - 1;
+    send_control(
+        control,
+        &ControlMessage::Request(ClientRequest {
+            request_id: REACQUIRE_REQUEST_ID,
+            actor_device_id: Some(identity.client_instance_id.to_string()),
+            lease_epoch: None,
+            control: Some(context),
+            body: Request::ProfileControl(
+                yttt_protocol::session::ProfileControlRequest::ReacquireIfUnowned { context },
+            ),
+        }),
+    )
+    .await
+    .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+    let response = tokio::time::timeout(REQUEST_TIMEOUT, receive_control(control))
+        .await
+        .map_err(|_| ConnectFailure::Retry("Host control reacquisition timed out".into()))?
+        .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+    let ControlMessage::Response(HostResponse {
+        request_id: REACQUIRE_REQUEST_ID,
+        result: Ok(Response::ProfileControl(status)),
+    }) = response
+    else {
+        return Err(ConnectFailure::Fatal(
+            "Host did not return profile control state after local recovery request".to_string(),
+        ));
+    };
+    Ok(status)
 }
 
 async fn connected_control_session(
@@ -1131,13 +1351,25 @@ async fn connected_state_event_session(
                     Ok(event) => event,
                     Err(error) => return Some(error.to_string()),
                 };
+                if *context.current_host_epoch.read() != Some(context.host_epoch) {
+                    continue;
+                }
                 if let ServerEvent::ProfileControl(status) = &event.body {
-                    update_profile_control(&context.control, status);
+                    update_profile_control(
+                        &context.control,
+                        status,
+                        &context.current_host_epoch,
+                        context.host_epoch,
+                        &context.identity.client_instance_id,
+                        &context.local_control_recovery,
+                    );
                 }
                 if let ServerEvent::ProjectTokenUsage(summary) = &event.body {
                     apply_project_token_usage(
                         summary.clone(),
                         &context.project_token_usage,
+                        &context.current_host_epoch,
+                        context.host_epoch,
                         &context.events,
                     );
                 }
@@ -1154,9 +1386,11 @@ async fn connected_state_event_session(
                 }
                 let checkpoint = handle_event(
                     event.clone(),
-                    &context.mirrors,
-                    &context.known_sessions,
+                    &context.terminal_state,
                     Some(&context.agent_snapshots),
+                    Some(&context.current_host_epoch),
+                    context.host_epoch,
+                    None,
                     &context.events,
                 );
                 if checkpoint.is_some()
@@ -1194,54 +1428,79 @@ fn handle_response(
     context: &ClientSessionContext,
 ) -> Vec<TerminalSessionId> {
     if let Ok(Response::ProfileControl(status)) = &result {
-        update_profile_control(&context.control, status);
+        update_profile_control(
+            &context.control,
+            status,
+            &context.current_host_epoch,
+            context.host_epoch,
+            &context.identity.client_instance_id,
+            &context.local_control_recovery,
+        );
     }
-    let mirrors = &context.mirrors;
-    let events = &context.events;
-    let known_sessions = &context.known_sessions;
-    let catalog = &context.catalog;
-    let agent_snapshots = &context.agent_snapshots;
-    let project_token_usage = &context.project_token_usage;
     let reconnect = matches!(&pending, PendingRequest::ReconnectCatalog);
     match pending {
         PendingRequest::User(reply) => {
             match &result {
-                Ok(Response::TerminalSpawned { lease, .. }) => {
-                    known_sessions.write().insert(lease.session_id.clone());
-                    start_terminal_data_channel(lease.session_id.clone(), context);
-                }
-                Ok(Response::TerminalAttached { lease, checkpoint }) => {
-                    known_sessions.write().insert(lease.session_id.clone());
-                    apply_terminal_update(
-                        TerminalStreamUpdate::Snapshot(checkpoint.viewport.clone()),
-                        mirrors,
-                        known_sessions,
-                        events,
+                Ok(Response::TerminalSpawned { lease, .. })
+                | Ok(Response::TerminalLease(lease)) => {
+                    register_terminal(
+                        &context.terminal_state,
+                        context.host_epoch,
+                        lease.session_id.clone(),
                     );
                     start_terminal_data_channel(lease.session_id.clone(), context);
                 }
-                Ok(Response::TerminalLease(lease)) => {
-                    known_sessions.write().insert(lease.session_id.clone());
+                Ok(Response::TerminalAttached { lease, checkpoint }) => {
+                    register_terminal(
+                        &context.terminal_state,
+                        context.host_epoch,
+                        lease.session_id.clone(),
+                    );
+                    apply_terminal_update(
+                        TerminalStreamUpdate::Snapshot(checkpoint.viewport.clone()),
+                        &context.terminal_state,
+                        context.host_epoch,
+                        None,
+                        &context.events,
+                    );
                     start_terminal_data_channel(lease.session_id.clone(), context);
                 }
                 Ok(Response::TerminalViewport(read)) | Ok(Response::TerminalScrolled(read)) => {
                     apply_terminal_update(
                         TerminalStreamUpdate::Snapshot(read.viewport.clone()),
-                        mirrors,
-                        known_sessions,
-                        events,
+                        &context.terminal_state,
+                        context.host_epoch,
+                        None,
+                        &context.events,
                     );
                 }
                 Ok(Response::Resources(resources)) => {
-                    catalog.write().replace(Arc::new(resources.clone()));
+                    let current_host_epoch = context.current_host_epoch.read();
+                    if resources.host_epoch == context.host_epoch
+                        && *current_host_epoch == Some(context.host_epoch)
+                    {
+                        context.catalog.write().replace(Arc::new(resources.clone()));
+                    }
                 }
                 Ok(Response::AgentSnapshots {
                     snapshots,
                     project_token_usage: summaries,
                     ..
                 }) => {
-                    apply_agent_snapshots(snapshots.clone(), agent_snapshots, events);
-                    apply_project_token_usage_batch(summaries.clone(), project_token_usage, events);
+                    apply_agent_snapshots(
+                        snapshots.clone(),
+                        &context.agent_snapshots,
+                        &context.current_host_epoch,
+                        context.host_epoch,
+                        &context.events,
+                    );
+                    apply_project_token_usage_batch(
+                        summaries.clone(),
+                        &context.project_token_usage,
+                        &context.current_host_epoch,
+                        context.host_epoch,
+                        &context.events,
+                    );
                 }
                 _ => {}
             }
@@ -1254,9 +1513,10 @@ fn handle_response(
             {
                 apply_terminal_update(
                     TerminalStreamUpdate::Snapshot(checkpoint.viewport),
-                    mirrors,
-                    known_sessions,
-                    events,
+                    &context.terminal_state,
+                    context.host_epoch,
+                    None,
+                    &context.events,
                 );
             }
             Vec::new()
@@ -1268,8 +1528,20 @@ fn handle_response(
                 ..
             }) = result
             {
-                apply_agent_snapshots(snapshots, agent_snapshots, events);
-                apply_project_token_usage_batch(summaries, project_token_usage, events);
+                apply_agent_snapshots(
+                    snapshots,
+                    &context.agent_snapshots,
+                    &context.current_host_epoch,
+                    context.host_epoch,
+                    &context.events,
+                );
+                apply_project_token_usage_batch(
+                    summaries,
+                    &context.project_token_usage,
+                    &context.current_host_epoch,
+                    context.host_epoch,
+                    &context.events,
+                );
             }
             Vec::new()
         }
@@ -1277,47 +1549,87 @@ fn handle_response(
             let Ok(Response::Resources(resources)) = result else {
                 return Vec::new();
             };
+            if resources.host_epoch != context.host_epoch {
+                return Vec::new();
+            }
+            let current_host_epoch = context.current_host_epoch.read();
+            if *current_host_epoch != Some(context.host_epoch) {
+                return Vec::new();
+            }
             let resources = Arc::new(resources);
-            catalog.write().replace(resources.clone());
+            context.catalog.write().replace(resources.clone());
             let active = resources
                 .terminals
                 .iter()
                 .map(|placement| placement.session_id.clone())
                 .collect::<HashSet<_>>();
-            let removed = {
-                let mut known = known_sessions.write();
-                let removed = known
+            let (removed, sessions) = {
+                let mut terminal_state = context.terminal_state.write();
+                if terminal_state.host_epoch != Some(context.host_epoch) {
+                    return Vec::new();
+                }
+                let removed = terminal_state
+                    .known_sessions
                     .iter()
                     .filter(|session_id| !active.contains(*session_id))
                     .cloned()
                     .collect::<Vec<_>>();
-                *known = active.clone();
-                removed
-            };
-            let sessions = {
-                let mut mirrors = mirrors.write();
-                mirrors.retain(|session_id, _| active.contains(session_id));
+                terminal_state.known_sessions = active;
+                {
+                    let TerminalState {
+                        known_sessions,
+                        mirrors,
+                        data_channels,
+                        ..
+                    } = &mut *terminal_state;
+                    mirrors.retain(|session_id, _| known_sessions.contains(session_id));
+                    data_channels.retain(|session_id, channel| {
+                        let keep = known_sessions.contains(session_id);
+                        if !keep {
+                            let _ = channel.desired.send(false);
+                        }
+                        keep
+                    });
+                }
                 // Catalog refreshes discover sessions; they must not navigate an existing view.
-                resources
+                let sessions = resources
                     .terminals
                     .iter()
                     .filter(|placement| {
                         reconnect
-                            || mirrors.get(&placement.session_id).is_none_or(|mirror| {
-                                mirror.viewport().session_epoch != placement.session_epoch
-                            })
+                            || terminal_state
+                                .mirrors
+                                .get(&placement.session_id)
+                                .is_none_or(|mirror| {
+                                    mirror.viewport().session_epoch != placement.session_epoch
+                                })
                     })
                     .map(|placement| placement.session_id.clone())
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                (removed, sessions)
             };
             for session_id in removed {
-                stop_terminal_data_channel(&context.data_channels, &session_id);
                 context.deferred_terminal_events.lock().remove(&session_id);
-                let _ = events.send(ClientEvent::TerminalUnavailable(session_id));
+                let _ = context
+                    .events
+                    .send(ClientEvent::TerminalUnavailable(session_id));
             }
-            let _ = events.send(ClientEvent::ResourceCatalogUpdated(resources));
+            let _ = context
+                .events
+                .send(ClientEvent::ResourceCatalogUpdated(resources));
             sessions
         }
+    }
+}
+
+fn register_terminal(
+    terminal_state: &RwLock<TerminalState>,
+    host_epoch: u64,
+    session_id: TerminalSessionId,
+) {
+    let mut terminal_state = terminal_state.write();
+    if terminal_state.host_epoch == Some(host_epoch) {
+        terminal_state.known_sessions.insert(session_id);
     }
 }
 
@@ -1326,37 +1638,46 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
     let data_connects = context.data_connects.clone();
     let mut identity = context.identity.clone();
     let token = context.token.clone();
-    let mirrors = context.mirrors.clone();
-    let known_sessions = context.known_sessions.clone();
+    let terminal_state = context.terminal_state.clone();
     let events = context.events.clone();
-    let data_channels = context.data_channels.clone();
     let checkpoint_requests = context.checkpoint_requests.clone();
     let diagnostics = context.diagnostics.clone();
     let mut shutdown = context.shutdown.clone();
-    let mut channels = data_channels.write();
-    if channels
-        .get(&session_id)
-        .is_some_and(|desired| !desired.is_closed() && *desired.borrow())
-    {
-        return;
-    }
-    if let Some(previous) = channels.remove(&session_id) {
-        let _ = previous.send(false);
-    }
-    let (desired, mut desired_rx) = watch::channel(true);
-    channels.insert(session_id.clone(), desired);
-    drop(channels);
+    let host_epoch = context.host_epoch;
+    let (worker_generation, mut desired_rx) = {
+        let mut state = terminal_state.write();
+        if state.host_epoch != Some(host_epoch) || !state.known_sessions.contains(&session_id) {
+            return;
+        }
+        if state
+            .data_channels
+            .get(&session_id)
+            .is_some_and(|channel| !channel.desired.is_closed() && *channel.desired.borrow())
+        {
+            return;
+        }
+        if let Some(previous) = state.data_channels.remove(&session_id) {
+            let _ = previous.desired.send(false);
+        }
+        let worker_generation = state.next_worker_generation;
+        state.next_worker_generation = state.next_worker_generation.wrapping_add(1);
+        let (desired, desired_rx) = watch::channel(true);
+        state.data_channels.insert(
+            session_id.clone(),
+            TerminalDataChannel {
+                generation: worker_generation,
+                desired,
+            },
+        );
+        (worker_generation, desired_rx)
+    };
     identity.channel = ConnectionChannel::TerminalData;
     identity.can_force_stop = false;
     identity.terminal_session_id = Some(session_id.clone());
-    let token = token.clone();
     tokio::spawn(async move {
         let mut attempt = 0_u32;
         'worker: loop {
-            if *shutdown.borrow() {
-                break;
-            }
-            if !*desired_rx.borrow() {
+            if *shutdown.borrow() || !*desired_rx.borrow() {
                 break;
             }
             let result = tokio::select! {
@@ -1402,7 +1723,15 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
                             break;
                         };
                         let result = tokio::select! {
-                            result = handle_terminal_data_event(event, &mirrors, &known_sessions, &events, &checkpoint_requests, &diagnostics) => result,
+                            result = handle_terminal_data_event(
+                                event,
+                                &terminal_state,
+                                host_epoch,
+                                worker_generation,
+                                &events,
+                                &checkpoint_requests,
+                                &diagnostics,
+                            ) => result,
                             _ = async { let _ = desired_rx.wait_for(|desired| !*desired).await; } => break 'worker,
                             _ = async { let _ = shutdown.wait_for(|stopped| *stopped).await; } => break 'worker,
                         };
@@ -1410,10 +1739,13 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
                             Ok(terminal_exited) => terminal_exited,
                             Err(()) => break 'worker,
                         };
-                        if terminal_exited
-                            && let Some(desired) = data_channels.read().get(&session_id)
-                        {
-                            let _ = desired.send(false);
+                        if terminal_exited {
+                            stop_terminal_data_channel_if_current(
+                                &terminal_state,
+                                &session_id,
+                                host_epoch,
+                                worker_generation,
+                            );
                         }
                     }
                     changed = desired_rx.changed() => {
@@ -1450,29 +1782,88 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
                 }
             }
         }
-        let mut channels = data_channels.write();
-        if channels
+        let mut state = terminal_state.write();
+        if state
+            .data_channels
             .get(&session_id)
-            .is_some_and(|sender| sender.subscribe().same_channel(&desired_rx))
+            .is_some_and(|channel| channel.generation == worker_generation)
         {
-            channels.remove(&session_id);
+            state.data_channels.remove(&session_id);
         }
     });
 }
 
-fn stop_terminal_data_channel(
-    channels: &RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>,
+fn terminal_stops_for_request(
+    terminal_state: &TerminalState,
+    request: &Request,
+) -> PendingTerminalStops {
+    match request {
+        Request::DetachTerminal { session_id }
+        | Request::TerminateTerminal { session_id, .. }
+        | Request::AcknowledgeTerminalExit { session_id, .. } => {
+            terminal_worker_fence(terminal_state, session_id)
+                .map_or(PendingTerminalStops::None, PendingTerminalStops::One)
+        }
+        Request::TerminateMany { requests } => {
+            let mut fences = requests
+                .iter()
+                .filter_map(|request| terminal_worker_fence(terminal_state, &request.session_id))
+                .collect::<Vec<_>>();
+            match fences.len() {
+                0 => PendingTerminalStops::None,
+                1 => PendingTerminalStops::One(fences.pop().expect("one terminal worker fence")),
+                _ => PendingTerminalStops::Many(fences),
+            }
+        }
+        _ => PendingTerminalStops::None,
+    }
+}
+
+fn terminal_worker_fence(
+    terminal_state: &TerminalState,
     session_id: &TerminalSessionId,
+) -> Option<TerminalWorkerFence> {
+    let host_epoch = terminal_state.host_epoch?;
+    let channel = terminal_state.data_channels.get(session_id)?;
+    Some(TerminalWorkerFence {
+        session_id: session_id.clone(),
+        host_epoch,
+        generation: channel.generation,
+    })
+}
+
+fn stop_terminal_data_channel_if_current(
+    terminal_state: &RwLock<TerminalState>,
+    session_id: &TerminalSessionId,
+    host_epoch: u64,
+    worker_generation: u64,
 ) {
-    if let Some(desired) = channels.write().remove(session_id) {
-        let _ = desired.send(false);
+    let mut terminal_state = terminal_state.write();
+    if terminal_state.host_epoch != Some(host_epoch) {
+        return;
+    }
+    if terminal_state
+        .data_channels
+        .get(session_id)
+        .is_some_and(|channel| channel.generation == worker_generation)
+        && let Some(channel) = terminal_state.data_channels.remove(session_id)
+    {
+        let _ = channel.desired.send(false);
     }
 }
 
 fn update_profile_control(
     cache: &RwLock<Option<yttt_protocol::session::ControlStatus>>,
     status: &yttt_protocol::session::ControlStatus,
+    current_host_epoch: &RwLock<Option<u64>>,
+    host_epoch: u64,
+    client_id: &yttt_core::model::ids::ClientInstanceId,
+    local_control_recovery: &LocalControlRecovery,
 ) {
+    let current_host_epoch = current_host_epoch.read();
+    if *current_host_epoch != Some(host_epoch) || status.context.host_epoch != host_epoch {
+        return;
+    }
     let mut current = cache.write();
     if current.as_ref().is_none_or(|current| {
         status.context.host_epoch > current.context.host_epoch
@@ -1480,20 +1871,31 @@ fn update_profile_control(
                 && status.revision >= current.revision)
     }) {
         *current = Some(status.clone());
+        local_control_recovery.observe(status, client_id);
     }
 }
 
 fn handle_event(
     event: HostEvent,
-    mirrors: &Arc<RwLock<HashMap<TerminalSessionId, TerminalMirror>>>,
-    known_sessions: &Arc<RwLock<HashSet<TerminalSessionId>>>,
+    terminal_state: &Arc<RwLock<TerminalState>>,
     agent_snapshots: Option<&Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>>,
+    current_host_epoch: Option<&RwLock<Option<u64>>>,
+    host_epoch: u64,
+    worker_generation: Option<u64>,
     events: &broadcast::Sender<ClientEvent>,
 ) -> Option<TerminalSessionId> {
     let update = match event.body {
         ServerEvent::AgentSnapshot(update) => {
-            if let Some(agent_snapshots) = agent_snapshots {
-                apply_agent_snapshots(vec![*update], agent_snapshots, events);
+            if let (Some(agent_snapshots), Some(current_host_epoch)) =
+                (agent_snapshots, current_host_epoch)
+            {
+                apply_agent_snapshots(
+                    vec![*update],
+                    agent_snapshots,
+                    current_host_epoch,
+                    host_epoch,
+                    events,
+                );
             }
             return None;
         }
@@ -1504,7 +1906,18 @@ fn handle_event(
             final_sequence,
             ..
         } => {
-            let final_viewport_is_ready = mirrors.read().get(&session_id).is_some_and(|mirror| {
+            let state = terminal_state.read();
+            if state.host_epoch != Some(host_epoch)
+                || worker_generation.is_some_and(|generation| {
+                    state
+                        .data_channels
+                        .get(&session_id)
+                        .is_none_or(|channel| channel.generation != generation)
+                })
+            {
+                return None;
+            }
+            let final_viewport_is_ready = state.mirrors.get(&session_id).is_some_and(|mirror| {
                 let viewport = mirror.viewport();
                 viewport.session_epoch == session_epoch
                     && viewport.sequence >= final_sequence
@@ -1514,30 +1927,47 @@ fn handle_event(
         }
         _ => return None,
     };
-    apply_terminal_update(update, mirrors, known_sessions, events)
+    apply_terminal_update(
+        update,
+        terminal_state,
+        host_epoch,
+        worker_generation,
+        events,
+    )
 }
 
 fn apply_terminal_update(
     update: TerminalStreamUpdate,
-    mirrors: &RwLock<HashMap<TerminalSessionId, TerminalMirror>>,
-    known_sessions: &RwLock<HashSet<TerminalSessionId>>,
+    terminal_state: &RwLock<TerminalState>,
+    host_epoch: u64,
+    worker_generation: Option<u64>,
     events: &broadcast::Sender<ClientEvent>,
 ) -> Option<TerminalSessionId> {
     let session_id = update.session_id().clone();
-    known_sessions.write().insert(session_id.clone());
     let published_update = Arc::new(update);
-    let apply = {
-        let mut store = mirrors.write();
-        match store.get_mut(&session_id) {
-            Some(mirror) => mirror.apply(published_update.as_ref()),
-            None => match published_update.as_ref() {
-                TerminalStreamUpdate::Snapshot(viewport) => {
-                    store.insert(session_id.clone(), TerminalMirror::new(viewport.clone()));
-                    MirrorApply::Updated
-                }
-                _ => MirrorApply::SequenceGap,
-            },
-        }
+    let mut state = terminal_state.write();
+    if state.host_epoch != Some(host_epoch)
+        || worker_generation.is_some_and(|generation| {
+            state
+                .data_channels
+                .get(&session_id)
+                .is_none_or(|channel| channel.generation != generation)
+        })
+        || (!state.known_sessions.contains(&session_id) && !state.mirrors.contains_key(&session_id))
+    {
+        return None;
+    }
+    let apply = match state.mirrors.get_mut(&session_id) {
+        Some(mirror) => mirror.apply(published_update.as_ref()),
+        None => match published_update.as_ref() {
+            TerminalStreamUpdate::Snapshot(viewport) => {
+                state
+                    .mirrors
+                    .insert(session_id.clone(), TerminalMirror::new(viewport.clone()));
+                MirrorApply::Updated
+            }
+            _ => MirrorApply::SequenceGap,
+        },
     };
     match apply {
         MirrorApply::Updated => {
@@ -1558,9 +1988,18 @@ fn agent_address_key(scope: &yttt_protocol::agent::AgentHookScope) -> String {
 fn apply_agent_snapshots(
     updates: Vec<AgentSnapshotUpdate>,
     snapshots: &Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
+    current_host_epoch: &RwLock<Option<u64>>,
+    host_epoch: u64,
     events: &broadcast::Sender<ClientEvent>,
 ) {
+    let current_host_epoch = current_host_epoch.read();
+    if *current_host_epoch != Some(host_epoch) {
+        return;
+    }
     for update in updates {
+        if update.host_epoch != host_epoch {
+            continue;
+        }
         let key = agent_address_key(&update.scope);
         let applied = {
             let mut snapshots = snapshots.write();
@@ -1587,18 +2026,26 @@ fn apply_agent_snapshots(
 fn apply_project_token_usage_batch(
     summaries: Vec<ProjectTokenUsage>,
     usage: &Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
+    current_host_epoch: &RwLock<Option<u64>>,
+    host_epoch: u64,
     events: &broadcast::Sender<ClientEvent>,
 ) {
     for summary in summaries {
-        apply_project_token_usage(summary, usage, events);
+        apply_project_token_usage(summary, usage, current_host_epoch, host_epoch, events);
     }
 }
 
 fn apply_project_token_usage(
     summary: ProjectTokenUsage,
     usage: &Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
+    current_host_epoch: &RwLock<Option<u64>>,
+    host_epoch: u64,
     events: &broadcast::Sender<ClientEvent>,
 ) {
+    let current_host_epoch = current_host_epoch.read();
+    if *current_host_epoch != Some(host_epoch) {
+        return;
+    }
     let applied = {
         let mut usage = usage.write();
         match usage.get(&summary.project_id) {
@@ -1616,8 +2063,9 @@ fn apply_project_token_usage(
 
 async fn handle_terminal_data_event(
     event: HostEvent,
-    mirrors: &Arc<RwLock<HashMap<TerminalSessionId, TerminalMirror>>>,
-    known_sessions: &Arc<RwLock<HashSet<TerminalSessionId>>>,
+    terminal_state: &Arc<RwLock<TerminalState>>,
+    host_epoch: u64,
+    worker_generation: u64,
     events: &broadcast::Sender<ClientEvent>,
     checkpoint_requests: &mpsc::Sender<TerminalSessionId>,
     diagnostics: &ClientPipelineDiagnostics,
@@ -1638,7 +2086,15 @@ async fn handle_terminal_data_event(
             )
     );
     let merge_started_at = Instant::now();
-    let checkpoint = handle_event(event, mirrors, known_sessions, None, events);
+    let checkpoint = handle_event(
+        event,
+        terminal_state,
+        None,
+        None,
+        host_epoch,
+        Some(worker_generation),
+        events,
+    );
     diagnostics.record_terminal_merge(merge_started_at.elapsed());
     if let Some(session_id) = checkpoint {
         diagnostics.record_checkpoint_resync();
@@ -1702,6 +2158,48 @@ fn set_state(
     let _ = events.send(ClientEvent::Connection(next));
 }
 
+fn install_host_epoch(
+    next_host_epoch: u64,
+    current_host_epoch: &RwLock<Option<u64>>,
+    terminal_state: &RwLock<TerminalState>,
+    catalog: &RwLock<Option<Arc<ResourceCatalog>>>,
+    agent_snapshots: &RwLock<HashMap<String, AgentSnapshotUpdate>>,
+    project_token_usage: &RwLock<HashMap<String, ProjectTokenUsage>>,
+    deferred_terminal_events: &Mutex<HashMap<TerminalSessionId, HostEvent>>,
+    profile_control: &RwLock<Option<yttt_protocol::session::ControlStatus>>,
+    events: &broadcast::Sender<ClientEvent>,
+) {
+    let mut current_host_epoch = current_host_epoch.write();
+    match *current_host_epoch {
+        Some(current) if current == next_host_epoch => {}
+        None => {
+            terminal_state.write().host_epoch = Some(next_host_epoch);
+            *current_host_epoch = Some(next_host_epoch);
+        }
+        Some(_) => {
+            let mut terminal_state = terminal_state.write();
+            terminal_state.host_epoch = Some(next_host_epoch);
+            terminal_state.mirrors.clear();
+            for (_, channel) in terminal_state.data_channels.drain() {
+                let _ = channel.desired.send(false);
+            }
+            catalog.write().take();
+            agent_snapshots.write().clear();
+            project_token_usage.write().clear();
+            deferred_terminal_events.lock().clear();
+            profile_control.write().take();
+            *current_host_epoch = Some(next_host_epoch);
+            let _ = events.send(ClientEvent::AgentSnapshotsReset {
+                host_epoch: next_host_epoch,
+            });
+            for session_id in terminal_state.known_sessions.drain() {
+                let _ = events.send(ClientEvent::TerminalUnavailable(session_id));
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 enum ConnectFailure {
     Retry(String),
     Fatal(String),
@@ -1764,8 +2262,19 @@ mod tests {
     #[tokio::test]
     async fn terminal_data_gap_queues_checkpoint_without_rebroadcasting_raw_event() {
         let session_id = TerminalSessionId::new("gap");
-        let mirrors = Arc::new(RwLock::new(HashMap::new()));
-        let known_sessions = Arc::new(RwLock::new(HashSet::new()));
+        let (desired, _desired_rx) = watch::channel(true);
+        let terminal_state = Arc::new(RwLock::new(TerminalState {
+            host_epoch: Some(1),
+            known_sessions: HashSet::from([session_id.clone()]),
+            data_channels: HashMap::from([(
+                session_id.clone(),
+                TerminalDataChannel {
+                    generation: 0,
+                    desired,
+                },
+            )]),
+            ..TerminalState::default()
+        }));
         let (events, mut event_rx) = broadcast::channel(4);
         let (checkpoint_requests, mut checkpoints) = mpsc::channel(1);
         let diagnostics = ClientPipelineDiagnostics::default();
@@ -1780,8 +2289,9 @@ mod tests {
         assert!(
             !handle_terminal_data_event(
                 event.clone(),
-                &mirrors,
-                &known_sessions,
+                &terminal_state,
+                1,
+                0,
                 &events,
                 &checkpoint_requests,
                 &diagnostics,
@@ -1790,7 +2300,7 @@ mod tests {
             .unwrap()
         );
         assert_eq!(checkpoints.recv().await, Some(session_id.clone()));
-        assert!(known_sessions.read().contains(&session_id));
+        assert!(terminal_state.read().known_sessions.contains(&session_id));
         assert!(
             tokio::time::timeout(Duration::from_millis(10), event_rx.recv())
                 .await

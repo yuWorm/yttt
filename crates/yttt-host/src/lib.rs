@@ -384,11 +384,24 @@ where
 
     let mut exit_reaper = tokio::time::interval(Duration::from_secs(60));
     exit_reaper.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut profile_deadline_changes = profile_changes.subscribe();
     loop {
         tokio::select! {
             changed = stop_rx.changed() => {
                 if changed.is_err() || *stop_rx.borrow() {
                     break;
+                }
+            }
+            changed = profile_deadline_changes.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
+            _ = wait_for_preparation_deadline(
+                workspaces.control.preparation_deadline_millis()
+            ) => {
+                if workspaces.control.expire_preparation() {
+                    profile_changes.send_modify(|revision| *revision = revision.wrapping_add(1));
                 }
             }
             _ = exit_reaper.tick() => {
@@ -708,6 +721,9 @@ fn authorize_ingress(
                 | Request::ReadDeviceSettings
                 | Request::SetLoginStartupConsent { .. }
                 | Request::RemoteAccess(_)
+                | Request::ProfileControl(
+                    yttt_protocol::session::ProfileControlRequest::ReacquireIfUnowned { .. }
+                )
         )
     {
         return Err(ProtocolFailure::new(
@@ -2180,11 +2196,21 @@ async fn handle_profile_control(
     client_id: &ClientInstanceId,
     request: yttt_protocol::session::ProfileControlRequest,
 ) -> Result<yttt_protocol::session::ControlStatus, ProtocolFailure> {
+    let expired = context.workspaces.control.expire_preparation();
     let changes = !matches!(
         request,
         yttt_protocol::session::ProfileControlRequest::Status
     );
-    let fence = context.workspaces.control.request(client_id, request)?;
+    let fence = context
+        .workspaces
+        .control
+        .request(client_id, context.identity.host_epoch, request);
+    if expired {
+        context
+            .profile_changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+    let fence = fence?;
     if changes {
         context
             .profile_changes
@@ -2646,8 +2672,9 @@ async fn handle_request(
                 let _guard = mutation_guard;
                 let result = workspaces.handle(&requesting_client, request)?;
                 if matches!(
-                    result,
+                    &result,
                     yttt_protocol::workspace::WorkspaceResponse::Committed { .. }
+                        | yttt_protocol::workspace::WorkspaceResponse::Forgotten { .. }
                 ) {
                     projects.sync_workspaces(workspaces.referenced_projects());
                 }
@@ -3264,6 +3291,18 @@ fn now_millis() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
+}
+
+async fn wait_for_preparation_deadline(deadline_millis: Option<u64>) {
+    match deadline_millis {
+        Some(deadline_millis) => {
+            tokio::time::sleep(Duration::from_millis(
+                deadline_millis.saturating_sub(now_millis()),
+            ))
+            .await;
+        }
+        None => std::future::pending::<()>().await,
+    }
 }
 
 #[cfg(unix)]

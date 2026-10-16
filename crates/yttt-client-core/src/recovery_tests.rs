@@ -1,4 +1,7 @@
 use super::*;
+use yttt_agent_core::{
+    AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState, ProviderId,
+};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
 use yttt_protocol::{BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, terminal::*};
 use yttt_transport::{TransportListener, memory_pair, receive_handshake};
@@ -34,12 +37,15 @@ fn context(connector: SharedConnector) -> (ClientSessionContext, watch::Sender<b
             checkpoint_requests,
             catalog_requests,
             events,
-            mirrors: Arc::default(),
+            terminal_state: Arc::new(RwLock::new(TerminalState {
+                host_epoch: Some(1),
+                ..TerminalState::default()
+            })),
             connector,
             identity: identity(),
+            host_epoch: 1,
+            current_host_epoch: Arc::new(RwLock::new(Some(1))),
             token: AuthToken::from_bytes([7; 32]),
-            data_channels: Arc::default(),
-            known_sessions: Arc::default(),
             catalog: Arc::default(),
             agent_snapshots: Arc::default(),
             project_token_usage: Arc::default(),
@@ -48,6 +54,7 @@ fn context(connector: SharedConnector) -> (ClientSessionContext, watch::Sender<b
             deferred_terminal_events: Arc::default(),
             shutdown: shutdown_rx,
             control: Arc::default(),
+            local_control_recovery: Arc::default(),
         },
         shutdown,
     )
@@ -88,6 +95,38 @@ fn viewport(sequence: u64) -> SemanticViewport {
         process_state: TerminalProcessState::Running,
         images: Vec::new(),
         placements: Vec::new(),
+    }
+}
+
+fn agent_snapshot(host_epoch: u64) -> AgentSnapshotUpdate {
+    AgentSnapshotUpdate {
+        scope: yttt_protocol::agent::AgentHookScope {
+            project_id: "project".to_string(),
+            tab_id: "tab".to_string(),
+            pane_id: "pane".to_string(),
+            generation: 1,
+        },
+        terminal_session_id: TerminalSessionId::new("recovery-terminal"),
+        host_epoch,
+        sequence: 1,
+        snapshot: AgentSnapshot {
+            instance_id: AgentInstanceId::new("agent").unwrap(),
+            provider_id: ProviderId::from_static("omp"),
+            generation: 1,
+            process_state: AgentProcessState::Running,
+            turn_state: AgentTurnState::Idle,
+            waiting_reason: None,
+            waiting_message: None,
+            task: None,
+            current_action: None,
+            last_action_failed: false,
+            children: Vec::new(),
+            session: None,
+            process_exit: None,
+            state_started_at: 0,
+            updated_at: 1,
+            board: Default::default(),
+        },
     }
 }
 
@@ -133,14 +172,46 @@ async fn handshake_timeout_is_retryable() {
 }
 
 #[tokio::test]
+async fn permanent_transport_rejection_is_fatal() {
+    #[derive(Clone)]
+    struct PermanentConnector;
+
+    impl TransportConnector for PermanentConnector {
+        fn connect(
+            &self,
+        ) -> yttt_transport::BoxFuture<
+            '_,
+            Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+        > {
+            Box::pin(async {
+                Err(yttt_transport::TransportError::Permanent(
+                    "invalid credential".to_string(),
+                ))
+            })
+        }
+    }
+
+    assert!(matches!(
+        establish(
+            &SharedConnector::new(PermanentConnector),
+            &identity(),
+            &AuthToken::from_bytes([7; 32]),
+        )
+        .await,
+        Err(ConnectFailure::Fatal(_))
+    ));
+}
+
+#[tokio::test]
 async fn late_checkpoint_cannot_replace_a_newer_terminal_mirror() {
     let (_, connector) = memory_pair();
     let (context, _shutdown) = context(SharedConnector::new(connector));
     let newer = viewport(105);
     let id = newer.session_id.clone();
     context
-        .mirrors
+        .terminal_state
         .write()
+        .mirrors
         .insert(id.clone(), TerminalMirror::new(newer.clone()));
     let mut events = context.events.subscribe();
     handle_response(
@@ -152,7 +223,10 @@ async fn late_checkpoint_cannot_replace_a_newer_terminal_mirror() {
         })),
         &context,
     );
-    assert_eq!(context.mirrors.read()[&id].viewport(), &newer);
+    assert_eq!(
+        context.terminal_state.read().mirrors[&id].viewport(),
+        &newer
+    );
     assert!(
         events.try_recv().is_err(),
         "stale snapshots must not reach the UI"
@@ -164,9 +238,19 @@ async fn removed_terminal_stops_its_data_worker() {
     let (_, connector) = memory_pair();
     let (context, _shutdown) = context(SharedConnector::new(connector));
     let id = viewport(1).session_id;
-    context.known_sessions.write().insert(id.clone());
+    context
+        .terminal_state
+        .write()
+        .known_sessions
+        .insert(id.clone());
     let (desired, desired_rx) = watch::channel(true);
-    context.data_channels.write().insert(id, desired);
+    context.terminal_state.write().data_channels.insert(
+        id,
+        TerminalDataChannel {
+            generation: 0,
+            desired,
+        },
+    );
     handle_response(
         PendingRequest::Catalog,
         Ok(Response::Resources(ResourceCatalog {
@@ -186,13 +270,178 @@ async fn removed_terminal_stops_its_data_worker() {
     );
 }
 
+#[test]
+fn stale_terminal_worker_cannot_restore_a_removed_or_replaced_session() {
+    let (_, connector) = memory_pair();
+    let (context, _shutdown) = context(SharedConnector::new(connector));
+    let session_id = viewport(1).session_id;
+    register_terminal(
+        &context.terminal_state,
+        context.host_epoch,
+        session_id.clone(),
+    );
+    let (old_desired, old_desired_rx) = watch::channel(true);
+    context.terminal_state.write().data_channels.insert(
+        session_id.clone(),
+        TerminalDataChannel {
+            generation: 7,
+            desired: old_desired,
+        },
+    );
+    apply_terminal_update(
+        TerminalStreamUpdate::Snapshot(viewport(8)),
+        &context.terminal_state,
+        context.host_epoch,
+        Some(7),
+        &context.events,
+    );
+    handle_response(
+        PendingRequest::Catalog,
+        Ok(Response::Resources(ResourceCatalog {
+            profile_id: ProfileId::new("recovery-test"),
+            host_id: HostId::new("test"),
+            host_epoch: 1,
+            revision: 1,
+            terminals: Vec::new(),
+            ssh_connections: Vec::new(),
+            projects: Vec::new(),
+        })),
+        &context,
+    );
+    assert!(!*old_desired_rx.borrow());
+    assert!(context.terminal_state.read().mirrors.is_empty());
+
+    register_terminal(
+        &context.terminal_state,
+        context.host_epoch,
+        session_id.clone(),
+    );
+    let (replacement_desired, replacement_desired_rx) = watch::channel(true);
+    context.terminal_state.write().data_channels.insert(
+        session_id.clone(),
+        TerminalDataChannel {
+            generation: 8,
+            desired: replacement_desired,
+        },
+    );
+    assert_eq!(
+        apply_terminal_update(
+            TerminalStreamUpdate::Snapshot(viewport(9)),
+            &context.terminal_state,
+            context.host_epoch,
+            Some(7),
+            &context.events,
+        ),
+        None
+    );
+    stop_terminal_data_channel_if_current(
+        &context.terminal_state,
+        &session_id,
+        context.host_epoch,
+        7,
+    );
+    let terminal_state = context.terminal_state.read();
+    assert!(terminal_state.mirrors.is_empty());
+    assert_eq!(terminal_state.data_channels[&session_id].generation, 8);
+    assert!(*replacement_desired_rx.borrow());
+}
+
+#[test]
+fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
+    let (_, connector) = memory_pair();
+    let (context, _shutdown) = context(SharedConnector::new(connector));
+    let session_id = viewport(9).session_id;
+    let mut events = context.events.subscribe();
+    register_terminal(
+        &context.terminal_state,
+        context.host_epoch,
+        session_id.clone(),
+    );
+    apply_terminal_update(
+        TerminalStreamUpdate::Snapshot(viewport(9)),
+        &context.terminal_state,
+        1,
+        None,
+        &context.events,
+    );
+    apply_agent_snapshots(
+        vec![agent_snapshot(1)],
+        &context.agent_snapshots,
+        &context.current_host_epoch,
+        1,
+        &context.events,
+    );
+    while events.try_recv().is_ok() {}
+
+    install_host_epoch(
+        2,
+        &context.current_host_epoch,
+        &context.terminal_state,
+        &context.catalog,
+        &context.agent_snapshots,
+        &context.project_token_usage,
+        &context.deferred_terminal_events,
+        &context.control,
+        &context.events,
+    );
+    assert!(context.agent_snapshots.read().is_empty());
+    assert!(context.terminal_state.read().mirrors.is_empty());
+    assert!(matches!(
+        events.try_recv(),
+        Ok(ClientEvent::AgentSnapshotsReset { host_epoch: 2 })
+    ));
+
+    register_terminal(&context.terminal_state, 2, session_id.clone());
+    assert_eq!(
+        apply_terminal_update(
+            TerminalStreamUpdate::Snapshot(viewport(2)),
+            &context.terminal_state,
+            1,
+            None,
+            &context.events,
+        ),
+        None,
+        "a frame from the old Host cannot recreate a reused terminal session"
+    );
+    apply_agent_snapshots(
+        vec![agent_snapshot(1)],
+        &context.agent_snapshots,
+        &context.current_host_epoch,
+        1,
+        &context.events,
+    );
+    assert!(context.agent_snapshots.read().is_empty());
+
+    apply_terminal_update(
+        TerminalStreamUpdate::Snapshot(viewport(1)),
+        &context.terminal_state,
+        2,
+        None,
+        &context.events,
+    );
+    assert_eq!(
+        context.terminal_state.read().mirrors[&session_id]
+            .viewport()
+            .sequence,
+        1,
+        "the restarted Host may reuse a session and session epoch with a lower sequence"
+    );
+}
+
 #[tokio::test]
 async fn enabling_an_active_data_worker_does_not_cancel_its_frame_read() {
     let (_, connector) = memory_pair();
     let (context, _shutdown) = context(SharedConnector::new(connector));
     let id = viewport(1).session_id;
+    register_terminal(&context.terminal_state, context.host_epoch, id.clone());
     let (desired, desired_rx) = watch::channel(true);
-    context.data_channels.write().insert(id.clone(), desired);
+    context.terminal_state.write().data_channels.insert(
+        id.clone(),
+        TerminalDataChannel {
+            generation: 0,
+            desired,
+        },
+    );
     start_terminal_data_channel(id, &context);
     assert!(
         !desired_rx.has_changed().unwrap(),
@@ -222,11 +471,13 @@ async fn stalled_connector_has_a_deadline() {
 async fn shutdown_cancels_a_data_worker_stuck_connecting() {
     let (_listener, connector) = memory_pair();
     let (context, shutdown) = context(SharedConnector::new(connector));
-    start_terminal_data_channel(viewport(1).session_id, &context);
+    let id = viewport(1).session_id;
+    register_terminal(&context.terminal_state, context.host_epoch, id.clone());
+    start_terminal_data_channel(id, &context);
     tokio::task::yield_now().await;
     shutdown.send(true).unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !context.data_channels.read().is_empty() {
+        while !context.terminal_state.read().data_channels.is_empty() {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
@@ -276,8 +527,9 @@ async fn equal_sequence_viewport_navigation_is_preserved() {
     let initial = viewport(100);
     let id = initial.session_id.clone();
     context
-        .mirrors
+        .terminal_state
         .write()
+        .mirrors
         .insert(id.clone(), TerminalMirror::new(initial.clone()));
     let mut scrolled = initial;
     scrolled.display_offset = 25;
@@ -293,7 +545,12 @@ async fn equal_sequence_viewport_navigation_is_preserved() {
         &context,
     );
     assert!(response.await.unwrap().is_ok());
-    assert_eq!(context.mirrors.read()[&id].viewport().display_offset, 25);
+    assert_eq!(
+        context.terminal_state.read().mirrors[&id]
+            .viewport()
+            .display_offset,
+        25
+    );
 }
 
 fn host_identity() -> yttt_transport::HostIdentity {
@@ -344,6 +601,119 @@ fn handshake_rejections_have_explicit_retry_policy() {
     ));
 }
 
+#[test]
+fn local_control_recovery_only_targets_an_unowned_profile() {
+    use yttt_protocol::session::{ControlContext, ControlStatus, ControlTransfer, TransferPhase};
+
+    let local = ClientInstanceId::new("local-controller");
+    let other = ClientInstanceId::new("other-controller");
+    let context = ControlContext {
+        host_epoch: 1,
+        control_epoch: 4,
+    };
+    let owned = ControlStatus {
+        context,
+        revision: 1,
+        owner: Some(local.clone()),
+        transfer: None,
+    };
+    let recovery = LocalControlRecovery::default();
+    recovery.enabled.store(true, Ordering::Release);
+    recovery.observe(&owned, &local);
+    let unowned = ControlStatus {
+        owner: None,
+        ..owned.clone()
+    };
+    assert!(should_reacquire_local_control(&recovery, true, &unowned));
+
+    let already_owned = ControlStatus {
+        owner: Some(other.clone()),
+        ..unowned.clone()
+    };
+    assert!(!should_reacquire_local_control(
+        &recovery,
+        true,
+        &already_owned
+    ));
+    let transfer_pending = ControlStatus {
+        transfer: Some(ControlTransfer {
+            id: "handoff".to_string(),
+            requester: other,
+            previous_owner: Some(local.clone()),
+            phase: TransferPhase::Preparing,
+            deadline_millis: 10,
+        }),
+        ..owned.clone()
+    };
+    assert!(!should_reacquire_local_control(
+        &recovery,
+        true,
+        &transfer_pending
+    ));
+
+    recovery.observe(&already_owned, &local);
+    assert!(
+        !recovery.can_recover(),
+        "a completed handoff clears recovery"
+    );
+    recovery.observe(&owned, &local);
+    assert!(
+        recovery.can_recover(),
+        "a later explicit local acquisition restores the opted-in policy"
+    );
+}
+
+#[tokio::test]
+async fn prior_local_controller_reacquires_only_with_the_authenticated_context() {
+    use yttt_protocol::session::{ControlContext, ControlStatus, ProfileControlRequest};
+
+    let identity = identity();
+    let context = ControlContext {
+        host_epoch: 3,
+        control_epoch: 8,
+    };
+    let recovered = ControlStatus {
+        context,
+        revision: 5,
+        owner: Some(identity.client_instance_id.clone()),
+        transfer: None,
+    };
+    let (client, mut server) = tokio::io::duplex(8192);
+    let mut client: TransportStream = Box::new(client);
+    let server_context = context;
+    let server_status = recovered.clone();
+    let server = tokio::spawn(async move {
+        let ControlMessage::Request(request) = receive_control(&mut server).await.unwrap() else {
+            panic!("expected recovery request");
+        };
+        assert_eq!(request.actor_device_id.as_deref(), Some("recovery-test"));
+        assert_eq!(request.control, Some(server_context));
+        assert!(matches!(
+            request.body,
+            Request::ProfileControl(ProfileControlRequest::ReacquireIfUnowned {
+                context: request_context,
+            }) if request_context == server_context
+        ));
+        send_control(
+            &mut server,
+            &ControlMessage::Response(HostResponse {
+                request_id: request.request_id,
+                result: Ok(Response::ProfileControl(server_status)),
+            }),
+        )
+        .await
+        .unwrap();
+    });
+
+    assert_eq!(
+        reacquire_local_control(&mut client, &identity, context)
+            .await
+            .unwrap(),
+        recovered
+    );
+    server.await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn permanently_rejected_data_worker_stops_retrying() {
     let (listener, connector) = memory_pair();
@@ -366,9 +736,14 @@ async fn permanently_rejected_data_worker_stops_retrying() {
             "permanent errors must not retry"
         );
     });
+    register_terminal(
+        &context.terminal_state,
+        context.host_epoch,
+        viewport(1).session_id,
+    );
     start_terminal_data_channel(viewport(1).session_id, &context);
     server.await.unwrap();
-    assert!(context.data_channels.read().is_empty());
+    assert!(context.terminal_state.read().data_channels.is_empty());
 }
 
 #[tokio::test]
@@ -409,6 +784,7 @@ async fn fragmented_terminal_frame_survives_repeated_attach() {
         std::future::pending::<()>().await;
     });
     let id = viewport(1).session_id;
+    register_terminal(&context.terminal_state, context.host_epoch, id.clone());
     start_terminal_data_channel(id.clone(), &context);
     partial_rx.await.unwrap();
     for _ in 0..5 {
@@ -424,7 +800,12 @@ async fn fragmented_terminal_frame_survives_repeated_attach() {
         .unwrap()
         .unwrap();
     assert!(matches!(event, ClientEvent::TerminalUpdated(_)));
-    assert_eq!(context.mirrors.read()[&id].viewport().sequence, 7);
+    assert_eq!(
+        context.terminal_state.read().mirrors[&id]
+            .viewport()
+            .sequence,
+        7
+    );
     shutdown.send(true).unwrap();
     server.abort();
 }
@@ -520,6 +901,7 @@ async fn expired_queued_request_is_rejected_before_transmission() {
 #[test]
 fn project_token_usage_cache_updates_without_agent_snapshots() {
     let usage = Arc::new(RwLock::new(HashMap::new()));
+    let current_host_epoch = Arc::new(RwLock::new(Some(1)));
     let (events, mut received) = broadcast::channel(EVENT_CAPACITY);
     let summary = ProjectTokenUsage {
         project_id: "project".to_string(),
@@ -529,7 +911,7 @@ fn project_token_usage_cache_updates_without_agent_snapshots() {
         observed_sources: 1,
         updated_at: 4,
     };
-    apply_project_token_usage(summary.clone(), &usage, &events);
+    apply_project_token_usage(summary.clone(), &usage, &current_host_epoch, 1, &events);
     assert_eq!(usage.read().get("project"), Some(&summary));
     assert!(matches!(
         received.try_recv().unwrap(),
@@ -541,7 +923,7 @@ fn project_token_usage_cache_updates_without_agent_snapshots() {
         updated_at: 3,
         ..summary
     };
-    apply_project_token_usage(stale, &usage, &events);
+    apply_project_token_usage(stale, &usage, &current_host_epoch, 1, &events);
     assert!(received.try_recv().is_err());
     assert_eq!(usage.read()["project"].tokens, Some(0));
 }

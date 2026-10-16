@@ -1,7 +1,7 @@
 use std::{fs, time::Duration};
 
 use tempfile::TempDir;
-use yttt_client_core::ClientCore;
+use yttt_client_core::{ClientCore, ConnectionState};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId};
 use yttt_host::{HostBootstrap, run};
 use yttt_protocol::{
@@ -786,5 +786,83 @@ async fn client_recovers_when_the_first_handshake_connection_is_interrupted() {
         Response::Pong { sent_millis: 7, .. }
     ));
     assert_eq!(client.diagnostics().connection_attempts, 2);
+    client.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn permanent_reconnect_failure_stops_the_supervisor_without_retrying() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone)]
+    struct PermanentAfterDisconnect {
+        inner: yttt_transport::MemoryConnector,
+        reject: tokio::sync::watch::Sender<bool>,
+        connect_calls: Arc<AtomicUsize>,
+    }
+
+    impl TransportConnector for PermanentAfterDisconnect {
+        fn connect(
+            &self,
+        ) -> yttt_transport::BoxFuture<
+            '_,
+            Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+        > {
+            Box::pin(async move {
+                self.connect_calls.fetch_add(1, Ordering::AcqRel);
+                if *self.reject.borrow() {
+                    Err(yttt_transport::TransportError::Permanent(
+                        "credentials rejected".to_string(),
+                    ))
+                } else {
+                    let mut stream = self.inner.connect().await?;
+                    let (client, mut peer) = tokio::io::duplex(64 * 1024);
+                    let mut disconnected = self.reject.subscribe();
+                    tokio::spawn(async move {
+                        tokio::select! {
+                            _ = tokio::io::copy_bidirectional(&mut stream, &mut peer) => {}
+                            _ = disconnected.wait_for(|rejected| *rejected) => {}
+                        }
+                    });
+                    Ok(Box::new(client) as yttt_transport::TransportStream)
+                }
+            })
+        }
+    }
+
+    let (listener, connector) = memory_pair();
+    let (reject, _) = tokio::sync::watch::channel(false);
+    let connect_calls = Arc::new(AtomicUsize::new(0));
+    let host = start_host(
+        listener,
+        PermanentAfterDisconnect {
+            inner: connector,
+            reject: reject.clone(),
+            connect_calls: connect_calls.clone(),
+        },
+    )
+    .await;
+    let client = connect_client(&host, "permanent-reconnect-client").await;
+    let initial_calls = connect_calls.load(Ordering::Acquire);
+    reject.send_replace(true);
+
+    let mut states = client.subscribe_state();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if matches!(&*states.borrow(), ConnectionState::HostLost { .. }) {
+                break;
+            }
+            states.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("permanent reconnect failure must become terminal");
+    assert_eq!(
+        connect_calls.load(Ordering::Acquire),
+        initial_calls + 1,
+        "the supervisor must not retry a permanent transport rejection"
+    );
     client.shutdown().await;
 }

@@ -1701,6 +1701,7 @@ mod tests {
             .control
             .request(
                 client,
+                1,
                 yttt_protocol::session::ProfileControlRequest::RequestControl,
             )
             .unwrap()
@@ -1715,13 +1716,14 @@ mod tests {
         use yttt_protocol::session::ProfileControlRequest;
         service
             .control
-            .request(to, ProfileControlRequest::RequestControl)
+            .request(to, 1, ProfileControlRequest::RequestControl)
             .unwrap();
         let transfer = service.control.status(1).transfer.unwrap();
         service
             .control
             .request(
                 from,
+                1,
                 ProfileControlRequest::Ready {
                     transfer_id: transfer.id.clone(),
                     revisions: vec![],
@@ -1960,6 +1962,7 @@ mod tests {
             .control
             .request(
                 &second,
+                1,
                 yttt_protocol::session::ProfileControlRequest::Release,
             )
             .unwrap()
@@ -2441,6 +2444,7 @@ mod publication_tests {
             .control
             .request(
                 &client,
+                1,
                 yttt_protocol::session::ProfileControlRequest::RequestControl,
             )
             .unwrap()
