@@ -530,13 +530,13 @@ pub fn insert_graphic<L: EventListener>(
 
     let graphic_id = term.graphics.next_id();
 
-    // If SIXEL_DISPLAY is disabled, the start of the graphic is the
-    // cursor position, and the grid can be scrolled if the graphic is
-    // larger than the screen. The cursor is moved to the next line
-    // after the graphic.
+    // With SIXEL_DISPLAY disabled, the graphic starts at the cursor and
+    // scrolls only when its pixels extend past the bottom margin. Leave the
+    // text cursor on the final image row; an extra linefeed would scroll an
+    // image that fits and strand its top row on each TUI repaint.
     //
-    // If it is disabled, the graphic starts at (0, 0), the grid is never
-    // scrolled, and the cursor position is unmodified.
+    // With SIXEL_DISPLAY enabled, the graphic starts at (0, 0), the grid is
+    // never scrolled, and the cursor position is unmodified.
 
     let scrolling = !term.mode().contains(TermMode::SIXEL_DISPLAY);
 
@@ -658,7 +658,6 @@ pub fn insert_graphic<L: EventListener>(
         let graphic_columns = graphic.width.div_ceil(cell_width);
         term.move_forward(graphic_columns);
     } else if scrolling {
-        term.linefeed();
         term.carriage_return();
     }
 

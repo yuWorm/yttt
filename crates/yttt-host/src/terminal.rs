@@ -1326,6 +1326,16 @@ fn command_builder(
     command.env("COLORTERM", "truecolor");
     command.env("TERM_PROGRAM", "yttt");
     command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+    // OMP does not recognize TERM_PROGRAM=yttt. Its attachment thumbnails
+    // require both Kitty graphics and Unicode placeholders, not Sixel fallback.
+    for (name, value) in [
+        ("PI_FORCE_IMAGE_PROTOCOL", "kitty"),
+        ("PI_KITTY_PLACEHOLDERS", "1"),
+    ] {
+        if command.get_env(name).is_none() {
+            command.env(name, value);
+        }
+    }
     #[cfg(unix)]
     if ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()

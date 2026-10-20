@@ -588,6 +588,17 @@ pub fn configure_terminal_environment(builder: &mut CommandBuilder) {
     builder.env("TERM_PROGRAM", "yttt");
     builder.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
 
+    // OMP does not recognize TERM_PROGRAM=yttt. Its attachment thumbnails
+    // require both Kitty graphics and Unicode placeholders, not Sixel fallback.
+    for (name, value) in [
+        ("PI_FORCE_IMAGE_PROTOCOL", "kitty"),
+        ("PI_KITTY_PLACEHOLDERS", "1"),
+    ] {
+        if builder.get_env(name).is_none() {
+            builder.env(name, value);
+        }
+    }
+
     #[cfg(unix)]
     if ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()

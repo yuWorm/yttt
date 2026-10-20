@@ -47,8 +47,11 @@ temporary files are deleted only under known temporary directories with a
 
 For example, run `chafa --format=sixels --size=60x20 image.png` inside the terminal.
 Host and Client both need resource protocol v11; reconnect restores images without raw PTY replay.
-For Pi, launch with `PI_IMAGE_PROTOCOL=kitty pi`; for OMP, use
-`PI_FORCE_IMAGE_PROTOCOL=kitty omp` (optionally `PI_KITTY_PLACEHOLDERS=1`).
+Local PTYs default OMP to `PI_FORCE_IMAGE_PROTOCOL=kitty` and
+`PI_KITTY_PLACEHOLDERS=1`, enabling transcript images and attachment thumbnails.
+Inherited values and explicit environment overrides/removals are preserved.
+For Pi, launch with `PI_IMAGE_PROTOCOL=kitty pi`; in a plain SSH session, use
+`PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp` on the remote side.
 
 ## Portable PTY usage
 
