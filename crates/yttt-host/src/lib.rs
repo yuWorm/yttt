@@ -5,7 +5,6 @@ mod audit;
 mod control;
 mod device_settings;
 pub mod diagnostics;
-mod drafts;
 mod lifecycle;
 mod project;
 mod remote_access;
@@ -16,6 +15,7 @@ mod terminal_data;
 pub use terminal_data::SharedTerminalUpdate;
 mod token_usage;
 mod workspace;
+mod workspace_objects;
 pub use workspace::WorkspaceService;
 
 use std::{

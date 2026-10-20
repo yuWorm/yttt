@@ -11,7 +11,9 @@ pub const MAX_OPERATION_ID_BYTES: usize = 128;
 
 pub const MAX_DRAFT_CONTENT_BYTES: usize = 6 * 1024 * 1024;
 pub const MAX_WORKSPACE_DRAFT_BYTES: usize = 64 * 1024 * 1024;
-/// Includes bounded Agent plans, questions and recent conversation records across projects.
+pub const MAX_AGENT_STATE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_WORKSPACE_AGENT_STATE_BYTES: usize = 256 * 1024 * 1024;
+/// Layout and immutable object references, not draft or Agent state bodies.
 pub const MAX_WORKSPACE_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 /// A short, path-safe identifier for one persisted workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -77,7 +79,7 @@ impl From<WorkspaceOperationId> for String {
     }
 }
 
-/// A pure serialized UI snapshot. The Host intentionally does not interpret its schema.
+/// A serialized UI snapshot with a reserved `agent_states` object-reference list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WorkspaceSnapshot(#[serde(deserialize_with = "deserialize_snapshot")] Value);
@@ -154,6 +156,71 @@ pub struct DraftRef {
     pub base: DraftBase,
     pub content_sha256: [u8; 32],
     pub bytes: u64,
+}
+
+/// One pane's immutable Agent state, stored separately from the workspace layout.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStateRef {
+    pub project_id: yttt_core::model::ids::ProjectId,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub content_sha256: [u8; 32],
+    pub bytes: u64,
+}
+
+impl AgentStateRef {
+    pub fn for_content(
+        project_id: yttt_core::model::ids::ProjectId,
+        tab_id: String,
+        pane_id: String,
+        content: &[u8],
+    ) -> Self {
+        use sha2::{Digest as _, Sha256};
+        Self {
+            project_id,
+            tab_id,
+            pane_id,
+            content_sha256: Sha256::digest(content).into(),
+            bytes: content.len() as u64,
+        }
+    }
+}
+
+pub fn agent_state_references(
+    snapshot: &Value,
+) -> Result<Vec<AgentStateRef>, WorkspaceValidationError> {
+    match snapshot.get("agent_states") {
+        None => Ok(Vec::new()),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|error| WorkspaceValidationError::InvalidAgentStates(error.to_string())),
+    }
+}
+
+/// Uses the same serialized envelope on Client and Host without allocating another payload.
+pub fn validate_workspace_manifest(
+    snapshot: &Value,
+    drafts: &[DraftRef],
+) -> Result<(), WorkspaceValidationError> {
+    struct ByteCount(usize);
+    impl std::io::Write for ByteCount {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = ByteCount(0);
+    serde_json::to_writer(&mut count, &(snapshot, drafts))
+        .map_err(|error| WorkspaceValidationError::Encoding(error.to_string()))?;
+    if count.0 > MAX_WORKSPACE_MANIFEST_BYTES {
+        return Err(WorkspaceValidationError::ManifestTooLarge {
+            actual: count.0,
+            maximum: MAX_WORKSPACE_MANIFEST_BYTES,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -408,7 +475,7 @@ pub enum WorkspaceRequest {
         expected_revision: u64,
         restore: bool,
     },
-    /// Explicitly deletes a closed workspace and its draft bodies.
+    /// Explicitly deletes a closed workspace and its draft and Agent state bodies.
     Forget {
         workspace_id: WorkspaceId,
         expected_revision: u64,
@@ -416,6 +483,18 @@ pub enum WorkspaceRequest {
     /// Reads a known workspace without manufacturing an empty missing record.
     OpenExisting {
         workspace_id: WorkspaceId,
+    },
+    /// Stores an immutable Agent state before a workspace manifest references it.
+    PutAgentState {
+        workspace_id: WorkspaceId,
+        reference: AgentStateRef,
+        #[serde(with = "serde_bytes")]
+        content: Vec<u8>,
+    },
+    /// Reads one Agent state currently published by this workspace.
+    GetAgentState {
+        workspace_id: WorkspaceId,
+        reference: AgentStateRef,
     },
 }
 
@@ -434,6 +513,7 @@ impl WorkspaceRequest {
                 | Self::Open { .. }
                 | Self::OpenExisting { .. }
                 | Self::GetDraft { .. }
+                | Self::GetAgentState { .. }
         )
     }
 }
@@ -484,6 +564,14 @@ pub enum WorkspaceResponse {
     Forgotten {
         workspace_id: WorkspaceId,
     },
+    AgentStateStored {
+        reference: AgentStateRef,
+    },
+    AgentState {
+        reference: AgentStateRef,
+        #[serde(with = "serde_bytes")]
+        content: Vec<u8>,
+    },
 }
 
 /// Validation failures raised while constructing strongly validated workspace wire values.
@@ -495,6 +583,12 @@ pub enum WorkspaceValidationError {
     /// The supplied UI snapshot is not a JSON object.
     #[error("workspace snapshot must be a JSON object")]
     SnapshotMustBeObject,
+    #[error("workspace manifest is {actual} bytes and exceeds the {maximum} byte limit")]
+    ManifestTooLarge { actual: usize, maximum: usize },
+    #[error("workspace manifest cannot be encoded: {0}")]
+    Encoding(String),
+    #[error("workspace Agent state references are invalid: {0}")]
+    InvalidAgentStates(String),
 }
 
 fn validate_identifier(
@@ -511,4 +605,38 @@ fn validate_identifier(
         return Err(WorkspaceValidationError::InvalidIdentifier { kind, maximum });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_limit_counts_the_complete_envelope_and_draft_references() {
+        let mut snapshot = serde_json::json!({
+            "layout": "x".repeat(MAX_WORKSPACE_MANIFEST_BYTES - br#"[{"layout":""},[]]"#.len()),
+        });
+        validate_workspace_manifest(&snapshot, &[]).unwrap();
+        let draft = DraftRef::for_document(
+            b"document",
+            &DraftContentRevision {
+                revision: 1,
+                base: DraftBase::Json {
+                    metadata: serde_json::json!({}),
+                },
+                content: "body".into(),
+            },
+        );
+        assert!(matches!(
+            validate_workspace_manifest(&snapshot, &[draft]),
+            Err(WorkspaceValidationError::ManifestTooLarge { .. })
+        ));
+        snapshot["layout"] = serde_json::Value::String(
+            "x".repeat(MAX_WORKSPACE_MANIFEST_BYTES - br#"[{"layout":""},[]]"#.len() + 1),
+        );
+        assert!(matches!(
+            validate_workspace_manifest(&snapshot, &[]),
+            Err(WorkspaceValidationError::ManifestTooLarge { .. })
+        ));
+    }
 }

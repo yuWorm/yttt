@@ -14,7 +14,14 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 18`。v18 追加
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 19`。v19 追加工作区 `PutAgentState` /
+  `GetAgentState` 请求与 `AgentStateStored` / `AgentState` 响应，正文使用 CBOR 字节串。
+  `AgentStateRef` 包含 project/tab/pane、SHA-256 与字节数，保存在 snapshot 顶层 `agent_states`；
+  `Commit` 在全部引用对象持久化且校验通过后才原子发布。正文每份最大 16 MiB、每工作区最大
+  256 MiB；Client 与 Host 共用 16 MiB manifest 校验，不再对 Client 单独限制 1 MiB。
+  Host 记录 schema 3 自动迁移旧版内联 Agent 状态，Client 快照 schema 2 使用对象引用。
+  桌面 Client、Host、远端 Server 与 CLI 需同步更新。
+  v18 追加
   `ProfileControlRequest::ReacquireIfUnowned { context }`：仅本机入口可用，Host 原子检查
   Host/control epoch、无 owner、无交接，拒绝时返回未改变的控制状态；不能强制接管。
   桌面 Client、Host、远端 Server 与 CLI 需同步更新。

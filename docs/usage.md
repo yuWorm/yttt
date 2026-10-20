@@ -350,11 +350,17 @@ After an explicit control handoff back to this Client, existing terminal panes r
 input leases and refresh their writer contexts by reattaching. The running processes are not
 restarted, and input and terminal-close operations use the renewed authority.
 
-**Recovery limits.** Draft bodies are separate from layout manifests: up to 6 MiB per document,
-64 MiB per workspace and 1 MiB per manifest. An oversized or failed publication remains an error;
-unpublished edits are not advertised as saved. Host restart restores confirmed windows and drafts,
-then reconnects or rebuilds shells and Agent sessions as described above; arbitrary commands are
-not automatically replayed.
+**Recovery limits.** Client and Host use the same 16 MiB layout-manifest budget, including object
+references. Editor draft bodies are separate: up to 6 MiB per document and 64 MiB per workspace.
+Agent state is also stored separately: up to 16 MiB per Agent and 256 MiB of published Agent state
+per workspace. Its messages and task records no longer consume the layout budget. Terminal image
+resources use the independent terminal stream and image limits described above.
+
+The Host persists every referenced body before atomically publishing its manifest. Legacy inline
+Agent state is migrated automatically; a failed migration or publication does not replace the last
+durable workspace. Oversized or failed publications remain errors, not successful saves. Host restart
+restores confirmed windows, drafts and retained Agent state, then reconnects or rebuilds sessions;
+arbitrary commands are not replayed, and retained questions do not recreate live answer channels.
 
 Forced control loss, disconnection, or a stale Host epoch preserves unpublished edits in
 Device-private recovery storage, keyed by Device profile, Host environment and workspace.
@@ -364,8 +370,9 @@ explicit choice: reconcile, reload the Host snapshot after preserving local reco
 the local layout/drafts against a newly read Host revision. Stale acknowledgements cannot advance
 the current baseline.
 **Recover local drafts** restores matching document drafts without replacing the whole workspace.
-The separate full-workspace recovery action restores the preserved layout and drafts, including
-after a Host reload or application restart; it refuses to overwrite current unpublished changes.
+The separate full-workspace recovery action restores the preserved layout, drafts and Agent state,
+including after a Host reload or application restart. Its local copy contains the Agent bodies rather
+than depending on unconfirmed Host uploads; it refuses to overwrite current unpublished changes.
 A cold restore failure, or a failed Host reload whose local state still matches the preserved
 snapshot, can also be replaced by valid saved recovery. Newer local changes remain protected.
 A deleted history entry reports a stopped recovery failure instead of retrying forever.
@@ -452,8 +459,9 @@ inside a remote Client browses the Host filesystem, including directory creation
 local native folder dialog. Device theme and keybinding changes stay on this computer.
 Manage SSH endpoints and Host-private administration from the local Client.
 
-Remote workspace snapshots include project/tab/group/pane layout, active selection, tree state,
-editor state and unsaved drafts. A save is acknowledged only after durable Host persistence.
+Remote workspace manifests include project/tab/group/pane layout, active selection, tree state,
+editor state, and references to unsaved drafts and retained Agent state. A save is acknowledged only
+after durable Host persistence of both the bodies and the manifest.
 Revision conflicts and disk failures remain visible rather than claiming success; closing with
 an unconfirmed workspace save requires keeping the window open or explicitly discarding that save.
 

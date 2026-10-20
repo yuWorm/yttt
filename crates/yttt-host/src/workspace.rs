@@ -13,15 +13,15 @@ use yttt_core::model::ids::ClientInstanceId;
 use yttt_protocol::{
     FailureCode, HostPath, PathSegment, ProjectRelativePath, ProtocolFailure,
     workspace::{
-        DraftRef, MAX_WORKSPACE_MANIFEST_BYTES, WorkspaceConfig, WorkspaceConfigRevision,
-        WorkspaceDirectory, WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind, WorkspaceDraft,
-        WorkspaceEnvironment, WorkspaceId, WorkspaceOperationId, WorkspaceProjectConfig,
-        WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot,
-        WorkspaceSummary, encode_project_path,
+        AgentStateRef, DraftRef, WorkspaceConfig, WorkspaceConfigRevision, WorkspaceDirectory,
+        WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind, WorkspaceDraft, WorkspaceEnvironment,
+        WorkspaceId, WorkspaceOperationId, WorkspaceProjectConfig, WorkspaceProjectConfigFile,
+        WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot, WorkspaceSummary,
+        agent_state_references, encode_project_path, validate_workspace_manifest,
     },
 };
 
-const WORKSPACE_SCHEMA_VERSION: u16 = 2;
+const WORKSPACE_SCHEMA_VERSION: u16 = 3;
 const MAX_WORKSPACES: usize = 128;
 const MAX_COMPLETED_OPERATIONS: usize = 128;
 const MAX_WORKSPACE_STATE_BYTES: usize = 24 * 1024 * 1024;
@@ -38,7 +38,8 @@ pub struct WorkspaceService {
     project_config: WorkspaceProjectConfig,
     workspace_root: PathBuf,
     environment_id: String,
-    drafts: crate::drafts::DraftObjects,
+    drafts: crate::workspace_objects::WorkspaceObjects<DraftRef>,
+    agent_states: crate::workspace_objects::WorkspaceObjects<AgentStateRef>,
     state: Mutex<ServiceState>,
     pub(crate) control: crate::control::ProfileControl,
 }
@@ -54,6 +55,7 @@ struct WorkspaceRecord {
     revision: u64,
     snapshot: WorkspaceSnapshot,
     drafts: Vec<DraftRef>,
+    agent_states: Vec<AgentStateRef>,
     name: String,
     saved_millis: u64,
     restore_on_startup: bool,
@@ -96,6 +98,7 @@ impl WorkspaceRecord {
             revision: 0,
             snapshot: empty_snapshot(),
             drafts: Vec::new(),
+            agent_states: Vec::new(),
             name: String::new(),
             saved_millis: 0,
             restore_on_startup: true,
@@ -130,6 +133,8 @@ impl WorkspaceRecord {
             .map_err(|failure| invalid_state(&failure.message))?;
         Ok(Self {
             revision: persisted.revision,
+            agent_states: agent_state_references(persisted.snapshot.as_value())
+                .map_err(io::Error::other)?,
             snapshot: persisted.snapshot,
             drafts: persisted.drafts,
             name: persisted.name,
@@ -172,7 +177,8 @@ impl WorkspaceService {
             Err(error) => return Err(error),
         };
 
-        let drafts = crate::drafts::DraftObjects::new(&state_root)?;
+        let drafts = crate::workspace_objects::WorkspaceObjects::new(&state_root)?;
+        let agent_states = crate::workspace_objects::WorkspaceObjects::new(&state_root)?;
         let mut workspaces = HashMap::new();
         let history_marker = state_root.join("workspace-history-initialized");
         let mut history_initialized = history_marker.try_exists()?;
@@ -205,13 +211,20 @@ impl WorkspaceService {
             let bytes = read_bounded_file(&path, MAX_WORKSPACE_STATE_BYTES)?;
             let mut persisted: PersistedWorkspaceRecord = serde_json::from_slice(&bytes)
                 .map_err(|error| invalid_state(&format!("invalid workspace state: {error}")))?;
+            let needs_migration = matches!(persisted.schema_version, 1 | 2);
             if persisted.schema_version == 1 {
                 migrate_inline_drafts(&drafts, &workspace_id, &mut persisted)?;
-                // Bodies are durable first. If publication fails, the original manifest is intact.
-                let migrated = serde_json::to_vec(&persisted).map_err(io::Error::other)?;
-                atomic_write(&path, &migrated, random_temporary_file())?;
+            }
+            if persisted.schema_version == 2 {
+                migrate_inline_agent_states(&agent_states, &workspace_id, &mut persisted)?;
             }
             let record = WorkspaceRecord::from_persisted(persisted)?;
+            if needs_migration {
+                // All referenced objects are durable before replacing the legacy manifest.
+                let migrated = serialize_workspace_record(&record)
+                    .map_err(|error| invalid_state(&error.message))?;
+                atomic_write(&path, &migrated, random_temporary_file())?;
+            }
             if !history_initialized {
                 atomic_write(&history_marker, b"1", random_temporary_file())?;
                 history_initialized = true;
@@ -221,9 +234,11 @@ impl WorkspaceService {
                 #[cfg(unix)]
                 File::open(&workspace_root)?.sync_all()?;
                 drafts.remove_workspace(&workspace_id)?;
+                agent_states.remove_workspace(&workspace_id)?;
                 continue;
             }
             drafts.recover(&workspace_id, &record.drafts)?;
+            agent_states.recover(&workspace_id, &record.agent_states)?;
             if workspaces.insert(workspace_id, record).is_some() {
                 return Err(invalid_state("duplicate workspace state identifier"));
             }
@@ -239,6 +254,7 @@ impl WorkspaceService {
             workspace_root,
             environment_id,
             drafts,
+            agent_states,
             control: crate::control::ProfileControl::new(),
             state: Mutex::new(ServiceState {
                 workspaces,
@@ -622,6 +638,44 @@ impl WorkspaceService {
                     .map_err(|error| filesystem_failure("read draft body", error))?;
                 Ok(WorkspaceResponse::Draft { reference, content })
             }
+            WorkspaceRequest::PutAgentState {
+                workspace_id,
+                reference,
+                content,
+            } => {
+                if !state.workspaces.contains_key(&workspace_id) {
+                    return Err(failure(
+                        FailureCode::NotFound,
+                        "register the workspace before uploading Agent states",
+                        false,
+                    ));
+                }
+                self.agent_states
+                    .put(&workspace_id, &reference, &content)
+                    .map_err(|error| filesystem_failure("persist Agent state", error))?;
+                Ok(WorkspaceResponse::AgentStateStored { reference })
+            }
+            WorkspaceRequest::GetAgentState {
+                workspace_id,
+                reference,
+            } => {
+                if !state
+                    .workspaces
+                    .get(&workspace_id)
+                    .is_some_and(|record| record.agent_states.contains(&reference))
+                {
+                    return Err(failure(
+                        FailureCode::NotFound,
+                        "Agent state is not published by this workspace",
+                        false,
+                    ));
+                }
+                let content = self
+                    .agent_states
+                    .read(&workspace_id, &reference)
+                    .map_err(|error| filesystem_failure("read Agent state", error))?;
+                Ok(WorkspaceResponse::AgentState { reference, content })
+            }
         }
     }
 
@@ -677,11 +731,17 @@ impl WorkspaceService {
         self.drafts
             .validate_references(&workspace_id, &drafts)
             .map_err(|error| filesystem_failure("verify draft references", error))?;
+        let agent_states = agent_state_references(snapshot.as_value())
+            .map_err(|error| failure(FailureCode::InvalidRequest, error.to_string(), false))?;
+        self.agent_states
+            .validate_references(&workspace_id, &agent_states)
+            .map_err(|error| filesystem_failure("verify Agent state references", error))?;
         let resulting_revision = next_revision(current.revision)?;
         let mut updated = current;
         updated.revision = resulting_revision;
         updated.snapshot = snapshot.clone();
         let previous_drafts = std::mem::replace(&mut updated.drafts, drafts);
+        let previous_agents = std::mem::replace(&mut updated.agent_states, agent_states);
         updated.saved_millis = crate::now_millis();
         updated.completed_operations.push_back(CompletedOperation {
             operation_id,
@@ -694,6 +754,8 @@ impl WorkspaceService {
         self.persist_workspace(state, &workspace_id, &updated)?;
         self.drafts
             .collect_obsolete(&workspace_id, &previous_drafts, &updated.drafts);
+        self.agent_states
+            .collect_obsolete(&workspace_id, &previous_agents, &updated.agent_states);
         state.workspaces.insert(workspace_id.clone(), updated);
 
         Ok(WorkspaceResponse::Committed {
@@ -744,6 +806,9 @@ impl WorkspaceService {
         self.drafts
             .remove_workspace(workspace_id)
             .map_err(|error| filesystem_failure("delete workspace drafts", error))?;
+        self.agent_states
+            .remove_workspace(workspace_id)
+            .map_err(|error| filesystem_failure("delete workspace Agent states", error))?;
         Ok(())
     }
 
@@ -1283,7 +1348,7 @@ fn workspace_summary(id: &WorkspaceId, record: &WorkspaceRecord) -> WorkspaceSum
 }
 
 fn workspace_is_empty(record: &WorkspaceRecord) -> bool {
-    if !record.drafts.is_empty() {
+    if !record.drafts.is_empty() || !record.agent_states.is_empty() {
         return false;
     }
     let value = record.snapshot.as_value();
@@ -1302,7 +1367,7 @@ fn workspace_is_empty(record: &WorkspaceRecord) -> bool {
 }
 
 fn migrate_inline_drafts(
-    objects: &crate::drafts::DraftObjects,
+    objects: &crate::workspace_objects::WorkspaceObjects<DraftRef>,
     workspace_id: &WorkspaceId,
     persisted: &mut PersistedWorkspaceRecord,
 ) -> io::Result<()> {
@@ -1351,6 +1416,75 @@ fn migrate_inline_drafts(
     persisted.snapshot = WorkspaceSnapshot::new(snapshot).map_err(io::Error::other)?;
     validate_workspace_payload(&persisted.snapshot, &persisted.drafts)
         .map_err(|error| invalid_state(&error.message))?;
+    persisted.schema_version = 2;
+    Ok(())
+}
+
+fn migrate_inline_agent_states(
+    objects: &crate::workspace_objects::WorkspaceObjects<AgentStateRef>,
+    workspace_id: &WorkspaceId,
+    persisted: &mut PersistedWorkspaceRecord,
+) -> io::Result<()> {
+    let mut snapshot = persisted.snapshot.clone().into_value();
+    let mut references = agent_state_references(&snapshot).map_err(io::Error::other)?;
+    if let Some(projects) = snapshot
+        .pointer_mut("/workspace/opened_projects")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for project in projects {
+            let project_id: yttt_core::model::ids::ProjectId =
+                serde_json::from_value(project["id"].clone()).map_err(io::Error::other)?;
+            let Some(tabs) = project
+                .get_mut("tab_states")
+                .and_then(serde_json::Value::as_array_mut)
+            else {
+                continue;
+            };
+            for tab in tabs {
+                let tab_id = tab["tab_id"]
+                    .as_str()
+                    .ok_or_else(|| invalid_state("Agent state tab has no identity"))?
+                    .to_string();
+                let Some(panes) = tab
+                    .get_mut("pane_states")
+                    .and_then(serde_json::Value::as_array_mut)
+                else {
+                    continue;
+                };
+                for pane in panes {
+                    let Some(agent) = pane.get("agent_snapshot").filter(|value| !value.is_null())
+                    else {
+                        continue;
+                    };
+                    let pane_id = pane["pane_id"]
+                        .as_str()
+                        .ok_or_else(|| invalid_state("Agent state pane has no identity"))?
+                        .to_string();
+                    let agent: yttt_agent_core::AgentSnapshot =
+                        serde_json::from_value(agent.clone()).map_err(io::Error::other)?;
+                    let content = serde_json::to_vec(&agent).map_err(io::Error::other)?;
+                    let reference = AgentStateRef::for_content(
+                        project_id.clone(),
+                        tab_id.clone(),
+                        pane_id,
+                        &content,
+                    );
+                    objects.put(workspace_id, &reference, &content)?;
+                    references.push(reference);
+                    pane["agent_snapshot"] = serde_json::Value::Null;
+                }
+            }
+        }
+        if snapshot["schema_version"] == 1 {
+            snapshot["schema_version"] = serde_json::json!(2);
+        }
+    }
+    if !references.is_empty() {
+        snapshot["agent_states"] = serde_json::to_value(&references).map_err(io::Error::other)?;
+    }
+    objects.validate_references(workspace_id, &references)?;
+    validate_workspace_manifest(&snapshot, &persisted.drafts).map_err(io::Error::other)?;
+    persisted.snapshot = WorkspaceSnapshot::new(snapshot).map_err(io::Error::other)?;
     persisted.schema_version = WORKSPACE_SCHEMA_VERSION;
     Ok(())
 }
@@ -1359,21 +1493,17 @@ fn validate_workspace_payload(
     snapshot: &WorkspaceSnapshot,
     drafts: &[DraftRef],
 ) -> Result<(), ProtocolFailure> {
-    let snapshot_bytes = serde_json::to_vec(&(snapshot.as_value(), drafts)).map_err(|error| {
-        failure(
-            FailureCode::Internal,
-            format!("failed to encode workspace snapshot: {error}"),
-            false,
-        )
-    })?;
-    if snapshot_bytes.len() > MAX_WORKSPACE_MANIFEST_BYTES {
-        return Err(failure(
-            FailureCode::ResourceLimit,
-            "workspace snapshot exceeds its size limit",
-            false,
-        ));
-    }
-    Ok(())
+    validate_workspace_manifest(snapshot.as_value(), drafts).map_err(|error| {
+        let code = if matches!(
+            error,
+            yttt_protocol::workspace::WorkspaceValidationError::ManifestTooLarge { .. }
+        ) {
+            FailureCode::ResourceLimit
+        } else {
+            FailureCode::InvalidRequest
+        };
+        failure(code, error.to_string(), false)
+    })
 }
 
 fn serialize_workspace_record(record: &WorkspaceRecord) -> Result<Vec<u8>, ProtocolFailure> {
@@ -2429,13 +2559,16 @@ mod tests {
 }
 
 #[cfg(test)]
+mod agent_state_tests;
+
+#[cfg(test)]
 mod publication_tests {
     use super::*;
     use yttt_protocol::workspace::{
         DraftBase, DraftContentRevision, MAX_DRAFT_CONTENT_BYTES, WorkspaceProjectConfig,
     };
 
-    fn setup(root: &Path) -> (WorkspaceService, ClientInstanceId) {
+    pub(super) fn setup(root: &Path) -> (WorkspaceService, ClientInstanceId) {
         let service =
             WorkspaceService::new(root, root.join("config"), WorkspaceProjectConfig::Project)
                 .unwrap();
@@ -2452,7 +2585,11 @@ mod publication_tests {
         service.control.finish(&transfer, |_| true).unwrap();
         (service, client)
     }
-    fn register(service: &WorkspaceService, client: &ClientInstanceId, name: &str) -> WorkspaceId {
+    pub(super) fn register(
+        service: &WorkspaceService,
+        client: &ClientInstanceId,
+        name: &str,
+    ) -> WorkspaceId {
         let id = WorkspaceId::new(name).unwrap();
         service
             .handle(

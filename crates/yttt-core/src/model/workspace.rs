@@ -47,6 +47,42 @@ impl Workspace {
         }
     }
 
+    /// Captures the manifest without copying Agent histories, which are separate objects.
+    pub fn persisted_layout_state(&self) -> WorkspaceState {
+        WorkspaceState {
+            selected_project_id: self.selected_project_id().cloned(),
+            opened_projects: self
+                .opened_projects
+                .iter()
+                .map(|project| OpenedProject {
+                    id: project.id.clone(),
+                    instance_id: project.instance_id.clone(),
+                    location: project.location.clone(),
+                    layout: project.layout.clone(),
+                    selected_tab_id: project.selected_tab_id.clone(),
+                    tab_states: project
+                        .tab_states
+                        .iter()
+                        .map(|tab| TabState {
+                            tab_id: tab.tab_id.clone(),
+                            start_state: tab.start_state,
+                            focused_pane_id: tab.focused_pane_id.clone(),
+                            pane_states: tab
+                                .pane_states
+                                .iter()
+                                .map(|pane| PaneState {
+                                    pane_id: pane.pane_id.clone(),
+                                    process_state: pane.process_state,
+                                    agent_snapshot: None,
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
     pub fn restore_persisted_state(state: WorkspaceState) -> Result<Self, WorkspaceRestoreError> {
         let mut project_ids = HashSet::new();
         for project in &state.opened_projects {

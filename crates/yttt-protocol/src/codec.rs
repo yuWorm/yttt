@@ -388,6 +388,31 @@ mod tests {
     }
 
     #[test]
+    fn maximum_agent_state_roundtrips_without_json_byte_array_expansion() {
+        use crate::workspace::{
+            AgentStateRef, MAX_AGENT_STATE_BYTES, WorkspaceId, WorkspaceRequest,
+        };
+        let content = vec![b'x'; MAX_AGENT_STATE_BYTES];
+        let reference = AgentStateRef::for_content(
+            yttt_core::model::ids::ProjectId::new("project"),
+            "tab".into(),
+            "pane".into(),
+            &content,
+        );
+        let request = ControlMessage::Request(crate::ClientRequest::new(
+            1,
+            crate::Request::Workspace(WorkspaceRequest::PutAgentState {
+                workspace_id: WorkspaceId::new("workspace").unwrap(),
+                reference,
+                content,
+            }),
+        ));
+        let encoded = encode_message(FrameKind::Control, &request).unwrap();
+        let decoded: ControlMessage = decode_message(&decode_frame(&encoded).unwrap()).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
     fn project_file_response_at_editor_limit_fits_the_control_frame() {
         let text = "a".repeat(6 * 1024 * 1024);
         let encoded = encode_message(

@@ -239,7 +239,8 @@ impl Request {
                 | WorkspaceRequest::OmpSessionExists { .. }
                 | WorkspaceRequest::Open { .. }
                 | WorkspaceRequest::OpenExisting { .. }
-                | WorkspaceRequest::GetDraft { .. } => Capability::WorkspaceRead,
+                | WorkspaceRequest::GetDraft { .. }
+                | WorkspaceRequest::GetAgentState { .. } => Capability::WorkspaceRead,
                 _ => Capability::WorkspaceMutate,
             }),
         }

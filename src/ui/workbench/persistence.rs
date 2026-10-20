@@ -1,3 +1,8 @@
+mod agent_state;
+#[cfg(all(test, unix))]
+mod agent_state_tests;
+
+use agent_state::{AgentStateCache, AgentStateUpload};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -21,9 +26,9 @@ use yttt_protocol::{
     project::{ContentRevision, ProjectFileFingerprint},
     session::ControlContext,
     workspace::{
-        DraftBase, DraftContentRevision, DraftRef, MAX_DRAFT_CONTENT_BYTES,
+        AgentStateRef, DraftBase, DraftContentRevision, DraftRef, MAX_DRAFT_CONTENT_BYTES,
         MAX_WORKSPACE_DRAFT_BYTES, WorkspaceId, WorkspaceOperationId, WorkspaceRequest,
-        WorkspaceResponse, WorkspaceSnapshot,
+        WorkspaceResponse, WorkspaceSnapshot, validate_workspace_manifest,
     },
 };
 
@@ -35,13 +40,17 @@ use crate::ui::editor::{
 
 use super::*;
 
-const REMOTE_WORKSPACE_SCHEMA_VERSION: u16 = 1;
-const MAX_REMOTE_WORKSPACE_SNAPSHOT_BYTES: usize = 1024 * 1024;
+const REMOTE_WORKSPACE_SCHEMA_VERSION: u16 = 2;
 const WORKSPACE_PERSISTENCE_INTERVAL: Duration = Duration::from_millis(500);
 
 const RECOVERABLE_WORKSPACE_DRAFT_SCHEMA_VERSION: u16 = 1;
 
 type DraftUpload = (DraftRef, Arc<Vec<u8>>);
+#[derive(Default)]
+struct WorkspaceUploads {
+    drafts: Vec<DraftUpload>,
+    agent_states: Vec<AgentStateUpload>,
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum WorkspacePersistenceMode {
     #[default]
@@ -65,7 +74,7 @@ struct PendingWorkspaceCommit {
     expected_revision: u64,
     operation_id: WorkspaceOperationId,
     snapshot: serde_json::Value,
-    drafts: Arc<Vec<DraftUpload>>,
+    uploads: Arc<WorkspaceUploads>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -78,6 +87,8 @@ pub(super) struct WorkspacePersistenceState {
     view: Option<crate::session_coordinator::WorkspaceViewLease>,
     frozen_transfer: Option<String>,
     draft_cache: std::cell::RefCell<HashMap<DocumentId, (u64, DraftUpload)>>,
+    agent_cache: std::cell::RefCell<AgentStateCache>,
+    confirmed_agent_states: HashSet<[u8; 32]>,
     confirmed_drafts: HashSet<[u8; 32]>,
     mode: WorkspacePersistenceMode,
     revision: Option<u64>,
@@ -115,6 +126,8 @@ impl Default for WorkspacePersistenceState {
             view: None,
             frozen_transfer: None,
             draft_cache: std::cell::RefCell::new(HashMap::new()),
+            agent_cache: std::cell::RefCell::new(AgentStateCache::new()),
+            confirmed_agent_states: HashSet::new(),
             confirmed_drafts: HashSet::new(),
             mode: WorkspacePersistenceMode::Inactive,
             revision: None,
@@ -153,6 +166,8 @@ struct RemoteWorkspaceSnapshot {
     workspace: WorkspaceState,
     editor: ProjectEditorWorkspaceSnapshot,
     documents: Vec<RemoteDocumentSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    agent_states: Vec<AgentStateRef>,
 }
 
 impl RemoteWorkspaceSnapshot {
@@ -162,6 +177,7 @@ impl RemoteWorkspaceSnapshot {
             workspace: Workspace::new().persisted_state(),
             editor: ProjectEditorWorkspaceSnapshot::default(),
             documents: Vec::new(),
+            agent_states: Vec::new(),
         }
     }
 
@@ -171,12 +187,14 @@ impl RemoteWorkspaceSnapshot {
         }
         let mut snapshot: Self = serde_json::from_value(value)
             .map_err(|error| format!("remote workspace snapshot is invalid: {error}"))?;
-        if snapshot.schema_version != REMOTE_WORKSPACE_SCHEMA_VERSION {
+        if !matches!(snapshot.schema_version, 1 | REMOTE_WORKSPACE_SCHEMA_VERSION) {
             return Err(format!(
                 "remote workspace snapshot schema {} is unsupported",
                 snapshot.schema_version
             ));
         }
+        snapshot.schema_version = REMOTE_WORKSPACE_SCHEMA_VERSION;
+        agent_state::validate_references(&snapshot.workspace, &snapshot.agent_states)?;
         repair_legacy_default_tabs(&mut snapshot.workspace);
         let workspace = Workspace::restore_persisted_state(snapshot.workspace.clone())
             .map_err(|error| format!("remote workspace core state is invalid: {error}"))?;
@@ -284,6 +302,8 @@ struct RecoverableWorkspaceDraft {
     host_epoch: Option<u64>,
     snapshot: serde_json::Value,
     drafts: Vec<RecoverableDraftContent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    agent_states: Vec<RecoverableAgentState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_settings: Option<PendingSettingsRecovery>,
 }
@@ -291,6 +311,12 @@ struct RecoverableWorkspaceDraft {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RecoverableDraftContent {
     reference: DraftRef,
+    content: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RecoverableAgentState {
+    reference: AgentStateRef,
     content: Vec<u8>,
 }
 
@@ -327,6 +353,7 @@ struct PreparedRemoteRestore {
     services: HashMap<ProjectId, ProjectServices>,
     available_terminal_sessions: HashSet<String>,
     losses: Vec<RemoteResourceLoss>,
+    agent_cache: AgentStateCache,
 }
 
 #[derive(Debug)]
@@ -850,11 +877,18 @@ impl WorkbenchView {
         }
         let candidate = materialize_recovery_snapshot(
             draft.snapshot,
-            draft
-                .drafts
-                .into_iter()
-                .map(|body| (body.reference, Arc::new(body.content)))
-                .collect(),
+            WorkspaceUploads {
+                drafts: draft
+                    .drafts
+                    .into_iter()
+                    .map(|body| (body.reference, Arc::new(body.content)))
+                    .collect(),
+                agent_states: draft
+                    .agent_states
+                    .into_iter()
+                    .map(|body| (body.reference, Arc::new(body.content)))
+                    .collect(),
+            },
         )?;
         self.workspace_persistence.recovery_candidate = Some(candidate);
         self.workspace_persistence.recovered_settings_recovery = draft.pending_settings;
@@ -1485,6 +1519,7 @@ impl WorkbenchView {
             };
         self.workspace = workspace;
         self.workspace_persistence.draft_cache.borrow_mut().clear();
+        *self.workspace_persistence.agent_cache.borrow_mut() = prepared.agent_cache;
         self.reset_remote_agent_snapshots();
         self.project.services = prepared.services;
         self.project.project_editor_runtime = ProjectEditorRuntime::default();
@@ -1528,6 +1563,12 @@ impl WorkbenchView {
                     .as_ref()
                     .map(|reference| reference.content_sha256)
             })
+            .collect();
+        self.workspace_persistence.confirmed_agent_states = prepared
+            .snapshot
+            .agent_states
+            .iter()
+            .map(|reference| reference.content_sha256)
             .collect();
         self.workspace_persistence.last_committed_snapshot = Some(prepared.server_snapshot);
         self.workspace_persistence.pending_commit = None;
@@ -2085,8 +2126,17 @@ impl WorkbenchView {
             host_epoch: remote_host_epoch(runtime).or(self.workspace_persistence.host_epoch),
             snapshot,
             drafts: drafts
+                .drafts
                 .into_iter()
                 .map(|(reference, content)| RecoverableDraftContent {
+                    reference,
+                    content: content.as_ref().clone(),
+                })
+                .collect(),
+            agent_states: drafts
+                .agent_states
+                .into_iter()
+                .map(|(reference, content)| RecoverableAgentState {
                     reference,
                     content: content.as_ref().clone(),
                 })
@@ -2475,7 +2525,7 @@ impl WorkbenchView {
                 expected_revision: pending.expected_revision,
                 operation_id: pending.operation_id.clone(),
                 snapshot: pending.snapshot.clone(),
-                drafts: pending.drafts.clone(),
+                uploads: pending.uploads.clone(),
             }
         } else {
             let (snapshot, drafts) = match self.build_remote_workspace_snapshot(cx) {
@@ -2488,21 +2538,13 @@ impl WorkbenchView {
             if self.workspace_snapshot_is_published(&snapshot) {
                 return;
             }
-            let bytes = match serde_json::to_vec(&snapshot) {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    self.set_workspace_persistence_error(format!(
-                        "Remote workspace snapshot cannot be serialized: {error}"
-                    ));
-                    return;
-                }
-            };
-            if bytes.len() > MAX_REMOTE_WORKSPACE_SNAPSHOT_BYTES {
-                self.set_workspace_persistence_error(format!(
-                    "Remote workspace snapshot is {} bytes and exceeds the {} byte recovery limit; changes remain unsaved",
-                    bytes.len(),
-                    MAX_REMOTE_WORKSPACE_SNAPSHOT_BYTES
-                ));
+            let references = drafts
+                .drafts
+                .iter()
+                .map(|(reference, _)| reference.clone())
+                .collect::<Vec<_>>();
+            if let Err(error) = validate_workspace_manifest(&snapshot, &references) {
+                self.set_workspace_persistence_error(format!("{error}; changes remain unsaved"));
                 return;
             }
             let operation_id =
@@ -2519,13 +2561,13 @@ impl WorkbenchView {
                 expected_revision: current_revision,
                 operation_id,
                 snapshot,
-                drafts: Arc::new(drafts),
+                uploads: Arc::new(drafts),
             };
             self.workspace_persistence.pending_commit = Some(PendingWorkspaceCommit {
                 expected_revision: pending.expected_revision,
                 operation_id: pending.operation_id.clone(),
                 snapshot: pending.snapshot.clone(),
-                drafts: pending.drafts.clone(),
+                uploads: pending.uploads.clone(),
             });
             pending
         };
@@ -2542,16 +2584,17 @@ impl WorkbenchView {
         self.workspace_persistence.commit_in_flight = true;
         let request_workspace_id = workspace_id.clone();
         let operation_id = pending.operation_id.clone();
-        let drafts = pending.drafts.clone();
+        let uploads = pending.uploads.clone();
         let confirmed_drafts = self.workspace_persistence.confirmed_drafts.clone();
+        let confirmed_agent_states = self.workspace_persistence.confirmed_agent_states.clone();
         let runtime_for_commit = runtime.clone();
         let commit_task = cx.background_spawn(async move {
             runtime_for_commit.workspace_request(WorkspaceRequest::Register {
                 workspace_id: request_workspace_id.clone(),
                 name: request_workspace_id.as_str().to_string(),
             })?;
-            let mut references = Vec::with_capacity(drafts.len());
-            for (reference, content) in drafts.iter() {
+            let mut references = Vec::with_capacity(uploads.drafts.len());
+            for (reference, content) in &uploads.drafts {
                 if !confirmed_drafts.contains(&reference.content_sha256) {
                     runtime_for_commit.workspace_request(WorkspaceRequest::PutDraft {
                         workspace_id: request_workspace_id.clone(),
@@ -2560,6 +2603,15 @@ impl WorkbenchView {
                     })?;
                 }
                 references.push(reference.clone());
+            }
+            for (reference, content) in &uploads.agent_states {
+                if !confirmed_agent_states.contains(&reference.content_sha256) {
+                    runtime_for_commit.workspace_request(WorkspaceRequest::PutAgentState {
+                        workspace_id: request_workspace_id.clone(),
+                        reference: reference.clone(),
+                        content: content.as_ref().clone(),
+                    })?;
+                }
             }
             runtime_for_commit.workspace_request(WorkspaceRequest::Commit {
                 workspace_id: request_workspace_id,
@@ -2619,9 +2671,13 @@ impl WorkbenchView {
                         }) if committed_workspace_id == workspace_id => {
                             root.workspace_persistence.revision = Some(revision);
                             root.workspace_persistence.confirmed_drafts = pending
+                                .uploads
                                 .drafts
                                 .iter()
                                 .map(|(reference, _)| reference.content_sha256)
+                                .collect();
+                            root.workspace_persistence.confirmed_agent_states = pending.uploads
+                                .agent_states.iter().map(|(reference, _)| reference.content_sha256)
                                 .collect();
                             root.workspace_persistence.last_committed_snapshot =
                                 Some(snapshot.into_value());
@@ -2678,7 +2734,7 @@ impl WorkbenchView {
     fn build_remote_workspace_snapshot(
         &self,
         cx: &Context<Self>,
-    ) -> Result<(serde_json::Value, Vec<DraftUpload>), String> {
+    ) -> Result<(serde_json::Value, WorkspaceUploads), String> {
         self.build_workspace_snapshot(
             cx,
             Some((MAX_DRAFT_CONTENT_BYTES, MAX_WORKSPACE_DRAFT_BYTES)),
@@ -2689,7 +2745,7 @@ impl WorkbenchView {
         &self,
         cx: &Context<Self>,
         limits: Option<(usize, usize)>,
-    ) -> Result<(serde_json::Value, Vec<DraftUpload>), String> {
+    ) -> Result<(serde_json::Value, WorkspaceUploads), String> {
         let mut documents = Vec::new();
         let mut bodies = Vec::new();
         let mut total_bytes = 0usize;
@@ -2801,13 +2857,30 @@ impl WorkbenchView {
                 .cmp(right.project_id.as_str())
                 .then_with(|| left.relative_path.cmp(&right.relative_path))
         });
+        let agent_states = agent_state::capture(
+            &self.workspace,
+            &mut self.workspace_persistence.agent_cache.borrow_mut(),
+            limits.is_some(),
+        )?;
         serde_json::to_value(RemoteWorkspaceSnapshot {
             schema_version: REMOTE_WORKSPACE_SCHEMA_VERSION,
-            workspace: self.workspace.persisted_state(),
+            workspace: self.workspace.persisted_layout_state(),
             editor: self.project.project_editor_runtime.workspace().snapshot(),
             documents,
+            agent_states: agent_states
+                .iter()
+                .map(|(reference, _)| reference.clone())
+                .collect(),
         })
-        .map(|snapshot| (snapshot, bodies))
+        .map(|snapshot| {
+            (
+                snapshot,
+                WorkspaceUploads {
+                    drafts: bodies,
+                    agent_states,
+                },
+            )
+        })
         .map_err(|error| format!("Remote workspace snapshot cannot be encoded: {error}"))
     }
 
@@ -3099,6 +3172,37 @@ fn load_recoverable_workspace_draft(path: &Path) -> Result<RecoverableWorkspaceD
             path.display()
         ));
     }
+    let mut expected_agents = snapshot
+        .agent_states
+        .iter()
+        .map(|reference| {
+            (
+                (&reference.project_id, &reference.tab_id, &reference.pane_id),
+                reference,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    for item in &draft.agent_states {
+        let reference = &item.reference;
+        let actual: [u8; 32] = Sha256::digest(&item.content).into();
+        if expected_agents.remove(&(&reference.project_id, &reference.tab_id, &reference.pane_id))
+            != Some(reference)
+            || reference.bytes != item.content.len() as u64
+            || reference.content_sha256 != actual
+            || serde_json::from_slice::<yttt_agent_core::AgentSnapshot>(&item.content).is_err()
+        {
+            return Err(format!(
+                "{} contains an invalid recovered Agent state",
+                path.display()
+            ));
+        }
+    }
+    if !expected_agents.is_empty() {
+        return Err(format!(
+            "{} is missing recovered Agent states",
+            path.display()
+        ));
+    }
     Ok(draft)
 }
 
@@ -3197,9 +3301,23 @@ fn acquire_control_and_open(
 
 fn materialize_recovery_snapshot(
     mut snapshot: serde_json::Value,
-    bodies: Vec<DraftUpload>,
+    bodies: WorkspaceUploads,
 ) -> Result<serde_json::Value, String> {
-    RemoteWorkspaceSnapshot::from_value(snapshot.clone())?;
+    let mut parsed = RemoteWorkspaceSnapshot::from_value(snapshot.clone())?;
+    agent_state::restore(&mut parsed.workspace, &parsed.agent_states, |reference| {
+        bodies
+            .agent_states
+            .iter()
+            .find(|(body, _)| body == reference)
+            .map(|(_, content)| content.clone())
+            .ok_or_else(|| "Saved Agent state body is missing".into())
+    })?;
+    snapshot["workspace"] =
+        serde_json::to_value(parsed.workspace).map_err(|error| error.to_string())?;
+    snapshot
+        .as_object_mut()
+        .ok_or("Invalid workspace snapshot")?
+        .remove("agent_states");
     if let Some(documents) = snapshot
         .get_mut("documents")
         .and_then(serde_json::Value::as_array_mut)
@@ -3211,6 +3329,7 @@ fn materialize_recovery_snapshot(
             let reference: DraftRef =
                 serde_json::from_value(reference.clone()).map_err(|error| error.to_string())?;
             let content = bodies
+                .drafts
                 .iter()
                 .find(|(body, _)| body == &reference)
                 .map(|(_, content)| content)
@@ -3274,6 +3393,39 @@ fn prepare_remote_restore(
             }
         }
     }
+    let mut agent_bodies = HashMap::new();
+    for reference in &snapshot.agent_states {
+        let response = runtime
+            .workspace_request(WorkspaceRequest::GetAgentState {
+                workspace_id: workspace_id.clone(),
+                reference: reference.clone(),
+            })
+            .map_err(RemoteWorkspaceOpenError::from_request)?;
+        match response {
+            WorkspaceResponse::AgentState {
+                reference: received,
+                content,
+            } if received == *reference => {
+                agent_bodies.insert(reference.content_sha256, Arc::new(content));
+            }
+            _ => {
+                return Err(RemoteWorkspaceOpenError::InvalidSnapshot(
+                    "Host returned an unexpected Agent state body".into(),
+                ));
+            }
+        }
+    }
+    let agent_cache = agent_state::restore(
+        &mut snapshot.workspace,
+        &snapshot.agent_states,
+        |reference| {
+            agent_bodies
+                .get(&reference.content_sha256)
+                .cloned()
+                .ok_or_else(|| "Host Agent state body is missing".into())
+        },
+    )
+    .map_err(RemoteWorkspaceOpenError::InvalidSnapshot)?;
     let mut workspace =
         Workspace::restore_persisted_state(snapshot.workspace.clone()).map_err(|error| {
             RemoteWorkspaceOpenError::InvalidSnapshot(format!(
@@ -3355,6 +3507,7 @@ fn prepare_remote_restore(
         services,
         available_terminal_sessions,
         losses,
+        agent_cache,
     })
 }
 
@@ -3731,6 +3884,7 @@ mod tests {
                     host_epoch: remote_host_epoch(&runtime),
                     snapshot: root.build_remote_workspace_snapshot(cx).unwrap().0,
                     drafts: Vec::new(),
+                    agent_states: Vec::new(),
                     pending_settings: None,
                 };
                 save_recoverable_workspace_draft(&host.root.path().join("recovery.json"), &draft)
@@ -3939,7 +4093,8 @@ mod tests {
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone())
         });
         let saved = source.update(cx, |root, cx| {
-            root.build_remote_workspace_snapshot(cx).unwrap().0
+            let (snapshot, bodies) = root.build_remote_workspace_snapshot(cx).unwrap();
+            materialize_recovery_snapshot(snapshot, bodies).unwrap()
         });
         let prepared = prepare_remote_restore(&runtime, lease.id(), saved, 1).unwrap();
         let pane = prepared.snapshot.workspace.opened_projects[0]
@@ -4350,6 +4505,7 @@ mod tests {
                     services,
                     available_terminal_sessions: HashSet::new(),
                     losses,
+                    agent_cache: AgentStateCache::new(),
                 },
                 window,
                 cx,
@@ -4575,6 +4731,7 @@ mod tests {
             host_epoch: Some(1),
             snapshot: serde_json::to_value(RemoteWorkspaceSnapshot::empty()).unwrap(),
             drafts: Vec::new(),
+            agent_states: Vec::new(),
             pending_settings: Some(PendingSettingsRecovery {
                 candidate: serde_json::json!({"editor": {"tab_size": 8}}),
                 confirmed: serde_json::json!({"editor": {"tab_size": 4}}),
@@ -4698,6 +4855,7 @@ mod tests {
             host_epoch: Some(9),
             snapshot: serde_json::to_value(RemoteWorkspaceSnapshot::empty()).unwrap(),
             drafts: Vec::new(),
+            agent_states: Vec::new(),
             pending_settings: Some(PendingSettingsRecovery {
                 candidate: serde_json::json!({"terminal": {"scrollback": 20_000}}),
                 confirmed: serde_json::json!({"terminal": {"scrollback": 1_000}}),

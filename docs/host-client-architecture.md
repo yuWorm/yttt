@@ -274,12 +274,20 @@ Windows 分隔符会在回传时重新拆为协议 segments，不附加本机盘
 目录浏览、项目注册、Agent 会话记录和文件草稿。本机文件访问及 desktop-shell 本机入口
 继续使用 `HostPath::to_path` / `HostPath::from_path`，不得把远端路径当作本机路径访问。
 
-每个 workspace 有原子 CAS manifest（最大 1 MiB）和独立不可变草稿正文。正文每份最大 6 MiB，
-每 workspace 最大 64 MiB；先持久化正文，再提交引用它的 manifest，最后确认幂等操作结果。
+每个 workspace 有原子 CAS manifest（最大 16 MiB），Client 与 Host 通过协议层同一个函数统计
+`(snapshot, draft_refs)` 的 JSON 字节数，Agent 引用已包含在 snapshot 中。草稿正文每份最大 6 MiB、
+每 workspace 最大 64 MiB；Agent 状态正文每份最大 16 MiB、每 workspace 已发布总量最大 256 MiB。
+两者复用不可变对象存储，分别位于 `drafts/<workspace>` 与 `agent-states/<workspace>`，以 SHA-256 命名。
+Agent 暂存目录允许最多 512 MiB，以便在旧版本仍有效时上传完整替代版本。先持久化并验证全部正文，
+再提交引用它们的 manifest，最后确认幂等操作结果；仅在发布成功后回收被替代的旧正文。
+Agent 引用包含 project/tab/pane、摘要和字节数；只允许读取当前 workspace 已发布的对象。
 启动回收未引用正文和已关闭的空记录；非空历史只由显式 `Forget` 删除。旧记录缺省不进入自动恢复集合。
 `Forget` 和空记录自动回收确认后，同步重算项目工作区引用；不再引用的项目不能继续阻塞 Host 空闲退出。
 持久 `workspace-history-initialized` 标记防止清空窗口后重新导入 legacy 状态；尚未初始化的 Host 仍可迁移旧数据。
-旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。
+旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。Host 记录 schema 3 将旧 schema 1/2 的
+内联 Agent 状态原子迁移为对象，保留 revision、消息、任务与人工验收；Client 快照 schema 2 保存引用，
+仍能读取旧 schema 1。正文写入或清单替换失败时不覆盖旧记录。Device recovery 同时携带正文，
+恢复时校验摘要、大小与 pane 归属；历史问题按原有失联状态规则禁用，不能凭落盘记录重建回答通道。
 本机自动恢复只消费 `restore_on_startup` 集合；关闭自动恢复或显式项目启动先归档未打开的旧成员。
 观察者启动记录待归档的旧 ID，获得控制后在注册新窗口前完成；不会以观察者身份写入 Host。
 显式远程连接读取 Host 当前窗口，不被本机的空白启动偏好屏蔽。历史恢复另开独占视图，不覆盖当前窗口。
