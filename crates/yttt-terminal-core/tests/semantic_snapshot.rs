@@ -163,6 +163,70 @@ fn image_only_delta_reconstructs_a_renderable_sixel_without_pty_replay() {
 }
 
 #[test]
+fn sixel_redraw_at_bottom_does_not_scroll_or_repeat_image_bands() {
+    let mut terminal = TerminalState::new(20, 8, EventCollector::default());
+    terminal.resize_with_cell_size(20, 8, 8, 6);
+    terminal.process_bytes(b"keep");
+    let mut snapshots = SemanticSnapshotter::new(TerminalSessionId::new("sixel-redraw"), 1);
+    let context = SemanticCaptureContext::running(20, 8, 1);
+    let image = b"\x1bPq\"1;1;16;30#1;2;100;0;0#2;2;0;100;0#3;2;0;0;100#4;2;100;100;0#5;2;0;100;100#1!16~-#2!16~-#3!16~-#4!16~-#5!16~\x1b\\";
+
+    for _ in 0..6 {
+        // A TUI reserves five rows, then paints from its final row while
+        // preserving the text cursor. The image fits exactly at the bottom.
+        terminal.process_bytes(b"\x1b[8;1H\x1b7\x1b[4A");
+        terminal.process_bytes(image);
+        terminal.process_bytes(b"\x1b8");
+        snapshots.capture_damage(&terminal, &context);
+        let viewport = snapshots.latest_viewport().unwrap();
+
+        assert_eq!(viewport.history_size, 0, "repainting must not scroll");
+        assert!(row_text(&viewport.rows[0]).starts_with("keep"));
+        assert!(viewport.rows[..3].iter().all(|row| row.graphics.is_empty()));
+        assert_eq!(viewport.images.len(), 1, "old repaint assets must be released");
+        let image_id = viewport.images[0].id;
+        for (row, offset_y) in viewport.rows[3..].iter().zip([0, 6, 12, 18, 24]) {
+            assert_eq!(row.graphics.len(), 2);
+            for (graphic, offset_x) in row.graphics.iter().zip([0, 8]) {
+                assert_eq!(graphic.image_id, image_id);
+                assert_eq!((graphic.offset_x, graphic.offset_y), (offset_x, offset_y));
+            }
+        }
+    }
+}
+
+#[test]
+fn sixel_scrolls_only_for_pixels_beyond_the_bottom_margin() {
+    for (bands, history, offsets) in [
+        (3, 0, vec![0, 6, 12]),
+        (5, 2, vec![0, 6, 12, 18, 24]),
+        (10, 7, vec![12, 18, 24, 30, 36, 42, 48, 54]),
+    ] {
+        let mut terminal = TerminalState::new(20, 8, EventCollector::default());
+        terminal.resize_with_cell_size(20, 8, 8, 6);
+        terminal.process_bytes(b"\x1b[6;1H");
+        let image = format!(
+            "\x1bPq#1;2;100;0;0{}!8~\x1b\\",
+            "!8~-".repeat(bands - 1),
+        );
+        terminal.process_bytes(image.as_bytes());
+        let mut snapshots =
+            SemanticSnapshotter::new(TerminalSessionId::new("sixel-overflow"), 1);
+        snapshots.capture(&terminal, &SemanticCaptureContext::running(20, 8, 1));
+        let viewport = snapshots.latest_viewport().unwrap();
+
+        assert_eq!(viewport.history_size, history, "{bands} bands");
+        assert_eq!(viewport.cursor.row, 7);
+        let visible_offsets = viewport
+            .rows
+            .iter()
+            .flat_map(|row| row.graphics.iter().map(|graphic| graphic.offset_y))
+            .collect::<Vec<_>>();
+        assert_eq!(visible_offsets, offsets, "{bands} bands");
+    }
+}
+
+#[test]
 fn kitty_animation_frame_switches_change_only_the_scene_and_keep_all_frame_assets() {
     let events = EventCollector::default();
     let mut terminal = TerminalState::new(8, 2, events);

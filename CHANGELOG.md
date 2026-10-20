@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修复 Sixel 图片贴底重绘时多滚动一行、旧图片顶部条带不断累积的问题；图片结束后光标保留在最后一行，仅实际超出底部的像素触发滚动。
+- Fix Sixel bottom-edge repaints scrolling an extra row and accumulating stale image-top strips. Leave the cursor on the final image row and scroll only for pixels extending beyond the bottom margin.
+- 本地 PTY（包括 Host 创建的会话）默认向 OMP 提供 Kitty 与 Unicode placeholders 配置，使附件缩略图无需手动设置即可显示；保留继承、显式覆盖与移除的环境变量设置。
+- Default locally spawned PTYs, including Host sessions, to OMP's Kitty graphics and Unicode placeholders so attachment thumbnails work without manual setup. Preserve inherited values, explicit overrides, and environment removals.
+
 ## 0.3.16 - 2026-10-16
 
 - 本版包含未成功发布的 0.3.14 与 0.3.15 改动，详见下方对应条目。资源协议仍为 18；桌面、Host、远端 Server 与 CLI 需同步更新，并重载运行中的 Agent 扩展。

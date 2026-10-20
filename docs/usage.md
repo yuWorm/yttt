@@ -168,13 +168,23 @@ printf '\033Pq#1;2;100;0;0!120~-!120~-!120~-!120~\033\\\n'
 ```
 
 Sixel images follow terminal cells through scrolling, partial overwrites, and clearing.
+The text cursor stays on the final Sixel image row. Images that fit against the bottom
+margin do not scroll on completion; output a newline explicitly to place text below them.
 Kitty graphics support RGB/RGBA/PNG, chunked and zlib-compressed uploads, image reuse/deletion,
 cropping, z-order, Unicode placeholders, relative placements, and animation/compositing.
 Animations advance even when the PTY is idle; exited sessions retain their final frame.
 Reconnecting to the same live Host restores images and placements from the semantic checkpoint;
 images are not persisted across a Host restart.
 
-Applications that do not recognize YTTT's image capabilities can select Kitty explicitly:
+New locally spawned PTYs, including Host-owned sessions, default
+`PI_FORCE_IMAGE_PROTOCOL=kitty` and `PI_KITTY_PLACEHOLDERS=1`. OMP therefore uses Kitty
+for both transcript images and attachment thumbnails even before it recognizes YTTT's
+terminal identity. Inherited values and explicit terminal environment overrides/removals
+take precedence; shell startup files can also override these defaults.
+
+Existing sessions keep their environment. After updating the PTY-owning Host, start a
+new terminal to use the defaults. Plain SSH sessions do not automatically inherit these
+local defaults; select the protocol on the remote side. Pi also needs its own override:
 
 ```sh
 PI_IMAGE_PROTOCOL=kitty pi
