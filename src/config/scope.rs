@@ -12,7 +12,7 @@ use super::{
     bars::{BarsLoadError, BarsLoadWarning, BarsSaveError, load_bars, save_bars},
     paths::AppConfigPaths,
     profile::AppProfile,
-    settings::AppSettings,
+    settings::{AppSettings, LanguageSetting},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,6 +206,22 @@ pub fn device_preferences_config_paths() -> Option<AppConfigPaths> {
 
 pub fn device_settings_file() -> Option<PathBuf> {
     device_preferences_config_paths().map(|paths| paths.settings_file())
+}
+
+/// Read the local Device language without binding a profile, contacting a Host, or migrating
+/// legacy preferences. A legacy setting is used only when no Device settings file exists.
+pub fn read_device_language_setting(
+    profile: &AppProfile,
+) -> Result<LanguageSetting, DevicePreferencesLoadError> {
+    let device_path = profile.paths().config.join("device/settings.toml");
+    if let Some(settings) = read_optional_device_settings(&device_path)? {
+        return Ok(settings.general.language);
+    }
+
+    let legacy_path = profile.paths().config.join("settings.toml");
+    Ok(read_optional_device_settings(&legacy_path)?
+        .map(|settings| settings.general.language)
+        .unwrap_or(LanguageSetting::System))
 }
 
 pub fn device_themes_dir() -> Option<PathBuf> {

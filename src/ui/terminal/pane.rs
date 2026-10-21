@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -22,6 +22,7 @@ use crate::{
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
     },
     ui::{
+        i18n::{Locale, UiText, UiTextKey},
         interaction::input_owner::TerminalInputGate,
         theme::{WorkbenchTheme, current_ui_style},
     },
@@ -257,8 +258,18 @@ fn resolved_terminal_title(default_title: &str, title: &str) -> String {
         title.to_string()
     }
 }
-fn terminal_io_error_message(operation: PtyIoOperation, message: &str) -> String {
-    format!("Terminal {operation:?} error: {message}")
+fn terminal_io_error_message(text: UiText, operation: PtyIoOperation, message: &str) -> String {
+    let operation = text.get(match operation {
+        PtyIoOperation::Read => UiTextKey::TerminalI18nIoRead,
+        PtyIoOperation::Write => UiTextKey::TerminalI18nIoWrite,
+        PtyIoOperation::Resize => UiTextKey::TerminalI18nIoResize,
+        PtyIoOperation::Mailbox => UiTextKey::TerminalI18nIoMailbox,
+        PtyIoOperation::InputQueue => UiTextKey::TerminalI18nIoInputQueue,
+        PtyIoOperation::Clipboard => UiTextKey::TerminalI18nIoClipboard,
+    });
+    text.get(UiTextKey::TerminalI18nIoError)
+        .replace("{operation}", operation)
+        .replace("{message}", message)
 }
 
 fn classify_terminal_start_error(error: ClientCoreError) -> TerminalStartAttemptError {
@@ -270,6 +281,33 @@ fn classify_terminal_start_error(error: ClientCoreError) -> TerminalStartAttempt
         error => TerminalStartAttemptError::Uncertain(error.to_string()),
     }
 }
+fn terminal_recovery_error_message(error: TerminalRecoveryError, text: UiText) -> String {
+    match error {
+        TerminalRecoveryError::AddressConflict {
+            session_id,
+            expected,
+            actual,
+        } => text
+            .get(UiTextKey::TerminalI18nAddressConflict)
+            .replace("{session_id}", session_id.as_str())
+            .replace("{expected}", &format!("{expected:#x}"))
+            .replace("{actual}", &format!("{actual:#x}")),
+        TerminalRecoveryError::MissingObservedSession(session_id) => text
+            .get(UiTextKey::TerminalI18nSessionNoLongerAvailable)
+            .replace("{session_id}", session_id.as_str()),
+        TerminalRecoveryError::ControlRequired(session_id) => text
+            .get(UiTextKey::TerminalI18nControlRequired)
+            .replace("{session_id}", session_id.as_str()),
+        TerminalRecoveryError::HostUnavailable => text
+            .get(UiTextKey::TerminalI18nHostRuntimeNotConnected)
+            .to_string(),
+        TerminalRecoveryError::HostEpochChanged { expected, actual } => text
+            .get(UiTextKey::TerminalI18nHostEpochChanged)
+            .replace("{expected}", &expected.to_string())
+            .replace("{actual}", &actual.to_string()),
+    }
+}
+
 
 fn interactive_shell_args(shell: &str) -> Vec<String> {
     let name = shell
@@ -322,6 +360,7 @@ struct HostTerminalWriter {
     session_id: TerminalSessionId,
     mutation_context: Arc<RwLock<TerminalMutationContext>>,
     next_sequence: Arc<AtomicU64>,
+    locale: Arc<AtomicU8>,
 }
 
 fn next_mutation_context(
@@ -364,19 +403,29 @@ fn submit_pending_host_resize(
         geometry,
     }));
 }
+impl HostTerminalWriter {
+    fn ui_text(&self) -> UiText {
+        UiText::new(match self.locale.load(Ordering::Relaxed) {
+            1 => Locale::Chinese,
+            _ => Locale::English,
+        })
+    }
+}
+
 
 impl Write for HostTerminalWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let text = self.ui_text();
         if !self.runtime.shared_editing_enabled() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "this Client is observing or publishing a control transfer",
+                text.get(UiTextKey::TerminalI18nControlTransferInProgress),
             ));
         }
         if !matches!(self.runtime.state(), ConnectionState::Ready { .. }) {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "Host terminal connection is not ready",
+                text.get(UiTextKey::TerminalI18nHostConnectionNotReady),
             ));
         }
         let context = next_mutation_context(&self.mutation_context, &self.next_sequence, None);
@@ -424,19 +473,33 @@ impl TerminalPaneView {
         raw: bool,
         cx: &gpui::App,
     ) -> Result<(flume::Receiver<Result<Response, ClientCoreError>>, usize), String> {
+        let ui_text = UiText::current(cx);
         if self.lifecycle != PaneLifecycle::Running {
-            return Err("Terminal is not running; inspect panes list before sending input".into());
+            return Err(
+                ui_text
+                    .get(UiTextKey::TerminalI18nInputTerminalNotRunning)
+                    .to_string(),
+            );
         }
-        let writer = self
-            .control_writer
-            .as_ref()
-            .ok_or("Terminal has no Host input channel")?;
+        let writer = self.control_writer.as_ref().ok_or_else(|| {
+            ui_text
+                .get(UiTextKey::TerminalI18nInputNoHostChannel)
+                .to_string()
+        })?;
         if !writer.runtime.shared_editing_enabled()
             || writer.mutation_context.read().lease_epoch == 0
         {
-            return Err("Terminal input control is unavailable".into());
+            return Err(
+                ui_text
+                    .get(UiTextKey::TerminalI18nInputControlUnavailable)
+                    .to_string(),
+            );
         }
-        let terminal = self.terminal.as_ref().ok_or("Terminal view is not ready")?;
+        let terminal = self.terminal.as_ref().ok_or_else(|| {
+            ui_text
+                .get(UiTextKey::TerminalI18nInputViewNotReady)
+                .to_string()
+        })?;
         let mut bytes = if raw {
             text.as_bytes().to_vec()
         } else {
@@ -446,7 +509,7 @@ impl TerminalPaneView {
             bytes.push(b'\r');
         }
         if bytes.is_empty() {
-            return Err("Input is empty".into());
+            return Err(ui_text.get(UiTextKey::TerminalI18nInputEmpty).to_string());
         }
         let count = bytes.len();
         let context = next_mutation_context(&writer.mutation_context, &writer.next_sequence, None);
@@ -757,6 +820,7 @@ impl TerminalPaneView {
         cx: &mut Context<Self>,
         intent: TerminalStartIntent,
     ) -> bool {
+        let ui_text = UiText::current(cx);
         let retrying_pending_start = self.pending_start.is_some();
         let attach_only = intent == TerminalStartIntent::Attach
             || self
@@ -769,13 +833,28 @@ impl TerminalPaneView {
             .cloned()
         else {
             if attach_only {
-                self.set_terminal_lost("Host runtime is unavailable".to_string(), cx);
+                self.set_terminal_lost(
+                    ui_text
+                        .get(UiTextKey::TerminalI18nHostRuntimeUnavailable)
+                        .to_string(),
+                    cx,
+                );
             } else if retrying_pending_start {
-                self.set_terminal_reconciling("Host runtime is unavailable".to_string(), cx);
+                self.set_terminal_reconciling(
+                    ui_text
+                        .get(UiTextKey::TerminalI18nHostRuntimeUnavailable)
+                        .to_string(),
+                    cx,
+                );
             } else {
                 self.lifecycle = PaneLifecycle::Starting;
                 self.generation = self.generation.wrapping_add(1);
-                self.set_spawn_failure("Host runtime is unavailable".to_string(), cx);
+                self.set_spawn_failure(
+                    ui_text
+                        .get(UiTextKey::TerminalI18nHostRuntimeUnavailable)
+                        .to_string(),
+                    cx,
+                );
             }
             return false;
         };
@@ -784,13 +863,28 @@ impl TerminalPaneView {
             ConnectionState::Ready { host_epoch, .. } => host_epoch,
             _ => {
                 if attach_only {
-                    self.set_terminal_lost("Host runtime is not connected".to_string(), cx);
+                    self.set_terminal_lost(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nHostRuntimeNotConnected)
+                            .to_string(),
+                        cx,
+                    );
                 } else if retrying_pending_start {
-                    self.set_terminal_reconciling("Host runtime is not connected".to_string(), cx);
+                    self.set_terminal_reconciling(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nHostRuntimeNotConnected)
+                            .to_string(),
+                        cx,
+                    );
                 } else {
                     self.lifecycle = PaneLifecycle::Starting;
                     self.generation = self.generation.wrapping_add(1);
-                    self.set_spawn_failure("Host runtime is not connected".to_string(), cx);
+                    self.set_spawn_failure(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nHostRuntimeNotConnected)
+                            .to_string(),
+                        cx,
+                    );
                 }
                 return false;
             }
@@ -808,7 +902,9 @@ impl TerminalPaneView {
                 self.lifecycle = PaneLifecycle::Starting;
                 self.generation = self.generation.wrapping_add(1);
                 self.set_spawn_failure(
-                    "Host restarted before the terminal launch could be reconciled".to_string(),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nHostRestartedBeforeReconcile)
+                        .to_string(),
                     cx,
                 );
                 return false;
@@ -870,6 +966,11 @@ impl TerminalPaneView {
             session_id: session_id.clone(),
             mutation_context: mutation_context.clone(),
             next_sequence: next_mutation_sequence.clone(),
+            locale: Arc::new(AtomicU8::new(if ui_text.locale() == Locale::Chinese {
+                1
+            } else {
+                0
+            })),
         };
         self.control_writer = Some(writer.clone());
         let terminal_input_allowed = self.terminal_input_gate.shared_flag();
@@ -882,6 +983,7 @@ impl TerminalPaneView {
         let scroll_session_id = session_id.clone();
         let scroll_mutation_context = mutation_context.clone();
         let scroll_mutation_sequence = next_mutation_sequence.clone();
+        let resize_text = ui_text;
         let error_parent = cx.weak_entity();
         let input_runtime = host_runtime.clone();
         let input_mutation_context = mutation_context.clone();
@@ -895,7 +997,11 @@ impl TerminalPaneView {
                 })
                 .with_resize_callback(move |cols, rows, cell_width, cell_height| {
                     if !matches!(resize_runtime.state(), ConnectionState::Ready { .. }) {
-                        return Err("Host terminal connection is not ready".to_string());
+                        return Err(
+                            resize_text
+                                .get(UiTextKey::TerminalI18nHostConnectionNotReady)
+                                .to_string(),
+                        );
                     }
                     let geometry = TerminalGeometry {
                         cols,
@@ -934,7 +1040,8 @@ impl TerminalPaneView {
                     }
                 })
                 .with_io_error_callback(move |cx, operation, message, fatal| {
-                    let message = terminal_io_error_message(operation, message);
+                    let message =
+                        terminal_io_error_message(UiText::current(cx), operation, message);
                     let _ = error_parent.update(cx, |pane, cx| {
                         pane.terminal_error = Some(message.clone());
                         cx.emit(TerminalPaneEvent::IoError {
@@ -1030,13 +1137,17 @@ impl TerminalPaneView {
                     .await
                     .map_err(|_| {
                         TerminalStartAttemptError::Uncertain(
-                            "Host catalog request channel closed".to_string(),
+                            ui_text
+                                .get(UiTextKey::TerminalI18nHostCatalogRequestClosed)
+                                .to_string(),
                         )
                     })?
                     .map_err(classify_terminal_start_error)?;
                 let Response::Resources(catalog) = catalog_response else {
                     return Err(TerminalStartAttemptError::Failed(
-                        "unexpected Host catalog response".to_string(),
+                        ui_text
+                            .get(UiTextKey::TerminalI18nHostCatalogResponseUnexpected)
+                            .to_string(),
                     ));
                 };
                 let catalog = Arc::new(catalog);
@@ -1047,12 +1158,18 @@ impl TerminalPaneView {
                         request_start.intent,
                         &request_start.attempt,
                     )
-                    .map_err(|error| match error {
-                        TerminalRecoveryError::MissingObservedSession(_)
-                        | TerminalRecoveryError::ControlRequired(_) => {
-                            TerminalStartAttemptError::Unavailable(error.to_string())
+                    .map_err(|error| {
+                        let unavailable = matches!(
+                            &error,
+                            TerminalRecoveryError::MissingObservedSession(_)
+                                | TerminalRecoveryError::ControlRequired(_)
+                        );
+                        let message = terminal_recovery_error_message(error, ui_text);
+                        if unavailable {
+                            TerminalStartAttemptError::Unavailable(message)
+                        } else {
+                            TerminalStartAttemptError::Failed(message)
                         }
-                        error => TerminalStartAttemptError::Failed(error.to_string()),
                     })?;
                 let response = request_runtime
                     .request(request)
@@ -1060,7 +1177,9 @@ impl TerminalPaneView {
                     .await
                     .map_err(|_| {
                         TerminalStartAttemptError::Uncertain(
-                            "Host terminal request channel closed".to_string(),
+                            ui_text
+                                .get(UiTextKey::TerminalI18nHostTerminalRequestClosed)
+                                .to_string(),
                         )
                     })?
                     .map_err(classify_terminal_start_error)?;
@@ -1158,7 +1277,10 @@ impl TerminalPaneView {
                         cx.notify();
                     }
                     Ok((response, _)) => {
-                        let message = format!("unexpected Host terminal response: {response:?}");
+                        let response = format!("{response:?}");
+                        let message = ui_text
+                            .get(UiTextKey::TerminalI18nHostTerminalResponseUnexpected)
+                            .replace("{response}", &response);
                         if request_start.intent == TerminalStartIntent::Attach {
                             pane.set_terminal_lost(message, cx);
                         } else {
@@ -1219,16 +1341,25 @@ impl TerminalPaneView {
             return;
         };
         let generation = self.generation;
+        let ui_text = UiText::current(cx);
         cx.spawn(async move |this, cx| {
             let catalog = async {
                 let response = host_runtime
                     .request(Request::ListResources)
                     .recv_async()
                     .await
-                    .map_err(|_| "Host catalog request channel closed".to_string())?
+                    .map_err(|_| {
+                        ui_text
+                            .get(UiTextKey::TerminalI18nHostCatalogRequestClosed)
+                            .to_string()
+                    })?
                     .map_err(|error| error.to_string())?;
                 let Response::Resources(catalog) = response else {
-                    return Err("unexpected Host catalog response".to_string());
+                    return Err(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nHostCatalogResponseUnexpected)
+                            .to_string(),
+                    );
                 };
                 Ok::<_, String>(catalog)
             }
@@ -1249,7 +1380,8 @@ impl TerminalPaneView {
                                 != pending_start.attempt.expected_host_epoch =>
                         {
                             pane.set_spawn_failure(
-                                "Host restarted before the terminal launch could be reconciled"
+                                ui_text
+                                    .get(UiTextKey::TerminalI18nHostRestartedBeforeReconcile)
                                     .to_string(),
                                 cx,
                             );
@@ -1263,7 +1395,8 @@ impl TerminalPaneView {
                             pane.start_host_terminal(window, cx, pending_start.intent);
                         }
                         Ok(_) => pane.set_terminal_reconciling(
-                            "Terminal launch outcome is still unknown; retry uses the same launch attempt"
+                            ui_text
+                                .get(UiTextKey::TerminalI18nLaunchOutcomeUnknown)
                                 .to_string(),
                             cx,
                         ),
@@ -1323,6 +1456,7 @@ impl TerminalPaneView {
                 terminal.set_read_only(!runtime.is_controller(), cx);
             });
         }
+        let ui_text = UiText::current(cx);
         match event {
             ClientEvent::TerminalUnavailable(unavailable) if unavailable == *session_id => {
                 // Removal events carry no session epoch. While a start/attach is
@@ -1338,7 +1472,9 @@ impl TerminalPaneView {
                     return;
                 }
                 self.set_terminal_lost(
-                    "Terminal session is no longer present in the Host catalog".to_string(),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nSessionMissingFromCatalog)
+                        .to_string(),
                     cx,
                 );
             }
@@ -1382,33 +1518,44 @@ impl TerminalPaneView {
                     session_id: revoked_session_id,
                     ..
                 } if revoked_session_id == *session_id => {
-                    self.terminal_error =
-                        Some("Terminal input lease was revoked by another client".to_string());
+                    self.terminal_error = Some(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nLeaseRevoked)
+                            .to_string(),
+                    );
                     cx.notify();
                 }
                 ServerEvent::TerminalLeaseReleased {
                     session_id: released_session_id,
                     ..
                 } if released_session_id == *session_id => {
-                    self.terminal_error = Some("Terminal input lease was released".to_string());
+                    self.terminal_error = Some(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nLeaseReleased)
+                            .to_string(),
+                    );
                     cx.notify();
                 }
                 ServerEvent::TerminalLeaseExpired {
                     session_id: expired_session_id,
                     ..
                 } if expired_session_id == *session_id => {
-                    self.terminal_error =
-                        Some("Terminal input lease expired after idle takeover".to_string());
+                    self.terminal_error = Some(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nLeaseExpired)
+                            .to_string(),
+                    );
                     cx.notify();
                 }
                 ServerEvent::TerminalControlRequested {
                     session_id: requested_session_id,
                     requester,
                 } if requested_session_id == *session_id => {
-                    self.terminal_error = Some(format!(
-                        "Another client ({}) requested terminal control",
-                        requester.as_str()
-                    ));
+                    self.terminal_error = Some(
+                        ui_text
+                            .get(UiTextKey::TerminalI18nControlRequested)
+                            .replace("{client}", requester.as_str()),
+                    );
                     cx.notify();
                 }
                 ServerEvent::TerminalControlGranted { lease }
@@ -1919,41 +2066,83 @@ impl Render for TerminalPaneView {
         #[cfg(feature = "perf-metrics")]
         self.start_performance_probe(window.window_handle(), cx);
         let ui_style = current_ui_style(cx);
+        let ui_text = UiText::current(cx);
+        if let Some(writer) = &self.control_writer {
+            writer.locale.store(
+                if ui_text.locale() == Locale::Chinese {
+                    1
+                } else {
+                    0
+                },
+                Ordering::Relaxed,
+            );
+        }
         let body = if let Some(terminal) = &self.terminal {
             div().flex().flex_1().child(terminal.clone())
         } else {
             let recovery_intent = self.recovery_intent();
             let lost = matches!(self.lifecycle, PaneLifecycle::Lost { .. });
             let lines = match &self.lifecycle {
-                PaneLifecycle::SpawnFailed { .. } => spawn_failure_lines(&TerminalSpawnFailure {
-                    command: self.command.clone(),
-                    cwd: self.project_path.clone(),
-                    message: terminal_start_error(&self.lifecycle, &self.terminal_error),
-                }),
+                PaneLifecycle::SpawnFailed { .. } => {
+                    spawn_failure_lines(
+                        &TerminalSpawnFailure {
+                            command: self.command.clone(),
+                            cwd: self.project_path.clone(),
+                            message: terminal_start_error(
+                                &self.lifecycle,
+                                &self.terminal_error,
+                                &ui_text,
+                            ),
+                        },
+                        &ui_text,
+                    )
+                }
                 PaneLifecycle::Lost { message } => vec![
-                    "Terminal session unavailable".to_string(),
-                    format!("command: {}", self.command),
-                    format!("cwd: {}", self.project_path.display()),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nSessionUnavailable)
+                        .to_string(),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nCommand)
+                        .replace("{command}", &self.command),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nWorkingDirectory)
+                        .replace("{cwd}", &self.project_path.display().to_string()),
                     match recovery_intent {
-                        Some(TerminalStartIntent::Restore) => {
-                            "The previous process is no longer available. Nothing will be restarted until you choose to continue.".to_string()
-                        }
-                        None => {
-                            "The previous process is no longer available. Take workspace control and wait for any transfer to finish before starting it.".to_string()
-                        }
-                        _ => format!("status: {message}"),
+                        Some(TerminalStartIntent::Restore) => ui_text
+                            .get(UiTextKey::TerminalI18nPreviousProcessUnavailable)
+                            .to_string(),
+                        None => ui_text
+                            .get(UiTextKey::TerminalI18nTakeWorkspaceControl)
+                            .to_string(),
+                        _ => ui_text
+                            .get(UiTextKey::TerminalI18nStatus)
+                            .replace("{status}", message),
                     },
                 ],
                 PaneLifecycle::Reconciling { message } => vec![
-                    "Terminal launch outcome is being reconciled".to_string(),
-                    format!("status: {message}"),
-                    format!("command: {}", self.command),
-                    format!("cwd: {}", self.project_path.display()),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nLaunchReconciling)
+                        .to_string(),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nStatus)
+                        .replace("{status}", message),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nCommand)
+                        .replace("{command}", &self.command),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nWorkingDirectory)
+                        .replace("{cwd}", &self.project_path.display().to_string()),
                 ],
                 _ => vec![
-                    format!("Process {}", pane_lifecycle_label(&self.lifecycle)),
-                    format!("command: {}", self.command),
-                    format!("cwd: {}", self.project_path.display()),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nProcessLifecycle)
+                        .replace("{state}", &pane_lifecycle_label(&self.lifecycle, &ui_text)),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nCommand)
+                        .replace("{command}", &self.command),
+                    ui_text
+                        .get(UiTextKey::TerminalI18nWorkingDirectory)
+                        .replace("{cwd}", &self.project_path.display().to_string()),
                 ],
             };
             let can_restart = recovery_intent.is_some()
@@ -1966,17 +2155,17 @@ impl Render for TerminalPaneView {
                         .as_ref()
                         .is_some_and(AgentPaneLaunch::is_resuming_session)
                     {
-                        "Resume saved session"
+                        ui_text.get(UiTextKey::TerminalI18nResumeSavedSession)
                     } else {
-                        "Start a new process"
+                        ui_text.get(UiTextKey::TerminalI18nStartNewProcess)
                     }
                 } else {
-                    "Reconnect"
+                    ui_text.get(UiTextKey::TerminalI18nReconnect)
                 }
             } else if matches!(&self.lifecycle, PaneLifecycle::Reconciling { .. }) {
-                "Retry"
+                ui_text.get(UiTextKey::TerminalI18nRetry)
             } else {
-                "Restart"
+                ui_text.get(UiTextKey::TerminalI18nRestart)
             };
 
             div()
@@ -2024,32 +2213,45 @@ impl Render for TerminalPaneView {
     }
 }
 
-pub fn pane_lifecycle_label(lifecycle: &PaneLifecycle) -> String {
+pub fn pane_lifecycle_label(lifecycle: &PaneLifecycle, text: &UiText) -> String {
     match lifecycle {
-        PaneLifecycle::Idle => "idle".to_string(),
-        PaneLifecycle::Starting => "starting".to_string(),
-        PaneLifecycle::Reconciling { .. } => "reconciling".to_string(),
-        PaneLifecycle::Running => "running".to_string(),
-        PaneLifecycle::Stopping { .. } => "stopping".to_string(),
+        PaneLifecycle::Idle => text.get(UiTextKey::TerminalI18nLifecycleIdle).to_string(),
+        PaneLifecycle::Starting => text.get(UiTextKey::TerminalI18nLifecycleStarting).to_string(),
+        PaneLifecycle::Reconciling { .. } => {
+            text.get(UiTextKey::TerminalI18nLifecycleReconciling).to_string()
+        }
+        PaneLifecycle::Running => text.get(UiTextKey::TerminalI18nLifecycleRunning).to_string(),
+        PaneLifecycle::Stopping { .. } => {
+            text.get(UiTextKey::TerminalI18nLifecycleStopping).to_string()
+        }
         PaneLifecycle::Exited {
             code: Some(code), ..
-        } => format!("exited {code}"),
+        } => text
+            .get(UiTextKey::TerminalI18nLifecycleExitedCode)
+            .replace("{code}", &code.to_string()),
         PaneLifecycle::Exited {
             code: None,
             reason: ExitReason::KilledByUser,
-        } => "killed".to_string(),
-        PaneLifecycle::Exited { code: None, .. } => "exited".to_string(),
-        PaneLifecycle::SpawnFailed { .. } => "spawn failed".to_string(),
-        PaneLifecycle::Lost { .. } => "lost".to_string(),
+        } => text.get(UiTextKey::TerminalI18nLifecycleKilled).to_string(),
+        PaneLifecycle::Exited { code: None, .. } => {
+            text.get(UiTextKey::TerminalI18nLifecycleExited).to_string()
+        }
+        PaneLifecycle::SpawnFailed { .. } => text
+            .get(UiTextKey::TerminalI18nLifecycleSpawnFailed)
+            .to_string(),
+        PaneLifecycle::Lost { .. } => text.get(UiTextKey::TerminalI18nLifecycleLost).to_string(),
     }
 }
 
-pub fn spawn_failure_lines(failure: &TerminalSpawnFailure) -> Vec<String> {
+pub fn spawn_failure_lines(failure: &TerminalSpawnFailure, text: &UiText) -> Vec<String> {
     vec![
-        "Failed to start terminal".to_string(),
-        format!("command: {}", failure.command),
-        format!("cwd: {}", failure.cwd.display()),
-        format!("error: {}", failure.message),
+        text.get(UiTextKey::TerminalI18nStartFailed).to_string(),
+        text.get(UiTextKey::TerminalI18nCommand)
+            .replace("{command}", &failure.command),
+        text.get(UiTextKey::TerminalI18nWorkingDirectory)
+            .replace("{cwd}", &failure.cwd.display().to_string()),
+        text.get(UiTextKey::TerminalI18nError)
+            .replace("{error}", &failure.message),
     ]
 }
 
@@ -2059,12 +2261,16 @@ fn remove_inherited_agent_hook_environment(environment: &mut BTreeMap<String, St
     }
 }
 
-fn terminal_start_error(lifecycle: &PaneLifecycle, terminal_error: &Option<String>) -> String {
+fn terminal_start_error(
+    lifecycle: &PaneLifecycle,
+    terminal_error: &Option<String>,
+    text: &UiText,
+) -> String {
     match lifecycle {
         PaneLifecycle::SpawnFailed { message } | PaneLifecycle::Lost { message } => message.clone(),
         _ => terminal_error
             .clone()
-            .unwrap_or_else(|| "terminal did not start".to_string()),
+            .unwrap_or_else(|| text.get(UiTextKey::TerminalI18nDidNotStart).to_string()),
     }
 }
 
@@ -2146,7 +2352,7 @@ mod tests {
             assert!(pane.terminal.is_none());
             assert!(matches!(
                 &pane.lifecycle,
-                PaneLifecycle::SpawnFailed { message } if message == "Host runtime is unavailable"
+                PaneLifecycle::SpawnFailed { .. }
             ));
         });
     }

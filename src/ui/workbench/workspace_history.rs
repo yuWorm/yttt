@@ -8,6 +8,7 @@ use yttt_protocol::workspace::{
 
 use crate::ui::{
     components::workbench_palette_item,
+    i18n::Locale,
     palette::picker::picker_header,
     primitives::panel::{YtttOverlayPlacement, YtttPanelKind, yttt_panel, yttt_panel_overlay},
     primitives::row::YtttRowKind,
@@ -134,24 +135,38 @@ where
         return (unknown.clone(), unknown);
     };
     let day = saved.date_naive();
+    let (time_format, same_year_format, prior_year_format, full_format) = match text.locale() {
+        Locale::English => (
+            "%-I:%M %p",
+            "%b %-d, %-I:%M %p",
+            "%b %-d, %Y",
+            "%b %-d, %Y, %-I:%M:%S %p %:z",
+        ),
+        Locale::Chinese => (
+            "%H:%M",
+            "%-m月%-d日 %H:%M",
+            "%Y年%-m月%-d日",
+            "%Y年%-m月%-d日 %H:%M:%S %:z",
+        ),
+    };
     let label = if day == now.date_naive() {
         format!(
             "{} {}",
             text.get(UiTextKey::WorkspaceHistoryToday),
-            saved.format("%H:%M")
+            saved.format(time_format)
         )
     } else if Some(day) == now.date_naive().pred_opt() {
         format!(
             "{} {}",
             text.get(UiTextKey::WorkspaceHistoryYesterday),
-            saved.format("%H:%M")
+            saved.format(time_format)
         )
     } else if saved.year() == now.year() {
-        saved.format("%m-%d %H:%M").to_string()
+        saved.format(same_year_format).to_string()
     } else {
-        saved.format("%Y-%m-%d").to_string()
+        saved.format(prior_year_format).to_string()
     };
-    (label, saved.format("%Y-%m-%d %H:%M:%S %:z").to_string())
+    (label, saved.format(full_format).to_string())
 }
 
 impl WorkbenchView {
@@ -226,7 +241,11 @@ impl WorkbenchView {
                                 });
                                 state.entries = entries;
                             }
-                            Err(error) => state.error = Some(error),
+                            Err(error) => state.error = Some(format!(
+                                "{}: {error}",
+                                root.ui_text
+                                    .get(UiTextKey::WorkbenchI18nWorkspaceHistoryLoadError)
+                            )),
                         }
                         cx.notify();
                     });
@@ -246,7 +265,13 @@ impl WorkbenchView {
         };
         match crate::ui::app::open_history_workspace(entry.summary.workspace_id.clone(), cx) {
             Ok(()) => self.close_palette(),
-            Err(error) => self.palette.workspace_history.error = Some(error.to_string()),
+            Err(error) => {
+                self.palette.workspace_history.error = Some(format!(
+                    "{}: {error}",
+                    self.ui_text
+                        .get(UiTextKey::WorkbenchI18nWorkspaceHistoryOpenError)
+                ))
+            }
         }
         cx.notify();
     }

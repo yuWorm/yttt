@@ -106,8 +106,6 @@ use std::{
 type SettingsStringSelectState = SelectState<SearchableVec<String>>;
 type SettingsFontFamilySelectState = SelectState<FontFamilyOptions>;
 
-const TERMINAL_THEME_FOLLOW_UI: &str = "Follow UI theme";
-const ICON_THEME_BUILTIN: &str = "Built-in";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsNumberField {
@@ -616,7 +614,7 @@ impl WorkbenchView {
                     Err(error) => {
                         self.load_error = combine_load_messages(
                             self.load_error.take(),
-                            Some(format!("Host project registration failed: {error}")),
+                            Some(self.ui_text.get(UiTextKey::HostProjectRegistrationFailed).replace("{error}", &error.to_string())),
                         );
                     }
                 }
@@ -671,10 +669,7 @@ impl WorkbenchView {
         if failures.is_empty() {
             Ok(())
         } else {
-            Err(WorkbenchError::HostTerminal(format!(
-                "Host rejected terminal close: {}",
-                failures.join("; ")
-            )))
+            Err(WorkbenchError::HostTerminal(self.ui_text.get(UiTextKey::HostTerminalCloseRejected).replace("{details}", &failures.join("; "))))
         }
     }
 
@@ -743,7 +738,7 @@ impl WorkbenchView {
                     self.open_project_path_with_mode(path, ProjectOpenMode::RestoreLastSession)
                 }
                 ProjectLocation::Ssh { .. } => {
-                    push_unique_string(&mut messages, "Previous SSH projects remain in Recent Projects; open them in an isolated remote workspace.".into());
+                    push_unique_string(&mut messages, self.ui_text.get(UiTextKey::PreviousSshProjects).into());
                     continue;
                 }
             };
@@ -813,13 +808,9 @@ impl WorkbenchView {
         let agent_setup_error = agent_manager.state_load_error().map(str::to_string);
         let recent_projects = recent_projects_for_palette(&recent_projects_config);
         let (app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
-        let ui_language = if !app_settings.general.onboarding_completed
-            && workspace.opened_projects().is_empty()
-            && app_settings.general.language == LanguageSetting::System
-        {
-            detect_system_language_setting()
-        } else {
-            app_settings.general.language
+        let ui_language = match app_settings.general.language {
+            LanguageSetting::System => detect_system_language_setting(),
+            language => language,
         };
         let ui_text = ui_text_for_language(ui_language);
         let keybindings_editor =
@@ -1004,7 +995,7 @@ impl WorkbenchView {
             return Ok(());
         }
         let language = match language {
-            LanguageSetting::System => LanguageSetting::English,
+            LanguageSetting::System => detect_system_language_setting(),
             language => language,
         };
         self.ui_text = ui_text_for_language(language);
@@ -1075,17 +1066,17 @@ impl WorkbenchView {
         };
         if state.step != OnboardingStep::ZedImport {
             return Err(
-                "confirm whether to import Zed themes before completing onboarding".to_string(),
+                self.ui_text.get(UiTextKey::OnboardingConfirmImport).to_string(),
             );
         }
 
         if !self.shared_mutation_allowed() {
             return Err(
-                "Host control is required to initialize the default layout and Agent.".into(),
+                self.ui_text.get(UiTextKey::OnboardingNeedsControl).into(),
             );
         }
         if self.settings_save_pending() || self.onboarding_completion_in_flight {
-            return Err("Wait for the current settings save before completing onboarding.".into());
+            return Err(self.ui_text.get(UiTextKey::OnboardingWaitSettings).into());
         }
         if self.terminal.host_runtime.is_some() {
             self.pending_onboarding_completion = Some(import_zed_themes);
@@ -1121,12 +1112,12 @@ impl WorkbenchView {
             })
         };
         if !can_write() {
-            return Err("Host control was lost before onboarding could be saved.".into());
+            return Err(UiText::from_language(state.selected_language).get(UiTextKey::OnboardingControlLost).into());
         }
         if import_zed_themes && !state.zed_import_completed {
             let device_paths = crate::config::scope::device_preferences_config_paths()
                 .or_else(|| paths.is_test_fixture().then(|| paths.clone()))
-                .ok_or_else(|| "Device preferences are not bound.".to_string())?;
+                .ok_or_else(|| UiText::from_language(state.selected_language).get(UiTextKey::DevicePreferencesUnbound).to_string())?;
             import_detected_zed_themes_with_policy(
                 &state.zed_detection,
                 &device_paths,
@@ -1492,7 +1483,7 @@ impl WorkbenchView {
     pub fn confirm_tab_rename_dialog(&mut self, title: &str) -> Result<(), WorkbenchError> {
         if !self.require_shared_mutation_control() {
             return Err(WorkbenchError::SettingsUnavailable(
-                "Shared editing control is required".into(),
+                self.ui_text.get(UiTextKey::SharedEditingRequired).into(),
             ));
         }
         let Some(rename) = self.overlays.pending_tab_rename.clone() else {
@@ -2055,7 +2046,7 @@ impl WorkbenchView {
             }
         };
         let Some(path) = path else {
-            self.load_error = Some("The selected configuration target is unavailable.".into());
+            self.load_error = Some(self.ui_text.get(UiTextKey::ConfigurationTargetUnavailable).into());
             return;
         };
         self.queue_status_notification(
@@ -2075,7 +2066,7 @@ impl WorkbenchView {
                 .is_test_fixture()
                 .then(|| self.config_paths.themes_dir())
         }) else {
-            self.load_error = Some("Device preferences are not bound.".into());
+            self.load_error = Some(self.ui_text.get(UiTextKey::DevicePreferencesUnbound).into());
             return;
         };
         self.queue_status_notification(
@@ -2600,10 +2591,7 @@ impl WorkbenchView {
                     self.default_layout_state.path().to_path_buf()
                 };
                 platform::reveal_path(&layout_file).map_err(|error| {
-                    WorkbenchError::SystemIntegration(format!(
-                        "failed to reveal {}: {error}",
-                        layout_file.display()
-                    ))
+                    WorkbenchError::SystemIntegration(self.ui_text.get(UiTextKey::RevealPathFailed).replace("{path}", &layout_file.display().to_string()).replace("{error}", &error.to_string()))
                 })?;
                 self.show_layout_file_path_status(&layout_file);
                 self.last_opened_layout_file = Some(layout_file);
@@ -2756,7 +2744,7 @@ impl WorkbenchView {
                     auxiliary_windows::RemoteServicesPage::Connections;
                 self.auxiliary_windows.pending_new_host_editor = true;
             } else {
-                self.load_error = Some("Open connections from your local yttt window.".into());
+                self.load_error = Some(self.ui_text.get(UiTextKey::ConnectionsLocalWindow).into());
             }
         }
         if !self.take_pending_open_project_request() {
@@ -2898,7 +2886,7 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         if !self.require_shared_mutation_control() {
             return Err(WorkbenchError::SettingsUnavailable(
-                "Shared editing control is required".into(),
+                self.ui_text.get(UiTextKey::SharedEditingRequired).into(),
             ));
         }
         self.terminate_host_project(project_id.as_str())?;
@@ -2926,7 +2914,7 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         if matches!(mode, ProjectOpenMode::Fresh) && !self.require_shared_mutation_control() {
             return Err(WorkbenchError::SettingsUnavailable(
-                "Shared editing control is required to open a project".into(),
+                self.ui_text.get(UiTextKey::ProjectOpenRequiresControl).into(),
             ));
         }
         match open_project_config(
@@ -2935,7 +2923,7 @@ impl WorkbenchView {
             &mut self.default_layout_state,
         ) {
             Ok(opened) => {
-                let source_message = layout_source_message(&opened.layout_source);
+                let source_message = layout_source_message(&opened.layout_source, self.ui_text);
                 let warning_message = if opened.warnings.is_empty() {
                     layout_load_warning_message(self.default_layout_state.warnings())
                 } else {
@@ -3370,7 +3358,7 @@ impl WorkbenchView {
             WorkItemId::Terminal(tab_id) => {
                 if !self.require_shared_mutation_control() {
                     return Err(WorkbenchError::SettingsUnavailable(
-                        "Shared editing control is required".into(),
+                        self.ui_text.get(UiTextKey::SharedEditingRequired).into(),
                     ));
                 }
                 self.workspace.select_tab(&tab_id)?;
@@ -3865,7 +3853,7 @@ impl WorkbenchView {
                 if let Err(error) =
                     result.and_then(|ready| root.agent_manager.ensure_initialized(ready))
                 {
-                    let message = format!("Agent initialization failed: {error}");
+                    let message = root.ui_text.get(UiTextKey::AgentInitializationFailed).replace("{error}", &error.to_string());
                     root.agent_initialization_error = Some(message.clone());
                     root.load_error = Some(message);
                 }

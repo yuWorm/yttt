@@ -390,7 +390,11 @@ impl WorkbenchView {
         let address = match address.trim().parse::<std::net::SocketAddr>() {
             Ok(address) => address,
             Err(error) => {
-                self.ssh.remote_access_error = Some(error.to_string());
+                self.ssh.remote_access_error = Some(format!(
+                    "{}: {error}",
+                    self.ui_text
+                        .get(UiTextKey::WorkbenchI18nRemoteAccessInvalidAddress)
+                ));
                 cx.notify();
                 return;
             }
@@ -504,12 +508,17 @@ impl WorkbenchView {
                             .remote_access
                             .as_ref()
                             .and_then(|status| status.bound_address)
-                            .ok_or("Remote access is not listening")
+                            .ok_or_else(|| {
+                                root.ui_text
+                                    .get(UiTextKey::WorkbenchI18nRemoteAccessNotListening)
+                                    .to_string()
+                            })
                             .and_then(|address| {
                                 crate::remote_launch::ConnectionCode::encode(
                                     address.to_string(),
                                     info,
                                 )
+                                .map_err(str::to_string)
                             });
                         match payload {
                             Ok(payload) => {
@@ -518,11 +527,21 @@ impl WorkbenchView {
                                     root.ui_text.get(UiTextKey::RemoteAccessCopied).to_string(),
                                 );
                             }
-                            Err(error) => root.ssh.remote_access_error = Some(error.to_string()),
+                            Err(error) => {
+                                root.ssh.remote_access_error = Some(format!(
+                                    "{}: {error}",
+                                    root.ui_text.get(UiTextKey::WorkbenchI18nRemoteAccessActionFailed)
+                                ));
+                            }
                         }
                     }
                     Ok(_) => {}
-                    Err(error) => root.ssh.remote_access_error = Some(error),
+                    Err(error) => {
+                        root.ssh.remote_access_error = Some(format!(
+                            "{}: {error}",
+                            root.ui_text.get(UiTextKey::WorkbenchI18nRemoteAccessActionFailed)
+                        ));
+                    }
                 }
                 cx.notify();
             });

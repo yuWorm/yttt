@@ -5,6 +5,12 @@ use std::{
     process::Command,
 };
 
+use crate::{
+    cli::ui_text_for_profile,
+    config::profile::AppProfile,
+    ui::i18n::{UiText, UiTextKey},
+};
+
 const CLI_PATH: &str = "/usr/local/bin/yttt";
 
 fn installed_executable(executable: &Path, home: Option<&Path>) -> bool {
@@ -74,7 +80,7 @@ fn applescript_string(value: &str) -> String {
     )
 }
 
-fn privileged_registration(executable: &Path) -> io::Result<()> {
+fn privileged_registration(executable: &Path, text: UiText) -> io::Result<()> {
     let executable = executable
         .to_str()
         .ok_or_else(|| io::Error::other("application path is not UTF-8"))?;
@@ -90,7 +96,7 @@ fn privileged_registration(executable: &Path) -> io::Result<()> {
             "do shell script {} with administrator privileges with prompt {}",
             applescript_string(&script),
             applescript_string(
-                "yttt needs permission to install its terminal command at /usr/local/bin/yttt."
+                text.get(UiTextKey::CliLocalizationRegistrationPermissionPrompt)
             )
         ))
         .output()?;
@@ -108,6 +114,7 @@ pub(crate) fn register_installed_app() {
     if cfg!(debug_assertions) || std::env::var_os("YTTT_PROFILE_ROOT").is_some() {
         return;
     }
+    let text = ui_text_for_profile(&AppProfile::production());
     let result = (|| {
         let executable = std::env::current_exe()?;
         let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -116,20 +123,21 @@ pub(crate) fn register_installed_app() {
         }
         match register_link(&executable, Path::new(CLI_PATH)) {
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                privileged_registration(&executable)
+                privileged_registration(&executable, text)
             }
             result => result,
         }
     })();
     if let Err(error) = result {
-        let message = format!(
-            "The yttt terminal command could not be installed. The application can still be used.\n\n{error}\n\nResolve the conflict or allow installation, then restart yttt to retry. You can also run the application's Contents/MacOS/yttt executable directly."
-        );
+        let message = text
+            .get(UiTextKey::CliLocalizationRegistrationFailure)
+            .replace("{error}", &error.to_string());
         eprintln!("{message}");
         let _ = Command::new("/usr/bin/osascript")
             .arg("-e")
             .arg(format!(
-                "display alert \"yttt command-line installation\" message {} as warning",
+                "display alert {} message {} as warning",
+                applescript_string(text.get(UiTextKey::CliLocalizationRegistrationAlertTitle)),
                 applescript_string(&message)
             ))
             .status();

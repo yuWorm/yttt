@@ -159,13 +159,21 @@ pub enum ProjectTabStatusTone {
 }
 
 pub fn visible_tab_titles(workspace: &Workspace) -> Vec<String> {
-    visible_tab_items(workspace)
-        .into_iter()
-        .map(|tab| tab.title)
+    let Some(selected_project_id) = workspace.selected_project_id() else {
+        return Vec::new();
+    };
+    let Some(project) = workspace.project(selected_project_id) else {
+        return Vec::new();
+    };
+    project
+        .layout
+        .tabs
+        .iter()
+        .map(|tab| tab.title.clone())
         .collect()
 }
 
-pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
+pub fn visible_tab_items(workspace: &Workspace, text: UiText) -> Vec<ProjectTabItem> {
     let Some(selected_project_id) = workspace.selected_project_id() else {
         return Vec::new();
     };
@@ -181,9 +189,9 @@ pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
             id: tab.id.clone(),
             title: tab.title.clone(),
             status: project.tab_state(&tab.id).map(|state| {
-                let mut parts = vec![tab_start_state_label(state.start_state).to_string()];
+                let mut parts = vec![tab_start_state_label(state.start_state, &text).to_string()];
                 if let Some(agent_status) = tab_agent_status(project, &tab.id) {
-                    parts.push(agent_status_label(agent_status).to_string());
+                    parts.push(agent_status_label(agent_status, &text).to_string());
                 }
                 parts.join(" · ")
             }),
@@ -252,8 +260,11 @@ pub fn visible_work_item_tabs(
         .collect()
 }
 
-pub fn visible_terminal_work_item_tabs(workspace: &Workspace) -> Vec<WorkbenchTabItem> {
-    let terminal_items = visible_tab_items(workspace);
+pub fn visible_terminal_work_item_tabs(
+    workspace: &Workspace,
+    text: UiText,
+) -> Vec<WorkbenchTabItem> {
+    let terminal_items = visible_tab_items(workspace, text);
     let active = workspace
         .selected_project_id()
         .and_then(|project_id| workspace.project(project_id))
@@ -756,11 +767,11 @@ where
     .debug_selector(|| id.to_string())
 }
 
-fn tab_start_state_label(state: TabStartState) -> &'static str {
-    match state {
-        TabStartState::Lazy => "lazy",
-        TabStartState::Started => "started",
-    }
+fn tab_start_state_label(state: TabStartState, text: &UiText) -> &'static str {
+    text.get(match state {
+        TabStartState::Lazy => UiTextKey::Lazy,
+        TabStartState::Started => UiTextKey::Started,
+    })
 }
 
 fn tab_status_tone(

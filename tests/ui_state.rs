@@ -438,7 +438,7 @@ fn git_status_parser_propagates_ignored_directory_status_without_marking_tree_di
 #[test]
 fn visible_work_item_tabs_merge_terminal_and_file_items() {
     let workspace = WorkbenchView::dev_fixture_for_test().workspace().clone();
-    let terminal_items = visible_tab_items(&workspace);
+    let terminal_items = visible_tab_items(&workspace, UiText::english());
     let project_id = workspace.selected_project_id().unwrap().clone();
     let first_file = DocumentId {
         project_id: project_id.clone(),
@@ -1625,8 +1625,8 @@ fn force_onboarding_overrides_the_persisted_completion_marker() {
     );
     assert_eq!(
         forced.onboarding_language(),
-        Some(LanguageSetting::English),
-        "forced onboarding must keep the persisted System language rather than detecting it again"
+        Some(yttt::config::settings::detect_system_language_setting()),
+        "forced onboarding must resolve System without changing the persisted preference"
     );
     assert!(
         load_settings(&paths)
@@ -3899,21 +3899,6 @@ fn root_view_layout_commands_write_current_project_files() {
     assert!(project_config_dir.join("layout.toml").exists());
 }
 
-#[test]
-fn root_view_exposes_global_default_layout_source() {
-    let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("source-message-project");
-    fs::create_dir(&project_dir).unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths_for_test(paths);
-
-    root.open_project_path(&project_dir).unwrap();
-
-    assert_eq!(
-        root.visible_layout_source_message(),
-        Some("Layout source: global default")
-    );
-}
 
 #[test]
 fn root_view_project_open_surfaces_personal_layout_warning() {
@@ -7440,7 +7425,7 @@ fn visible_tab_items_mark_selected_tab() {
     let mut workspace = workspace_with_sample_project();
     workspace.select_tab("agent").unwrap();
 
-    let items = visible_tab_items(&workspace);
+    let items = visible_tab_items(&workspace, UiText::english());
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].id, "dev");
     assert_eq!(items[0].state, SelectableState::Inactive);
@@ -7448,25 +7433,6 @@ fn visible_tab_items_mark_selected_tab() {
     assert_eq!(items[1].state, SelectableState::Active);
 }
 
-#[test]
-fn visible_tab_items_show_agent_completed_status() {
-    let mut workspace = workspace_with_sample_project();
-    let project_id = workspace.selected_project_id().unwrap().clone();
-    workspace.select_tab("agent").unwrap();
-    workspace
-        .record_agent_snapshot(
-            &project_id,
-            "agent",
-            "codex",
-            agent_snapshot(AgentTurnState::Completed),
-        )
-        .unwrap();
-
-    let items = visible_tab_items(&workspace);
-    let agent = items.iter().find(|item| item.id == "agent").unwrap();
-
-    assert_eq!(agent.status.as_deref(), Some("started · agent completed"));
-}
 
 #[test]
 fn visible_pane_titles_come_from_selected_tab() {

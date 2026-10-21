@@ -86,7 +86,7 @@ impl WorkbenchView {
         match source {
             Ok(source) => cx.write_to_clipboard(ClipboardItem::new_string(source)),
             Err(error) => {
-                self.load_error = Some(format!("Settings draft could not be copied: {error}"))
+                self.load_error = Some(self.ui_text.get(UiTextKey::SettingsDraftCopyFailed).replace("{error}", &error.to_string()))
             }
         }
     }
@@ -114,14 +114,14 @@ impl WorkbenchView {
         if let Some(draft) = self.settings.failed_project_settings_save.as_ref() {
             if !self.project_settings_draft_matches_current_target(draft) {
                 return Err(WorkbenchError::SettingsUnavailable(
-                    "Select the project that owns this draft before retrying it.".into(),
+                    self.ui_text.get(UiTextKey::SettingsDraftSelectOwner).into(),
                 ));
             }
             if !self.settings_scope_is_editable(SettingsScope::Project)
                 || !self.shared_mutation_allowed()
             {
                 return Err(WorkbenchError::SettingsUnavailable(
-                    "Host control is required to retry this project settings draft.".into(),
+                    self.ui_text.get(UiTextKey::SettingsDraftProjectControl).into(),
                 ));
             }
             self.settings.pending_project_settings_save = Some(draft.clone());
@@ -134,14 +134,14 @@ impl WorkbenchView {
         };
         if baseline != &self.settings.confirmed_settings {
             return Err(WorkbenchError::SettingsUnavailable(
-                "Settings changed since this draft was created. The draft is retained; review the current values before discarding it and applying your changes again.".into(),
+                self.ui_text.get(UiTextKey::SettingsDraftStale).into(),
             ));
         }
         if crate::config::scope::host_settings_changed(candidate, baseline)
             && !self.shared_mutation_allowed()
         {
             return Err(WorkbenchError::SettingsUnavailable(
-                "Host control is required to retry this settings draft.".into(),
+                self.ui_text.get(UiTextKey::SettingsDraftControl).into(),
             ));
         }
         self.settings.pending_settings_save = Some((candidate.clone(), *bars_only));
@@ -189,7 +189,7 @@ impl WorkbenchView {
                     );
                 }
                 _ => {
-                    self.load_error = Some("Recovered project settings draft is invalid.".into());
+                    self.load_error = Some(self.ui_text.get(UiTextKey::SettingsDraftProjectInvalid).into());
                 }
             }
             return;
@@ -205,7 +205,7 @@ impl WorkbenchView {
                 );
             }
             (Err(error), _) | (_, Err(error)) => {
-                self.load_error = Some(format!("Recovered settings draft is invalid: {error}"));
+                self.load_error = Some(self.ui_text.get(UiTextKey::SettingsDraftInvalid).replace("{error}", &error.to_string()));
             }
         }
     }
@@ -237,7 +237,7 @@ impl WorkbenchView {
                 )
             {
                 return Err(WorkbenchError::SettingsUnavailable(
-                    "This window does not currently control the shared environment.".into(),
+                    self.ui_text.get(UiTextKey::SettingsNoSharedControl).into(),
                 ));
             }
             self.settings.pending_settings_save = Some((candidate, bars_only));
@@ -348,7 +348,7 @@ impl WorkbenchView {
                         if same_bars_draft {
                             root.set_layout_toml_editor_error("bars", error.clone());
                         }
-                        root.load_error = Some(format!("Settings were not saved: {error}"));
+                        root.load_error = Some(root.ui_text.get(UiTextKey::SettingsSaveFailed).replace("{error}", &error.to_string()));
                         root.settings.settings_save_error = Some(error);
                         root.failed_settings_save = Some(retained);
                     }
@@ -451,7 +451,7 @@ impl WorkbenchView {
                     }
                     Err(error) => {
                         root.load_error =
-                            Some(format!("Project settings were not saved: {error}"));
+                            Some(root.ui_text.get(UiTextKey::SettingsProjectSaveFailed).replace("{error}", &error.to_string()));
                         root.settings.settings_save_error = Some(error);
                         root.settings.failed_project_settings_save = Some(draft);
                     }
@@ -477,10 +477,16 @@ impl WorkbenchView {
         self.app_settings = settings;
         self.appearance.replace(theme);
         self.icon_theme = icons;
+        let previous_locale = self.ui_text.locale();
         self.ui_text = ui_text_for_language(
             self.onboarding_language()
                 .unwrap_or(self.app_settings.general.language),
         );
+        self.ui_text.activate(cx);
+        if self.ui_text.locale() != previous_locale {
+            self.reset_palette_input();
+            self.reset_settings_search_input();
+        }
         self.system_notifications_enabled = self.app_settings.notifications.system;
         self.vim.set_support(self.app_settings.vim.mode);
         self.sync_editor_vim_modes(window, cx);
@@ -584,7 +590,7 @@ impl WorkbenchView {
                         if last_error.as_ref() != Some(&error) {
                             let _ = this.update(cx, |root, cx| {
                                 root.load_error =
-                                    Some(format!("Settings could not be refreshed: {error}"));
+                                    Some(root.ui_text.get(UiTextKey::SettingsRefreshFailed).replace("{error}", &error.to_string()));
                                 cx.notify();
                             });
                             last_error = Some(error);

@@ -120,13 +120,17 @@ impl WorkbenchView {
             .workspace
             .selected_project_id()
             .cloned()
-            .ok_or_else(|| "No project is selected.".to_string())?;
+            .ok_or_else(|| self.ui_text.get(UiTextKey::SettingsOpenProjectFirst).to_string())?;
         let project_path = self
             .workspace
             .project(&project_id)
             .and_then(|project| project.location.local_path())
             .cloned()
-            .ok_or_else(|| "The selected project has no Host configuration path.".to_string())?;
+            .ok_or_else(|| {
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nProjectHostConfigurationUnavailable)
+                    .to_string()
+            })?;
         Ok(ProjectEditorSettingsIo {
             project_id,
             config_paths: self.config_paths.clone(),

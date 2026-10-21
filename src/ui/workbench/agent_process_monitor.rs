@@ -2,7 +2,7 @@ use gpui::{Context, Window};
 use yttt_agent_core::AgentProcessState;
 use yttt_protocol::agent::AgentSnapshotUpdate;
 
-use super::{WorkbenchView, helpers::terminal_pane_key};
+use super::{UiTextKey, WorkbenchView, helpers::terminal_pane_key};
 use crate::{
     model::ids::ProjectId,
     runtime::{
@@ -136,10 +136,11 @@ impl WorkbenchView {
         };
         let address: AgentPaneAddress = pane.read(cx).agent_pane_address();
         if address.project_id != update.scope.project_id {
-            self.load_error = Some(format!(
-                "Host Agent snapshot project mismatch for terminal {}",
-                update.terminal_session_id.as_str()
-            ));
+            self.load_error = Some(
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nAgentSnapshotProjectMismatch)
+                    .replace("{terminal}", update.terminal_session_id.as_str()),
+            );
             return true;
         }
         match self.agent_manager.apply_host_snapshot(address, update) {
@@ -154,16 +155,26 @@ impl WorkbenchView {
                     self.record_agent_event_snapshot(address, snapshot, window, cx)
                 };
                 if let Err(error) = result {
-                    self.load_error = Some(error.to_string());
+                    self.load_error = Some(format!(
+                        "{}: {error}",
+                        self.ui_text
+                            .get(UiTextKey::WorkbenchI18nAgentSnapshotApplyFailed)
+                    ));
                 }
                 true
             }
             Some(AgentPaneExitOutcome::ResumeFailed { address, snapshot }) => {
                 if let Err(error) = self.record_agent_runtime_snapshot(address, snapshot) {
-                    self.load_error = Some(error.to_string());
+                    self.load_error = Some(format!(
+                        "{}: {error}",
+                        self.ui_text
+                            .get(UiTextKey::WorkbenchI18nAgentSnapshotApplyFailed)
+                    ));
                 } else {
                     self.load_error = Some(
-                        "Agent session could not be resumed; the original session is retained. Retry or explicitly open a new session.".into(),
+                        self.ui_text
+                            .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailedRetained)
+                            .to_string(),
                     );
                 }
                 true

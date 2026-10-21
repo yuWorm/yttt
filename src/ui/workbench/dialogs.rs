@@ -955,7 +955,7 @@ pub(super) fn close_project_dialog(
                 div()
                     .text_xs()
                     .text_color(dialog.hint)
-                    .child("Enter to close, Escape to cancel"),
+                    .child(ui_text.get(UiTextKey::WorkbenchI18nCloseProjectKeyboardHint)),
             )
             .child(
                 div()

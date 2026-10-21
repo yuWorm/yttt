@@ -8,6 +8,10 @@
 - Fix Sixel bottom-edge repaints scrolling an extra row and accumulating stale image-top strips. Leave the cursor on the final image row and scroll only for pixels extending beyond the bottom margin.
 - 本地 PTY（包括 Host 创建的会话）默认向 OMP 提供 Kitty 与 Unicode placeholders 配置，使附件缩略图无需手动设置即可显示；保留继承、显式覆盖与移除的环境变量设置。
 - Default locally spawned PTYs, including Host sessions, to OMP's Kitty graphics and Unicode placeholders so attachment thumbnails work without manual setup. Preserve inherited values, explicit overrides, and environment removals.
+- 补齐英文与简体中文界面：正常启动也会解析“跟随系统”，切换语言同步组件库及设置控件；工作区恢复、退出确认、终端恢复、状态栏、快捷键动作与时间日期使用所选语言。
+- Complete English and Simplified Chinese UI coverage: resolve System on normal startup, synchronize component and settings-control locales on language changes, and localize workspace/terminal recovery, close confirmations, status bars, shortcut actions, and dates.
+- CLI 帮助和人工可读输出支持离线读取设备语言；Linux 安装脚本按环境 locale 选择语言，Windows 安装器内置中英文资源。命令、协议标识、JSON 字段及底层诊断原文保持稳定。
+- Localize CLI help and human-readable output using offline device preferences, select Linux installer language from the environment locale, and bundle both Windows installer languages. Commands, protocol identifiers, JSON fields, and underlying diagnostics remain unchanged.
 
 ## 0.3.16 - 2026-10-16
 

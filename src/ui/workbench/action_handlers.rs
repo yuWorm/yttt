@@ -13,7 +13,11 @@ impl WorkbenchView {
         if self.shared_mutation_allowed() {
             return true;
         }
-        self.load_error = Some("Shared editing control is required".to_string());
+        self.load_error = Some(
+            self.ui_text
+                .get(UiTextKey::WorkbenchI18nSharedEditingControlRequired)
+                .to_string(),
+        );
         false
     }
 
@@ -342,7 +346,7 @@ impl WorkbenchView {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Open Directory".into()),
+            prompt: Some(self.ui_text.get(UiTextKey::OpenDirectory).into()),
         });
 
         cx.spawn(async move |this, cx| match picked_paths.await {
@@ -359,13 +363,21 @@ impl WorkbenchView {
             Ok(Ok(None)) => {}
             Ok(Err(error)) => {
                 let _ = this.update(cx, |this, cx| {
-                    this.load_error = Some(format!("Failed to open directory picker: {error}"));
+                    this.load_error = Some(format!(
+                        "{}: {error}",
+                        this.ui_text
+                            .get(UiTextKey::WorkbenchI18nDirectoryPickerFailed)
+                    ));
                     cx.notify();
                 });
             }
             Err(error) => {
                 let _ = this.update(cx, |this, cx| {
-                    this.load_error = Some(format!("Directory picker was interrupted: {error}"));
+                    this.load_error = Some(format!(
+                        "{}: {error}",
+                        this.ui_text
+                            .get(UiTextKey::WorkbenchI18nDirectoryPickerInterrupted)
+                    ));
                     cx.notify();
                 });
             }

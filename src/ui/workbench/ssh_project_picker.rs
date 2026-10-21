@@ -36,6 +36,14 @@ struct SshPasswordAttempt {
 const SSH_PROJECT_DIRECTORY_SCROLL_ROW_LIMIT: usize = 8;
 
 impl WorkbenchView {
+
+    fn localized_ssh_project_picker_error(&self, detail: impl std::fmt::Display) -> String {
+        format!(
+            "{}: {detail}",
+            self.ui_text
+                .get(UiTextKey::WorkbenchI18nSshProjectPickerOperationFailed)
+        )
+    }
     pub(super) fn open_remote_host_directory_picker(&mut self, cx: &mut Context<Self>) {
         let Some(environment) = self
             .terminal
@@ -64,16 +72,17 @@ impl WorkbenchView {
         let path = match remote_picker_input_path(
             &input.read(cx).value(),
             self.ssh.project_picker.home_path.as_ref(),
+            self.ui_text,
         ) {
             Ok(path) => PathBuf::from(path.as_str()),
             Err(error) => {
-                self.ssh.project_picker.error = Some(error);
+                self.ssh.project_picker.error = Some(self.localized_ssh_project_picker_error(error));
                 cx.notify();
                 return;
             }
         };
         if let Err(error) = yttt_protocol::HostPath::from_client_path(&path) {
-            self.ssh.project_picker.error = Some(error.to_string());
+            self.ssh.project_picker.error = Some(self.localized_ssh_project_picker_error(error));
             cx.notify();
             return;
         }
@@ -96,9 +105,15 @@ impl WorkbenchView {
                 match result {
                     Ok(path) => match yttt_protocol::HostPath::from_client_path(&path) {
                         Ok(path) => root.load_remote_host_directory(path, cx),
-                        Err(error) => root.ssh.project_picker.error = Some(error.to_string()),
+                        Err(error) => {
+                            root.ssh.project_picker.error =
+                                Some(root.localized_ssh_project_picker_error(error));
+                        }
                     },
-                    Err(error) => root.ssh.project_picker.error = Some(error),
+                    Err(error) => {
+                        root.ssh.project_picker.error =
+                            Some(root.localized_ssh_project_picker_error(error));
+                    }
                 }
                 cx.notify();
             });
@@ -123,7 +138,8 @@ impl WorkbenchView {
             }) {
             Ok(path) => path,
             Err(error) => {
-                self.ssh.project_picker.error = Some(error);
+                self.ssh.project_picker.error =
+                    Some(self.localized_ssh_project_picker_error(error));
                 cx.notify();
                 return;
             }
@@ -173,7 +189,10 @@ impl WorkbenchView {
                                 root.ssh.project_picker.path_input_needs_sync =
                                     !root.ssh.project_picker.preserve_path_input;
                             }
-                            Err(error) => root.ssh.project_picker.error = Some(error),
+                            Err(error) => {
+                                root.ssh.project_picker.error =
+                                    Some(root.localized_ssh_project_picker_error(error));
+                            }
                         }
                         root.ssh.project_picker.directories = directory
                             .entries
@@ -208,7 +227,10 @@ impl WorkbenchView {
                                 .into(),
                         )
                     }
-                    Err(error) => root.ssh.project_picker.error = Some(error.to_string()),
+                    Err(error) => {
+                        root.ssh.project_picker.error =
+                            Some(root.localized_ssh_project_picker_error(error));
+                    }
                 }
                 root.ssh.project_picker.reset_directory_selection();
                 cx.notify();
@@ -580,11 +602,13 @@ impl WorkbenchView {
                             workbench.sync_input_owner_state();
                         }
                         Err(error) => {
-                            workbench.ssh.project_picker.error = Some(error.to_string());
+                            workbench.ssh.project_picker.error =
+                                Some(workbench.localized_ssh_project_picker_error(error));
                         }
                     },
                     Err(error) => {
-                        workbench.ssh.project_picker.error = Some(error.to_string());
+                        workbench.ssh.project_picker.error =
+                            Some(workbench.localized_ssh_project_picker_error(error));
                     }
                 }
                 cx.notify();
@@ -633,7 +657,8 @@ impl WorkbenchView {
                     }
                     Err(error) => {
                         root.ssh.project_picker.loading = false;
-                        root.ssh.project_picker.error = Some(error.to_string());
+                        root.ssh.project_picker.error =
+                            Some(root.localized_ssh_project_picker_error(error));
                         cx.notify();
                     }
                 }
@@ -714,7 +739,8 @@ impl WorkbenchView {
                         root.ssh.project_picker.error = None;
                     }
                     Err(error) => {
-                        root.ssh.project_picker.error = Some(error.to_string());
+                        root.ssh.project_picker.error =
+                            Some(root.localized_ssh_project_picker_error(error));
                     }
                 }
                 root.ssh.project_picker.reset_directory_selection();
@@ -737,7 +763,10 @@ impl WorkbenchView {
         {
             match yttt_protocol::HostPath::from_client_path(Path::new(path.as_str())) {
                 Ok(path) => self.load_remote_host_directory(path, cx),
-                Err(error) => self.ssh.project_picker.error = Some(error.to_string()),
+                Err(error) => {
+                    self.ssh.project_picker.error =
+                        Some(self.localized_ssh_project_picker_error(error));
+                }
             }
             return;
         }
@@ -964,7 +993,10 @@ impl WorkbenchView {
             };
             match self.open_project_path(Path::new(path.as_str())) {
                 Ok(()) => self.close_ssh_project_picker(cx),
-                Err(error) => self.ssh.project_picker.error = Some(error.to_string()),
+                Err(error) => {
+                    self.ssh.project_picker.error =
+                        Some(self.localized_ssh_project_picker_error(error));
+                }
             }
             cx.notify();
             return;
@@ -985,7 +1017,8 @@ impl WorkbenchView {
                 self.sync_input_owner_state();
             }
             Err(error) => {
-                self.ssh.project_picker.error = Some(error.to_string());
+                self.ssh.project_picker.error =
+                    Some(self.localized_ssh_project_picker_error(error));
             }
         }
         cx.notify();
@@ -1044,7 +1077,11 @@ impl WorkbenchView {
             self.navigate_ssh_project_path_input(cx);
         } else if matches!(event, InputEvent::Change) {
             let value = input.read(cx).value();
-            match remote_picker_directory_query(&value, self.ssh.project_picker.home_path.as_ref())
+            match remote_picker_directory_query(
+                &value,
+                self.ssh.project_picker.home_path.as_ref(),
+                self.ui_text,
+            )
             {
                 Ok((parent, prefix)) => {
                     if self.ssh.project_picker.current_path.as_ref() != Some(&parent)
@@ -1356,11 +1393,14 @@ fn remote_picker_path_label(path: &RemotePathBuf) -> String {
 fn remote_picker_input_path(
     value: &str,
     home: Option<&RemotePathBuf>,
+    text: UiText,
 ) -> Result<RemotePathBuf, String> {
-    let value = value.trim();
     let expanded;
     let value = if value == "~" || value.starts_with("~/") {
-        let home = home.ok_or_else(|| "Remote home directory is not available yet.".to_string())?;
+        let home = home.ok_or_else(|| {
+            text.get(UiTextKey::WorkbenchI18nSshProjectHomeUnavailable)
+                .to_string()
+        })?;
         expanded = format!("{}{}", home.as_str().trim_end_matches('/'), &value[1..]);
         if expanded.is_empty() { "/" } else { &expanded }
     } else {
@@ -1372,16 +1412,17 @@ fn remote_picker_input_path(
 fn remote_picker_directory_query(
     value: &str,
     home: Option<&RemotePathBuf>,
+    text: UiText,
 ) -> Result<(RemotePathBuf, String), String> {
     let value = value.trim();
-    let path = remote_picker_input_path(value, home)?;
+    let path = remote_picker_input_path(value, home, text)?;
     // A trailing separator (or an explicit dot component) requests the directory itself.
     let last = value.rsplit('/').next().unwrap_or_default();
     if value.ends_with('/') || value == "~" || matches!(last, "." | "..") {
         return Ok((path, String::new()));
     }
     let parent = remote_parent_path(&path)
-        .ok_or_else(|| "Expected an absolute directory path.".to_string())?;
+        .ok_or_else(|| text.get(UiTextKey::RemoteInvalidRoot).to_string())?;
     Ok((parent, last.to_string()))
 }
 
@@ -2289,10 +2330,12 @@ mod tests {
         remote_child_path, remote_parent_path, remote_picker_directory_query,
         remote_picker_input_path,
     };
+    use crate::ui::i18n::UiText;
     use yttt_core::model::project::RemotePathBuf;
 
     #[test]
     fn remote_directory_query_distinguishes_prefixes_from_directory_navigation() {
+        let text = UiText::english();
         let home = RemotePathBuf::new("/home/remote").unwrap();
         for (input, parent, prefix) in [
             ("/Volumes/WorkSpace/Pro", "/Volumes/WorkSpace", "Pro"),
@@ -2313,15 +2356,15 @@ mod tests {
             ("/tmp/~", "/tmp", "~"),
         ] {
             let (actual_parent, actual_prefix) =
-                remote_picker_directory_query(input, Some(&home)).unwrap();
+                remote_picker_directory_query(input, Some(&home), text).unwrap();
             assert_eq!(
                 (actual_parent.as_str(), actual_prefix.as_str()),
                 (parent, prefix),
                 "{input}"
             );
         }
-        assert!(remote_picker_directory_query("~/Pro", None).is_err());
-        assert!(remote_picker_directory_query("relative/Pro", Some(&home)).is_err());
+        assert!(remote_picker_directory_query("~/Pro", None, text).is_err());
+        assert!(remote_picker_directory_query("relative/Pro", Some(&home), text).is_err());
     }
 
     #[test]
@@ -2339,18 +2382,19 @@ mod tests {
     #[test]
     fn remote_picker_expands_only_the_connected_users_home() {
         let home = RemotePathBuf::new("/home/remote-user").unwrap();
-        assert_eq!(remote_picker_input_path("~", Some(&home)).unwrap(), home);
+        let text = UiText::english();
+        assert_eq!(remote_picker_input_path("~", Some(&home), text).unwrap(), home);
         assert_eq!(
-            remote_picker_input_path("~/Project with spaces/../.config/", Some(&home))
+            remote_picker_input_path("~/Project with spaces/../.config/", Some(&home), text)
                 .unwrap()
                 .as_str(),
             "/home/remote-user/.config"
         );
-        assert!(remote_picker_input_path("~", None).is_err());
-        assert!(remote_picker_input_path("~other/project", Some(&home)).is_err());
+        assert!(remote_picker_input_path("~", None, text).is_err());
+        assert!(remote_picker_input_path("~other/project", Some(&home), text).is_err());
         let root_home = RemotePathBuf::new("/").unwrap();
         assert_eq!(
-            remote_picker_input_path("~", Some(&root_home)).unwrap(),
+            remote_picker_input_path("~", Some(&root_home), text).unwrap(),
             root_home
         );
     }

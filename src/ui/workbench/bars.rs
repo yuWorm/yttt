@@ -18,7 +18,7 @@ use crate::{
     model::project::ProjectLocation,
     ui::{
         editor::{EditorDiagnosticSeverity, WorkItemId},
-        i18n::UiTextKey,
+        i18n::{UiText, UiTextKey},
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
         terminal::status::{agent_status_label, project_agent_status},
         theme::{UiStyle, WorkbenchTheme, current_ui_style, current_workbench_theme},
@@ -112,6 +112,7 @@ struct UpdateBarInfo {
 }
 
 struct ShellBarData {
+    text: UiText,
     project_name: String,
     project_path: Option<String>,
     active_item: Option<ActiveItemBarInfo>,
@@ -449,7 +450,7 @@ impl WorkbenchView {
                     .map(|status| status.state)
                     .unwrap_or(ConnectionState::Disconnected);
                 Some(SshBarInfo {
-                    text: format!("{name} · {}", ssh_state_label(state)),
+                    text: format!("{name} · {}", ssh_state_label(state, &self.ui_text)),
                     tooltip: host,
                     tone: ssh_state_tone(state),
                 })
@@ -531,6 +532,7 @@ impl WorkbenchView {
         .flatten();
 
         ShellBarData {
+            text: self.ui_text,
             project_name,
             project_path,
             active_item,
@@ -1000,15 +1002,20 @@ fn bar_module_view(
             let editor = data.editor.as_ref()?;
             let (line, character) = (editor.line?, editor.character?);
             let mut view = BarModuleView::text(format!("{line}:{character}"));
-            view.tooltip = Some(format!("Line {line}, column {character}"));
+            view.tooltip = Some(
+                data.text
+                    .get(UiTextKey::BarI18nEditorPosition)
+                    .replace("{line}", &line.to_string())
+                    .replace("{column}", &character.to_string()),
+            );
             view
         }
         ShellBarModule::EditorDirty => {
             let editor = data.editor.as_ref()?;
             let mut view = BarModuleView::text(if editor.dirty {
-                "● modified"
+                data.text.get(UiTextKey::BarI18nEditorModified)
             } else {
-                "saved"
+                data.text.get(UiTextKey::BarI18nEditorSaved)
             });
             view.empty = !editor.dirty;
             view.tone = if editor.dirty {
@@ -1032,7 +1039,9 @@ fn bar_module_view(
                 parts.push(format!("I{infos}"));
             }
             let mut view = BarModuleView::text(if parts.is_empty() {
-                "no diagnostics".to_string()
+                data.text
+                    .get(UiTextKey::BarI18nEditorNoDiagnostics)
+                    .to_string()
             } else {
                 parts.join(" ")
             });
@@ -1050,50 +1059,68 @@ fn bar_module_view(
             let editor = data.editor.as_ref()?;
             let mut view = match editor.selection {
                 Some(selection) => {
-                    let label = format!(
-                        "{} chars · {} {}",
-                        selection.characters,
-                        selection.lines,
-                        if selection.lines == 1 {
-                            "line"
-                        } else {
-                            "lines"
-                        }
+                    let (label_key, tooltip_key) = if selection.lines == 1 {
+                        (
+                            UiTextKey::BarI18nEditorSelectionSingle,
+                            UiTextKey::BarI18nEditorSelectionTooltipSingle,
+                        )
+                    } else {
+                        (
+                            UiTextKey::BarI18nEditorSelectionMultiple,
+                            UiTextKey::BarI18nEditorSelectionTooltipMultiple,
+                        )
+                    };
+                    let characters = selection.characters.to_string();
+                    let lines = selection.lines.to_string();
+                    let mut view = BarModuleView::text(
+                        data.text
+                            .get(label_key)
+                            .replace("{characters}", &characters)
+                            .replace("{lines}", &lines),
                     );
-                    let mut view = BarModuleView::text(label);
-                    view.tooltip = Some(format!(
-                        "{} Unicode scalar characters across {} selected {}",
-                        selection.characters,
-                        selection.lines,
-                        if selection.lines == 1 {
-                            "line"
-                        } else {
-                            "lines"
-                        }
-                    ));
+                    view.tooltip = Some(
+                        data.text
+                            .get(tooltip_key)
+                            .replace("{characters}", &characters)
+                            .replace("{lines}", &lines),
+                    );
                     view
                 }
-                None => BarModuleView::text("no selection"),
+                None => BarModuleView::text(data.text.get(UiTextKey::BarI18nEditorNoSelection)),
             };
             view.empty = editor.selection.is_none();
             view
         }
         ShellBarModule::EditorTabSize => {
             let editor = data.editor.as_ref()?;
-            let mut view = BarModuleView::text(format!("tab {}", editor.tab_size));
-            view.tooltip = Some(format!("Tab size: {} spaces", editor.tab_size));
+            let size = editor.tab_size.to_string();
+            let mut view = BarModuleView::text(
+                data.text
+                    .get(UiTextKey::BarI18nEditorTabSize)
+                    .replace("{size}", &size),
+            );
+            view.tooltip = Some(
+                data.text
+                    .get(UiTextKey::BarI18nEditorTabSizeTooltip)
+                    .replace("{size}", &size),
+            );
             view
         }
         ShellBarModule::EditorWrap => {
             let editor = data.editor.as_ref()?;
-            let mut view = BarModuleView::text(if editor.soft_wrap { "wrap" } else { "no wrap" });
+            let mut view = BarModuleView::text(if editor.soft_wrap {
+                data.text.get(UiTextKey::BarI18nEditorWrap)
+            } else {
+                data.text.get(UiTextKey::BarI18nEditorNoWrap)
+            });
             view.tooltip = Some(
-                if editor.soft_wrap {
-                    "Soft wrapping enabled"
-                } else {
-                    "Soft wrapping disabled"
-                }
-                .to_string(),
+                data.text
+                    .get(if editor.soft_wrap {
+                        UiTextKey::BarI18nEditorWrapEnabled
+                    } else {
+                        UiTextKey::BarI18nEditorWrapDisabled
+                    })
+                    .to_string(),
             );
             view
         }
@@ -1101,9 +1128,9 @@ fn bar_module_view(
         ShellBarModule::TerminalState => {
             let terminal = data.terminal.as_ref()?;
             let mut view = BarModuleView::text(if terminal.running {
-                "running"
+                data.text.get(UiTextKey::BarI18nTerminalRunning)
             } else {
-                "stopped"
+                data.text.get(UiTextKey::BarI18nTerminalStopped)
             });
             view.tone = if terminal.running {
                 BarTone::Success
@@ -1114,12 +1141,20 @@ fn bar_module_view(
         }
         ShellBarModule::TerminalExit => {
             let terminal = data.terminal.as_ref()?;
-            let (code, reason) = terminal.exit.as_ref()?;
+            let (code, exit_reason) = terminal.exit.as_ref()?;
+            let reason = terminal_exit_reason_label(exit_reason, &data.text);
             let mut view = BarModuleView::text(match code {
-                Some(code) => format!("exit {code} · {}", terminal_exit_reason_label(reason)),
-                None => format!("exit · {}", terminal_exit_reason_label(reason)),
+                Some(code) => data
+                    .text
+                    .get(UiTextKey::BarI18nTerminalExitCode)
+                    .replace("{code}", &code.to_string())
+                    .replace("{reason}", reason),
+                None => data
+                    .text
+                    .get(UiTextKey::BarI18nTerminalExit)
+                    .replace("{reason}", reason),
             });
-            view.tone = terminal_exit_reason_tone(reason);
+            view.tone = terminal_exit_reason_tone(exit_reason);
             view
         }
         ShellBarModule::TerminalSize => {
@@ -1128,9 +1163,12 @@ fn bar_module_view(
                 Some((cols, rows)) => BarModuleView::text(format!("{cols}×{rows}")),
                 None => BarModuleView::text("—"),
             };
-            view.tooltip = terminal
-                .viewport_size
-                .map(|(cols, rows)| format!("{cols} columns × {rows} rows"));
+            view.tooltip = terminal.viewport_size.map(|(cols, rows)| {
+                data.text
+                    .get(UiTextKey::BarI18nTerminalSizeTooltip)
+                    .replace("{columns}", &cols.to_string())
+                    .replace("{rows}", &rows.to_string())
+            });
             view.empty = terminal.viewport_size.is_none();
             view
         }
@@ -1156,7 +1194,7 @@ fn bar_module_view(
         }
         ShellBarModule::AgentState => {
             let state = data.agent_state?;
-            let mut view = BarModuleView::text(agent_status_label(state));
+            let mut view = BarModuleView::text(agent_status_label(state, &data.text));
             view.icon = Some(IconName::Bot);
             view.tone = agent_state_tone(state);
             view
@@ -1168,8 +1206,12 @@ fn bar_module_view(
             }
             let text = agent
                 .waiting_reason
-                .map(|reason| format!("waiting · {}", waiting_reason_label(reason)))
-                .unwrap_or_else(|| "waiting".to_string());
+                .map(|reason| {
+                    data.text
+                        .get(UiTextKey::BarI18nAgentWaitingReason)
+                        .replace("{reason}", waiting_reason_label(reason, &data.text))
+                })
+                .unwrap_or_else(|| data.text.get(UiTextKey::BarI18nAgentWaiting).to_string());
             let mut view = BarModuleView::text(text);
             view.icon = Some(IconName::Bot);
             view.tooltip = agent.waiting_message.clone();
@@ -1178,24 +1220,45 @@ fn bar_module_view(
         }
         ShellBarModule::AgentModel => {
             let model = data.active_agent.as_ref()?.model.as_ref()?;
-            let mut view = BarModuleView::text(format!("model {model}"));
+            let mut view = BarModuleView::text(
+                data.text
+                    .get(UiTextKey::BarI18nAgentModel)
+                    .replace("{model}", model),
+            );
             view.icon = Some(IconName::Bot);
-            view.tooltip = Some(format!("Agent model: {model}"));
+            view.tooltip = Some(
+                data.text
+                    .get(UiTextKey::BarI18nAgentModelTooltip)
+                    .replace("{model}", model),
+            );
             view
         }
         ShellBarModule::AgentChildren => {
             let agent = data.active_agent.as_ref()?;
-            let mut view = BarModuleView::text(format!("children {}", agent.active_children));
+            let count = agent.active_children.to_string();
+            let mut view = BarModuleView::text(
+                data.text
+                    .get(UiTextKey::BarI18nAgentChildren)
+                    .replace("{count}", &count),
+            );
             view.icon = Some(IconName::Bot);
-            view.tooltip = Some(format!("{} active child agents", agent.active_children));
+            view.tooltip = Some(
+                data.text
+                    .get(UiTextKey::BarI18nAgentChildrenTooltip)
+                    .replace("{count}", &count),
+            );
             view.empty = agent.active_children == 0;
             view
         }
         ShellBarModule::AgentStateDuration => {
             let agent = data.active_agent.as_ref()?;
             let elapsed = current_unix_millis().saturating_sub(agent.state_started_at);
-            let mut view = BarModuleView::text(format_state_duration(elapsed));
-            view.tooltip = Some("Current selected agent state duration".to_string());
+            let mut view = BarModuleView::text(format_state_duration(elapsed, &data.text));
+            view.tooltip = Some(
+                data.text
+                    .get(UiTextKey::BarI18nAgentStateDurationTooltip)
+                    .to_string(),
+            );
             view.tone = agent_state_tone(agent.state);
             view
         }
@@ -1276,14 +1339,22 @@ fn bar_module_view(
         ShellBarModule::CommandPalette => {
             let mut view = BarModuleView::text("");
             view.icon = Some(IconName::Search);
-            view.tooltip = Some("Open command palette".to_string());
+            view.tooltip = Some(
+                data.text
+                    .get(UiTextKey::CommandPaletteOpenTitle)
+                    .to_string(),
+            );
             view.action = Some(CommandId::CommandPaletteOpen);
             view
         }
         ShellBarModule::Settings => {
             let mut view = BarModuleView::text("");
             view.icon = Some(IconName::Settings);
-            view.tooltip = Some("Open settings".to_string());
+            view.tooltip = Some(
+                data.text
+                    .get(UiTextKey::CommandSettingsOpenTitle)
+                    .to_string(),
+            );
             view.action = Some(CommandId::SettingsOpen);
             view
         }
@@ -1505,20 +1576,23 @@ fn agent_state_tone(state: AgentViewState) -> BarTone {
     }
 }
 
-fn waiting_reason_label(reason: WaitingReason) -> &'static str {
-    match reason {
-        WaitingReason::Approval => "approval",
-        WaitingReason::UserInput => "input",
-        WaitingReason::External => "external",
-    }
+fn waiting_reason_label(reason: WaitingReason, text: &UiText) -> &'static str {
+    text.get(match reason {
+        WaitingReason::Approval => UiTextKey::BarI18nAgentWaitApproval,
+        WaitingReason::UserInput => UiTextKey::BarI18nAgentWaitInput,
+        WaitingReason::External => UiTextKey::BarI18nAgentWaitExternal,
+    })
 }
 
-fn terminal_exit_reason_label(reason: &yttt_terminal::ExitReason) -> &'static str {
-    match reason {
-        yttt_terminal::ExitReason::Completed => "completed",
-        yttt_terminal::ExitReason::Failed => "failed",
-        yttt_terminal::ExitReason::KilledByUser => "killed",
-    }
+fn terminal_exit_reason_label(
+    reason: &yttt_terminal::ExitReason,
+    text: &UiText,
+) -> &'static str {
+    text.get(match reason {
+        yttt_terminal::ExitReason::Completed => UiTextKey::BarI18nTerminalExitCompleted,
+        yttt_terminal::ExitReason::Failed => UiTextKey::BarI18nTerminalExitFailed,
+        yttt_terminal::ExitReason::KilledByUser => UiTextKey::BarI18nTerminalExitKilled,
+    })
 }
 
 fn terminal_exit_reason_tone(reason: &yttt_terminal::ExitReason) -> BarTone {
@@ -1539,32 +1613,42 @@ fn current_unix_millis() -> u64 {
     .unwrap_or(u64::MAX)
 }
 
-fn format_state_duration(elapsed_millis: u64) -> String {
+fn format_state_duration(elapsed_millis: u64, text: &UiText) -> String {
     let seconds = elapsed_millis / 1_000;
     if seconds < 60 {
-        return format!("{seconds}s");
+        return text
+            .get(UiTextKey::BarI18nDurationSeconds)
+            .replace("{seconds}", &seconds.to_string());
     }
     let minutes = seconds / 60;
     if minutes < 60 {
-        return format!("{minutes}m {}s", seconds % 60);
+        return text
+            .get(UiTextKey::BarI18nDurationMinutesSeconds)
+            .replace("{minutes}", &minutes.to_string())
+            .replace("{seconds}", &(seconds % 60).to_string());
     }
     let hours = minutes / 60;
     if hours < 24 {
-        return format!("{hours}h {}m", minutes % 60);
+        return text
+            .get(UiTextKey::BarI18nDurationHoursMinutes)
+            .replace("{hours}", &hours.to_string())
+            .replace("{minutes}", &(minutes % 60).to_string());
     }
-    format!("{}d {}h", hours / 24, hours % 24)
+    text.get(UiTextKey::BarI18nDurationDaysHours)
+        .replace("{days}", &(hours / 24).to_string())
+        .replace("{hours}", &(hours % 24).to_string())
 }
 
-fn ssh_state_label(state: ConnectionState) -> &'static str {
-    match state {
-        ConnectionState::Disconnected => "disconnected",
-        ConnectionState::Connecting => "connecting",
-        ConnectionState::VerifyingHostKey => "verifying",
-        ConnectionState::Authenticating => "authenticating",
-        ConnectionState::Connected => "connected",
-        ConnectionState::Reconnecting => "reconnecting",
-        ConnectionState::Failed => "failed",
-    }
+fn ssh_state_label(state: ConnectionState, text: &UiText) -> &'static str {
+    text.get(match state {
+        ConnectionState::Disconnected => UiTextKey::SshDisconnected,
+        ConnectionState::Connecting => UiTextKey::SshConnecting,
+        ConnectionState::VerifyingHostKey => UiTextKey::SshVerifyingHostKey,
+        ConnectionState::Authenticating => UiTextKey::SshAuthenticating,
+        ConnectionState::Connected => UiTextKey::SshConnected,
+        ConnectionState::Reconnecting => UiTextKey::SshReconnecting,
+        ConnectionState::Failed => UiTextKey::SshFailed,
+    })
 }
 
 fn ssh_state_tone(state: ConnectionState) -> BarTone {
@@ -1579,13 +1663,11 @@ fn ssh_state_tone(state: ConnectionState) -> BarTone {
     }
 }
 
-fn update_bar_info(status: &UpdateStatus, text: &crate::ui::i18n::UiText) -> UpdateBarInfo {
-    use crate::ui::i18n::UiTextKey;
-
+fn update_bar_info(status: &UpdateStatus, text: &UiText) -> UpdateBarInfo {
     match status {
         UpdateStatus::Idle => UpdateBarInfo {
             text: format!("v{}", crate::runtime::update::APP_VERSION),
-            tooltip: "Update status has not been checked".to_string(),
+            tooltip: text.get(UiTextKey::BarI18nUpdateNotChecked).to_string(),
             tone: BarTone::Muted,
             empty: true,
         },
@@ -1602,7 +1684,9 @@ fn update_bar_info(status: &UpdateStatus, text: &crate::ui::i18n::UiText) -> Upd
             empty: true,
         },
         UpdateStatus::Available(update) => UpdateBarInfo {
-            text: format!("v{} available", update.version),
+            text: text
+                .get(UiTextKey::BarI18nUpdateAvailable)
+                .replace("{version}", &update.version.to_string()),
             tooltip: update.release_url.clone(),
             tone: BarTone::Accent,
             empty: false,

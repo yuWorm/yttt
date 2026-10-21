@@ -77,11 +77,17 @@ impl WorkbenchView {
                     .then(|| self.config_paths.bars_file())
             })
             .ok_or_else(|| {
-                WorkbenchError::SettingsUnavailable("Device preferences are not bound.".to_string())
+                WorkbenchError::SettingsUnavailable(
+                    self.ui_text
+                        .get(UiTextKey::WorkbenchI18nDevicePreferencesUnbound)
+                        .to_string(),
+                )
             })?;
         let value = toml::to_string_pretty(&self.app_settings.bars).map_err(|source| {
             WorkbenchError::LayoutTomlEditor(format!(
-                "failed to serialize bars TOML for {}: {source}",
+                "{} ({}): {source}",
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nBarsEditorSerializeFailed),
                 path.display()
             ))
         })?;
@@ -114,7 +120,7 @@ impl WorkbenchView {
             &self.ui_text,
         )? {
             Some(value) => value,
-            None => serialize_layout_editor_source(self.default_layout_state.template(), &path)?,
+            None => serialize_layout_editor_source(self.default_layout_state.template(), &path, &self.ui_text)?,
         };
 
         self.overlays.layout_toml_editor = Some(LayoutEditorSession::new(
@@ -209,7 +215,9 @@ impl WorkbenchView {
             let value = crate::config::layout_loader::serialize_personal_replace(&effective_layout)
                 .map_err(|error| {
                     WorkbenchError::LayoutTomlEditor(format!(
-                        "Failed to prepare layout TOML ({}): {error}",
+                        "{} ({}): {error}",
+                        self.ui_text
+                            .get(UiTextKey::WorkbenchI18nLayoutEditorPrepareFailed),
                         personal_file.display(),
                     ))
                 })?;
@@ -648,10 +656,12 @@ fn optional_layout_editor_source(
 fn serialize_layout_editor_source(
     layout: &impl serde::Serialize,
     path: &Path,
+    ui_text: &UiText,
 ) -> Result<String, WorkbenchError> {
     toml::to_string_pretty(layout).map_err(|source| {
         WorkbenchError::LayoutTomlEditor(format!(
-            "failed to serialize layout TOML for {}: {source}",
+            "{} ({}): {source}",
+            ui_text.get(UiTextKey::WorkbenchI18nLayoutEditorSerializeFailed),
             path.display()
         ))
     })
@@ -735,8 +745,12 @@ fn localized_bars_editor_parse_error(
     let region = bars_editor_region_at_line(source, line)
         .map(|region| format!("{region}, "))
         .unwrap_or_default();
+    let position = ui_text
+        .get(UiTextKey::WorkbenchI18nLayoutEditorParsePosition)
+        .replace("{line}", &line.to_string())
+        .replace("{column}", &column.to_string());
     format!(
-        "{}: {region}line {line}, column {column}: {error}",
+        "{}: {region}{position}: {error}",
         ui_text.get(UiTextKey::BarsEditorParseFailed)
     )
 }

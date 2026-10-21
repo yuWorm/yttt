@@ -33,7 +33,7 @@ use crate::{
         app::startup::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
         },
-        i18n::{Locale, UiText, UiTextKey},
+        i18n::{UiText, UiTextKey},
         interaction::actions::{
             bindable_registry, compiled_app_keybindings, load_app_keybindings,
             ui_action_for_command,
@@ -119,6 +119,7 @@ pub fn run(
         }
 
         gpui_component::init(cx);
+        UiText::from_language(app_settings.general.language).activate(cx);
         assets::load_ui_fonts(cx);
         cx.bind_keys(gpui_markdown_editor::default_key_bindings());
         crate::ui::editor::register_builtin_editor_languages();
@@ -221,6 +222,7 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
             #[cfg(target_os = "macos")]
             platform::macos::prepare_macos_app_runtime();
             gpui_component::init(cx);
+            UiText::new(launch.appearance.locale).activate(cx);
             assets::load_ui_fonts(cx);
             yttt_terminal::init(cx);
             crate::ui::editor::register_builtin_editor_languages();
@@ -403,11 +405,12 @@ fn start_remote_client_restore(profile: AppProfile, cx: &mut App) {
                 cx.update(|cx| {
                     if let Some(handle) = cx.windows().first().copied() {
                         let _ = handle.update(cx, |_, window, cx| {
+                            let text = UiText::current(cx);
                             std::mem::drop(window.prompt(
                                 gpui::PromptLevel::Warning,
-                                "Cannot restore remote Clients",
+                                text.get(UiTextKey::DesktopRestoreClientsFailed),
                                 Some(&error.to_string()),
-                                &["OK"],
+                                &[text.get(UiTextKey::DialogOk)],
                                 cx,
                             ));
                         });
@@ -623,10 +626,7 @@ fn install_desktop_tray(window_context: DesktopWindowContext, cx: &mut App) {
     if !tray.is_available() {
         return;
     }
-    let text = UiText::new(match window_context.app_settings.general.language {
-        crate::config::settings::LanguageSetting::Chinese => Locale::Chinese,
-        _ => Locale::English,
-    });
+    let text = UiText::from_language(window_context.app_settings.general.language);
     tray.update(
         &DesktopTrayStatus::unavailable(text.get(UiTextKey::TrayConnecting)),
         text,
@@ -763,10 +763,22 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
         return;
     }
     let stops_host = stop_all || runtime.actual_lifetime() == yttt_host::HostLifetime::DesktopOwned;
-    let answer = window.prompt(gpui::PromptLevel::Warning, "Quit yttt?",
-        Some(if stops_host { "This Host is owned by the desktop. Quitting stops its network listener, disconnects remote clients, and terminates running terminals and Agent tasks. Confirmed workspaces and drafts remain saved." }
-            else { "This independently running Host will keep its network listener, remote clients, terminals and Agent tasks. Only this desktop client will disconnect." }),
-        &["Cancel", if stops_host { "Stop Host and quit" } else { "Disconnect desktop" }], cx);
+    let text = UiText::current(cx);
+    let answer = window.prompt(
+        gpui::PromptLevel::Warning,
+        text.get(UiTextKey::DesktopQuitTitle),
+        Some(text.get(if stops_host {
+            UiTextKey::DesktopQuitOwnedHostBody
+        } else {
+            UiTextKey::DesktopQuitIndependentHostBody
+        })),
+        &[text.get(UiTextKey::Cancel), text.get(if stops_host {
+            UiTextKey::DesktopStopHostAndQuit
+        } else {
+            UiTextKey::DesktopDisconnect
+        })],
+        cx,
+    );
     let window_handle = window.window_handle();
     cx.spawn(async move |cx| {
         if !matches!(answer.await, Ok(1)) { return; }
@@ -778,16 +790,21 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
             match runtime.exit_publication_ready(&transfer) {
                 Ok(true) => break Ok(()),
                 Err(error) => break Err(error),
-                Ok(false) if std::time::Instant::now() >= deadline => break Err("Some work windows could not finish publishing. Keep them open and resolve their save errors before quitting.".to_string()),
+                Ok(false) if std::time::Instant::now() >= deadline => break Err(text.get(UiTextKey::DesktopPublishTimeout).to_string()),
                 Ok(false) => cx.background_executor().timer(Duration::from_millis(50)).await,
             }
         };
         if let Err(error) = publication {
             let answer = cx.update(|cx| {
                 window_handle.update(cx, |_, window, cx| {
-                    window.prompt(gpui::PromptLevel::Warning, "Some changes could not be published",
-                        Some(&format!("{error}\nUnpublished changes may be lost. Confirmed Host workspaces remain saved.")),
-                        &["Keep desktop open", "Quit without publishing"], cx)
+                    let text = UiText::current(cx);
+                    window.prompt(
+                        gpui::PromptLevel::Warning,
+                        text.get(UiTextKey::DesktopUnpublishedTitle),
+                        Some(&text.get(UiTextKey::DesktopUnpublishedBody).replace("{error}", &error)),
+                        &[text.get(UiTextKey::DesktopKeepOpen), text.get(UiTextKey::DesktopQuitUnpublished)],
+                        cx,
+                    )
                 }).ok()
             });
             let discard = match answer { Some(answer) => matches!(answer.await, Ok(1)), None => false };
@@ -803,7 +820,14 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
                 runtime.cancel_exit_publication();
                 cx.update(|cx| {
                     let _ = window_handle.update(cx, |_, window, cx| {
-                        std::mem::drop(window.prompt(gpui::PromptLevel::Warning, "Host stop failed", Some("The desktop remains connected. Retry after checking Host status."), &["OK"], cx));
+                        let text = UiText::current(cx);
+                        std::mem::drop(window.prompt(
+                            gpui::PromptLevel::Warning,
+                            text.get(UiTextKey::DesktopStopFailed),
+                            Some(text.get(UiTextKey::DesktopStopFailedBody)),
+                            &[text.get(UiTextKey::DialogOk)],
+                            cx,
+                        ));
                     });
                 });
                 return;
