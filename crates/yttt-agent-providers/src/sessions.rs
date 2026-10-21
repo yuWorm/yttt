@@ -118,9 +118,6 @@ pub fn omp_session_exists(root: &Path, session_id: &str) -> io::Result<bool> {
     Ok(false)
 }
 
-// Optional display metadata must not require reading an entire conversation.
-// Missing session identity is still searched for beyond this many records.
-const DISPLAY_METADATA_RECORDS: usize = 256;
 const MAX_TITLE_CHARS: usize = 120;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -190,11 +187,7 @@ pub fn scan_agent_sessions_for_agents_with_roots(
             continue;
         }
         let result = match agent {
-            SessionProvider::Codex => Ok(scan_transcripts(
-                &roots.codex.join("sessions"),
-                &mut context,
-                agent,
-            )),
+            SessionProvider::Codex => Ok(scan_codex(&roots.codex.join("sessions"), &mut context)),
             SessionProvider::Claude => {
                 Ok(scan_claude(&roots.claude.join("projects"), &mut context))
             }
@@ -247,7 +240,8 @@ fn scan_transcripts(
     )
     .into_iter()
     .filter_map(|file| match parse_transcript(&file, context, provider) {
-        Ok(session) => session,
+        Ok(Some(parsed)) => Some(parsed.session),
+        Ok(None) => None,
         Err(error) => {
             context.warnings.push(error.to_string());
             None
@@ -256,18 +250,28 @@ fn scan_transcripts(
     .collect()
 }
 
+struct ParsedTranscript {
+    session: AgentSession,
+    title_is_authoritative: bool,
+}
+
 fn parse_transcript(
     file: &SessionFile,
     context: &mut ScanContext,
     provider: SessionProvider,
-) -> Result<Option<AgentSession>, AgentSessionScanError> {
+) -> Result<Option<ParsedTranscript>, AgentSessionScanError> {
     let mut records = TranscriptValues::open(&file.path)?;
     let mut id = None;
     let mut cwd = None;
-    let mut title = None;
+    let mut fallback_title = None;
+    let mut custom_title = None;
+    let mut pi_session_name = None;
+    let mut omp_title_slot = None;
+    let mut omp_header_title = None;
+    let mut omp_title_change = None;
     let mut first_prompt = None;
     let mut model = None;
-    for (index, value) in records.by_ref().enumerate() {
+    for value in records.by_ref() {
         let kind = value.get("type").and_then(Value::as_str);
         match provider {
             SessionProvider::Codex => {
@@ -276,8 +280,8 @@ fn parse_transcript(
                         id = string_at(payload, &["session_id", "id"]);
                         cwd = string_at(payload, &["cwd"]);
                     }
-                } else if title.is_none() {
-                    title = codex_title(&value);
+                } else if fallback_title.is_none() {
+                    fallback_title = codex_title(&value);
                 }
             }
             SessionProvider::Claude => {
@@ -286,16 +290,36 @@ fn parse_transcript(
                 }
                 id = id.or_else(|| string_at(&value, &["sessionId"]));
                 cwd = cwd.or_else(|| string_at(&value, &["cwd"]));
-                if title.is_none() && kind == Some("user") {
-                    title = user_message_title(&value);
+                match kind {
+                    Some("custom-title") => {
+                        custom_title =
+                            string_at(&value, &["customTitle"]).and_then(clean_persisted_title);
+                    }
+                    Some("user") if first_prompt.is_none() => {
+                        first_prompt = user_message_title(&value);
+                    }
+                    _ => {}
                 }
             }
             SessionProvider::Pi | SessionProvider::OhMyPi => match kind {
                 Some("session") => {
                     id = string_at(&value, &["id"]);
                     cwd = string_at(&value, &["cwd"]);
+                    if provider == SessionProvider::OhMyPi {
+                        omp_header_title =
+                            string_at(&value, &["title"]).and_then(clean_persisted_title);
+                    }
                 }
-                Some("title") => title = string_at(&value, &["title"]).and_then(clean_title),
+                Some("session_info") if provider == SessionProvider::Pi => {
+                    pi_session_name = string_at(&value, &["name"]).and_then(clean_persisted_title);
+                }
+                Some("title") if provider == SessionProvider::OhMyPi => {
+                    omp_title_slot = string_at(&value, &["title"]).and_then(clean_persisted_title);
+                }
+                Some("title_change") if provider == SessionProvider::OhMyPi => {
+                    omp_title_change =
+                        string_at(&value, &["title"]).and_then(clean_persisted_title);
+                }
                 Some("message") if first_prompt.is_none() => {
                     first_prompt = user_message_title(&value);
                 }
@@ -309,13 +333,6 @@ fn parse_transcript(
             return Ok(None);
         }
         model = model.or_else(|| session_model(&value));
-        if id.is_some()
-            && cwd.is_some()
-            && (((title.is_some() || first_prompt.is_some()) && model.is_some())
-                || index + 1 >= DISPLAY_METADATA_RECORDS)
-        {
-            break;
-        }
     }
     if let Some(error) = records.first_error {
         context.warn(&file.path, error);
@@ -327,21 +344,111 @@ fn parse_transcript(
         context.warn(&file.path, "missing session ID or working directory");
         return Ok(None);
     };
-    Ok(Some(AgentSession {
-        provider,
-        title: title.or(first_prompt).unwrap_or_default(),
-        model,
-        id,
-        transcript_path: Some(file.path.clone()),
-        updated_at_ms: file.updated_at_ms,
+    let (title, title_is_authoritative) = match provider {
+        SessionProvider::Claude => {
+            let title_is_authoritative = custom_title.is_some();
+            (
+                custom_title.or(first_prompt).unwrap_or_default(),
+                title_is_authoritative,
+            )
+        }
+        SessionProvider::Pi => {
+            let title_is_authoritative = pi_session_name.is_some();
+            (
+                pi_session_name.or(first_prompt).unwrap_or_default(),
+                title_is_authoritative,
+            )
+        }
+        SessionProvider::OhMyPi => {
+            let title_is_authoritative = omp_title_slot.is_some()
+                || omp_header_title.is_some()
+                || omp_title_change.is_some();
+            let title = omp_title_slot
+                .or(omp_header_title)
+                .or(omp_title_change)
+                .or(first_prompt)
+                .unwrap_or_default();
+            (title, title_is_authoritative)
+        }
+        SessionProvider::Codex => (fallback_title.unwrap_or_default(), false),
+        SessionProvider::Grok | SessionProvider::OpenCode => unreachable!(),
+    };
+    Ok(Some(ParsedTranscript {
+        session: AgentSession {
+            provider,
+            title,
+            model,
+            id,
+            transcript_path: Some(file.path.clone()),
+            updated_at_ms: file.updated_at_ms,
+        },
+        title_is_authoritative,
     }))
+}
+
+fn scan_codex(sessions_root: &Path, context: &mut ScanContext) -> Vec<AgentSession> {
+    let mut sessions = scan_transcripts(sessions_root, context, SessionProvider::Codex);
+    let index_path = sessions_root
+        .parent()
+        .map(|parent| parent.join("session_index.jsonl"));
+    let Some(index_path) = index_path else {
+        return sessions;
+    };
+    let mut names = match File::open(&index_path) {
+        Ok(file) => {
+            let mut names = HashMap::new();
+            for (line, value) in BufReader::new(file).lines().enumerate() {
+                let value = match value {
+                    Ok(value) if value.trim().is_empty() => continue,
+                    Ok(value) => value,
+                    Err(error) => {
+                        context.warn(&index_path, error);
+                        break;
+                    }
+                };
+                let value: Value = match serde_json::from_str(&value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        context.warn(
+                            &index_path,
+                            format!("invalid JSON on line {}: {error}", line + 1),
+                        );
+                        continue;
+                    }
+                };
+                if let (Some(id), Some(title)) = (
+                    value.get("id").and_then(Value::as_str),
+                    value
+                        .get("thread_name")
+                        .and_then(Value::as_str)
+                        .and_then(clean_persisted_title),
+                ) {
+                    // session_index is an append-only index; the last entry is
+                    // the current native thread name.
+                    names.insert(id.to_string(), title);
+                }
+            }
+            names
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return sessions,
+        Err(error) => {
+            context.warn(&index_path, error);
+            return sessions;
+        }
+    };
+    for session in &mut sessions {
+        if let Some(title) = names.remove(&session.id) {
+            session.title = title;
+        }
+    }
+    sessions
 }
 
 fn codex_title(value: &Value) -> Option<String> {
     let payload = value.get("payload")?;
     let payload_type = payload.get("type").and_then(Value::as_str);
     if matches!(payload_type, Some("thread_name" | "session_name")) {
-        return string_at(payload, &["name", "title"]).and_then(clean_title);
+        return string_at(payload, &["name", "title"]).and_then(clean_persisted_title);
     }
     if payload_type == Some("user_message") {
         return payload
@@ -402,12 +509,13 @@ fn scan_claude(projects_root: &Path, context: &mut ScanContext) -> Vec<AgentSess
             .is_some_and(|extension| extension == "jsonl")
     }) {
         match parse_transcript(file, context, SessionProvider::Claude) {
-            Ok(Some(session)) => {
+            Ok(Some(parsed)) => {
+                let session = parsed.session;
                 if let Some(indexed) = sessions.get_mut(&session.id) {
                     indexed.updated_at_ms = indexed.updated_at_ms.max(session.updated_at_ms);
                     indexed.model = session.model;
                     indexed.transcript_path = session.transcript_path;
-                    if indexed.title.is_empty() {
+                    if parsed.title_is_authoritative || indexed.title.is_empty() {
                         indexed.title = session.title;
                     }
                 } else {
@@ -475,7 +583,7 @@ fn parse_claude_index(
             },
         )
         .map(|entry| {
-            let title = clean_title(&entry.summary)
+            let title = clean_persisted_title(&entry.summary)
                 .or_else(|| clean_title(&entry.first_prompt))
                 .unwrap_or_default();
             AgentSession {
@@ -495,6 +603,10 @@ struct GrokSessionSummary {
     info: GrokSessionInfo,
     #[serde(default)]
     generated_title: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    title_is_manual: bool,
     #[serde(default)]
     session_summary: String,
     current_model_id: Option<String>,
@@ -569,12 +681,19 @@ fn scan_grok(root: &Path, context: &mut ScanContext) -> Vec<AgentSession> {
             context.warn(&file.path, "missing session ID");
             return None;
         }
+        let title = if summary.title_is_manual {
+            clean_persisted_title(summary.generated_title)
+                .or_else(|| clean_persisted_title(summary.title))
+        } else {
+            clean_persisted_title(summary.title)
+                .or_else(|| clean_persisted_title(summary.generated_title))
+        }
+        .or_else(|| clean_persisted_title(summary.session_summary))
+        .unwrap_or_default();
         Some(AgentSession {
             provider: SessionProvider::Grok,
             id: id.to_string(),
-            title: clean_title(summary.generated_title)
-                .or_else(|| clean_title(summary.session_summary))
-                .unwrap_or_default(),
+            title,
             model: summary.current_model_id.and_then(clean_title),
             transcript_path: None,
             updated_at_ms: file.updated_at_ms,
@@ -646,7 +765,7 @@ fn parse_opencode_output(
         )
         .map(|entry| AgentSession {
             provider: SessionProvider::OpenCode,
-            title: clean_title(&entry.title).unwrap_or_default(),
+            title: clean_persisted_title(&entry.title).unwrap_or_default(),
             model: None,
             id: entry.id,
             transcript_path: None,
@@ -823,6 +942,26 @@ fn clean_title(value: impl AsRef<str>) -> Option<String> {
         }
         title.push(character);
         title_chars += 1;
+    }
+    (!title.is_empty()).then_some(title)
+}
+
+/// Provider-owned names are authoritative input for rename. Unlike prompt
+/// previews, they must never be clipped to the list's display width.
+fn clean_persisted_title(value: impl AsRef<str>) -> Option<String> {
+    let value = value.as_ref();
+    let mut title = String::with_capacity(value.len());
+    let mut pending_space = false;
+    for character in value.trim().chars() {
+        if character.is_whitespace() {
+            pending_space = !title.is_empty();
+            continue;
+        }
+        if pending_space {
+            title.push(' ');
+        }
+        pending_space = false;
+        title.push(character);
     }
     (!title.is_empty()).then_some(title)
 }
@@ -1261,5 +1400,101 @@ mod tests {
         assert!(parse_opencode_output(b"", &mut context).unwrap().is_empty());
         assert!(context.warnings.is_empty());
         assert!(parse_opencode_output(b"not a session list", &mut context).is_err());
+    }
+
+    #[test]
+    fn authoritative_provider_names_are_full_and_latest() {
+        let temporary = tempfile::tempdir().unwrap();
+        let roots = roots(temporary.path());
+        let project = temporary.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+
+        let codex_dir = roots.codex.join("sessions/encoded");
+        fs::create_dir_all(&codex_dir).unwrap();
+        fs::write(
+            codex_dir.join("session.jsonl"),
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex\",\"cwd\":{:?}}}}}\n",
+                project.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let codex_title = "c".repeat(MAX_TITLE_CHARS + 40);
+        fs::write(
+            roots.codex.join("session_index.jsonl"),
+            format!(
+                "{{\"id\":\"codex\",\"thread_name\":\"stale\"}}\n{{\"id\":\"codex\",\"thread_name\":{:?}}}\n",
+                codex_title
+            ),
+        )
+        .unwrap();
+        let codex =
+            scan_agent_sessions_with_roots(SessionProvider::Codex, &project, &roots).unwrap();
+        assert_eq!(codex[0].title, codex_title);
+
+        let claude_dir = roots.claude.join("projects/encoded");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let claude_title = "l".repeat(MAX_TITLE_CHARS + 40);
+        fs::write(
+            claude_dir.join("session.jsonl"),
+            format!(
+                concat!(
+                    "{{\"type\":\"user\",\"sessionId\":\"claude\",\"cwd\":{:?},\"message\":{{\"role\":\"user\",\"content\":\"prompt\"}}}}\n",
+                    "{{\"type\":\"custom-title\",\"customTitle\":\"stale\"}}\n",
+                    "{{\"type\":\"custom-title\",\"customTitle\":{:?}}}\n"
+                ),
+                project.to_string_lossy(),
+                claude_title,
+            ),
+        )
+        .unwrap();
+        fs::write(
+            claude_dir.join("sessions-index.json"),
+            format!(
+                "{{\"entries\":[{{\"sessionId\":\"claude\",\"fullPath\":\"unused\",\"fileMtime\":1,\"summary\":\"index\",\"projectPath\":{:?}}}]}}",
+                project.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let claude =
+            scan_agent_sessions_with_roots(SessionProvider::Claude, &project, &roots).unwrap();
+        assert_eq!(claude[0].title, claude_title);
+
+        let pi_dir = roots.pi.join("encoded");
+        fs::create_dir_all(&pi_dir).unwrap();
+        let pi_title = "p".repeat(MAX_TITLE_CHARS + 40);
+        fs::write(
+            pi_dir.join("session.jsonl"),
+            format!(
+                concat!(
+                    "{{\"type\":\"session\",\"id\":\"pi\",\"cwd\":{:?}}}\n",
+                    "{{\"type\":\"session_info\",\"name\":\"stale\"}}\n",
+                    "{{\"type\":\"session_info\",\"name\":{:?}}}\n"
+                ),
+                project.to_string_lossy(),
+                pi_title,
+            ),
+        )
+        .unwrap();
+        let pi = scan_agent_sessions_with_roots(SessionProvider::Pi, &project, &roots).unwrap();
+        assert_eq!(pi[0].title, pi_title);
+
+        let omp_dir = roots.omp.join("encoded");
+        fs::create_dir_all(&omp_dir).unwrap();
+        fs::write(
+            omp_dir.join("session.jsonl"),
+            format!(
+                concat!(
+                    "{{\"type\":\"title\",\"title\":\"slot\"}}\n",
+                    "{{\"type\":\"session\",\"id\":\"omp\",\"cwd\":{:?},\"title\":\"header\"}}\n",
+                    "{{\"type\":\"title_change\",\"title\":\"change\"}}\n"
+                ),
+                project.to_string_lossy(),
+            ),
+        )
+        .unwrap();
+        let omp =
+            scan_agent_sessions_with_roots(SessionProvider::OhMyPi, &project, &roots).unwrap();
+        assert_eq!(omp[0].title, "slot");
     }
 }

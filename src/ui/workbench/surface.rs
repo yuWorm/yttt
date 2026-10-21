@@ -1176,6 +1176,31 @@ impl WorkbenchView {
             .min_h_0()
             .child(header)
             .when(show_search, |panel| panel.child(search))
+            .when(self.agent_sessions.mutation.is_some(), |panel| {
+                panel.child(
+                    div()
+                        .debug_selector(|| "agent-sessions-mutating".to_string())
+                        .px(ui_style.spacing.md)
+                        .py(ui_style.spacing.xs)
+                        .text_xs()
+                        .child(self.ui_text.get(UiTextKey::AgentSessionsMutating)),
+                )
+            })
+            .when_some(
+                self.agent_sessions.mutation_error.clone(),
+                |panel, error| {
+                    panel.child(
+                        div()
+                            .debug_selector(|| "agent-sessions-mutation-error".to_string())
+                            .px(ui_style.spacing.md)
+                            .py(ui_style.spacing.xs)
+                            .text_xs()
+                            .max_h(px(96.0))
+                            .overflow_y_scrollbar()
+                            .child(error),
+                    )
+                },
+            )
             .when(!sessions.is_empty(), |panel| {
                 panel.when_some(self.agent_sessions.error.clone(), |panel, error| {
                     panel.child(
@@ -1206,7 +1231,7 @@ impl WorkbenchView {
         ui_style: UiStyle,
         tooltip_text: AgentSessionTooltipText,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
+    ) -> gpui_component::menu::ContextMenu<gpui::Stateful<Div>> {
         let title = self.agent_session_title(session);
         let tooltip_title = title.clone();
         let age = self.agent_session_age_label(session.updated_at_ms);
@@ -1225,6 +1250,13 @@ impl WorkbenchView {
             .as_ref()
             .and_then(|path| path.file_name())
             .map(|name| name.to_string_lossy().into_owned());
+        let menu_workbench = cx.weak_entity();
+        let menu_id = session_id.clone();
+        let menu_provider = session.provider;
+        let menu_disabled =
+            self.agent_sessions.mutation.is_some() || !self.shared_mutation_allowed();
+        let rename_label = self.ui_text.get(UiTextKey::AgentSessionsRename);
+        let delete_label = self.ui_text.get(UiTextKey::AgentSessionsDelete);
         div()
             .id(SharedString::from(format!(
                 "agent-session-{}-{}",
@@ -1351,6 +1383,48 @@ impl WorkbenchView {
                         .text_xs()
                         .text_color(theme.text_subtle)
                         .child(age),
+                )
+            })
+            .context_menu(move |menu, _, cx| {
+                let rename_workbench = menu_workbench.clone();
+                let delete_workbench = menu_workbench.clone();
+                let rename_id = menu_id.clone();
+                let delete_id = menu_id.clone();
+                yttt_ui::primitives::menu::yttt_popup_menu(
+                    menu,
+                    crate::ui::theme::current_workbench_theme(cx),
+                    crate::ui::theme::current_ui_style(cx),
+                )
+                .item(
+                    PopupMenuItem::new(rename_label)
+                        .disabled(menu_disabled)
+                        .on_click(move |_, window, cx| {
+                            let _ = rename_workbench.update(cx, |root, cx| {
+                                root.open_agent_session_management(
+                                    menu_provider,
+                                    &rename_id,
+                                    false,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }),
+                )
+                .item(PopupMenuItem::separator())
+                .item(
+                    PopupMenuItem::new(delete_label)
+                        .disabled(menu_disabled)
+                        .on_click(move |_, window, cx| {
+                            let _ = delete_workbench.update(cx, |root, cx| {
+                                root.open_agent_session_management(
+                                    menu_provider,
+                                    &delete_id,
+                                    true,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }),
                 )
             })
     }

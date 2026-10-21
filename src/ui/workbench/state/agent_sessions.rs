@@ -23,6 +23,8 @@ pub(in super::super) struct AgentSessionsControllerState {
     pub(in super::super) key: Option<AgentSessionScanKey>,
     pub(in super::super) sessions: Arc<Vec<AgentSession>>,
     pub(in super::super) error: Option<String>,
+    pub(in super::super) mutation: Option<(BuiltinAgent, String)>,
+    pub(in super::super) mutation_error: Option<String>,
     pub(in super::super) expanded_providers: HashSet<&'static str>,
     pub(in super::super) search_input: Option<Entity<InputState>>,
     pub(in super::super) search_input_subscription: Option<Subscription>,
@@ -37,6 +39,7 @@ impl AgentSessionsControllerState {
         self.key = None;
         self.sessions = Arc::new(Vec::new());
         self.error = None;
+        self.mutation_error = None;
         self.expanded_providers.clear();
         self.search_input = None;
         self.search_input_subscription = None;

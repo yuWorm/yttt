@@ -1271,9 +1271,9 @@ File-backed providers enumerate all candidate sessions before project filtering;
 are deduplicated by provider and session ID and ordered by update time, without the former
 5,000-file or 100-result cutoffs. OpenCode uses its native session command with
 `--max-count -1` because omitting that option still defaults to a limited list.
-JSONL identity discovery continues beyond large preambles; optional title/model lookup
-is bounded once the session ID and working directory are known. Claude indexes supplement
-transcripts rather than preventing fallback when an index or individual entry is damaged.
+JSONL identity and title discovery reads the complete transcript so the latest saved custom
+title wins over older prompts and index summaries. Claude indexes supplement transcripts
+rather than preventing fallback when an index or individual entry is damaged.
 
 Search covers the entire discovered result, not only recent conversations. Opening the
 page requests a fresh scan; while selected, it refreshes every 30 seconds after the previous
@@ -1286,6 +1286,30 @@ available results; it does not discard unrelated providers. A failed refresh kee
 previous list visible. Remote Host history uses the same scanner and returns its warnings.
 Production profiles honor the provider home/session-directory environment overrides;
 development/test profiles retain their isolated stores and do not run native OpenCode commands.
+
+Right-click a session row to **Rename session** or **Delete session history**. Names are
+written to the Agent's own history, not a yttt-only alias. Delete requires confirmation,
+removes the selected conversation and its owned history artifacts, and leaves project
+files and unrelated sessions untouched. Grok uses its native deletion command: when
+authenticated, this may also delete the synced cloud copy, as the confirmation warns.
+Deleting history is not a general erasure of every Agent cache, log, or backup.
+
+Close the session in **all terminals and applications** before either operation. yttt
+checks file ownership, project/store containment, open files and available native status;
+unverifiable access, symlink mutation targets, or open history files fail closed. File
+checks require `lsof` on the executing Host. These checks cannot prevent a separate,
+non-cooperating Agent process from opening the same history afterward.
+Codex and OpenCode require their installed native CLI/API; Grok native-store deletion
+requires `grok`. Isolated development stores do not fall back to ambient native databases.
+Rename accepts a nonblank title up to 200 characters without control characters; Grok
+allows 100, and OMP must fit its native 256-byte title record (UTF-8 and JSON overhead
+reduce the available title length). Unsupported history versions are left unchanged.
+
+Only one history mutation runs at a time. Resume and other mutations are disabled while
+it runs; completion rescans the selected project, and older scans cannot overwrite its
+result. Failures remain visible separately from scan warnings. Remote operations execute
+on the target Host and require workspace write permission. Desktop, Host, remote Server,
+and CLI must all support resource protocol 21.
 
 ## Agent Status
 

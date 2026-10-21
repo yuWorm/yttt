@@ -16,6 +16,8 @@
 - Fix history discovery for all six Agents: remove merged-result and candidate-file truncation, explicitly request complete OpenCode history, normalize project paths, and traverse linked stores with cycle protection. Fall back to Claude transcripts when an index is damaged; surface provider/file warnings without discarding healthy results.
 - 会话页搜索覆盖完整扫描结果，打开时和停留期间每 30 秒刷新；刷新保留已有列表与搜索，避免重复扫描。远程会话响应携带部分失败警告，资源协议升至 20；桌面、Host、远端 Server 与 CLI 需同步更新。
 - Search the complete discovered history; refresh on opening the session page and every 30 seconds while selected, preserving existing results/search and avoiding duplicate scans. Remote history responses carry partial-failure warnings; resource protocol is now 20, requiring Desktop, Host, remote Server, and CLI to be upgraded together.
+- 会话列表支持 Codex、Claude Code、Grok、OpenCode、Pi 和 OMP 的原生重命名与删除；右键操作，删除二次确认，远端操作遵循 Host 写权限，旧扫描不会覆盖操作结果。活动文件或无法确认安全状态时拒绝修改。Grok 原生命令可能同时删除云端副本，确认框会明确提示。资源协议升至 21，所有组件需同步更新。
+- Add native history rename/delete for Codex, Claude Code, Grok, OpenCode, Pi, and OMP through the session context menu. Confirm deletions, enforce remote Host write permissions, and fence stale scans. Refuse mutations when history is open or safe access cannot be verified. Explicitly warn that Grok's native deletion may also remove its cloud copy. Resource protocol is now 21; upgrade all components together.
 
 ## 0.3.16 - 2026-10-16
 

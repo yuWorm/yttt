@@ -11559,11 +11559,14 @@ dependencies = [
 name = "yttt-agent-providers"
 version = "0.3.16"
 dependencies = [
+ "chrono",
+ "fs2",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
+ "uuid",
  "yttt-agent-core",
 ]
 

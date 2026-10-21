@@ -14,7 +14,11 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 20`。v20 将 `AgentSessions` 响应改为
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 21`。v21 追加 `MutateAgentSession`
+  请求（provider、session_id、project_root、Rename/Delete 操作）与
+  `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，
+  不接受客户端提供的历史文件删除路径。桌面、Host、远端 Server 与 CLI 需同步更新。
+  v20 将 `AgentSessions` 响应改为
   `{ sessions, warnings }`，完整会话列表与 provider／文件级部分失败分别传递；
   不再因单个 provider 失败清空其他会话。桌面 Client、Host、远端 Server 与 CLI
   需同步更新。v19 追加工作区 `PutAgentState` /

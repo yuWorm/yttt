@@ -92,12 +92,26 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AgentSessionsSearchPlaceholder => "搜索会话…",
         UiTextKey::AgentSessionsNoMatches => "没有匹配的会话",
         UiTextKey::AgentSessionsRemoteUnavailable => "暂不支持扫描远程项目的会话",
-        UiTextKey::AgentSessionsResumeHint => "双击恢复此会话",
+        UiTextKey::AgentSessionsResumeHint => "双击恢复；右键重命名或删除会话记录",
         UiTextKey::AgentSessionsJustNow => "刚刚",
         UiTextKey::AgentSessionsSessionId => "会话 ID",
         UiTextKey::AgentSessionsModel => "模型",
         UiTextKey::AgentSessionsTranscript => "会话文件",
         UiTextKey::AgentSessionsUntitled => "未命名会话",
+        UiTextKey::AgentSessionsRename => "重命名会话",
+        UiTextKey::AgentSessionsRenameDescription => {
+            "修改 Agent 原生会话名称，而非仅修改 yttt 中的显示名称。"
+        }
+        UiTextKey::AgentSessionsDelete => "删除会话记录",
+        UiTextKey::AgentSessionsDeleteDescription => {
+            "永久删除此 Agent 保存的对话及会话专属数据，无法撤销。不会删除项目文件。请先在所有终端中关闭此会话。"
+        }
+        UiTextKey::AgentSessionsGrokDeleteDescription => {
+            "通过 Grok 永久删除此对话及会话专属数据。若 Grok 已登录，还可能删除同步的云端副本。此操作无法撤销，不会删除项目文件。请先在所有终端中关闭此会话。"
+        }
+        UiTextKey::AgentSessionsMutating => "正在更新会话记录…",
+        UiTextKey::AgentSessionsMutationFailed => "会话操作失败",
+        UiTextKey::AgentSessionsSelectionChanged => "所选项目已改变，请重新打开会话菜单。",
         UiTextKey::ProjectFilesShow => "显示项目面板",
         UiTextKey::ProjectFilesHide => "隐藏项目面板",
         UiTextKey::ProjectFilesRefresh => "刷新",
@@ -1464,13 +1478,21 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::DialogContinue => "继续",
         UiTextKey::DesktopRestoreClientsFailed => "无法恢复远程客户端",
         UiTextKey::DesktopQuitTitle => "退出 yttt？",
-        UiTextKey::DesktopQuitOwnedHostBody => "此 Host 由桌面端管理。退出将停止网络监听、断开远程客户端，并终止运行中的终端和 Agent 任务。已确认的工作区和草稿仍会保留。",
-        UiTextKey::DesktopQuitIndependentHostBody => "此 Host 独立运行，其网络监听、远程客户端、终端和 Agent 任务将继续运行。只会断开当前桌面客户端。",
+        UiTextKey::DesktopQuitOwnedHostBody => {
+            "此 Host 由桌面端管理。退出将停止网络监听、断开远程客户端，并终止运行中的终端和 Agent 任务。已确认的工作区和草稿仍会保留。"
+        }
+        UiTextKey::DesktopQuitIndependentHostBody => {
+            "此 Host 独立运行，其网络监听、远程客户端、终端和 Agent 任务将继续运行。只会断开当前桌面客户端。"
+        }
         UiTextKey::DesktopStopHostAndQuit => "停止 Host 并退出",
         UiTextKey::DesktopDisconnect => "断开桌面端",
-        UiTextKey::DesktopPublishTimeout => "部分工作窗口未能完成发布。请保持窗口打开，解决保存错误后再退出。",
+        UiTextKey::DesktopPublishTimeout => {
+            "部分工作窗口未能完成发布。请保持窗口打开，解决保存错误后再退出。"
+        }
         UiTextKey::DesktopUnpublishedTitle => "部分更改未能发布",
-        UiTextKey::DesktopUnpublishedBody => "{error}\n未发布的更改可能丢失。Host 上已确认的工作区仍会保留。",
+        UiTextKey::DesktopUnpublishedBody => {
+            "{error}\n未发布的更改可能丢失。Host 上已确认的工作区仍会保留。"
+        }
         UiTextKey::DesktopKeepOpen => "保持桌面端打开",
         UiTextKey::DesktopQuitUnpublished => "不发布并退出",
         UiTextKey::DesktopStopFailed => "停止 Host 失败",
@@ -1480,40 +1502,66 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceRestoreFailedTitle => "工作区恢复失败",
         UiTextKey::ProfileForceControlTitle => "强制接管此配置档案？",
         UiTextKey::ProfileContinueTitle => "在此继续使用整个配置档案？",
-        UiTextKey::ProfileForceControlBody => "只会恢复最后确认的状态。前一个客户端尚未发布的编辑可能丢失。",
-        UiTextKey::ProfileContinueBody => "所有工作区将一起转移。前一个客户端将发布编辑并进入观察模式。运行中的终端进程不会重启。",
+        UiTextKey::ProfileForceControlBody => {
+            "只会恢复最后确认的状态。前一个客户端尚未发布的编辑可能丢失。"
+        }
+        UiTextKey::ProfileContinueBody => {
+            "所有工作区将一起转移。前一个客户端将发布编辑并进入观察模式。运行中的终端进程不会重启。"
+        }
         UiTextKey::ProfileUnexpectedControlResponse => "收到非预期的控制权响应",
         UiTextKey::WorkspaceSettingsUnconfirmed => "设置尚未得到 Host 确认",
         UiTextKey::WorkspaceUnsavedTitle => "更改尚未保存",
         UiTextKey::WorkspaceKeepOpen => "保持窗口打开",
         UiTextKey::WorkspaceCloseUnsaved => "不保存并关闭",
-        UiTextKey::WorkspaceSettingsPending => "设置仍在等待保存或保存失败；请保持此窗口打开，以便重试或复制草稿",
+        UiTextKey::WorkspaceSettingsPending => {
+            "设置仍在等待保存或保存失败；请保持此窗口打开，以便重试或复制草稿"
+        }
         UiTextKey::WorkspaceFlushHostUnavailable => "Host 不可用，无法完成远程工作区保存",
-        UiTextKey::WorkspaceFlushControlUnavailable => "未获得 Host 的独占控制权，无法在关闭前保存远程工作区更改",
+        UiTextKey::WorkspaceFlushControlUnavailable => {
+            "未获得 Host 的独占控制权，无法在关闭前保存远程工作区更改"
+        }
         UiTextKey::WorkspaceFlushIdentityUnavailable => "缺少工作区标识，无法完成远程工作区保存",
         UiTextKey::PersistenceRecoveryRequested => "已请求恢复工作区",
-        UiTextKey::PersistenceRecoveryWaitOperation => "请等待当前工作区操作完成，再恢复已保存的恢复副本",
-        UiTextKey::PersistenceRecoveryReconcile => "请先协调 Host 工作区状态，再恢复已保存的恢复副本",
-        UiTextKey::PersistenceRecoveryPublishFirst => "请先发布当前更改或协调状态，再恢复已保存的完整工作区",
+        UiTextKey::PersistenceRecoveryWaitOperation => {
+            "请等待当前工作区操作完成，再恢复已保存的恢复副本"
+        }
+        UiTextKey::PersistenceRecoveryReconcile => {
+            "请先协调 Host 工作区状态，再恢复已保存的恢复副本"
+        }
+        UiTextKey::PersistenceRecoveryPublishFirst => {
+            "请先发布当前更改或协调状态，再恢复已保存的完整工作区"
+        }
         UiTextKey::PersistenceRecoveryControlUnavailable => "无法获得工作区控制权",
-        UiTextKey::PersistenceRecoveryDifferentWorkspace => "已保存的恢复副本属于另一个 Host 工作区",
+        UiTextKey::PersistenceRecoveryDifferentWorkspace => {
+            "已保存的恢复副本属于另一个 Host 工作区"
+        }
         UiTextKey::PersistenceRestoreRetryHostUnavailable => "Host 不可用，无法重试工作区恢复",
-        UiTextKey::PersistenceRestoreRetryIdentityUnavailable => "缺少 Host 工作区标识，无法重试恢复",
+        UiTextKey::PersistenceRestoreRetryIdentityUnavailable => {
+            "缺少 Host 工作区标识，无法重试恢复"
+        }
         UiTextKey::PersistenceRestoreIdentityLost => "远程 Host 丢失了工作区标识",
         UiTextKey::PersistencePublishDisconnected => "本地编辑发布前，Host 已断开连接",
-        UiTextKey::PersistenceRecoveryObserver => "此客户端处于观察模式，恢复的设备私有草稿将保留在本地",
+        UiTextKey::PersistenceRecoveryObserver => {
+            "此客户端处于观察模式，恢复的设备私有草稿将保留在本地"
+        }
         UiTextKey::PersistencePublishForcedControl => "Host 控制权已被另一个客户端强制接管",
         UiTextKey::PersistencePublishLostControl => "工作区发布失去了控制权",
-        UiTextKey::PersistencePublishEpochChanged => "本地编辑发布前，Host 或工作区的控制权代次已变化",
+        UiTextKey::PersistencePublishEpochChanged => {
+            "本地编辑发布前，Host 或工作区的控制权代次已变化"
+        }
         UiTextKey::PersistenceRestoreEpochChanged => "此客户端断开期间，远程 Host 的代次已变化",
         UiTextKey::PersistenceDraftReconcileFirst => "请先协调 Host 工作区状态，再恢复设备私有草稿",
         UiTextKey::PersistenceDraftHostUnavailable => "Host 不可用，无法恢复设备私有草稿",
         UiTextKey::PersistenceDraftIdentityUnavailable => "缺少工作区标识，无法恢复设备私有草稿",
-        UiTextKey::PersistenceDraftDifferentWorkspace => "设备私有草稿恢复副本属于另一个 Host 工作区",
+        UiTextKey::PersistenceDraftDifferentWorkspace => {
+            "设备私有草稿恢复副本属于另一个 Host 工作区"
+        }
         UiTextKey::PersistenceDraftInvalidText => "设备私有草稿包含无效文本，无法恢复",
         UiTextKey::PersistenceDraftMissingBody => "缺少文档正文，无法恢复设备私有草稿",
         UiTextKey::PersistenceDraftManifestMismatch => "文档正文与清单不匹配，无法恢复设备私有草稿",
-        UiTextKey::PersistenceDraftNoMatchingProjects => "没有设备私有草稿与此 Host 工作区当前打开的项目匹配",
+        UiTextKey::PersistenceDraftNoMatchingProjects => {
+            "没有设备私有草稿与此 Host 工作区当前打开的项目匹配"
+        }
         UiTextKey::PersistenceDraftScopeMismatch => "本地草稿恢复范围与此 Host 工作区不匹配",
         UiTextKey::PersistencePublishWorkspaceChanged => "本地编辑发布前，工作区控制权已变化",
         UiTextKey::PersistencePublishInterrupted => "发布时连接中断；正在等待协调状态",
@@ -1531,26 +1579,44 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PersistenceLocalRecoveryUnavailable => "本地草稿恢复不可用：{error}",
         UiTextKey::PersistenceListRecoveryFailed => "无法列出本地草稿恢复副本：{error}",
         UiTextKey::PersistenceReadRecoveryFailed => "无法读取本地草稿恢复副本：{error}",
-        UiTextKey::PersistencePrepareRecoveryFailed => "{reason}；未发布的编辑仍保持打开，但无法准备本地恢复快照：{error}",
-        UiTextKey::PersistenceRecoveryStorageUnavailable => "{reason}；未发布的编辑仍保持打开，但设备私有恢复存储不可用",
-        UiTextKey::PersistenceLocateRecoveryFailed => "{reason}；未发布的编辑仍保持打开，但无法定位设备私有恢复存储：{error}",
-        UiTextKey::PersistenceScopeRecoveryFailed => "{reason}；未发布的编辑仍保持打开，但无法确定设备私有恢复存储的范围：{error}",
-        UiTextKey::PersistenceRecoverySaved => "{reason}；未发布的编辑已保存到设备私有恢复存储，不会自动替换 Host 工作区",
-        UiTextKey::PersistenceRecoveryStorageFailed => "{reason}；未发布的编辑仍保持打开，但设备私有恢复存储失败：{error}",
+        UiTextKey::PersistencePrepareRecoveryFailed => {
+            "{reason}；未发布的编辑仍保持打开，但无法准备本地恢复快照：{error}"
+        }
+        UiTextKey::PersistenceRecoveryStorageUnavailable => {
+            "{reason}；未发布的编辑仍保持打开，但设备私有恢复存储不可用"
+        }
+        UiTextKey::PersistenceLocateRecoveryFailed => {
+            "{reason}；未发布的编辑仍保持打开，但无法定位设备私有恢复存储：{error}"
+        }
+        UiTextKey::PersistenceScopeRecoveryFailed => {
+            "{reason}；未发布的编辑仍保持打开，但无法确定设备私有恢复存储的范围：{error}"
+        }
+        UiTextKey::PersistenceRecoverySaved => {
+            "{reason}；未发布的编辑已保存到设备私有恢复存储，不会自动替换 Host 工作区"
+        }
+        UiTextKey::PersistenceRecoveryStorageFailed => {
+            "{reason}；未发布的编辑仍保持打开，但设备私有恢复存储失败：{error}"
+        }
         UiTextKey::PersistenceCloseSavedWorkspace => "无法关闭已保存的工作区：{detail}",
         UiTextKey::PersistenceUpdateClientRestore => "无法更新远程客户端恢复状态：{error}",
         UiTextKey::PersistenceOperationIdInvalid => "远程工作区操作标识无效：{error}",
         UiTextKey::PersistenceSnapshotInvalid => "远程工作区快照无效；更改仍未保存：{error}",
-        UiTextKey::PersistenceUnexpectedCommitResponse => "远程 Host 返回了非预期的工作区提交响应：{detail}",
+        UiTextKey::PersistenceUnexpectedCommitResponse => {
+            "远程 Host 返回了非预期的工作区提交响应：{detail}"
+        }
         UiTextKey::PersistenceCommitControlLost => "远程工作区提交被拒绝；控制权已丢失：{error}",
         UiTextKey::PersistencePublishDisconnectedDetail => "发布时 Host 断开连接：{error}",
         UiTextKey::PersistenceCommitFailed => "远程工作区提交失败；此前的快照保持完整：{error}",
         UiTextKey::SettingsIconThemeBuiltin => "内置",
         UiTextKey::SettingsTerminalThemeFollowUi => "跟随界面主题",
         UiTextKey::SettingsShellAuto => "自动",
-        UiTextKey::PersistenceRecoveringDrafts => "正在恢复设备私有草稿：{count} 份。不会替换 Host 工作区。",
+        UiTextKey::PersistenceRecoveringDrafts => {
+            "正在恢复设备私有草稿：{count} 份。不会替换 Host 工作区。"
+        }
         UiTextKey::PersistenceRecoverableProjects => " 仍可恢复的项目：{count} 个。",
-        UiTextKey::PersistenceLostTerminals => "Host 丢失终端进程：{count} 个。正在恢复 Shell 和 Agent 会话，不会重放其他命令。",
+        UiTextKey::PersistenceLostTerminals => {
+            "Host 丢失终端进程：{count} 个。正在恢复 Shell 和 Agent 会话，不会重放其他命令。"
+        }
         UiTextKey::SettingsDeviceUnbound => "此客户端配置档案尚未绑定设备偏好设置。",
         UiTextKey::SettingsProjectChanged => "保存此设置之前，所选项目已变化。",
         UiTextKey::SettingsTabSizeInvalid => "制表符宽度必须介于 1 和 16 之间。",
@@ -1559,7 +1625,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUnexpectedDeviceResponse => "Host 返回了非预期的设备设置响应",
         UiTextKey::SettingsDraftSelectOwner => "请先选择此草稿所属的项目，再重试。",
         UiTextKey::SettingsDraftProjectControl => "重试此项目设置草稿需要 Host 控制权。",
-        UiTextKey::SettingsDraftStale => "此草稿创建后设置已变化。草稿仍会保留；请先检查当前值，再丢弃草稿并重新应用更改。",
+        UiTextKey::SettingsDraftStale => {
+            "此草稿创建后设置已变化。草稿仍会保留；请先检查当前值，再丢弃草稿并重新应用更改。"
+        }
         UiTextKey::SettingsDraftControl => "重试此设置草稿需要 Host 控制权。",
         UiTextKey::SettingsDraftProjectInvalid => "恢复的项目设置草稿无效。",
         UiTextKey::SettingsNoSharedControl => "此窗口当前没有共享环境的控制权。",
@@ -1571,7 +1639,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ConfigurationTargetUnavailable => "所选配置目标不可用。",
         UiTextKey::ConnectionsLocalWindow => "请从本地 yttt 窗口打开连接。",
         UiTextKey::ProjectOpenRequiresControl => "打开项目需要共享编辑控制权",
-        UiTextKey::PreviousSshProjects => "此前的 SSH 项目保留在“最近项目”中；请在独立的远程工作区中打开。",
+        UiTextKey::PreviousSshProjects => {
+            "此前的 SSH 项目保留在“最近项目”中；请在独立的远程工作区中打开。"
+        }
         UiTextKey::PersistenceWorkspaceAlreadyOpen => "此工作区已在当前客户端中打开",
         UiTextKey::PersistenceMissingIndex => "Host 未返回工作区索引",
         UiTextKey::PersistenceMissingRevision => "工作区修订版本不可用",
@@ -1582,7 +1652,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsRefreshFailed => "无法刷新设置：{error}",
         UiTextKey::HostProjectRegistrationFailed => "Host 项目注册失败：{error}",
         UiTextKey::SettingsUnknownGroup => "未知设置分组：{group_id}",
-        UiTextKey::PersistenceClearSettingsRecoveryFailed => "无法清除设备私有设置恢复副本：{error}",
+        UiTextKey::PersistenceClearSettingsRecoveryFailed => {
+            "无法清除设备私有设置恢复副本：{error}"
+        }
         UiTextKey::LayoutSourceGlobal => "全局默认",
         UiTextKey::LayoutSourceGlobalPatched => "全局默认 + 个人补丁",
         UiTextKey::LayoutSourceProject => "项目配置",
@@ -1595,13 +1667,19 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ThemeWarningFile => "主题 {path}：{error}",
         UiTextKey::ThemeWarningColor => "主题 {theme} 的颜色 {field} 无效；已使用回退颜色",
         UiTextKey::DevicePreferencesUnbound => "尚未绑定设备偏好设置。",
-        UiTextKey::PersistenceRevisionChanged => "此客户端断开期间，远程工作区从修订版本 {previous} 变为 {current}",
+        UiTextKey::PersistenceRevisionChanged => {
+            "此客户端断开期间，远程工作区从修订版本 {previous} 变为 {current}"
+        }
         UiTextKey::PersistenceQueueFile => "无法将恢复的编辑器文件加入队列：{path}",
         UiTextKey::PersistenceProjectService => "恢复文件 {path} 所需的远程项目服务不可用",
         UiTextKey::PersistenceDocumentMissing => "未能创建恢复的编辑器文档 {path}",
-        UiTextKey::PersistenceDraftConflict => "恢复的草稿 {path} 与当前远程文件冲突；请检查后再保存",
+        UiTextKey::PersistenceDraftConflict => {
+            "恢复的草稿 {path} 与当前远程文件冲突；请检查后再保存"
+        }
         UiTextKey::PersistenceDraftProjectMissing => "草稿 {path} 所属项目不可用，无法恢复",
-        UiTextKey::PersistenceDraftBaseMissing => "恢复的草稿 {path} 没有当前远程基准文件；仍处于未保存状态",
+        UiTextKey::PersistenceDraftBaseMissing => {
+            "恢复的草稿 {path} 没有当前远程基准文件；仍处于未保存状态"
+        }
         UiTextKey::SettingsInspectKeybindings => "无法检查快捷键目录 {path}：{error}",
         UiTextKey::SettingsResolveKeybindings => "无法解析快捷键目录 {path}：{error}",
         UiTextKey::SettingsWatchKeybindings => "无法监视快捷键配置 {path}：{error}",
@@ -1611,21 +1689,31 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PersistenceWorkspaceUnavailable => "工作区不可用",
         UiTextKey::PersistenceNoSavedRecovery => "没有已保存的工作区恢复副本",
         UiTextKey::WorkspaceRecoveryTitle => "恢复工作区",
-        UiTextKey::WorkspaceRecoveryBody => "重新对账不会覆盖冲突。使用 Host 快照会替换当前布局，本地恢复副本仍保留。保留本地并发布会替换 Host 上此工作区的布局和草稿；不会重放终端命令。",
+        UiTextKey::WorkspaceRecoveryBody => {
+            "重新对账不会覆盖冲突。使用 Host 快照会替换当前布局，本地恢复副本仍保留。保留本地并发布会替换 Host 上此工作区的布局和草稿；不会重放终端命令。"
+        }
         UiTextKey::WorkspaceRecoveryReconcile => "重新对账",
         UiTextKey::WorkspaceRecoveryUseHost => "使用 Host 快照",
         UiTextKey::WorkspaceRecoveryPublishLocal => "保留本地并发布",
         UiTextKey::WorkspaceFullRecoveryTitle => "恢复完整工作区？",
-        UiTextKey::WorkspaceFullRecoveryBody => "使用本机保留的布局、文件标签和草稿替换此 Host 工作区。当前更改必须先完成发布；终端命令不会重放。",
+        UiTextKey::WorkspaceFullRecoveryBody => {
+            "使用本机保留的布局、文件标签和草稿替换此 Host 工作区。当前更改必须先完成发布；终端命令不会重放。"
+        }
         UiTextKey::WorkspaceRestoreAndPublish => "恢复并发布",
         UiTextKey::KeybindingUiCommandCenterTitle => "切换调度中心",
         UiTextKey::KeybindingUiCommandCenterDescription => "显示或隐藏单屏智能体调度中心。",
         UiTextKey::KeybindingUiCommandCenterQuestionPreviousTitle => "上一个调度中心问题",
-        UiTextKey::KeybindingUiCommandCenterQuestionPreviousDescription => "选择调度中心中上一个待处理问题。",
+        UiTextKey::KeybindingUiCommandCenterQuestionPreviousDescription => {
+            "选择调度中心中上一个待处理问题。"
+        }
         UiTextKey::KeybindingUiCommandCenterQuestionNextTitle => "下一个调度中心问题",
-        UiTextKey::KeybindingUiCommandCenterQuestionNextDescription => "选择调度中心中下一个待处理问题。",
+        UiTextKey::KeybindingUiCommandCenterQuestionNextDescription => {
+            "选择调度中心中下一个待处理问题。"
+        }
         UiTextKey::KeybindingUiCommandCenterQuestionSubmitTitle => "提交调度中心问题",
-        UiTextKey::KeybindingUiCommandCenterQuestionSubmitDescription => "提交所选调度中心问题的回答。",
+        UiTextKey::KeybindingUiCommandCenterQuestionSubmitDescription => {
+            "提交所选调度中心问题的回答。"
+        }
         UiTextKey::KeybindingUiPaletteNextTitle => "选择下一个面板项",
         UiTextKey::KeybindingUiPaletteNextDescription => "在已打开的面板中将选择移至下一项。",
         UiTextKey::KeybindingUiPalettePreviousTitle => "选择上一个面板项",
@@ -1643,13 +1731,19 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::KeybindingUiProjectsFocusListTitle => "聚焦项目列表",
         UiTextKey::KeybindingUiProjectsFocusListDescription => "将键盘焦点移至已打开项目列表。",
         UiTextKey::KeybindingUiProjectTreeCollapseAllNodesTitle => "折叠所有项目目录",
-        UiTextKey::KeybindingUiProjectTreeCollapseAllNodesDescription => "折叠项目树中所有已展开的目录。",
+        UiTextKey::KeybindingUiProjectTreeCollapseAllNodesDescription => {
+            "折叠项目树中所有已展开的目录。"
+        }
         UiTextKey::KeybindingUiProjectTreeToggleHiddenFilesTitle => "切换显示隐藏项目文件",
-        UiTextKey::KeybindingUiProjectTreeToggleHiddenFilesDescription => "显示或隐藏项目树中的点文件。",
+        UiTextKey::KeybindingUiProjectTreeToggleHiddenFilesDescription => {
+            "显示或隐藏项目树中的点文件。"
+        }
         UiTextKey::KeybindingUiProjectTreeCreateFileTitle => "新建项目文件",
         UiTextKey::KeybindingUiProjectTreeCreateFileDescription => "在所选项目目录中创建文件。",
         UiTextKey::KeybindingUiProjectTreeCreateDirectoryTitle => "新建项目目录",
-        UiTextKey::KeybindingUiProjectTreeCreateDirectoryDescription => "在所选项目目录中创建目录。",
+        UiTextKey::KeybindingUiProjectTreeCreateDirectoryDescription => {
+            "在所选项目目录中创建目录。"
+        }
         UiTextKey::KeybindingUiProjectTreeRenameEntryTitle => "重命名项目条目",
         UiTextKey::KeybindingUiProjectTreeRenameEntryDescription => "重命名所选项目文件或目录。",
         UiTextKey::KeybindingUiProjectTreeDeleteEntryTitle => "删除项目条目",
@@ -1659,7 +1753,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::KeybindingUiProjectTreeCutEntryTitle => "剪切项目条目",
         UiTextKey::KeybindingUiProjectTreeCutEntryDescription => "剪切所选项目文件或目录。",
         UiTextKey::KeybindingUiProjectTreePasteEntryTitle => "粘贴项目条目",
-        UiTextKey::KeybindingUiProjectTreePasteEntryDescription => "将已复制的项目条目粘贴到所选目录中。",
+        UiTextKey::KeybindingUiProjectTreePasteEntryDescription => {
+            "将已复制的项目条目粘贴到所选目录中。"
+        }
         UiTextKey::KeybindingUiGitDiffDismissTitle => "关闭 Git 差异",
         UiTextKey::KeybindingUiGitDiffDismissDescription => "关闭当前 Git 差异面板。",
         UiTextKey::KeybindingUiGitDiffStageModeTitle => "切换 Git 差异暂存状态",
@@ -1681,7 +1777,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::KeybindingUiTerminalClipboardCopyTitle => "从终端复制",
         UiTextKey::KeybindingUiTerminalClipboardCopyDescription => "复制当前终端选择内容。",
         UiTextKey::KeybindingUiTerminalClipboardPasteTitle => "粘贴到终端",
-        UiTextKey::KeybindingUiTerminalClipboardPasteDescription => "将剪贴板文本粘贴到聚焦的终端。",
+        UiTextKey::KeybindingUiTerminalClipboardPasteDescription => {
+            "将剪贴板文本粘贴到聚焦的终端。"
+        }
         UiTextKey::KeybindingUiTerminalSearchOpenTitle => "打开终端搜索",
         UiTextKey::KeybindingUiTerminalSearchOpenDescription => "在聚焦的终端中打开搜索。",
         UiTextKey::KeybindingUiTerminalSearchForwardTitle => "下一个终端搜索匹配项",
@@ -1695,7 +1793,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::KeybindingUiTerminalSearchDismissTitle => "关闭终端搜索或提示",
         UiTextKey::KeybindingUiTerminalSearchDismissDescription => "关闭终端搜索或键盘提示模式。",
         UiTextKey::KeybindingUiTerminalHintOpenTitle => "打开终端键盘提示",
-        UiTextKey::KeybindingUiTerminalHintOpenDescription => "打开可通过键盘选择的链接和文本提示。",
+        UiTextKey::KeybindingUiTerminalHintOpenDescription => {
+            "打开可通过键盘选择的链接和文本提示。"
+        }
         UiTextKey::KeybindingUiCloseAllTabsTitle => "关闭所有标签页",
         UiTextKey::KeybindingUiCloseAllTabsDescription => "关闭当前面板中的所有标签页。",
         UiTextKey::KeybindingUiCloseTabsBeforeTitle => "关闭之前的标签页",
@@ -1715,23 +1815,39 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::TerminalI18nIoClipboard => "剪贴板",
         UiTextKey::TerminalI18nControlTransferInProgress => "此客户端正在观察或发布控制权转移。",
         UiTextKey::TerminalI18nHostConnectionNotReady => "Host 终端连接尚未就绪。",
-        UiTextKey::TerminalI18nInputTerminalNotRunning => "终端未运行；请先查看窗格列表，再发送输入。",
+        UiTextKey::TerminalI18nInputTerminalNotRunning => {
+            "终端未运行；请先查看窗格列表，再发送输入。"
+        }
         UiTextKey::TerminalI18nInputNoHostChannel => "终端没有 Host 输入通道。",
         UiTextKey::TerminalI18nInputControlUnavailable => "终端输入控制不可用。",
         UiTextKey::TerminalI18nInputViewNotReady => "终端视图尚未就绪。",
         UiTextKey::TerminalI18nInputEmpty => "输入为空。",
         UiTextKey::TerminalI18nHostRuntimeUnavailable => "Host 运行时不可用。",
         UiTextKey::TerminalI18nHostRuntimeNotConnected => "Host 运行时未连接。",
-        UiTextKey::TerminalI18nHostRestartedBeforeReconcile => "Host 在终端启动结果可协调前已重启。",
-        UiTextKey::TerminalI18nAddressConflict => "终端地址与 Host 会话 {session_id} 冲突：预期指纹为 {expected}，收到 {actual}",
-        UiTextKey::TerminalI18nSessionNoLongerAvailable => "终端 {session_id} 已无法在 Host 上使用。",
-        UiTextKey::TerminalI18nControlRequired => "启动终端 {session_id} 需要工作区控制权，且不能有正在进行的控制权转移。",
-        UiTextKey::TerminalI18nHostEpochChanged => "协调终端启动时 Host 世代已变化：预期 {expected}，观察到 {actual}。",
+        UiTextKey::TerminalI18nHostRestartedBeforeReconcile => {
+            "Host 在终端启动结果可协调前已重启。"
+        }
+        UiTextKey::TerminalI18nAddressConflict => {
+            "终端地址与 Host 会话 {session_id} 冲突：预期指纹为 {expected}，收到 {actual}"
+        }
+        UiTextKey::TerminalI18nSessionNoLongerAvailable => {
+            "终端 {session_id} 已无法在 Host 上使用。"
+        }
+        UiTextKey::TerminalI18nControlRequired => {
+            "启动终端 {session_id} 需要工作区控制权，且不能有正在进行的控制权转移。"
+        }
+        UiTextKey::TerminalI18nHostEpochChanged => {
+            "协调终端启动时 Host 世代已变化：预期 {expected}，观察到 {actual}。"
+        }
         UiTextKey::TerminalI18nHostCatalogRequestClosed => "Host 资源目录请求通道已关闭。",
         UiTextKey::TerminalI18nHostCatalogResponseUnexpected => "收到意外的 Host 资源目录响应。",
         UiTextKey::TerminalI18nHostTerminalRequestClosed => "Host 终端请求通道已关闭。",
-        UiTextKey::TerminalI18nHostTerminalResponseUnexpected => "收到意外的 Host 终端响应：{response}",
-        UiTextKey::TerminalI18nLaunchOutcomeUnknown => "终端启动结果仍未知；重试会使用同一次启动尝试。",
+        UiTextKey::TerminalI18nHostTerminalResponseUnexpected => {
+            "收到意外的 Host 终端响应：{response}"
+        }
+        UiTextKey::TerminalI18nLaunchOutcomeUnknown => {
+            "终端启动结果仍未知；重试会使用同一次启动尝试。"
+        }
         UiTextKey::TerminalI18nSessionMissingFromCatalog => "终端会话已不在 Host 资源目录中。",
         UiTextKey::TerminalI18nLeaseRevoked => "终端输入租约已被另一客户端撤销。",
         UiTextKey::TerminalI18nLeaseReleased => "终端输入租约已释放。",
@@ -1740,8 +1856,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::TerminalI18nSessionUnavailable => "终端会话不可用",
         UiTextKey::TerminalI18nCommand => "命令：{command}",
         UiTextKey::TerminalI18nWorkingDirectory => "工作目录：{cwd}",
-        UiTextKey::TerminalI18nPreviousProcessUnavailable => "之前的进程已不可用。在您选择继续之前，不会重新启动任何进程。",
-        UiTextKey::TerminalI18nTakeWorkspaceControl => "之前的进程已不可用。请取得工作区控制权，并等待所有转移完成后再启动它。",
+        UiTextKey::TerminalI18nPreviousProcessUnavailable => {
+            "之前的进程已不可用。在您选择继续之前，不会重新启动任何进程。"
+        }
+        UiTextKey::TerminalI18nTakeWorkspaceControl => {
+            "之前的进程已不可用。请取得工作区控制权，并等待所有转移完成后再启动它。"
+        }
         UiTextKey::TerminalI18nStatus => "状态：{status}",
         UiTextKey::TerminalI18nLaunchReconciling => "正在协调终端启动结果",
         UiTextKey::TerminalI18nProcessLifecycle => "进程{state}",
@@ -1777,8 +1897,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::BarI18nEditorNoDiagnostics => "无诊断信息",
         UiTextKey::BarI18nEditorSelectionSingle => "{characters} 个字符 · {lines} 行",
         UiTextKey::BarI18nEditorSelectionMultiple => "{characters} 个字符 · {lines} 行",
-        UiTextKey::BarI18nEditorSelectionTooltipSingle => "已选择 {lines} 行，共 {characters} 个 Unicode 标量字符",
-        UiTextKey::BarI18nEditorSelectionTooltipMultiple => "已选择 {lines} 行，共 {characters} 个 Unicode 标量字符",
+        UiTextKey::BarI18nEditorSelectionTooltipSingle => {
+            "已选择 {lines} 行，共 {characters} 个 Unicode 标量字符"
+        }
+        UiTextKey::BarI18nEditorSelectionTooltipMultiple => {
+            "已选择 {lines} 行，共 {characters} 个 Unicode 标量字符"
+        }
         UiTextKey::BarI18nEditorNoSelection => "未选择内容",
         UiTextKey::BarI18nEditorTabSize => "制表符 {size}",
         UiTextKey::BarI18nEditorTabSizeTooltip => "制表符宽度：{size} 个空格",
@@ -1811,7 +1935,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::BarI18nUpdateNotChecked => "尚未检查更新状态",
         UiTextKey::BarI18nUpdateAvailable => "发现 v{version} 新版本",
         UiTextKey::AgentInitializationFailed => "Agent 初始化失败：{error}",
-        UiTextKey::CliLocalizationCtlHelp => "用法：yttt ctl <资源> <操作> [选项]\n\n  windows list\n  projects list\n  tabs list | create | focus | rename | close\n  panes list | split | focus | rename | close | resize | send | read\n  agents list | create | send\n  board show                   打开原生多项目 调度中心\n\n目标：\n  --window ID                  windows list 返回的窗口 ID（有歧义时必填）\n  --project ID                 projects list 返回的项目 ID\n  --tab ID                     tabs list 返回的终端标签页 ID\n  --pane ID                    标签页内的窗格 ID\n\n创建 / 管理：\n  tabs create --project ID [--command 'cargo test'] [--title NAME]\n  agents create --project ID --provider codex [--title NAME] [-- <provider arguments>]\n  panes split --project ID --tab ID --pane ID --direction horizontal|vertical [--command CMD]\n  panes resize --project ID --tab ID --pane ID --direction left|right|up|down [--percent 5]\n  tabs|panes rename <targets> --title NAME\n  tabs|panes close <targets>   终止目标中的进程\n\n输入：\n  panes send <targets> --text TEXT [--enter] [--raw]\n  agents send <targets> --text TEXT\n  agents send <targets> --prompt-file PATH\n  panes|agents send <targets> --stdin\n  panes read <targets>        读取当前终端视口\n  board answer <targets> --request ID --answers-json JSON\n                              排入结构化答案；请查看 Agent 确认\n\n  --json                      机器可读响应（错误输出到 stderr）\n  --help                      显示此帮助\n\n桌面应用必须已在运行。使用 YTTT_PROFILE_ROOT 指定自定义配置。\n列表涵盖已打开的桌面窗口和终端标签页。变更操作会选择其目标。\nCreated 表示布局已存在且已请求启动；请列出窗格以检查就绪状态。\nInputAccepted 表示 Host 已接收字节，不表示命令或 Agent 回合已完成。\nAgent send 会提交文本并附加 Enter，并拒绝 working/waiting/stale 的 Agent 状态。\n使用 panes send 在繁忙的 Agent 或批准提示下进行有意的原始交互。\n请求绝不会自动重试。超时后，请先检查状态再重试。\n",
+        UiTextKey::CliLocalizationCtlHelp => {
+            "用法：yttt ctl <资源> <操作> [选项]\n\n  windows list\n  projects list\n  tabs list | create | focus | rename | close\n  panes list | split | focus | rename | close | resize | send | read\n  agents list | create | send\n  board show                   打开原生多项目 调度中心\n\n目标：\n  --window ID                  windows list 返回的窗口 ID（有歧义时必填）\n  --project ID                 projects list 返回的项目 ID\n  --tab ID                     tabs list 返回的终端标签页 ID\n  --pane ID                    标签页内的窗格 ID\n\n创建 / 管理：\n  tabs create --project ID [--command 'cargo test'] [--title NAME]\n  agents create --project ID --provider codex [--title NAME] [-- <provider arguments>]\n  panes split --project ID --tab ID --pane ID --direction horizontal|vertical [--command CMD]\n  panes resize --project ID --tab ID --pane ID --direction left|right|up|down [--percent 5]\n  tabs|panes rename <targets> --title NAME\n  tabs|panes close <targets>   终止目标中的进程\n\n输入：\n  panes send <targets> --text TEXT [--enter] [--raw]\n  agents send <targets> --text TEXT\n  agents send <targets> --prompt-file PATH\n  panes|agents send <targets> --stdin\n  panes read <targets>        读取当前终端视口\n  board answer <targets> --request ID --answers-json JSON\n                              排入结构化答案；请查看 Agent 确认\n\n  --json                      机器可读响应（错误输出到 stderr）\n  --help                      显示此帮助\n\n桌面应用必须已在运行。使用 YTTT_PROFILE_ROOT 指定自定义配置。\n列表涵盖已打开的桌面窗口和终端标签页。变更操作会选择其目标。\nCreated 表示布局已存在且已请求启动；请列出窗格以检查就绪状态。\nInputAccepted 表示 Host 已接收字节，不表示命令或 Agent 回合已完成。\nAgent send 会提交文本并附加 Enter，并拒绝 working/waiting/stale 的 Agent 状态。\n使用 panes send 在繁忙的 Agent 或批准提示下进行有意的原始交互。\n请求绝不会自动重试。超时后，请先检查状态再重试。\n"
+        }
         UiTextKey::CliLocalizationArgumentsUtf8 => "命令行参数必须是有效的 UTF-8",
         UiTextKey::CliLocalizationExpectedResource => "需要资源；请查看 yttt ctl --help",
         UiTextKey::CliLocalizationExpectedAction => "需要操作；请查看 yttt ctl --help",
@@ -1826,18 +1952,26 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CliLocalizationTitleRequired => "必须提供 --title",
         UiTextKey::CliLocalizationResizeDirection => "--direction 必须为 left、right、up 或 down",
         UiTextKey::CliLocalizationPercentRange => "--percent 必须是 1 到 90 之间的数字",
-        UiTextKey::CliLocalizationInputSourceExactlyOne => "必须且只能提供 --text、--prompt-file 或 --stdin 之一",
+        UiTextKey::CliLocalizationInputSourceExactlyOne => {
+            "必须且只能提供 --text、--prompt-file 或 --stdin 之一"
+        }
         UiTextKey::CliLocalizationAgentRawInput => "请使用 panes send --raw 发送原始终端输入",
-        UiTextKey::CliLocalizationUnknownCommand => "未知命令：{resource} {action}；请查看 yttt ctl --help",
+        UiTextKey::CliLocalizationUnknownCommand => {
+            "未知命令：{resource} {action}；请查看 yttt ctl --help"
+        }
         UiTextKey::CliLocalizationUnknownOption => "此命令不支持的选项：{option}",
         UiTextKey::CliLocalizationProviderArgumentsOnly => "仅 agents create 接受 provider 参数",
         UiTextKey::CliLocalizationTabsRejectPane => "标签页命令不接受 --pane",
         UiTextKey::CliLocalizationPaneRequired => "必须提供 --pane",
         UiTextKey::CliLocalizationRequestValidationError => "无效的控制请求：{error}",
-        UiTextKey::CliLocalizationControlFailure => "{error}。请确认对应的桌面应用正在运行；在重试变更操作前先检查状态",
+        UiTextKey::CliLocalizationControlFailure => {
+            "{error}。请确认对应的桌面应用正在运行；在重试变更操作前先检查状态"
+        }
         UiTextKey::CliLocalizationTargetPane => " 窗格={pane}",
         UiTextKey::CliLocalizationTarget => "窗口={window} 项目={project} 标签页={tab}{pane}",
-        UiTextKey::CliLocalizationWindowItem => "{id}\t可写={writable}\t加载中={loading}\t项目={project}",
+        UiTextKey::CliLocalizationWindowItem => {
+            "{id}\t可写={writable}\t加载中={loading}\t项目={project}"
+        }
         UiTextKey::CliLocalizationBooleanTrue => "是",
         UiTextKey::CliLocalizationBooleanFalse => "否",
         UiTextKey::CliLocalizationTabItem => "{target}\t{title}\t窗格数={panes}",
@@ -1847,11 +1981,17 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CliLocalizationClosed => "已关闭 {target}",
         UiTextKey::CliLocalizationInputAccepted => "Host 已接收发送到 {target} 的 {bytes} 个字节",
         UiTextKey::CliLocalizationCommandCenterShown => "调度中心已显示在窗口={window}",
-        UiTextKey::CliLocalizationAnswerQueued => "已为 {target} 的请求={request} 排入答案；正在等待 Agent 确认",
+        UiTextKey::CliLocalizationAnswerQueued => {
+            "已为 {target} 的请求={request} 排入答案；正在等待 Agent 确认"
+        }
         UiTextKey::CliLocalizationLifecycleCommandExclusive => "一次只能使用一个 Host 生命周期命令",
-        UiTextKey::CliLocalizationLoginStartupConfirmationRequired => "查看后台 Host 访问提示后，--enable-login-startup 需要 --confirm-remote-access",
+        UiTextKey::CliLocalizationLoginStartupConfirmationRequired => {
+            "查看后台 Host 访问提示后，--enable-login-startup 需要 --confirm-remote-access"
+        }
         UiTextKey::CliLocalizationProfileIdDuplicate => "--profile-id 只能指定一次",
-        UiTextKey::CliLocalizationProfileMismatch => "登录启动请求的配置是 {requested_profile}，但此可执行文件所属的配置是 {profile}",
+        UiTextKey::CliLocalizationProfileMismatch => {
+            "登录启动请求的配置是 {requested_profile}，但此可执行文件所属的配置是 {profile}"
+        }
         UiTextKey::CliLocalizationLoginStartupDisabled => "已禁用",
         UiTextKey::CliLocalizationLoginStartupEnabled => "已启用",
         UiTextKey::CliLocalizationLoginStartupRequiresApproval => "需要在系统设置中批准",
@@ -1860,28 +2000,44 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CliLocalizationHostForceStopping => "正在强制停止",
         UiTextKey::CliLocalizationOpenLogsFailure => "无法打开 yttt 日志：{error}",
         UiTextKey::CliLocalizationLoginStartupFailure => "登录启动命令失败：{error}",
-        UiTextKey::CliLocalizationDetachedHostStdioFailure => "无法将分离的 Host 与桌面命令行的标准输入输出隔离：{error}",
-        UiTextKey::CliLocalizationLifecycleRuntimeFailure => "无法初始化 Host 生命周期运行时：{error}",
+        UiTextKey::CliLocalizationDetachedHostStdioFailure => {
+            "无法将分离的 Host 与桌面命令行的标准输入输出隔离：{error}"
+        }
+        UiTextKey::CliLocalizationLifecycleRuntimeFailure => {
+            "无法初始化 Host 生命周期运行时：{error}"
+        }
         UiTextKey::CliLocalizationHostLauncherFailure => "无法初始化 Host 启动器：{error}",
         UiTextKey::CliLocalizationHostStopped => "Host 已停止",
-        UiTextKey::CliLocalizationHostStatus => "Host {state}：{terminals} 个终端、{clients} 个客户端、{projects} 个项目、{ssh_connections} 个 SSH 连接、{jobs} 个任务",
-        UiTextKey::CliLocalizationUnexpectedHostStatusResponse => "意外的 Host 状态响应：{response}",
+        UiTextKey::CliLocalizationHostStatus => {
+            "Host {state}：{terminals} 个终端、{clients} 个客户端、{projects} 个项目、{ssh_connections} 个 SSH 连接、{jobs} 个任务"
+        }
+        UiTextKey::CliLocalizationUnexpectedHostStatusResponse => {
+            "意外的 Host 状态响应：{response}"
+        }
         UiTextKey::CliLocalizationHostStarted => "Host 已启动",
         UiTextKey::CliLocalizationHostAlreadyRunning => "Host 已在运行",
         UiTextKey::CliLocalizationHostBusy => "Host 正被 {count} 个阻塞项占用：{blockers}",
         UiTextKey::CliLocalizationUnexpectedHostStopResponse => "意外的 Host 停止响应：{response}",
         UiTextKey::CliLocalizationHostRestarted => "Host 已重启",
         UiTextKey::CliLocalizationHostForceStopped => "Host 已强制停止",
-        UiTextKey::CliLocalizationUnexpectedHostForceStopResponse => "意外的 Host 强制停止响应：{response}",
+        UiTextKey::CliLocalizationUnexpectedHostForceStopResponse => {
+            "意外的 Host 强制停止响应：{response}"
+        }
         UiTextKey::CliLocalizationHostLifecycleFailure => "Host 生命周期命令失败：{error}",
         UiTextKey::CliLocalizationHostExitTimeout => "等待 Host 退出超时",
         UiTextKey::CliLocalizationRemoteClientLaunchInvalid => "远程 Client 启动无效：{error}",
-        UiTextKey::CliLocalizationInstallerPreflightArgumentError => "安装程序 Host 预检参数错误：{error}",
+        UiTextKey::CliLocalizationInstallerPreflightArgumentError => {
+            "安装程序 Host 预检参数错误：{error}"
+        }
         UiTextKey::CliLocalizationDesktopActivationFailure => "无法激活 yttt 桌面 shell：{error}",
         UiTextKey::CliLocalizationHostRuntimeFailure => "无法初始化 Host 运行时：{error}",
         UiTextKey::CliLocalizationHostProcessFailure => "yttt Host 失败：{error}",
-        UiTextKey::CliLocalizationRegistrationPermissionPrompt => "yttt 需要权限才能在 /usr/local/bin/yttt 安装其终端命令。",
-        UiTextKey::CliLocalizationRegistrationFailure => "无法安装 yttt 终端命令。仍可继续使用应用程序。\n\n{error}\n\n请解决冲突或允许安装，然后重新启动 yttt 以重试。也可以直接运行应用程序的 Contents/MacOS/yttt 可执行文件。",
+        UiTextKey::CliLocalizationRegistrationPermissionPrompt => {
+            "yttt 需要权限才能在 /usr/local/bin/yttt 安装其终端命令。"
+        }
+        UiTextKey::CliLocalizationRegistrationFailure => {
+            "无法安装 yttt 终端命令。仍可继续使用应用程序。\n\n{error}\n\n请解决冲突或允许安装，然后重新启动 yttt 以重试。也可以直接运行应用程序的 Contents/MacOS/yttt 可执行文件。"
+        }
         UiTextKey::CliLocalizationRegistrationAlertTitle => "yttt 命令行安装",
         UiTextKey::CliLocalizationPromptInputReadFailure => "无法读取提示输入：{error}",
         UiTextKey::CliLocalizationControlRuntimeFailure => "无法初始化桌面控制运行时：{error}",
@@ -1900,12 +2056,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkbenchI18nSharedEditingControlRequired => "需要共享编辑控制权限。",
         UiTextKey::WorkbenchI18nDirectoryPickerFailed => "无法打开目录选择器",
         UiTextKey::WorkbenchI18nDirectoryPickerInterrupted => "目录选择被中断",
-        UiTextKey::WorkbenchI18nAgentSnapshotProjectMismatch => "Host Agent 快照的项目与终端 {terminal} 不匹配",
+        UiTextKey::WorkbenchI18nAgentSnapshotProjectMismatch => {
+            "Host Agent 快照的项目与终端 {terminal} 不匹配"
+        }
         UiTextKey::WorkbenchI18nAgentSnapshotApplyFailed => "应用 Agent 快照失败",
-        UiTextKey::WorkbenchI18nAgentSessionResumeFailedRetained => "无法恢复 Agent 会话；原会话已保留。请重试或显式打开新会话。",
+        UiTextKey::WorkbenchI18nAgentSessionResumeFailedRetained => {
+            "无法恢复 Agent 会话；原会话已保留。请重试或显式打开新会话。"
+        }
         UiTextKey::WorkbenchI18nAgentSessionsLoadError => "无法加载 Agent 会话",
         UiTextKey::WorkbenchI18nAgentSessionUnavailable => "Agent 会话已不可用。",
-        UiTextKey::WorkbenchI18nAgentSessionProviderNoResumeCommand => "{provider} 未提供恢复此会话的命令。",
+        UiTextKey::WorkbenchI18nAgentSessionProviderNoResumeCommand => {
+            "{provider} 未提供恢复此会话的命令。"
+        }
         UiTextKey::WorkbenchI18nAgentSessionResumeFailed => "无法恢复 Agent 会话",
         UiTextKey::WorkbenchI18nAgentSessionsMinutesAgo => "{count} 分钟前",
         UiTextKey::WorkbenchI18nAgentSessionsHoursAgo => "{count} 小时前",
@@ -1920,7 +2082,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkbenchI18nLayoutEditorSerializeFailed => "序列化布局 TOML 失败",
         UiTextKey::WorkbenchI18nLayoutEditorParsePosition => "第 {line} 行，第 {column} 列",
         UiTextKey::WorkbenchI18nCommandUnavailableDetail => "命令不可用：{reason}",
-        UiTextKey::WorkbenchI18nProjectHostConfigurationUnavailable => "所选项目没有 Host 配置路径。",
+        UiTextKey::WorkbenchI18nProjectHostConfigurationUnavailable => {
+            "所选项目没有 Host 配置路径。"
+        }
         UiTextKey::WorkbenchI18nRemoteAccessInvalidAddress => "监听地址无效",
         UiTextKey::WorkbenchI18nRemoteAccessNotListening => "远程访问未在监听",
         UiTextKey::WorkbenchI18nRemoteAccessActionFailed => "远程访问操作失败",
@@ -1930,7 +2094,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkbenchI18nFieldRequired => "{field} 为必填项。",
         UiTextKey::WorkbenchI18nRemoteRestoreRemovalFailed => "无法移除远程恢复记录",
         UiTextKey::WorkbenchI18nSshConnectionNotConfigured => "未配置 SSH 连接 {connection}",
-        UiTextKey::WorkbenchI18nSshProjectConnectionRequired => "请先连接 SSH 端点，再打开其远程项目。",
+        UiTextKey::WorkbenchI18nSshProjectConnectionRequired => {
+            "请先连接 SSH 端点，再打开其远程项目。"
+        }
         UiTextKey::WorkbenchI18nSshProjectPickerOperationFailed => "SSH 项目操作失败",
         UiTextKey::WorkbenchI18nSshProjectHomeUnavailable => "远程主目录暂不可用。",
         UiTextKey::WorkbenchI18nWorkspaceHistoryLoadError => "无法加载工作区历史",

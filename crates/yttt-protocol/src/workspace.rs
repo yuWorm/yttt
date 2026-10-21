@@ -348,6 +348,13 @@ pub struct AgentSessionSummary {
     pub updated_at_ms: u64,
 }
 
+/// A native Agent session mutation performed by the Host that owns its history.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentSessionOperation {
+    Rename { title: String },
+    Delete,
+}
+
 /// Project-configuration routing selected by the Host profile.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -385,6 +392,13 @@ pub enum WorkspaceRequest {
     AgentSessions {
         providers: Vec<String>,
         project_root: HostPath,
+    },
+    /// Renames or permanently deletes one provider-owned project session.
+    MutateAgentSession {
+        provider: String,
+        session_id: String,
+        project_root: HostPath,
+        operation: AgentSessionOperation,
     },
     /// Lists a Host directory so the client can choose a project root.
     Browse {
@@ -530,6 +544,8 @@ pub enum WorkspaceResponse {
         sessions: Vec<AgentSessionSummary>,
         warnings: Vec<String>,
     },
+    /// Confirms one provider-owned session mutation.
+    AgentSessionMutated,
     AgentHooksInstalled,
     Directory(WorkspaceDirectory),
     /// Returns a configuration document, or `None` when it has not been created.
@@ -641,5 +657,29 @@ mod tests {
             validate_workspace_manifest(&snapshot, &[]),
             Err(WorkspaceValidationError::ManifestTooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn agent_session_mutation_serializes_and_requires_mutation_permission() {
+        let operation = AgentSessionOperation::Rename {
+            title: "Renamed session".to_string(),
+        };
+        let serialized = serde_json::to_value(&operation).unwrap();
+        assert_eq!(
+            serialized,
+            serde_json::json!({ "Rename": { "title": "Renamed session" } })
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentSessionOperation>(serialized).unwrap(),
+            operation
+        );
+
+        let request = WorkspaceRequest::MutateAgentSession {
+            provider: "codex".to_string(),
+            session_id: "session-123".to_string(),
+            project_root: HostPath::from_path(&std::env::temp_dir()).unwrap(),
+            operation,
+        };
+        assert!(request.is_mutation());
     }
 }

@@ -1,4 +1,5 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use yttt_agent_providers::session_management::SessionOperation;
 
 use super::*;
 
@@ -117,6 +118,7 @@ impl WorkbenchView {
             return;
         }
         if self.agent_sessions.loading
+            || self.agent_sessions.mutation.is_some()
             || self.agent_sessions.key.is_none()
             || self.agent_sessions.refresh_task.is_some()
         {
@@ -167,6 +169,7 @@ impl WorkbenchView {
         self.agent_sessions.pending_scan = true;
         self.agent_sessions.loading = true;
         if changed_project_or_providers {
+            self.agent_sessions.mutation_error = None;
             self.agent_sessions.expanded_providers.clear();
             if key.agents.len() > 1
                 && let Some(primary_agent) = key.agents.first()
@@ -186,7 +189,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.agent_sessions.pending_scan {
+        if !self.agent_sessions.pending_scan || self.agent_sessions.mutation.is_some() {
             return;
         }
         self.agent_sessions.pending_scan = false;
@@ -283,6 +286,210 @@ impl WorkbenchView {
         }
     }
 
+    pub(super) fn open_agent_session_management(
+        &mut self,
+        provider: BuiltinAgent,
+        session_id: &str,
+        delete: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_sessions.mutation.is_some() || !self.require_shared_mutation_control() {
+            return;
+        }
+        let Some(key) = self.agent_sessions.key.clone() else {
+            return;
+        };
+        let Some(session) = self
+            .agent_sessions
+            .sessions
+            .iter()
+            .find(|session| session.provider == provider && session.id == session_id)
+        else {
+            return;
+        };
+        let name = self.agent_session_title(session);
+        let input = (!delete)
+            .then(|| cx.new(|cx| InputState::new(window, cx).default_value(session.title.clone())));
+        let session_id = session_id.to_string();
+        let identity = format!("{} · {}", provider.display_name(), session_id);
+        let title = self
+            .ui_text
+            .get(if delete {
+                UiTextKey::AgentSessionsDelete
+            } else {
+                UiTextKey::AgentSessionsRename
+            })
+            .to_string();
+        let description = self
+            .ui_text
+            .get(if delete && provider == BuiltinAgent::Grok {
+                UiTextKey::AgentSessionsGrokDeleteDescription
+            } else if delete {
+                UiTextKey::AgentSessionsDeleteDescription
+            } else {
+                UiTextKey::AgentSessionsRenameDescription
+            })
+            .to_string();
+        let cancel = self.ui_text.get(UiTextKey::Cancel).to_string();
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let style = appearance.style;
+        let workbench = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let input = input.clone();
+            let workbench = workbench.clone();
+            let key = key.clone();
+            let session_id = session_id.clone();
+            let body = div()
+                .flex()
+                .flex_col()
+                .gap(style.spacing.md)
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(name.clone()))
+                .child(div().text_xs().child(identity.clone()))
+                .child(description.clone())
+                .when_some(input.as_ref(), |body, input| {
+                    body.child(yttt_dialog_input(input, theme, style))
+                });
+            alert.title(title.clone()).description(body).footer(
+                DialogFooter::new()
+                    .child(
+                        yttt_button(
+                            "agent-session-mutation-cancel",
+                            cancel.clone(),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            style,
+                            cx,
+                        )
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        yttt_button(
+                            "agent-session-mutation-confirm",
+                            title.clone(),
+                            if delete {
+                                YtttButtonVariant::Danger
+                            } else {
+                                YtttButtonVariant::Primary
+                            },
+                            theme,
+                            style,
+                            cx,
+                        )
+                        .debug_selector(|| "agent-session-mutation-confirm".to_string())
+                        .on_click(move |_, window, cx| {
+                            let operation = match &input {
+                                Some(input) => SessionOperation::Rename {
+                                    title: input.read(cx).value().to_string(),
+                                },
+                                None => SessionOperation::Delete,
+                            };
+                            let _ = workbench.update(cx, |root, cx| {
+                                root.start_agent_session_mutation(
+                                    key.clone(),
+                                    provider,
+                                    session_id.clone(),
+                                    operation,
+                                    window,
+                                    cx,
+                                );
+                            });
+                            window.close_dialog(cx);
+                        }),
+                    ),
+            )
+        });
+    }
+
+    fn start_agent_session_mutation(
+        &mut self,
+        key: AgentSessionScanKey,
+        provider: BuiltinAgent,
+        session_id: String,
+        operation: SessionOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_sessions.mutation.is_some() || !self.require_shared_mutation_control() {
+            return;
+        }
+        if self.agent_sessions.key.as_ref() != Some(&key)
+            || self.workspace.selected_project_id() != Some(&key.project_id)
+        {
+            self.load_error = Some(
+                self.ui_text
+                    .get(UiTextKey::AgentSessionsSelectionChanged)
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        let Some(project_path) = self
+            .workspace
+            .project(&key.project_id)
+            .and_then(|project| project.location.local_path())
+            .cloned()
+        else {
+            return;
+        };
+        // Fence any read started before this write; do not refresh until it settles.
+        self.agent_sessions.generation = self.agent_sessions.generation.wrapping_add(1);
+        self.agent_sessions.pending_scan = false;
+        self.agent_sessions.loading = false;
+        self.agent_sessions.refresh_task = None;
+        self.agent_sessions.mutation = Some((provider, session_id.clone()));
+        self.agent_sessions.mutation_error = None;
+        let access = self.config_paths.agent_session_access().clone();
+        let remote_host = self
+            .terminal
+            .host_runtime
+            .clone()
+            .filter(|runtime| runtime.is_remote());
+        let task = cx.background_spawn(async move {
+            match remote_host {
+                Some(runtime) => crate::runtime::agent_sessions::mutate_remote_agent_session(
+                    &runtime,
+                    provider,
+                    &session_id,
+                    &project_path,
+                    &operation,
+                ),
+                None => crate::runtime::agent_sessions::mutate_agent_session(
+                    provider,
+                    &session_id,
+                    &project_path,
+                    &access,
+                    &operation,
+                ),
+            }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |root, _, cx| {
+                root.agent_sessions.mutation = None;
+                root.agent_sessions.loading = false;
+                root.agent_sessions.pending_scan = false;
+                if let Err(error) = result {
+                    let error = format!(
+                        "{}: {error}",
+                        root.ui_text.get(UiTextKey::AgentSessionsMutationFailed)
+                    );
+                    if root.agent_sessions.key.as_ref() == Some(&key) {
+                        root.agent_sessions.mutation_error = Some(error);
+                    } else {
+                        root.load_error = Some(error);
+                    }
+                }
+                // Also reconcile failures: a transport timeout can follow a committed write.
+                root.refresh_agent_sessions();
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(super) fn agent_session_title(&self, session: &AgentSession) -> String {
         if session.title.is_empty() {
             self.ui_text
@@ -298,6 +505,9 @@ impl WorkbenchView {
         provider: BuiltinAgent,
         session_id: &str,
     ) -> Result<(), String> {
+        if self.agent_sessions.mutation.is_some() {
+            return Err(self.ui_text.get(UiTextKey::AgentSessionsMutating).into());
+        }
         let session = self
             .agent_sessions
             .sessions

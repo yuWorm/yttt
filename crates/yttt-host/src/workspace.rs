@@ -13,11 +13,11 @@ use yttt_core::model::ids::ClientInstanceId;
 use yttt_protocol::{
     FailureCode, HostPath, PathSegment, ProjectRelativePath, ProtocolFailure,
     workspace::{
-        AgentStateRef, DraftRef, WorkspaceConfig, WorkspaceConfigRevision, WorkspaceDirectory,
-        WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind, WorkspaceDraft, WorkspaceEnvironment,
-        WorkspaceId, WorkspaceOperationId, WorkspaceProjectConfig, WorkspaceProjectConfigFile,
-        WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot, WorkspaceSummary,
-        agent_state_references, encode_project_path, validate_workspace_manifest,
+        AgentSessionOperation, AgentStateRef, DraftRef, WorkspaceConfig, WorkspaceConfigRevision,
+        WorkspaceDirectory, WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind, WorkspaceDraft,
+        WorkspaceEnvironment, WorkspaceId, WorkspaceOperationId, WorkspaceProjectConfig,
+        WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot,
+        WorkspaceSummary, agent_state_references, encode_project_path, validate_workspace_manifest,
     },
 };
 
@@ -347,6 +347,12 @@ impl WorkspaceService {
                 providers,
                 project_root,
             } => return scan_agent_history(providers, project_root),
+            WorkspaceRequest::MutateAgentSession {
+                provider,
+                session_id,
+                project_root,
+                operation,
+            } => return mutate_agent_history(provider, session_id, project_root, operation),
             WorkspaceRequest::OmpSessionExists { session_id } => {
                 let roots = yttt_agent_providers::sessions::AgentSessionRoots::native()
                     .ok_or_else(|| {
@@ -367,7 +373,9 @@ impl WorkspaceService {
         };
         let mut state = self.state.lock();
         match request {
-            WorkspaceRequest::AgentSessions { .. } | WorkspaceRequest::OmpSessionExists { .. } => {
+            WorkspaceRequest::AgentSessions { .. }
+            | WorkspaceRequest::MutateAgentSession { .. }
+            | WorkspaceRequest::OmpSessionExists { .. } => {
                 unreachable!("handled before the state lock")
             }
             WorkspaceRequest::InstallAgentHooks => {
@@ -1196,6 +1204,41 @@ fn scan_agent_history(
     })
 }
 
+fn mutate_agent_history(
+    provider: String,
+    session_id: String,
+    root: HostPath,
+    operation: AgentSessionOperation,
+) -> Result<WorkspaceResponse, ProtocolFailure> {
+    use yttt_agent_providers::{
+        session_management::{
+            SessionOperation as ProviderSessionOperation,
+            mutate_agent_session as mutate_provider_session,
+        },
+        sessions::{AgentSessionRoots, SessionProvider},
+    };
+
+    let provider = SessionProvider::from_id(&provider)
+        .ok_or_else(|| failure(FailureCode::InvalidRequest, "unknown Agent provider", false))?;
+    let root = root
+        .to_path()
+        .map_err(|error| failure(FailureCode::InvalidRequest, error.to_string(), false))?;
+    let roots = AgentSessionRoots::native().ok_or_else(|| {
+        failure(
+            FailureCode::Internal,
+            "Host home directory is unavailable",
+            false,
+        )
+    })?;
+    let operation = match operation {
+        AgentSessionOperation::Rename { title } => ProviderSessionOperation::Rename { title },
+        AgentSessionOperation::Delete => ProviderSessionOperation::Delete,
+    };
+    mutate_provider_session(provider, &session_id, &root, &roots, true, &operation)
+        .map_err(|error| failure(FailureCode::Internal, error, false))?;
+    Ok(WorkspaceResponse::AgentSessionMutated)
+}
+
 fn environment(
     environment_id: &str,
     config_root: &Path,
@@ -1842,6 +1885,34 @@ mod tests {
             .control
             .finish(&id, |revisions| service.verify_revisions(revisions))
             .unwrap();
+    }
+
+    #[test]
+    fn observer_cannot_rename_or_delete_agent_history() {
+        let temporary = tempdir().unwrap();
+        let host = service(temporary.path());
+        let owner = client("owner");
+        let observer = client("observer");
+        acquire(&host, &owner);
+        for operation in [
+            yttt_protocol::workspace::AgentSessionOperation::Rename {
+                title: "new title".into(),
+            },
+            yttt_protocol::workspace::AgentSessionOperation::Delete,
+        ] {
+            let failure = host
+                .handle(
+                    &observer,
+                    WorkspaceRequest::MutateAgentSession {
+                        provider: "pi".into(),
+                        session_id: "private-history".into(),
+                        project_root: HostPath::from_path(temporary.path()).unwrap(),
+                        operation,
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(failure.code, FailureCode::PermissionDenied);
+        }
     }
 
     fn transfer(service: &WorkspaceService, from: &ClientInstanceId, to: &ClientInstanceId) {

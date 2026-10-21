@@ -4,8 +4,9 @@ use crate::config::{
 };
 use std::path::{Path, PathBuf};
 use yttt_agent_core::AgentSessionMetadata;
-use yttt_agent_providers::sessions::{
-    AgentSessionRoots, SessionProvider, scan_agent_sessions_for_agents_with_roots,
+use yttt_agent_providers::{
+    session_management::{SessionOperation, mutate_agent_session as mutate_provider_session},
+    sessions::{AgentSessionRoots, SessionProvider, scan_agent_sessions_for_agents_with_roots},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +89,50 @@ pub fn scan_agent_sessions(
     })
 }
 
+/// Mutates one locally available Agent session within this profile's configured history roots.
+pub fn mutate_agent_session(
+    provider: BuiltinAgent,
+    session_id: &str,
+    project_path: &Path,
+    access: &AgentSessionAccess,
+    operation: &SessionOperation,
+) -> Result<(), String> {
+    if crate::config::storage::is_remote() {
+        return Err("remote Agent session changes must be requested from its Host".to_string());
+    }
+    let roots = mutation_session_roots(access)?;
+    let provider = SessionProvider::from_id(provider.id())
+        .ok_or_else(|| "unknown Agent provider".to_string())?;
+    mutate_provider_session(
+        provider,
+        session_id,
+        project_path,
+        &roots,
+        access.allows_native_commands(),
+        operation,
+    )
+}
+
+fn mutation_session_roots(access: &AgentSessionAccess) -> Result<AgentSessionRoots, String> {
+    if access.policy() == AgentSessionReadPolicy::Disabled {
+        return Err("Agent session history is disabled for this profile".to_string());
+    }
+    session_roots(access)
+}
+
+fn session_roots(access: &AgentSessionAccess) -> Result<AgentSessionRoots, String> {
+    let roots = access.roots().ok_or_else(|| {
+        "Agent session history roots are unavailable for this profile".to_string()
+    })?;
+    Ok(AgentSessionRoots {
+        codex: roots.codex.clone(),
+        claude: roots.claude.clone(),
+        grok: roots.grok.clone(),
+        pi: roots.pi.clone(),
+        omp: roots.omp.clone(),
+    })
+}
+
 pub fn scan_remote_agent_sessions(
     runtime: &crate::host_runtime::DesktopHostRuntime,
     agents: &[BuiltinAgent],
@@ -121,4 +166,34 @@ pub fn scan_remote_agent_sessions(
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(AgentSessionScan { sessions, warnings })
+}
+
+/// Requests that the connected Host mutate one session in the Host's native history store.
+pub fn mutate_remote_agent_session(
+    runtime: &crate::host_runtime::DesktopHostRuntime,
+    provider: BuiltinAgent,
+    session_id: &str,
+    project_path: &Path,
+    operation: &SessionOperation,
+) -> Result<(), String> {
+    use yttt_protocol::workspace::{AgentSessionOperation, WorkspaceRequest, WorkspaceResponse};
+
+    let operation = match operation {
+        SessionOperation::Rename { title } => AgentSessionOperation::Rename {
+            title: title.clone(),
+        },
+        SessionOperation::Delete => AgentSessionOperation::Delete,
+    };
+    let response = runtime.workspace_request(WorkspaceRequest::MutateAgentSession {
+        provider: provider.id().to_string(),
+        session_id: session_id.to_string(),
+        project_root: yttt_protocol::HostPath::from_client_path(project_path)
+            .map_err(|error| error.to_string())?,
+        operation,
+    })?;
+    if matches!(response, WorkspaceResponse::AgentSessionMutated) {
+        Ok(())
+    } else {
+        Err("unexpected Agent session mutation response".to_string())
+    }
 }
