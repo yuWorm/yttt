@@ -588,179 +588,349 @@ pub(crate) fn bindable_action_text_with_text(
             (text.get(title_key), text.get(description_key))
         }
         action => {
-            if let Some((title_key, description_key)) = static_vim_action_text_keys(action) {
-                (text.get(title_key), text.get(description_key))
-            } else {
-                (
-                    action.title().expect("non-command actions have a title"),
-                    action
-                        .description()
-                        .expect("non-command actions have a description"),
-                )
-            }
+            let (title_key, description_key) = static_action_text_keys(action);
+            (text.get(title_key), text.get(description_key))
         }
     }
 }
 
-fn static_vim_action_text_keys(action: BindableActionId) -> Option<(UiTextKey, UiTextKey)> {
+fn static_action_text_keys(action: BindableActionId) -> (UiTextKey, UiTextKey) {
     match action {
-        BindableActionId::SettingsVimPrevious => Some((
+        BindableActionId::Command(_) | BindableActionId::EditorVim(_) => {
+            unreachable!("non-static actions are handled before resolving UI text keys")
+        }
+        BindableActionId::CommandCenter => (
+            UiTextKey::KeybindingUiCommandCenterTitle,
+            UiTextKey::KeybindingUiCommandCenterDescription,
+        ),
+        BindableActionId::CommandCenterQuestionPrevious => (
+            UiTextKey::KeybindingUiCommandCenterQuestionPreviousTitle,
+            UiTextKey::KeybindingUiCommandCenterQuestionPreviousDescription,
+        ),
+        BindableActionId::CommandCenterQuestionNext => (
+            UiTextKey::KeybindingUiCommandCenterQuestionNextTitle,
+            UiTextKey::KeybindingUiCommandCenterQuestionNextDescription,
+        ),
+        BindableActionId::CommandCenterQuestionSubmit => (
+            UiTextKey::KeybindingUiCommandCenterQuestionSubmitTitle,
+            UiTextKey::KeybindingUiCommandCenterQuestionSubmitDescription,
+        ),
+        BindableActionId::PaletteNext => (
+            UiTextKey::KeybindingUiPaletteNextTitle,
+            UiTextKey::KeybindingUiPaletteNextDescription,
+        ),
+        BindableActionId::PalettePrevious => (
+            UiTextKey::KeybindingUiPalettePreviousTitle,
+            UiTextKey::KeybindingUiPalettePreviousDescription,
+        ),
+        BindableActionId::PaletteAccept => (
+            UiTextKey::KeybindingUiPaletteAcceptTitle,
+            UiTextKey::KeybindingUiPaletteAcceptDescription,
+        ),
+        BindableActionId::PaletteDismiss => (
+            UiTextKey::KeybindingUiPaletteDismissTitle,
+            UiTextKey::KeybindingUiPaletteDismissDescription,
+        ),
+        BindableActionId::SettingsVimPrevious => (
             UiTextKey::KeybindingSettingsVimPreviousTitle,
             UiTextKey::KeybindingSettingsVimPreviousDescription,
-        )),
-        BindableActionId::SettingsVimNext => Some((
+        ),
+        BindableActionId::SettingsVimNext => (
             UiTextKey::KeybindingSettingsVimNextTitle,
             UiTextKey::KeybindingSettingsVimNextDescription,
-        )),
-        BindableActionId::SettingsVimFirst => Some((
+        ),
+        BindableActionId::SettingsVimFirst => (
             UiTextKey::KeybindingSettingsVimFirstTitle,
             UiTextKey::KeybindingSettingsVimFirstDescription,
-        )),
-        BindableActionId::SettingsVimLast => Some((
+        ),
+        BindableActionId::SettingsVimLast => (
             UiTextKey::KeybindingSettingsVimLastTitle,
             UiTextKey::KeybindingSettingsVimLastDescription,
-        )),
-        BindableActionId::VimNormal => Some((
+        ),
+        BindableActionId::ProjectPanelPreviousPage => (
+            UiTextKey::KeybindingUiProjectPanelPreviousPageTitle,
+            UiTextKey::KeybindingUiProjectPanelPreviousPageDescription,
+        ),
+        BindableActionId::ProjectPanelNextPage => (
+            UiTextKey::KeybindingUiProjectPanelNextPageTitle,
+            UiTextKey::KeybindingUiProjectPanelNextPageDescription,
+        ),
+        BindableActionId::ProjectPanelFilesPage => (
+            UiTextKey::KeybindingUiProjectPanelFilesPageTitle,
+            UiTextKey::KeybindingUiProjectPanelFilesPageDescription,
+        ),
+        BindableActionId::VimNormal => (
             UiTextKey::KeybindingVimNormalTitle,
             UiTextKey::KeybindingVimNormalDescription,
-        )),
-        BindableActionId::VimInsert => Some((
+        ),
+        BindableActionId::VimInsert => (
             UiTextKey::KeybindingVimInsertTitle,
             UiTextKey::KeybindingVimInsertDescription,
-        )),
-        BindableActionId::VimTerminal => Some((
+        ),
+        BindableActionId::VimTerminal => (
             UiTextKey::KeybindingVimTerminalTitle,
             UiTextKey::KeybindingVimTerminalDescription,
-        )),
-        BindableActionId::ProjectsVimPrevious => Some((
+        ),
+        BindableActionId::ProjectsFocusList => (
+            UiTextKey::KeybindingUiProjectsFocusListTitle,
+            UiTextKey::KeybindingUiProjectsFocusListDescription,
+        ),
+        BindableActionId::ProjectsVimPrevious => (
             UiTextKey::KeybindingProjectsVimPreviousTitle,
             UiTextKey::KeybindingProjectsVimPreviousDescription,
-        )),
-        BindableActionId::ProjectsVimNext => Some((
+        ),
+        BindableActionId::ProjectsVimNext => (
             UiTextKey::KeybindingProjectsVimNextTitle,
             UiTextKey::KeybindingProjectsVimNextDescription,
-        )),
-        BindableActionId::ProjectsVimFirst => Some((
+        ),
+        BindableActionId::ProjectsVimFirst => (
             UiTextKey::KeybindingProjectsVimFirstTitle,
             UiTextKey::KeybindingProjectsVimFirstDescription,
-        )),
-        BindableActionId::ProjectsVimLast => Some((
+        ),
+        BindableActionId::ProjectsVimLast => (
             UiTextKey::KeybindingProjectsVimLastTitle,
             UiTextKey::KeybindingProjectsVimLastDescription,
-        )),
-        BindableActionId::ProjectTreeVimUp => Some((
+        ),
+        BindableActionId::ProjectTreeVimUp => (
             UiTextKey::KeybindingProjectTreeVimUpTitle,
             UiTextKey::KeybindingProjectTreeVimUpDescription,
-        )),
-        BindableActionId::ProjectTreeVimDown => Some((
+        ),
+        BindableActionId::ProjectTreeVimDown => (
             UiTextKey::KeybindingProjectTreeVimDownTitle,
             UiTextKey::KeybindingProjectTreeVimDownDescription,
-        )),
-        BindableActionId::ProjectTreeVimLeft => Some((
+        ),
+        BindableActionId::ProjectTreeVimLeft => (
             UiTextKey::KeybindingProjectTreeVimLeftTitle,
             UiTextKey::KeybindingProjectTreeVimLeftDescription,
-        )),
-        BindableActionId::ProjectTreeVimRight => Some((
+        ),
+        BindableActionId::ProjectTreeVimRight => (
             UiTextKey::KeybindingProjectTreeVimRightTitle,
             UiTextKey::KeybindingProjectTreeVimRightDescription,
-        )),
-        BindableActionId::ProjectTreeVimOpen => Some((
+        ),
+        BindableActionId::ProjectTreeVimOpen => (
             UiTextKey::KeybindingProjectTreeVimOpenTitle,
             UiTextKey::KeybindingProjectTreeVimOpenDescription,
-        )),
-        BindableActionId::ProjectTreeVimToggle => Some((
+        ),
+        BindableActionId::ProjectTreeVimToggle => (
             UiTextKey::KeybindingProjectTreeVimToggleTitle,
             UiTextKey::KeybindingProjectTreeVimToggleDescription,
-        )),
-        BindableActionId::ProjectTreeVimFirst => Some((
+        ),
+        BindableActionId::ProjectTreeVimFirst => (
             UiTextKey::KeybindingProjectTreeVimFirstTitle,
             UiTextKey::KeybindingProjectTreeVimFirstDescription,
-        )),
-        BindableActionId::ProjectTreeVimLast => Some((
+        ),
+        BindableActionId::ProjectTreeVimLast => (
             UiTextKey::KeybindingProjectTreeVimLastTitle,
             UiTextKey::KeybindingProjectTreeVimLastDescription,
-        )),
-        BindableActionId::TerminalViToggle => Some((
+        ),
+        BindableActionId::ProjectTreeCollapseAllNodes => (
+            UiTextKey::KeybindingUiProjectTreeCollapseAllNodesTitle,
+            UiTextKey::KeybindingUiProjectTreeCollapseAllNodesDescription,
+        ),
+        BindableActionId::ProjectTreeToggleHiddenFiles => (
+            UiTextKey::KeybindingUiProjectTreeToggleHiddenFilesTitle,
+            UiTextKey::KeybindingUiProjectTreeToggleHiddenFilesDescription,
+        ),
+        BindableActionId::ProjectTreeCreateFile => (
+            UiTextKey::KeybindingUiProjectTreeCreateFileTitle,
+            UiTextKey::KeybindingUiProjectTreeCreateFileDescription,
+        ),
+        BindableActionId::ProjectTreeCreateDirectory => (
+            UiTextKey::KeybindingUiProjectTreeCreateDirectoryTitle,
+            UiTextKey::KeybindingUiProjectTreeCreateDirectoryDescription,
+        ),
+        BindableActionId::ProjectTreeRenameEntry => (
+            UiTextKey::KeybindingUiProjectTreeRenameEntryTitle,
+            UiTextKey::KeybindingUiProjectTreeRenameEntryDescription,
+        ),
+        BindableActionId::ProjectTreeDeleteEntry => (
+            UiTextKey::KeybindingUiProjectTreeDeleteEntryTitle,
+            UiTextKey::KeybindingUiProjectTreeDeleteEntryDescription,
+        ),
+        BindableActionId::ProjectTreeCopyEntry => (
+            UiTextKey::KeybindingUiProjectTreeCopyEntryTitle,
+            UiTextKey::KeybindingUiProjectTreeCopyEntryDescription,
+        ),
+        BindableActionId::ProjectTreeCutEntry => (
+            UiTextKey::KeybindingUiProjectTreeCutEntryTitle,
+            UiTextKey::KeybindingUiProjectTreeCutEntryDescription,
+        ),
+        BindableActionId::ProjectTreePasteEntry => (
+            UiTextKey::KeybindingUiProjectTreePasteEntryTitle,
+            UiTextKey::KeybindingUiProjectTreePasteEntryDescription,
+        ),
+        BindableActionId::GitDiffDismiss => (
+            UiTextKey::KeybindingUiGitDiffDismissTitle,
+            UiTextKey::KeybindingUiGitDiffDismissDescription,
+        ),
+        BindableActionId::GitDiffStageMode => (
+            UiTextKey::KeybindingUiGitDiffStageModeTitle,
+            UiTextKey::KeybindingUiGitDiffStageModeDescription,
+        ),
+        BindableActionId::GitDiffViewMode => (
+            UiTextKey::KeybindingUiGitDiffViewModeTitle,
+            UiTextKey::KeybindingUiGitDiffViewModeDescription,
+        ),
+        BindableActionId::GitDiffWhitespace => (
+            UiTextKey::KeybindingUiGitDiffWhitespaceTitle,
+            UiTextKey::KeybindingUiGitDiffWhitespaceDescription,
+        ),
+        BindableActionId::GitDiffPreviousFile => (
+            UiTextKey::KeybindingUiGitDiffPreviousFileTitle,
+            UiTextKey::KeybindingUiGitDiffPreviousFileDescription,
+        ),
+        BindableActionId::GitDiffNextFile => (
+            UiTextKey::KeybindingUiGitDiffNextFileTitle,
+            UiTextKey::KeybindingUiGitDiffNextFileDescription,
+        ),
+        BindableActionId::GitDiffCopy => (
+            UiTextKey::KeybindingUiGitDiffCopyTitle,
+            UiTextKey::KeybindingUiGitDiffCopyDescription,
+        ),
+        BindableActionId::TerminalTab => (
+            UiTextKey::KeybindingUiTerminalTabTitle,
+            UiTextKey::KeybindingUiTerminalTabDescription,
+        ),
+        BindableActionId::TerminalBacktab => (
+            UiTextKey::KeybindingUiTerminalBacktabTitle,
+            UiTextKey::KeybindingUiTerminalBacktabDescription,
+        ),
+        BindableActionId::TerminalClipboardCopy => (
+            UiTextKey::KeybindingUiTerminalClipboardCopyTitle,
+            UiTextKey::KeybindingUiTerminalClipboardCopyDescription,
+        ),
+        BindableActionId::TerminalClipboardPaste => (
+            UiTextKey::KeybindingUiTerminalClipboardPasteTitle,
+            UiTextKey::KeybindingUiTerminalClipboardPasteDescription,
+        ),
+        BindableActionId::TerminalSearchOpen => (
+            UiTextKey::KeybindingUiTerminalSearchOpenTitle,
+            UiTextKey::KeybindingUiTerminalSearchOpenDescription,
+        ),
+        BindableActionId::TerminalSearchForward => (
+            UiTextKey::KeybindingUiTerminalSearchForwardTitle,
+            UiTextKey::KeybindingUiTerminalSearchForwardDescription,
+        ),
+        BindableActionId::TerminalSearchBackward => (
+            UiTextKey::KeybindingUiTerminalSearchBackwardTitle,
+            UiTextKey::KeybindingUiTerminalSearchBackwardDescription,
+        ),
+        BindableActionId::TerminalSearchHistoryUp => (
+            UiTextKey::KeybindingUiTerminalSearchHistoryUpTitle,
+            UiTextKey::KeybindingUiTerminalSearchHistoryUpDescription,
+        ),
+        BindableActionId::TerminalSearchHistoryDown => (
+            UiTextKey::KeybindingUiTerminalSearchHistoryDownTitle,
+            UiTextKey::KeybindingUiTerminalSearchHistoryDownDescription,
+        ),
+        BindableActionId::TerminalSearchDismiss => (
+            UiTextKey::KeybindingUiTerminalSearchDismissTitle,
+            UiTextKey::KeybindingUiTerminalSearchDismissDescription,
+        ),
+        BindableActionId::TerminalViToggle => (
             UiTextKey::KeybindingTerminalViToggleTitle,
             UiTextKey::KeybindingTerminalViToggleDescription,
-        )),
-        BindableActionId::TerminalViLeave => Some((
+        ),
+        BindableActionId::TerminalHintOpen => (
+            UiTextKey::KeybindingUiTerminalHintOpenTitle,
+            UiTextKey::KeybindingUiTerminalHintOpenDescription,
+        ),
+        BindableActionId::TerminalViLeave => (
             UiTextKey::KeybindingTerminalViLeaveTitle,
             UiTextKey::KeybindingTerminalViLeaveDescription,
-        )),
-        BindableActionId::TerminalViSelection => Some((
+        ),
+        BindableActionId::TerminalViSelection => (
             UiTextKey::KeybindingTerminalViSelectionTitle,
             UiTextKey::KeybindingTerminalViSelectionDescription,
-        )),
-        BindableActionId::TerminalViYank => Some((
+        ),
+        BindableActionId::TerminalViYank => (
             UiTextKey::KeybindingTerminalViYankTitle,
             UiTextKey::KeybindingTerminalViYankDescription,
-        )),
-        BindableActionId::TerminalViMoveLeft => Some((
+        ),
+        BindableActionId::TerminalViMoveLeft => (
             UiTextKey::KeybindingTerminalViMoveLeftTitle,
             UiTextKey::KeybindingTerminalViMoveLeftDescription,
-        )),
-        BindableActionId::TerminalViMoveDown => Some((
+        ),
+        BindableActionId::TerminalViMoveDown => (
             UiTextKey::KeybindingTerminalViMoveDownTitle,
             UiTextKey::KeybindingTerminalViMoveDownDescription,
-        )),
-        BindableActionId::TerminalViMoveUp => Some((
+        ),
+        BindableActionId::TerminalViMoveUp => (
             UiTextKey::KeybindingTerminalViMoveUpTitle,
             UiTextKey::KeybindingTerminalViMoveUpDescription,
-        )),
-        BindableActionId::TerminalViMoveRight => Some((
+        ),
+        BindableActionId::TerminalViMoveRight => (
             UiTextKey::KeybindingTerminalViMoveRightTitle,
             UiTextKey::KeybindingTerminalViMoveRightDescription,
-        )),
-        BindableActionId::TerminalViMoveFirst => Some((
+        ),
+        BindableActionId::TerminalViMoveFirst => (
             UiTextKey::KeybindingTerminalViMoveFirstTitle,
             UiTextKey::KeybindingTerminalViMoveFirstDescription,
-        )),
-        BindableActionId::TerminalViMoveLast => Some((
+        ),
+        BindableActionId::TerminalViMoveLast => (
             UiTextKey::KeybindingTerminalViMoveLastTitle,
             UiTextKey::KeybindingTerminalViMoveLastDescription,
-        )),
-        BindableActionId::TerminalViMoveFirstOccupied => Some((
+        ),
+        BindableActionId::TerminalViMoveFirstOccupied => (
             UiTextKey::KeybindingTerminalViMoveFirstOccupiedTitle,
             UiTextKey::KeybindingTerminalViMoveFirstOccupiedDescription,
-        )),
-        BindableActionId::TerminalViMoveHigh => Some((
+        ),
+        BindableActionId::TerminalViMoveHigh => (
             UiTextKey::KeybindingTerminalViMoveHighTitle,
             UiTextKey::KeybindingTerminalViMoveHighDescription,
-        )),
-        BindableActionId::TerminalViMoveMiddle => Some((
+        ),
+        BindableActionId::TerminalViMoveMiddle => (
             UiTextKey::KeybindingTerminalViMoveMiddleTitle,
             UiTextKey::KeybindingTerminalViMoveMiddleDescription,
-        )),
-        BindableActionId::TerminalViMoveLow => Some((
+        ),
+        BindableActionId::TerminalViMoveLow => (
             UiTextKey::KeybindingTerminalViMoveLowTitle,
             UiTextKey::KeybindingTerminalViMoveLowDescription,
-        )),
-        BindableActionId::TerminalViMoveWordLeft => Some((
+        ),
+        BindableActionId::TerminalViMoveWordLeft => (
             UiTextKey::KeybindingTerminalViMoveWordLeftTitle,
             UiTextKey::KeybindingTerminalViMoveWordLeftDescription,
-        )),
-        BindableActionId::TerminalViMoveWordRight => Some((
+        ),
+        BindableActionId::TerminalViMoveWordRight => (
             UiTextKey::KeybindingTerminalViMoveWordRightTitle,
             UiTextKey::KeybindingTerminalViMoveWordRightDescription,
-        )),
-        BindableActionId::TerminalViMoveWordEnd => Some((
+        ),
+        BindableActionId::TerminalViMoveWordEnd => (
             UiTextKey::KeybindingTerminalViMoveWordEndTitle,
             UiTextKey::KeybindingTerminalViMoveWordEndDescription,
-        )),
-        BindableActionId::TerminalViMoveBracket => Some((
+        ),
+        BindableActionId::TerminalViMoveBracket => (
             UiTextKey::KeybindingTerminalViMoveBracketTitle,
             UiTextKey::KeybindingTerminalViMoveBracketDescription,
-        )),
-        BindableActionId::TerminalViMoveParagraphUp => Some((
+        ),
+        BindableActionId::TerminalViMoveParagraphUp => (
             UiTextKey::KeybindingTerminalViMoveParagraphUpTitle,
             UiTextKey::KeybindingTerminalViMoveParagraphUpDescription,
-        )),
-        BindableActionId::TerminalViMoveParagraphDown => Some((
+        ),
+        BindableActionId::TerminalViMoveParagraphDown => (
             UiTextKey::KeybindingTerminalViMoveParagraphDownTitle,
             UiTextKey::KeybindingTerminalViMoveParagraphDownDescription,
-        )),
-        _ => None,
+        ),
+        BindableActionId::CloseAllTabs => (
+            UiTextKey::KeybindingUiCloseAllTabsTitle,
+            UiTextKey::KeybindingUiCloseAllTabsDescription,
+        ),
+        BindableActionId::CloseTabsBefore => (
+            UiTextKey::KeybindingUiCloseTabsBeforeTitle,
+            UiTextKey::KeybindingUiCloseTabsBeforeDescription,
+        ),
+        BindableActionId::CloseTabsAfter => (
+            UiTextKey::KeybindingUiCloseTabsAfterTitle,
+            UiTextKey::KeybindingUiCloseTabsAfterDescription,
+        ),
+        BindableActionId::CloseAllFileTabs => (
+            UiTextKey::KeybindingUiCloseAllFileTabsTitle,
+            UiTextKey::KeybindingUiCloseAllFileTabsDescription,
+        ),
+        BindableActionId::CloseAllTerminalTabs => (
+            UiTextKey::KeybindingUiCloseAllTerminalTabsTitle,
+            UiTextKey::KeybindingUiCloseAllTerminalTabsDescription,
+        ),
     }
 }
 

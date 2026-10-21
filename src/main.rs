@@ -15,8 +15,9 @@ use yttt::{
     host_launcher::{HostLauncher, ProcessRole, process_role, run_host_process},
     login_startup::{LoginStartupManager, LoginStartupStatus},
     model::ids::ProfileId,
+    ui::i18n::{UiText, UiTextKey},
 };
-use yttt_protocol::{LifecycleRequest, LifecycleResponse};
+use yttt_protocol::{HostLifecycleState, LifecycleRequest, LifecycleResponse};
 
 fn desktop_profile() -> AppProfile {
     if let Some(root) = std::env::var_os("YTTT_PROFILE_ROOT") {
@@ -54,7 +55,7 @@ enum DesktopCliCommand {
     OpenLogs,
 }
 
-fn desktop_cli_command(args: &[OsString]) -> Result<Option<DesktopCliCommand>, String> {
+fn desktop_cli_command(args: &[OsString], text: UiText) -> Result<Option<DesktopCliCommand>, String> {
     let mut selected = None;
     for (flag, command) in [
         ("--host-status", DesktopCliCommand::HostStatus),
@@ -79,7 +80,9 @@ fn desktop_cli_command(args: &[OsString]) -> Result<Option<DesktopCliCommand>, S
         if args.iter().any(|argument| argument == OsStr::new(flag))
             && selected.replace(command).is_some()
         {
-            return Err("only one Host lifecycle command may be used at a time".to_string());
+            return Err(text
+                .get(UiTextKey::CliLocalizationLifecycleCommandExclusive)
+                .to_string());
         }
     }
     if selected == Some(DesktopCliCommand::EnableLoginStartup)
@@ -87,30 +90,33 @@ fn desktop_cli_command(args: &[OsString]) -> Result<Option<DesktopCliCommand>, S
             .iter()
             .any(|argument| argument == OsStr::new("--confirm-remote-access"))
     {
-        return Err(
-            "--enable-login-startup requires --confirm-remote-access after reviewing the background Host access prompt"
-                .to_string(),
-        );
+        return Err(text
+            .get(UiTextKey::CliLocalizationLoginStartupConfirmationRequired)
+            .to_string());
     }
     Ok(selected)
 }
 
-fn profile_for_args(args: &[OsString]) -> Result<AppProfile, String> {
-    let profile = desktop_profile();
+fn profile_for_args(
+    profile: AppProfile,
+    args: &[OsString],
+    text: UiText,
+) -> Result<AppProfile, String> {
     let mut requested_profile = None;
     for pair in args.windows(2) {
         if pair[0] == OsStr::new("--profile-id") && requested_profile.replace(&pair[1]).is_some() {
-            return Err("--profile-id may be specified only once".to_string());
+            return Err(text
+                .get(UiTextKey::CliLocalizationProfileIdDuplicate)
+                .to_string());
         }
     }
     if let Some(requested_profile) = requested_profile
         && requested_profile != OsStr::new(profile.id().as_str())
     {
-        return Err(format!(
-            "login startup requested profile {:?}, but this executable owns profile {}",
-            requested_profile,
-            profile.id().as_str()
-        ));
+        return Err(text
+            .get(UiTextKey::CliLocalizationProfileMismatch)
+            .replace("{requested_profile}", &format!("{requested_profile:?}"))
+            .replace("{profile}", profile.id().as_str()));
     }
     Ok(profile)
 }
@@ -118,6 +124,7 @@ fn profile_for_args(args: &[OsString]) -> Result<AppProfile, String> {
 fn run_login_startup_cli(
     profile: &AppProfile,
     command: DesktopCliCommand,
+    text: UiText,
 ) -> Result<String, anyhow::Error> {
     let manager = LoginStartupManager::for_current_platform(profile)?;
     let state = match command {
@@ -126,21 +133,37 @@ fn run_login_startup_cli(
         DesktopCliCommand::DisableLoginStartup => manager.set_enabled(false, true)?,
         _ => unreachable!(),
     };
-    let status = match state.status {
-        LoginStartupStatus::Disabled => "disabled",
-        LoginStartupStatus::Enabled => "enabled",
-        LoginStartupStatus::RequiresApproval => "requires approval in system settings",
-        LoginStartupStatus::Unavailable => "unavailable",
-    };
-    Ok(format!("Login startup {status} ({:?})", state.method))
+    let status = text.get(match state.status {
+        LoginStartupStatus::Disabled => UiTextKey::CliLocalizationLoginStartupDisabled,
+        LoginStartupStatus::Enabled => UiTextKey::CliLocalizationLoginStartupEnabled,
+        LoginStartupStatus::RequiresApproval => UiTextKey::CliLocalizationLoginStartupRequiresApproval,
+        LoginStartupStatus::Unavailable => UiTextKey::CliLocalizationLoginStartupUnavailable,
+    });
+    Ok(text
+        .get(UiTextKey::CliLocalizationLoginStartupStatus)
+        .replace("{status}", status)
+        .replace("{method}", &format!("{:?}", state.method)))
+}
+
+fn host_state_label(state: HostLifecycleState, text: UiText) -> &'static str {
+    text.get(match state {
+        HostLifecycleState::Running => UiTextKey::TrayRunning,
+        HostLifecycleState::Draining => UiTextKey::TrayDraining,
+        HostLifecycleState::ForceStopping => UiTextKey::CliLocalizationHostForceStopping,
+    })
 }
 
 fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
+    let text = yttt::cli::ui_text_for_profile(&profile);
     if command == DesktopCliCommand::OpenLogs {
         if let Err(error) = fs::create_dir_all(&profile.paths().logs)
             .and_then(|()| yttt::ui::app::platform::reveal_path(&profile.paths().logs))
         {
-            eprintln!("failed to open yttt logs: {error}");
+            eprintln!(
+                "{}",
+                text.get(UiTextKey::CliLocalizationOpenLogsFailure)
+                    .replace("{error}", &error.to_string())
+            );
             return 1;
         }
         return 0;
@@ -151,13 +174,17 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
             | DesktopCliCommand::EnableLoginStartup
             | DesktopCliCommand::DisableLoginStartup
     ) {
-        return match run_login_startup_cli(&profile, command) {
+        return match run_login_startup_cli(&profile, command, text) {
             Ok(message) => {
                 println!("{message}");
                 0
             }
             Err(error) => {
-                eprintln!("{error}");
+                eprintln!(
+                    "{}",
+                    text.get(UiTextKey::CliLocalizationLoginStartupFailure)
+                        .replace("{error}", &error.to_string())
+                );
                 1
             }
         };
@@ -168,7 +195,11 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
         DesktopCliCommand::StartHost | DesktopCliCommand::RestartHost
     ) && let Err(error) = prevent_detached_host_stdio_inheritance()
     {
-        eprintln!("failed to isolate detached Host from desktop CLI stdio: {error}");
+        eprintln!(
+            "{}",
+            text.get(UiTextKey::CliLocalizationDetachedHostStdioFailure)
+                .replace("{error}", &error.to_string())
+        );
         return 1;
     }
 
@@ -178,47 +209,58 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("failed to initialize Host lifecycle runtime: {error}");
+            eprintln!(
+                "{}",
+                text.get(UiTextKey::CliLocalizationLifecycleRuntimeFailure)
+                    .replace("{error}", &error.to_string())
+            );
             return 1;
         }
     };
     let launcher = match HostLauncher::for_current_executable(profile.clone()) {
         Ok(launcher) => launcher,
         Err(error) => {
-            eprintln!("failed to initialize Host launcher: {error}");
+            eprintln!(
+                "{}",
+                text.get(UiTextKey::CliLocalizationHostLauncherFailure)
+                    .replace("{error}", &error.to_string())
+            );
             return 1;
         }
     };
+    let mut busy = false;
     let result = runtime.block_on(async {
         match command {
             DesktopCliCommand::HostStatus => {
                 if !host_runtime_artifacts_exist(profile.paths().runtime.as_path()) {
-                    return Ok("Host stopped".to_string());
+                    return Ok(text.get(UiTextKey::CliLocalizationHostStopped).to_string());
                 }
                 let mut client = launcher.connect_lifecycle(false).await?;
                 match client.request(LifecycleRequest::Status).await? {
-                    LifecycleResponse::Status(status) => Ok(format!(
-                        "Host {:?}: {} terminals, {} clients, {} projects, {} SSH connections, {} jobs",
-                        status.state,
-                        status.terminal_count,
-                        status.client_count,
-                        status.project_count,
-                        status.ssh_connection_count,
-                        status.agent_count
-                    )),
+                    LifecycleResponse::Status(status) => Ok(text
+                        .get(UiTextKey::CliLocalizationHostStatus)
+                        .replace("{state}", host_state_label(status.state, text))
+                        .replace("{terminals}", &status.terminal_count.to_string())
+                        .replace("{clients}", &status.client_count.to_string())
+                        .replace("{projects}", &status.project_count.to_string())
+                        .replace("{ssh_connections}", &status.ssh_connection_count.to_string())
+                        .replace("{jobs}", &status.agent_count.to_string())),
                     response => Err(anyhow::anyhow!(
-                        "unexpected Host status response: {response:?}"
+                        "{}",
+                        text.get(UiTextKey::CliLocalizationUnexpectedHostStatusResponse)
+                            .replace("{response}", &format!("{response:?}"))
                     )),
                 }
             }
             DesktopCliCommand::StartHost => {
                 let process = launcher.launch_or_attach().await?;
-                let disposition = if process.spawned() {
-                    "started"
-                } else {
-                    "already running"
-                };
-                Ok(format!("Host {disposition}"))
+                Ok(text
+                    .get(if process.spawned() {
+                        UiTextKey::CliLocalizationHostStarted
+                    } else {
+                        UiTextKey::CliLocalizationHostAlreadyRunning
+                    })
+                    .to_string())
             }
             DesktopCliCommand::StopHost | DesktopCliCommand::RestartHost => {
                 if host_runtime_artifacts_exist(profile.paths().runtime.as_path()) {
@@ -228,41 +270,50 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
                     match response {
                         LifecycleResponse::Stopping => {}
                         LifecycleResponse::Busy { blockers } => {
+                            busy = true;
                             return Err(anyhow::anyhow!(
-                                "Host is busy with {} blocker(s): {blockers:?}",
-                                blockers.len()
+                                "{}",
+                                text.get(UiTextKey::CliLocalizationHostBusy)
+                                    .replace("{count}", &blockers.len().to_string())
+                                    .replace("{blockers}", &format!("{blockers:?}"))
                             ));
                         }
                         response => {
                             return Err(anyhow::anyhow!(
-                                "unexpected Host stop response: {response:?}"
+                                "{}",
+                                text.get(UiTextKey::CliLocalizationUnexpectedHostStopResponse)
+                                    .replace("{response}", &format!("{response:?}"))
                             ));
                         }
                     }
-                    wait_for_host_artifacts_to_clear(profile.paths().runtime.as_path())?;
+                    wait_for_host_artifacts_to_clear(profile.paths().runtime.as_path(), text)?;
                 }
                 if command == DesktopCliCommand::RestartHost {
                     let process = launcher.launch_or_attach().await?;
                     drop(process);
-                    Ok("Host restarted".to_string())
+                    Ok(text.get(UiTextKey::CliLocalizationHostRestarted).to_string())
                 } else {
-                    Ok("Host stopped".to_string())
+                    Ok(text.get(UiTextKey::CliLocalizationHostStopped).to_string())
                 }
             }
             DesktopCliCommand::ForceStopHost => {
                 if !host_runtime_artifacts_exist(profile.paths().runtime.as_path()) {
-                    return Ok("Host stopped".to_string());
+                    return Ok(text.get(UiTextKey::CliLocalizationHostStopped).to_string());
                 }
                 let mut client = launcher.connect_lifecycle(true).await?;
                 let response = client.request(LifecycleRequest::ForceStop).await?;
                 drop(client);
                 match response {
                     LifecycleResponse::Draining => {
-                        wait_for_host_artifacts_to_clear(profile.paths().runtime.as_path())?;
-                        Ok("Host force-stopped".to_string())
+                        wait_for_host_artifacts_to_clear(profile.paths().runtime.as_path(), text)?;
+                        Ok(text
+                            .get(UiTextKey::CliLocalizationHostForceStopped)
+                            .to_string())
                     }
                     response => Err(anyhow::anyhow!(
-                        "unexpected Host force-stop response: {response:?}"
+                        "{}",
+                        text.get(UiTextKey::CliLocalizationUnexpectedHostForceStopResponse)
+                            .replace("{response}", &format!("{response:?}"))
                     )),
                 }
             }
@@ -278,12 +329,12 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("{error}");
-            if error.to_string().contains("Host is busy") {
-                2
-            } else {
-                1
-            }
+            eprintln!(
+                "{}",
+                text.get(UiTextKey::CliLocalizationHostLifecycleFailure)
+                    .replace("{error}", &error.to_string())
+            );
+            if busy { 2 } else { 1 }
         }
     }
 }
@@ -318,7 +369,10 @@ fn host_runtime_artifacts_exist(runtime_root: &Path) -> bool {
     runtime_root.join("host-ready.json").exists() || runtime_root.join("host.pid").exists()
 }
 
-fn wait_for_host_artifacts_to_clear(runtime_root: &Path) -> anyhow::Result<()> {
+fn wait_for_host_artifacts_to_clear(
+    runtime_root: &Path,
+    text: UiText,
+) -> anyhow::Result<()> {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         if !host_runtime_artifacts_exist(runtime_root) {
@@ -326,7 +380,10 @@ fn wait_for_host_artifacts_to_clear(runtime_root: &Path) -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    anyhow::bail!("timed out waiting for Host exit")
+    anyhow::bail!(
+        "{}",
+        text.get(UiTextKey::CliLocalizationHostExitTimeout)
+    )
 }
 
 const INSTALLER_HOST_PREFLIGHT_ARG: &str = "--installer-host-preflight";
@@ -419,7 +476,14 @@ fn main() {
     {
         match yttt::remote_launch::read_remote_launch() {
             Ok(launch) => yttt::ui::app::run_remote(launch),
-            Err(error) => eprintln!("invalid remote Client launch: {error}"),
+            Err(error) => {
+                let text = yttt::cli::ui_text_for_profile(&desktop_profile());
+                eprintln!(
+                    "{}",
+                    text.get(UiTextKey::CliLocalizationRemoteClientLaunchInvalid)
+                        .replace("{error}", &error.to_string())
+                );
+            }
         }
         return;
     }
@@ -429,20 +493,27 @@ fn main() {
         }
         Ok(None) => {}
         Err(error) => {
-            eprintln!("{error}");
+            let text = yttt::cli::ui_text_for_profile(&desktop_profile());
+            eprintln!(
+                "{}",
+                text.get(UiTextKey::CliLocalizationInstallerPreflightArgumentError)
+                    .replace("{error}", &error)
+            );
             std::process::exit(1);
         }
     }
     match process_role(args.iter()) {
         ProcessRole::Desktop => {
-            let profile = match profile_for_args(&args) {
+            let desktop_profile = desktop_profile();
+            let text = yttt::cli::ui_text_for_profile(&desktop_profile);
+            let profile = match profile_for_args(desktop_profile, &args, text) {
                 Ok(profile) => profile,
                 Err(error) => {
                     eprintln!("{error}");
                     std::process::exit(1);
                 }
             };
-            match desktop_cli_command(&args) {
+            match desktop_cli_command(&args, text) {
                 Ok(Some(command)) => {
                     std::process::exit(run_desktop_cli(profile, command));
                 }
@@ -464,20 +535,40 @@ fn main() {
                 }
                 Ok(DesktopShellClaim::Forwarded) => {}
                 Err(error) => {
-                    eprintln!("failed to activate yttt desktop shell: {error}");
+                    eprintln!(
+                        "{}",
+                        text.get(UiTextKey::CliLocalizationDesktopActivationFailure)
+                            .replace("{error}", &error.to_string())
+                    );
                     std::process::exit(1);
                 }
             }
         }
         ProcessRole::Host => {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(1)
                 .enable_all()
                 .thread_name("yttt-host")
                 .build()
-                .expect("failed to initialize Host runtime");
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let text = yttt::cli::ui_text_for_profile(&desktop_profile());
+                    eprintln!(
+                        "{}",
+                        text.get(UiTextKey::CliLocalizationHostRuntimeFailure)
+                            .replace("{error}", &error.to_string())
+                    );
+                    std::process::exit(1);
+                }
+            };
             if let Err(error) = runtime.block_on(run_host_process(args)) {
-                eprintln!("yttt Host failed: {error}");
+                let text = yttt::cli::ui_text_for_profile(&desktop_profile());
+                eprintln!(
+                    "{}",
+                    text.get(UiTextKey::CliLocalizationHostProcessFailure)
+                        .replace("{error}", &error.to_string())
+                );
                 std::process::exit(1);
             }
         }
@@ -494,16 +585,22 @@ mod tests {
 
     #[test]
     fn login_startup_enable_cli_requires_explicit_remote_access_confirmation() {
-        let error =
-            desktop_cli_command(&arguments(&["yttt", "--enable-login-startup"])).unwrap_err();
+        let error = desktop_cli_command(
+            &arguments(&["yttt", "--enable-login-startup"]),
+            UiText::english(),
+        )
+        .unwrap_err();
         assert!(error.contains("--confirm-remote-access"));
 
         assert_eq!(
-            desktop_cli_command(&arguments(&[
-                "yttt",
-                "--enable-login-startup",
-                "--confirm-remote-access",
-            ]))
+            desktop_cli_command(
+                &arguments(&[
+                    "yttt",
+                    "--enable-login-startup",
+                    "--confirm-remote-access",
+                ]),
+                UiText::english(),
+            )
             .unwrap(),
             Some(DesktopCliCommand::EnableLoginStartup)
         );
@@ -521,19 +618,23 @@ mod tests {
 
         assert_eq!(process_role(args.iter()), ProcessRole::Desktop);
         assert_eq!(
-            desktop_cli_command(&args).unwrap(),
+            desktop_cli_command(&args, UiText::english()).unwrap(),
             Some(DesktopCliCommand::StartHost)
         );
         assert_eq!(
-            profile_for_args(&args).unwrap().id().as_str(),
+            profile_for_args(profile.clone(), &args, UiText::english())
+                .unwrap()
+                .id()
+                .as_str(),
             profile.id().as_str()
         );
     }
 
     #[test]
     fn registered_startup_invocation_rejects_another_profile() {
+        let profile = desktop_profile();
         let args = arguments(&["yttt", "--start-host", "--profile-id", "another-profile"]);
-        let error = profile_for_args(&args).unwrap_err();
+        let error = profile_for_args(profile, &args, UiText::english()).unwrap_err();
         assert!(error.contains("this executable owns profile"));
     }
 }

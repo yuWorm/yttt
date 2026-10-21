@@ -50,6 +50,12 @@ and `general.onboarding_completed = true`. Configuration reads alone never creat
 install hooks. Projects opened afterward inherit the Host default unless they provide a project
 or personal layout override.
 
+The Device language setting supports English (`en`), Simplified Chinese (`zh-CN`), and
+System (`system`). System resolves the operating-system language on every application
+startup, not only during onboarding. Changing language updates built-in component text,
+settings choices, shortcut titles and descriptions, recovery prompts, and date/time labels.
+Command names, user content, paths, and underlying technical diagnostics are not translated.
+
 Normal application launches remain local. The project status bar identifies the current
 environment; Dispatch center uses its connection banner instead. Connecting a remote service
 never replaces the current local window.

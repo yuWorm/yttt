@@ -214,7 +214,7 @@ impl WorkbenchView {
     }
 
     pub(super) fn workbench_tab_items(&self, cx: &Context<Self>) -> Vec<WorkbenchTabItem> {
-        let terminal_items = visible_tab_items(&self.workspace);
+        let terminal_items = visible_tab_items(&self.workspace, self.ui_text);
         let Some(project_id) = self.workspace.selected_project_id() else {
             return Vec::new();
         };

@@ -7,6 +7,12 @@ The default development profile depends on the executable path; an installed rel
 and a development binary do not address the same desktop. Restart the desktop after
 updating it to a build with CLI control support.
 
+Human-readable help and output use the selected profile's Device language, even when no
+desktop or Host is running. The CLI reads `config/device/settings.toml` without migrating
+settings; only a missing Device file falls back to legacy `config/settings.toml`. System
+or unreadable preferences use the operating-system language. Commands, option names,
+protocol values, and machine-readable JSON remain unchanged.
+
 ## Installing the command
 
 - **macOS:** drag the release app to `/Applications` or `~/Applications`, then launch it.
@@ -36,6 +42,9 @@ updating it to a build with CLI control support.
   `XDG_CONFIG_HOME`. The installer requires `flock`; `~/.yttt-install.lock` is retained
   as a lock inode but is unlocked when the installer exits. HOME containing `:` is rejected
   before writing files, because it cannot be represented as one PATH element.
+  Installer messages follow `LC_ALL`, then `LC_MESSAGES`, then `LANG`: Chinese locales
+  select Simplified Chinese; other locales select English. The Windows installer offers
+  English and Simplified Chinese independently of the application's Device preference.
 
 The command and desktop use the same executable, so updating the application does not
 leave a separately copied CLI behind. To bypass PATH registration on macOS, run

@@ -186,7 +186,11 @@ fn open_auxiliary_window(
             Ok(handle) => slot.window = Some(handle.into()),
             Err(error) => {
                 root.close_auxiliary_window(kind);
-                root.load_error = Some(format!("Failed to open window: {error}"));
+                root.load_error = Some(format!(
+                    "{}: {error}",
+                    root.ui_text
+                        .get(UiTextKey::WorkbenchI18nAuxiliaryWindowOpenFailed)
+                ));
             }
         }
         cx.notify();

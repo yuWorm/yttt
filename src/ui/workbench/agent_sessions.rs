@@ -201,7 +201,11 @@ impl WorkbenchView {
                     }
                     Err(error) => {
                         root.agent_sessions.sessions = Arc::new(Vec::new());
-                        root.agent_sessions.error = Some(error);
+                        root.agent_sessions.error = Some(format!(
+                            "{}: {error}",
+                            root.ui_text
+                                .get(UiTextKey::WorkbenchI18nAgentSessionsLoadError)
+                        ));
                     }
                 }
                 cx.notify();
@@ -259,24 +263,39 @@ impl WorkbenchView {
             .sessions
             .get(index)
             .cloned()
-            .ok_or_else(|| "Agent session is no longer available".to_string())?;
+            .ok_or_else(|| {
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nAgentSessionUnavailable)
+                    .to_string()
+            })?;
         let title = self.agent_session_title(&session);
         let resume = self
             .agent_manager
             .resume_command(session.provider.id(), &session.metadata())
             .ok_or_else(|| {
-                format!(
-                    "{} does not provide a resume command for this session",
-                    session.provider.display_name()
-                )
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nAgentSessionProviderNoResumeCommand)
+                    .replace("{provider}", session.provider.display_name())
             })?;
         let tab_id = self
             .workspace
             .create_agent_tab(title, resume.program, resume.arguments)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                format!(
+                    "{}: {error}",
+                    self.ui_text
+                        .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailed)
+                )
+            })?;
         self.select_work_item(WorkItemId::Terminal(tab_id))
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(|error| {
+                format!(
+                    "{}: {error}",
+                    self.ui_text
+                        .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailed)
+                )
+            })
     }
 
     pub(super) fn agent_session_age_label(&self, updated_at_ms: u64) -> String {
@@ -292,12 +311,26 @@ impl WorkbenchView {
             self.ui_text
                 .get(UiTextKey::AgentSessionsJustNow)
                 .to_string()
-        } else if seconds < 60 * 60 {
-            format!("{}m", seconds / 60)
-        } else if seconds < 24 * 60 * 60 {
-            format!("{}h", seconds / (60 * 60))
         } else {
-            format!("{}d", seconds / (24 * 60 * 60))
+            let (key, count) = if seconds < 60 * 60 {
+                (
+                    UiTextKey::WorkbenchI18nAgentSessionsMinutesAgo,
+                    seconds / 60,
+                )
+            } else if seconds < 24 * 60 * 60 {
+                (
+                    UiTextKey::WorkbenchI18nAgentSessionsHoursAgo,
+                    seconds / (60 * 60),
+                )
+            } else {
+                (
+                    UiTextKey::WorkbenchI18nAgentSessionsDaysAgo,
+                    seconds / (24 * 60 * 60),
+                )
+            };
+            self.ui_text
+                .get(key)
+                .replace("{count}", &count.to_string())
         }
     }
 }

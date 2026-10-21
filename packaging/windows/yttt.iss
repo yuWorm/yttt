@@ -52,10 +52,61 @@ RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
+
+[CustomMessages]
+english.CreateDesktopShortcut=Create a desktop shortcut
+chinesesimplified.CreateDesktopShortcut=创建桌面快捷方式
+english.AdditionalShortcuts=Additional shortcuts:
+chinesesimplified.AdditionalShortcuts=附加快捷方式：
+english.AddFolderContextMenus=Add “Open with yttt” to folder context menus
+chinesesimplified.AddFolderContextMenus=在文件夹右键菜单中添加“使用 yttt 打开”
+english.ExplorerIntegration=Explorer integration:
+chinesesimplified.ExplorerIntegration=资源管理器集成：
+english.OpenWithYttt=Open with yttt
+chinesesimplified.OpenWithYttt=使用 yttt 打开
+english.LaunchYttt=Launch yttt
+chinesesimplified.LaunchYttt=启动 yttt
+english.UserScope=user
+chinesesimplified.UserScope=当前用户
+english.MachineScope=machine
+chinesesimplified.MachineScope=所有用户
+english.CannotReadExistingPath=Cannot read the existing PATH as a string; it was not changed.
+chinesesimplified.CannotReadExistingPath=无法将现有 PATH 读取为字符串；未作任何更改。
+english.OwnedPathDifferentDirectory=yttt already owns the PATH entry for %1.%nUpgrade that directory, or uninstall yttt before choosing a different destination.
+chinesesimplified.OwnedPathDifferentDirectory=yttt 已拥有 %1 的 PATH 条目。%n请升级该目录，或在选择其他目标目录前先卸载 yttt。
+english.OwnedPathDifferentScope=yttt already owns a %1 PATH entry for this directory.%nUninstall it before changing the installation scope.
+chinesesimplified.OwnedPathDifferentScope=yttt 已拥有此目录的 %1 PATH 条目。%n更改安装范围前请先卸载。
+english.CannotDetermineUserProfile=Cannot determine the installing user profile; PATH registration was not completed.
+chinesesimplified.CannotDetermineUserProfile=无法确定安装用户的配置文件；未完成 PATH 注册。
+english.CannotRecordInstallScope=Cannot record the installation scope; PATH registration was not completed.
+chinesesimplified.CannotRecordInstallScope=无法记录安装范围；未完成 PATH 注册。
+english.InvalidInstallerState=The selected directory contains invalid yttt installer state.%nRestore the original yttt-installer-state.ini before upgrading or uninstalling.
+chinesesimplified.InvalidInstallerState=所选目录包含无效的 yttt 安装程序状态。%n升级或卸载前，请还原原始 yttt-installer-state.ini。
+english.SelectedDirectoryOtherScope=The selected directory belongs to a %1 yttt installation.%nUninstall it before changing the installation scope.
+chinesesimplified.SelectedDirectoryOtherScope=所选目录属于 %1 yttt 安装。%n更改安装范围前请先卸载。
+english.SelectedDirectoryOtherUser=The selected directory belongs to another user's yttt installation.%nUninstall it as that user before reusing this directory.
+chinesesimplified.SelectedDirectoryOtherUser=所选目录属于其他用户的 yttt 安装。%n重新使用此目录前，请以该用户身份卸载。
+english.InvalidScopeRecord=The yttt installation scope record is missing or invalid. Restore the original yttt-installer-state.ini before uninstalling.
+chinesesimplified.InvalidScopeRecord=yttt 安装范围记录缺失或无效。卸载前，请还原原始 yttt-installer-state.ini。
+english.OtherUserInstallation=This is another user's yttt installation. Run its uninstaller as the original installing user.
+chinesesimplified.OtherUserInstallation=这是其他用户的 yttt 安装。请以最初安装的用户身份运行其卸载程序。
+english.DirectoryContainsSemicolon=The selected installation directory contains a semicolon.%nChoose a directory without semicolons because it cannot be registered in PATH.
+chinesesimplified.DirectoryContainsSemicolon=所选安装目录包含分号。%n请选择不含分号的目录，因为它无法注册到 PATH 中。
+english.CannotDetermineInstallingProfile=Cannot determine the installing user profile needed to safely maintain PATH.
+chinesesimplified.CannotDetermineInstallingProfile=无法确定安全维护 PATH 所需的安装用户配置文件。
+english.CannotRunHostPreflight=Unable to run the installed yttt Host upgrade preflight.
+chinesesimplified.CannotRunHostPreflight=无法运行已安装 yttt Host 的升级预检。
+english.HostPreflightNoDetails=The installed yttt Host did not provide blocker details.
+chinesesimplified.HostPreflightNoDetails=已安装的 yttt Host 未提供阻塞原因。
+english.HostResourcesBlockUpgrade=yttt cannot be upgraded while the Host owns running or unacknowledged resources.%n%1
+chinesesimplified.HostResourcesBlockUpgrade=Host 正在占用运行中或未确认的资源，因此无法升级 yttt。%n%1
+english.HostPreflightFailed=yttt Host upgrade preflight failed.%n%1
+chinesesimplified.HostPreflightFailed=yttt Host 升级预检失败。%n%1
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "foldercontext"; Description: "Add Open with yttt to folder context menus"; GroupDescription: "Explorer integration:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopShortcut}"; GroupDescription: "{cm:AdditionalShortcuts}"; Flags: unchecked
+Name: "foldercontext"; Description: "{cm:AddFolderContextMenus}"; GroupDescription: "{cm:ExplorerIntegration}"; Flags: unchecked
 
 [Files]
 Source: "{#SourceBinary}"; DestDir: "{app}"; Flags: ignoreversion; AfterInstall: WriteInstallerState
@@ -66,10 +117,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 
 [Registry]
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\Directory\shell\yttt"; ValueType: string; ValueName: ""; ValueData: "Open with yttt"; Tasks: foldercontext; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\shell\yttt"; ValueType: string; ValueName: ""; ValueData: "{cm:OpenWithYttt}"; Tasks: foldercontext; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\shell\yttt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName},0"; Tasks: foldercontext
 Root: HKA; Subkey: "Software\Classes\Directory\shell\yttt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: foldercontext
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\yttt"; ValueType: string; ValueName: ""; ValueData: "Open with yttt"; Tasks: foldercontext; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\yttt"; ValueType: string; ValueName: ""; ValueData: "{cm:OpenWithYttt}"; Tasks: foldercontext; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\yttt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName},0"; Tasks: foldercontext
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\yttt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%V"""; Tasks: foldercontext
 
@@ -148,6 +199,14 @@ begin
     Result := 'user';
 end;
 
+function DisplayInstallScope(const Scope: String): String;
+begin
+  if SameText(Scope, 'machine') then
+    Result := CustomMessage('MachineScope')
+  else
+    Result := CustomMessage('UserScope');
+end;
+
 function CurrentUserProfile: String;
 begin
   Result := ExpandConstant('{%USERPROFILE|}');
@@ -207,7 +266,7 @@ begin
   Prepared := True;
   PathExisted := RegQueryStringValue(Root, EnvironmentKey, 'Path', CurrentPath);
   if not PathExisted and RegValueExists(Root, EnvironmentKey, 'Path') then
-    RaiseException('Cannot read the existing PATH as a string; it was not changed.');
+    RaiseException(CustomMessage('CannotReadExistingPath'));
   if not PathExisted then
     CurrentPath := '';
 
@@ -258,16 +317,16 @@ begin
 
   if not SameText(InstalledPath, ApplicationPath) then
   begin
-    Result :=
-      'yttt already owns the PATH entry for ' + AddQuotes(InstalledPath) + '.' + #13#10 +
-      'Upgrade that directory, or uninstall yttt before choosing a different destination.';
+    Result := FmtMessage(
+      CustomMessage('OwnedPathDifferentDirectory'), [AddQuotes(InstalledPath)]);
     exit;
   end;
 
   if not SameText(ExistingScope, CurrentInstallScope) then
-    Result :=
-      'yttt already owns a ' + ExistingScope + ' PATH entry for this directory.' + #13#10 +
-      'Uninstall it before changing the installation scope.';
+  begin
+    Result := FmtMessage(
+      CustomMessage('OwnedPathDifferentScope'), [DisplayInstallScope(ExistingScope)]);
+  end;
 end;
 
 function CheckForOwnedPathConflicts: String;
@@ -535,13 +594,13 @@ begin
   begin
     UserProfile := CurrentUserProfile;
     if UserProfile = '' then
-      RaiseException('Cannot determine the installing user profile; PATH registration was not completed.');
+      RaiseException(CustomMessage('CannotDetermineUserProfile'));
     SetArrayLength(Lines, 3);
     Lines[2] := 'user-profile=' + UserProfile;
   end;
 
   if not SaveStringsToUTF8File(InstallerStatePath, Lines, False) then
-    RaiseException('Cannot record the installation scope; PATH registration was not completed.');
+    RaiseException(CustomMessage('CannotRecordInstallScope'));
 end;
 
 function CheckInstallerStateForInstall: String;
@@ -555,25 +614,20 @@ begin
     exit;
   if not ReadInstallerState(Scope, UserProfile) then
   begin
-    Result :=
-      'The selected directory contains invalid yttt installer state.' + #13#10 +
-      'Restore the original yttt-installer-state.ini before upgrading or uninstalling.';
+    Result := CustomMessage('InvalidInstallerState');
     exit;
   end;
   if not SameText(Scope, CurrentInstallScope) then
   begin
-    Result :=
-      'The selected directory belongs to a ' + Scope + ' yttt installation.' + #13#10 +
-      'Uninstall it before changing the installation scope.';
+    Result := FmtMessage(
+      CustomMessage('SelectedDirectoryOtherScope'), [DisplayInstallScope(Scope)]);
     exit;
   end;
   if SameText(Scope, 'user') then
   begin
     CurrentProfile := CurrentUserProfile;
     if (CurrentProfile = '') or not SameText(UserProfile, CurrentProfile) then
-      Result :=
-        'The selected directory belongs to another user''s yttt installation.' + #13#10 +
-        'Uninstall it as that user before reusing this directory.';
+      Result := CustomMessage('SelectedDirectoryOtherUser');
   end;
 end;
 
@@ -604,14 +658,14 @@ begin
   Result := ReadInstallerState(Scope, UserProfile);
   if not Result then
     SuppressibleMsgBox(
-      'The yttt installation scope record is missing or invalid. Restore the original yttt-installer-state.ini before uninstalling.',
+      CustomMessage('InvalidScopeRecord'),
       mbError, MB_OK, IDOK)
   else if SameText(Scope, 'user') and
           not SameText(UserProfile, CurrentUserProfile) then
   begin
     Result := False;
     SuppressibleMsgBox(
-      'This is another user''s yttt installation. Run its uninstaller as the original installing user.',
+      CustomMessage('OtherUserInstallation'),
       mbError, MB_OK, IDOK);
   end;
 end;
@@ -621,20 +675,19 @@ var
   InstalledBinary: String;
   ReportFile: String;
   Detail: AnsiString;
+  DetailText: String;
   ResultCode: Integer;
 begin
   Result := '';
   if Pos(';', ApplicationPath) <> 0 then
   begin
-    Result :=
-      'The selected installation directory contains a semicolon.' + #13#10 +
-      'Choose a directory without semicolons because it cannot be registered in PATH.';
+    Result := CustomMessage('DirectoryContainsSemicolon');
     exit;
   end;
 
   if (not IsAdminInstallMode) and (CurrentUserProfile = '') then
   begin
-    Result := 'Cannot determine the installing user profile needed to safely maintain PATH.';
+    Result := CustomMessage('CannotDetermineInstallingProfile');
     exit;
   end;
 
@@ -659,20 +712,22 @@ begin
       ResultCode)
     then
     begin
-      Result := 'Unable to run the installed yttt Host upgrade preflight.';
+      Result := CustomMessage('CannotRunHostPreflight');
       exit;
     end;
 
     if ResultCode <> 0 then
     begin
-      if not LoadStringFromFile(ReportFile, Detail) then
-        Detail := 'The installed yttt Host did not provide blocker details.';
-      if ResultCode = 2 then
-        Result :=
-          'yttt cannot be upgraded while the Host owns running or unacknowledged resources.' + #13#10 +
-          Trim(Detail)
+      if LoadStringFromFile(ReportFile, Detail) then
+        DetailText := Trim(Detail)
       else
-        Result := 'yttt Host upgrade preflight failed.' + #13#10 + Trim(Detail);
+        DetailText := CustomMessage('HostPreflightNoDetails');
+      if ResultCode = 2 then
+        Result := FmtMessage(
+          CustomMessage('HostResourcesBlockUpgrade'), [DetailText])
+      else
+        Result := FmtMessage(
+          CustomMessage('HostPreflightFailed'), [DetailText]);
       exit;
     end;
   end;
@@ -704,4 +759,4 @@ begin
 end;
 
 [Run]
-Filename: "{cmd}"; Parameters: "/d /v:on /s /c ""set ""PATH=!CD!;!PATH!"" && start """" /b "".\{#MyAppExeName}"""""; WorkingDir: "{app}"; Description: "Launch {#MyAppName}"; Flags: {#PostInstallLaunchFlags}
+Filename: "{cmd}"; Parameters: "/d /v:on /s /c ""set ""PATH=!CD!;!PATH!"" && start """" /b "".\{#MyAppExeName}"""""; WorkingDir: "{app}"; Description: "{cm:LaunchYttt}"; Flags: {#PostInstallLaunchFlags}

@@ -227,7 +227,7 @@ pub(crate) fn create(
             }),
             address: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("host:port")
+                    .placeholder(text.get(UiTextKey::WorkbenchI18nConnectionAddressPlaceholder))
                     .validate(|value, _| value.len() <= 1024)
             }),
             info,
@@ -318,6 +318,14 @@ impl ExistingHostForm {
         !matches!(&self.editor, Editor::Closed)
     }
 
+    fn operation_error(&self, detail: impl std::fmt::Display) -> String {
+        format!(
+            "{}: {detail}",
+            self.text
+                .get(UiTextKey::WorkbenchI18nExistingHostOperationFailed)
+        )
+    }
+
     pub(crate) fn new_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.editor_open() {
             return;
@@ -393,7 +401,7 @@ impl ExistingHostForm {
                     }
                     Err(error) => {
                         view.remember = false;
-                        view.error = Some(error);
+                        view.error = Some(view.operation_error(error));
                         view.info.update(cx, |input, cx| input.focus(window, cx));
                     }
                 }
@@ -453,7 +461,7 @@ impl ExistingHostForm {
             }
         });
         cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
+            let result: Result<SavedConnectionLoad, String> = task.await;
             let _ = this.update_in(cx, |view, window, cx| {
                 if view.operation_generation != generation
                     || !matches!(&view.editor, Editor::Closed)
@@ -474,7 +482,7 @@ impl ExistingHostForm {
                     ),
                     Ok(SavedConnectionLoad::CredentialsRequired(error)) => {
                         view.busy = false;
-                        view.error = error;
+                        view.error = error.map(|error| view.operation_error(error));
                         view.editor = Editor::Credentials { target: record };
                         view.remember = true;
                         view.remember_changed = false;
@@ -486,7 +494,7 @@ impl ExistingHostForm {
                     }
                     Err(error) => {
                         view.busy = false;
-                        view.error = Some(error);
+                        view.error = Some(view.operation_error(error));
                         cx.notify();
                     }
                 }
@@ -548,7 +556,7 @@ impl ExistingHostForm {
                 view.busy = false;
                 match result {
                     Ok(records) => view.saved = records,
-                    Err(error) => view.error = Some(error),
+                    Err(error) => view.error = Some(view.operation_error(error)),
                 }
                 cx.notify();
             });
@@ -570,7 +578,7 @@ impl ExistingHostForm {
                 },
             )
         {
-            self.error = Some(error.to_string());
+            self.error = Some(self.operation_error(error));
             cx.notify();
             return;
         }
@@ -618,7 +626,7 @@ impl ExistingHostForm {
                 view.busy = false;
                 match result {
                     Ok(saved) => view.saved = saved,
-                    Err(error) => view.error = Some(error),
+                    Err(error) => view.error = Some(view.operation_error(error)),
                 }
                 cx.notify();
             });
@@ -780,7 +788,7 @@ impl ExistingHostForm {
                     }
                     Err(error) => {
                         view.busy = false;
-                        view.error = Some(error);
+                        view.error = Some(view.operation_error(error));
                         cx.notify();
                     }
                 }
@@ -869,7 +877,7 @@ impl ExistingHostForm {
                     ),
                     Err(error) => {
                         view.busy = false;
-                        view.error = Some(error);
+                        view.error = Some(view.operation_error(error));
                         cx.notify();
                     }
                 }
@@ -927,7 +935,7 @@ impl ExistingHostForm {
                     },
                     Err(error) => {
                         view.busy = false;
-                        view.error = Some(error);
+                        view.error = Some(view.operation_error(error));
                         cx.notify();
                     }
                 }

@@ -418,7 +418,6 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
                 "{}@{}:{}",
                 connection.user, connection.host, connection.port
             ),
-            "SSH",
             root.ssh.connecting.is_some(),
             cx,
         ));
@@ -437,7 +436,6 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
                 Target::Host(record.credential_id),
                 name,
                 record.address,
-                "Host",
                 busy,
                 cx,
             ));
@@ -499,13 +497,16 @@ fn connection_row(
     target: Target,
     name: String,
     address: String,
-    kind: &'static str,
     busy: bool,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let style = current_ui_style(cx);
     let text = root.ui_text;
+    let kind = match &target {
+        Target::Ssh(_) => "SSH",
+        Target::Host(_) => text.get(UiTextKey::WorkbenchI18nRemoteConnectionKindHost),
+    };
     let id = match &target {
         Target::Ssh(id) => format!("ssh-{}", id),
         Target::Host(id) => format!("host-{}", id),

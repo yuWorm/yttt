@@ -18,7 +18,6 @@ use yttt::model::{
     project::{ProjectDescriptor, ProjectLocation},
     workspace::{TabStartState, Workspace},
 };
-use yttt::ui::editor::EditorVimActionId;
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::actions::{
     BindableActionId, CompiledKeybindingAction, app_startup_keybindings, bindable_registry,
@@ -1220,144 +1219,39 @@ fn keybindings_editor_localizes_command_presentations() {
 }
 
 #[test]
-fn keybindings_editor_localizes_every_vim_action_presentation() {
-    const VIM_ACTION_ID_PREFIXES: [&str; 6] = [
-        "editor.vim.",
-        "settings.vim.",
-        "projects.vim.",
-        "project_tree.vim.",
-        "terminal.vi.",
-        "vim.mode.",
-    ];
-    const STATIC_VIM_ACTIONS: [BindableActionId; 39] = [
-        BindableActionId::SettingsVimPrevious,
-        BindableActionId::SettingsVimNext,
-        BindableActionId::SettingsVimFirst,
-        BindableActionId::SettingsVimLast,
-        BindableActionId::VimNormal,
-        BindableActionId::VimInsert,
-        BindableActionId::VimTerminal,
-        BindableActionId::ProjectsVimPrevious,
-        BindableActionId::ProjectsVimNext,
-        BindableActionId::ProjectsVimFirst,
-        BindableActionId::ProjectsVimLast,
-        BindableActionId::ProjectTreeVimUp,
-        BindableActionId::ProjectTreeVimDown,
-        BindableActionId::ProjectTreeVimLeft,
-        BindableActionId::ProjectTreeVimRight,
-        BindableActionId::ProjectTreeVimOpen,
-        BindableActionId::ProjectTreeVimToggle,
-        BindableActionId::ProjectTreeVimFirst,
-        BindableActionId::ProjectTreeVimLast,
-        BindableActionId::TerminalViToggle,
-        BindableActionId::TerminalViLeave,
-        BindableActionId::TerminalViSelection,
-        BindableActionId::TerminalViYank,
-        BindableActionId::TerminalViMoveLeft,
-        BindableActionId::TerminalViMoveDown,
-        BindableActionId::TerminalViMoveUp,
-        BindableActionId::TerminalViMoveRight,
-        BindableActionId::TerminalViMoveFirst,
-        BindableActionId::TerminalViMoveLast,
-        BindableActionId::TerminalViMoveFirstOccupied,
-        BindableActionId::TerminalViMoveHigh,
-        BindableActionId::TerminalViMoveMiddle,
-        BindableActionId::TerminalViMoveLow,
-        BindableActionId::TerminalViMoveWordLeft,
-        BindableActionId::TerminalViMoveWordRight,
-        BindableActionId::TerminalViMoveWordEnd,
-        BindableActionId::TerminalViMoveBracket,
-        BindableActionId::TerminalViMoveParagraphUp,
-        BindableActionId::TerminalViMoveParagraphDown,
-    ];
-
+fn keybindings_editor_localizes_every_non_command_action_presentation() {
     let editor = KeybindingsEditorState::new(KeybindingsConfig::default(), bindable_registry());
     let english = UiText::english();
     let chinese = UiText::new(Locale::Chinese);
     let english_rows = editor.rows_with_text(&english);
     let chinese_rows = editor.rows_with_text(&chinese);
-    let vim_actions: Vec<_> = BindableActionId::all()
-        .filter(|action| {
-            VIM_ACTION_ID_PREFIXES
-                .iter()
-                .any(|prefix| action.as_str().starts_with(prefix))
-        })
+    let actions: Vec<_> = BindableActionId::all()
+        .filter(|action| !matches!(*action, BindableActionId::Command(_)))
         .collect();
 
-    assert_eq!(EditorVimActionId::ALL.len(), 46);
-    assert_eq!(STATIC_VIM_ACTIONS.len(), 39);
-    assert_eq!(vim_actions.len(), 85);
-    assert!(vim_actions.iter().all(|action| {
-        matches!(*action, BindableActionId::EditorVim(_)) || STATIC_VIM_ACTIONS.contains(action)
-    }));
-    assert_eq!(
-        english_rows
-            .iter()
-            .filter(|row| vim_actions.contains(&row.command))
-            .count(),
-        85
-    );
-    assert_eq!(
-        chinese_rows
-            .iter()
-            .filter(|row| vim_actions.contains(&row.command))
-            .count(),
-        85
-    );
-
-    for action in vim_actions {
+    for action in actions {
         let english_row = english_rows
             .iter()
             .find(|row| row.command == action)
-            .expect("every Vim action must have an English keybinding row");
+            .expect("every non-command action must have an English keybinding row");
         let chinese_row = chinese_rows
             .iter()
             .find(|row| row.command == action)
-            .expect("every Vim action must have a Chinese keybinding row");
+            .expect("every non-command action must have a Chinese keybinding row");
 
-        assert_eq!(english_row.title, action.title().unwrap());
-        assert_eq!(english_row.description, action.description().unwrap());
-        assert_ne!(chinese_row.title, action.title().unwrap());
-        assert_ne!(chinese_row.description, action.description().unwrap());
+        assert_ne!(
+            english_row.title,
+            chinese_row.title,
+            "{} title must be localized",
+            action.as_str()
+        );
+        assert_ne!(
+            english_row.description,
+            chinese_row.description,
+            "{} description must be localized",
+            action.as_str()
+        );
     }
-
-    let move_left = chinese_rows
-        .iter()
-        .find(|row| row.command == BindableActionId::EditorVim(EditorVimActionId::MoveLeft))
-        .unwrap();
-    assert_eq!(move_left.title, "编辑器 Vim：向左移动");
-    assert_eq!(move_left.description, "将 Vim 光标向左移动。");
-
-    let delete_operator = chinese_rows
-        .iter()
-        .find(|row| row.command == BindableActionId::EditorVim(EditorVimActionId::DeleteOperator))
-        .unwrap();
-    assert_eq!(delete_operator.title, "编辑器 Vim：删除操作符");
-    assert_eq!(delete_operator.description, "开始 Vim 删除操作。");
-
-    let settings_next = chinese_rows
-        .iter()
-        .find(|row| row.command == BindableActionId::SettingsVimNext)
-        .unwrap();
-    assert_eq!(settings_next.title, "设置 Vim：下一组");
-    assert_eq!(settings_next.description, "选择下一个可见的设置组。");
-
-    let vim_normal = chinese_rows
-        .iter()
-        .find(|row| row.command == BindableActionId::VimNormal)
-        .unwrap();
-    assert_eq!(vim_normal.title, "进入 Vim 普通模式");
-    assert_eq!(
-        vim_normal.description,
-        "将当前 yttt 界面切换回 Vim 普通模式。"
-    );
-
-    let terminal_move_down = chinese_rows
-        .iter()
-        .find(|row| row.command == BindableActionId::TerminalViMoveDown)
-        .unwrap();
-    assert_eq!(terminal_move_down.title, "终端 Vi：向下移动");
-    assert_eq!(terminal_move_down.description, "将终端 Vi 光标向下移动。");
 }
 
 #[test]

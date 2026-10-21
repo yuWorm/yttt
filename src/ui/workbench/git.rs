@@ -70,6 +70,14 @@ pub(super) struct GitDiffPanel {
 }
 
 impl WorkbenchView {
+
+    fn localized_git_operation_error(&self, detail: impl std::fmt::Display) -> String {
+        format!(
+            "{}: {detail}",
+            self.ui_text
+                .get(UiTextKey::WorkbenchI18nGitOperationFailed)
+        )
+    }
     pub fn git_diff_panel_is_open(&self) -> bool {
         self.overlays.git_diff_panel.is_some()
     }
@@ -463,9 +471,12 @@ impl WorkbenchView {
             self.palette.pending_git_branch_load.take()
         {
             let services = self.project.services.get(&project_id).cloned();
+            let text = self.ui_text;
             let task = cx.background_spawn(async move {
-                let services =
-                    services.ok_or_else(|| "Project services are unavailable".to_string())?;
+                let services = services.ok_or_else(|| {
+                    text.get(UiTextKey::WorkbenchI18nProjectServicesUnavailable)
+                        .to_string()
+                })?;
                 read_project_git_branches_with(&services)
             });
             cx.spawn_in(window, async move |this, cx| {
@@ -489,7 +500,8 @@ impl WorkbenchView {
                         }
                         Err(error) => {
                             root.palette.git_branches.clear();
-                            root.palette.git_branch_error = Some(error);
+                            root.palette.git_branch_error =
+                                Some(root.localized_git_operation_error(error));
                         }
                     }
                     cx.notify();
@@ -502,9 +514,12 @@ impl WorkbenchView {
             self.palette.pending_git_branch_switch.take()
         {
             let services = self.project.services.get(&project_id).cloned();
+            let text = self.ui_text;
             let task = cx.background_spawn(async move {
-                let services =
-                    services.ok_or_else(|| "Project services are unavailable".to_string())?;
+                let services = services.ok_or_else(|| {
+                    text.get(UiTextKey::WorkbenchI18nProjectServicesUnavailable)
+                        .to_string()
+                })?;
                 switch_project_git_branch_with(&services, &branch)
             });
             cx.spawn_in(window, async move |this, cx| {
@@ -535,6 +550,7 @@ impl WorkbenchView {
                             root.load_error = None;
                         }
                         Err(error) => {
+                            let error = root.localized_git_operation_error(error);
                             root.palette.git_branch_error = Some(error.clone());
                             root.load_error = Some(error);
                         }
@@ -566,9 +582,12 @@ impl WorkbenchView {
                 return;
             };
             let services = self.project.services.get(&project_id).cloned();
+            let text = self.ui_text;
             let task = cx.background_spawn(async move {
-                let services =
-                    services.ok_or_else(|| "Project services are unavailable".to_string())?;
+                let services = services.ok_or_else(|| {
+                    text.get(UiTextKey::WorkbenchI18nProjectServicesUnavailable)
+                        .to_string()
+                })?;
                 read_project_git_diff_result_with(&services, mode, ignore_whitespace).map(|diff| {
                     let sidebar_rows = git_diff_sidebar_rows(&diff, &collapsed_folders);
                     (diff, sidebar_rows)
@@ -593,7 +612,10 @@ impl WorkbenchView {
                             panel.sidebar_rows = Arc::new(sidebar_rows);
                         }
                         Err(error) => {
-                            panel.content = GitDiffPanelContent::Error(error);
+                            panel.content = GitDiffPanelContent::Error(format!(
+                                "{}: {error}",
+                                root.ui_text.get(UiTextKey::WorkbenchI18nGitOperationFailed)
+                            ));
                             panel.sidebar_rows = Arc::new(Vec::new());
                         }
                     }

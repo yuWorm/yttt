@@ -123,91 +123,75 @@ pub(super) fn selected_index_for_settings_option(
         .map(|index| IndexPath::default().row(index))
 }
 
-pub(super) fn language_setting_labels() -> Vec<String> {
-    [
-        LanguageSetting::System,
-        LanguageSetting::English,
-        LanguageSetting::Chinese,
-    ]
-    .into_iter()
-    .map(language_setting_label)
-    .map(ToString::to_string)
-    .collect()
+pub(super) fn language_setting_labels(text: UiText) -> Vec<String> {
+    [LanguageSetting::System, LanguageSetting::English, LanguageSetting::Chinese]
+        .into_iter()
+        .map(|language| language_setting_label(language, text).to_string())
+        .collect()
 }
 
-pub(super) fn language_setting_label(language: LanguageSetting) -> &'static str {
+pub(super) fn language_setting_label(language: LanguageSetting, text: UiText) -> &'static str {
     match language {
-        LanguageSetting::System => "System",
+        LanguageSetting::System => text.get(UiTextKey::SettingsLanguageSystem),
         LanguageSetting::English => "English",
         LanguageSetting::Chinese => "中文",
     }
 }
 
-pub(super) fn language_setting_from_label(label: &str) -> Option<LanguageSetting> {
-    match label {
-        "System" => Some(LanguageSetting::System),
-        "English" => Some(LanguageSetting::English),
-        "中文" => Some(LanguageSetting::Chinese),
-        _ => None,
-    }
+pub(super) fn language_setting_from_label(label: &str, text: UiText) -> Option<LanguageSetting> {
+    [LanguageSetting::System, LanguageSetting::English, LanguageSetting::Chinese]
+        .into_iter()
+        .find(|language| language_setting_label(*language, text) == label)
 }
 
-pub(super) fn terminal_cursor_shape_labels() -> Vec<String> {
-    [
-        TerminalCursorShape::Block,
-        TerminalCursorShape::Underline,
-        TerminalCursorShape::Beam,
-    ]
-    .into_iter()
-    .map(terminal_cursor_shape_label)
-    .map(ToString::to_string)
-    .collect()
+pub(super) fn terminal_cursor_shape_labels(text: UiText) -> Vec<String> {
+    [TerminalCursorShape::Block, TerminalCursorShape::Underline, TerminalCursorShape::Beam]
+        .into_iter()
+        .map(|shape| terminal_cursor_shape_label(shape, text).to_string())
+        .collect()
 }
 
-pub(super) fn terminal_cursor_shape_label(shape: TerminalCursorShape) -> &'static str {
-    match shape {
-        TerminalCursorShape::Block => "Block",
-        TerminalCursorShape::Underline => "Underline",
-        TerminalCursorShape::Beam => "Beam",
-    }
+pub(super) fn terminal_cursor_shape_label(shape: TerminalCursorShape, text: UiText) -> &'static str {
+    text.get(match shape {
+        TerminalCursorShape::Block => UiTextKey::SettingsCursorBlock,
+        TerminalCursorShape::Underline => UiTextKey::SettingsCursorUnderline,
+        TerminalCursorShape::Beam => UiTextKey::SettingsCursorBeam,
+    })
 }
 
-pub(super) fn terminal_cursor_shape_from_label(label: &str) -> Option<TerminalCursorShape> {
-    match label {
-        "Block" => Some(TerminalCursorShape::Block),
-        "Underline" => Some(TerminalCursorShape::Underline),
-        "Beam" => Some(TerminalCursorShape::Beam),
-        _ => None,
-    }
+pub(super) fn terminal_cursor_shape_from_label(label: &str, text: UiText) -> Option<TerminalCursorShape> {
+    [TerminalCursorShape::Block, TerminalCursorShape::Underline, TerminalCursorShape::Beam]
+        .into_iter()
+        .find(|shape| terminal_cursor_shape_label(*shape, text) == label)
 }
 
-pub(super) fn terminal_osc52_policy_labels() -> Vec<String> {
-    [
-        TerminalOsc52Policy::Disabled,
-        TerminalOsc52Policy::CopyOnly,
-        TerminalOsc52Policy::ReadWrite,
-    ]
-    .into_iter()
-    .map(terminal_osc52_policy_label)
-    .map(ToString::to_string)
-    .collect()
+pub(super) fn terminal_osc52_policy_labels(text: UiText) -> Vec<String> {
+    [TerminalOsc52Policy::Disabled, TerminalOsc52Policy::CopyOnly, TerminalOsc52Policy::ReadWrite]
+        .into_iter()
+        .map(|policy| terminal_osc52_policy_label(policy, text).to_string())
+        .collect()
 }
 
-pub(super) fn terminal_osc52_policy_label(policy: TerminalOsc52Policy) -> &'static str {
-    match policy {
-        TerminalOsc52Policy::Disabled => "Disabled",
-        TerminalOsc52Policy::CopyOnly => "Copy only",
-        TerminalOsc52Policy::ReadWrite => "Read and write",
-    }
+pub(super) fn terminal_osc52_policy_label(policy: TerminalOsc52Policy, text: UiText) -> &'static str {
+    text.get(match policy {
+        TerminalOsc52Policy::Disabled => UiTextKey::SettingsOptionDisabled,
+        TerminalOsc52Policy::CopyOnly => UiTextKey::SettingsOsc52CopyOnly,
+        TerminalOsc52Policy::ReadWrite => UiTextKey::SettingsOsc52ReadWrite,
+    })
 }
 
-pub(super) fn terminal_osc52_policy_from_label(label: &str) -> Option<TerminalOsc52Policy> {
-    match label {
-        "Disabled" => Some(TerminalOsc52Policy::Disabled),
-        "Copy only" => Some(TerminalOsc52Policy::CopyOnly),
-        "Read and write" => Some(TerminalOsc52Policy::ReadWrite),
-        _ => None,
-    }
+pub(super) fn terminal_osc52_policy_from_label(label: &str, text: UiText) -> Option<TerminalOsc52Policy> {
+    [TerminalOsc52Policy::Disabled, TerminalOsc52Policy::CopyOnly, TerminalOsc52Policy::ReadWrite]
+        .into_iter()
+        .find(|policy| terminal_osc52_policy_label(*policy, text) == label)
+}
+
+pub(super) fn vim_mode_label(mode: VimModeSetting, text: UiText) -> &'static str {
+    text.get(match mode {
+        VimModeSetting::Global => UiTextKey::SettingsVimGlobal,
+        VimModeSetting::Editor => UiTextKey::SettingsVimEditorOnly,
+        VimModeSetting::Disabled => UiTextKey::SettingsOptionDisabled,
+    })
 }
 
 pub(super) fn should_focus_terminal_after_command(command_id: CommandId) -> bool {
@@ -227,16 +211,15 @@ pub(super) fn should_focus_terminal_after_command(command_id: CommandId) -> bool
     )
 }
 
-pub(super) fn layout_source_message(source: &LayoutSource) -> String {
-    let source_name = match source {
-        LayoutSource::GlobalDefault(_) => "global default",
-        LayoutSource::GlobalDefaultWithPersonalPatch { .. } => "global default + personal patch",
-        LayoutSource::ProjectConfig(_) => "project config",
-        LayoutSource::ProjectConfigWithPersonalPatch { .. } => "project config + personal patch",
-        LayoutSource::PersonalReplace(_) => "personal replacement",
+pub(super) fn layout_source_message(source: &LayoutSource, text: UiText) -> String {
+    let key = match source {
+        LayoutSource::GlobalDefault(_) => UiTextKey::LayoutSourceGlobal,
+        LayoutSource::GlobalDefaultWithPersonalPatch { .. } => UiTextKey::LayoutSourceGlobalPatched,
+        LayoutSource::ProjectConfig(_) => UiTextKey::LayoutSourceProject,
+        LayoutSource::ProjectConfigWithPersonalPatch { .. } => UiTextKey::LayoutSourceProjectPatched,
+        LayoutSource::PersonalReplace(_) => UiTextKey::LayoutSourcePersonal,
     };
-
-    format!("Layout source: {source_name}")
+    text.get(UiTextKey::LayoutSourceLabel).replace("{source}", text.get(key))
 }
 
 pub(super) fn layout_load_warning_message(warnings: &[LayoutLoadWarning]) -> Option<String> {
@@ -306,7 +289,8 @@ pub(super) fn load_app_settings_messages(paths: &AppConfigPaths) -> (AppSettings
     let mut warnings = Vec::new();
     let settings = match load_settings(paths) {
         Ok(loaded) => {
-            warnings.extend(loaded.warnings.iter().map(format_settings_warning_line));
+            let text = UiText::from_language(loaded.settings.general.language);
+            warnings.extend(loaded.warnings.iter().map(|warning| format_settings_warning_line(warning, text)));
             loaded.settings
         }
         Err(error) => {
@@ -323,9 +307,10 @@ pub(super) fn load_theme_runtime_messages(
     settings: &AppSettings,
 ) -> (ThemeRuntime, Vec<String>) {
     let mut warnings = Vec::new();
+    let text = UiText::from_language(settings.general.language);
     let theme_store = match load_theme_store(paths) {
         Ok(loaded) => {
-            warnings.extend(loaded.warnings.iter().map(format_theme_warning_line));
+            warnings.extend(loaded.warnings.iter().map(|warning| format_theme_warning_line(warning, text)));
             loaded.store
         }
         Err(error) => {
@@ -346,70 +331,58 @@ pub(super) fn combine_load_messages(left: Option<String>, right: Option<String>)
     }
 }
 
-pub(super) fn format_settings_warning_line(warning: &SettingsLoadWarning) -> String {
-    match warning {
+pub(super) fn format_settings_warning_line(warning: &SettingsLoadWarning, text: UiText) -> String {
+    let (group, field) = match warning {
         SettingsLoadWarning::InvalidToml { path, message } => {
-            format!("Settings {}: {message}", path.display())
-        }
-        SettingsLoadWarning::InvalidGeneralValue { field } => {
-            format!("Settings general.{field} is invalid; using default")
-        }
-        SettingsLoadWarning::InvalidWindowValue { field } => {
-            format!("Settings window.{field} is invalid; using default")
-        }
-        SettingsLoadWarning::InvalidThemeValue { field } => {
-            format!("Settings theme.{field} is invalid; using default")
-        }
-        SettingsLoadWarning::InvalidTerminalValue { field } => {
-            format!("Settings terminal.{field} is invalid; using default")
-        }
-        SettingsLoadWarning::InvalidEditorValue { field } => {
-            format!("Settings editor.{field} is invalid; using default")
-        }
-        SettingsLoadWarning::InvalidVimValue { field } => {
-            format!("Settings vim.{field} is invalid; using default")
+            return text.get(UiTextKey::SettingsWarningFile)
+                .replace("{path}", &path.display().to_string())
+                .replace("{error}", message);
         }
         SettingsLoadWarning::InvalidBarsValue { field, value } => {
-            format!("Bars {field} contains invalid module {value:?}; ignoring it")
+            return text.get(UiTextKey::SettingsWarningBars)
+                .replace("{field}", field)
+                .replace("{value}", &format!("{value:?}"));
         }
-        SettingsLoadWarning::InvalidProjectPanelValue { field } => {
-            format!("Settings project_panel.{field} is invalid; using default")
-        }
-    }
+        SettingsLoadWarning::InvalidGeneralValue { field } => ("general", field),
+        SettingsLoadWarning::InvalidWindowValue { field } => ("window", field),
+        SettingsLoadWarning::InvalidThemeValue { field } => ("theme", field),
+        SettingsLoadWarning::InvalidTerminalValue { field } => ("terminal", field),
+        SettingsLoadWarning::InvalidEditorValue { field } => ("editor", field),
+        SettingsLoadWarning::InvalidVimValue { field } => ("vim", field),
+        SettingsLoadWarning::InvalidProjectPanelValue { field } => ("project_panel", field),
+    };
+    text.get(UiTextKey::SettingsWarningInvalidValue)
+        .replace("{group}", group)
+        .replace("{field}", field)
 }
 
-pub(super) fn format_theme_warning_line(warning: &ThemeLoadWarning) -> String {
+pub(super) fn format_theme_warning_line(warning: &ThemeLoadWarning, text: UiText) -> String {
     match warning {
-        ThemeLoadWarning::ReadDir { path, message } => {
-            format!("Themes {}: {message}", path.display())
-        }
-        ThemeLoadWarning::ReadFile { path, message } => {
-            format!("Theme {}: {message}", path.display())
-        }
-        ThemeLoadWarning::ParseFile { path, message } => {
-            format!("Theme {}: {message}", path.display())
+        ThemeLoadWarning::ReadDir { path, message }
+        | ThemeLoadWarning::ReadFile { path, message }
+        | ThemeLoadWarning::ParseFile { path, message } => {
+            text.get(UiTextKey::ThemeWarningFile)
+                .replace("{path}", &path.display().to_string())
+                .replace("{error}", message)
         }
         ThemeLoadWarning::InvalidColor { theme, field } => {
-            format!("Theme {theme} has invalid color {field}; using fallback")
+            text.get(UiTextKey::ThemeWarningColor)
+                .replace("{theme}", theme)
+                .replace("{field}", field)
         }
     }
 }
 
 pub(super) fn ui_text_for_language(language: LanguageSetting) -> UiText {
-    match language {
-        LanguageSetting::System | LanguageSetting::English => UiText::english(),
-        LanguageSetting::Chinese => UiText::new(Locale::Chinese),
-    }
+    UiText::from_language(language)
 }
 
 pub(super) fn markdown_editor_strings_for_language(
     language: LanguageSetting,
 ) -> Arc<gpui_markdown_editor::MarkdownEditorStrings> {
-    Arc::new(match language {
-        LanguageSetting::System | LanguageSetting::English => {
-            gpui_markdown_editor::MarkdownEditorStrings::en_us()
-        }
-        LanguageSetting::Chinese => gpui_markdown_editor::MarkdownEditorStrings::zh_cn(),
+    Arc::new(match UiText::from_language(language).locale() {
+        Locale::English => gpui_markdown_editor::MarkdownEditorStrings::en_us(),
+        Locale::Chinese => gpui_markdown_editor::MarkdownEditorStrings::zh_cn(),
     })
 }
 

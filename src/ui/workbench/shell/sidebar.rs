@@ -515,7 +515,6 @@ fn agent_state_icon(
     theme: WorkbenchTheme,
 ) -> AnyElement {
     let color = agent_state_color(state, theme);
-    let label: SharedString = agent_status_label(state).into();
     let glyph = match state {
         AgentViewState::Starting | AgentViewState::Working => Spinner::new()
             .with_size(gpui::px(11.0))
@@ -551,8 +550,9 @@ fn agent_state_icon(
         .justify_center()
         .size(gpui::px(14.0))
         .tooltip(move |window, cx| {
+            let label: SharedString = agent_status_label(state, &UiText::current(cx)).into();
             yttt_ui::primitives::tooltip::yttt_tooltip(
-                label.clone(),
+                label,
                 crate::ui::theme::current_workbench_theme(cx),
                 crate::ui::theme::current_ui_style(cx),
             )

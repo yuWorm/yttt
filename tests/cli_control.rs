@@ -2,11 +2,15 @@ use std::ffi::OsString;
 use yttt::{
     cli,
     desktop_shell::{DesktopShellClaim, DesktopShellCommand, DesktopShellRuntime, control_desktop},
+    ui::i18n::UiText,
 };
 use yttt_protocol::desktop_control::*;
 
 fn parse(words: &[&str]) -> Result<cli::CliInvocation, String> {
-    cli::parse(&words.iter().map(OsString::from).collect::<Vec<_>>())
+    cli::parse(
+        &words.iter().map(OsString::from).collect::<Vec<_>>(),
+        UiText::english(),
+    )
 }
 
 #[test]
@@ -179,4 +183,59 @@ fn desktop_control_waits_for_execution_reply_and_preserves_errors() {
         DesktopControlErrorCode::PermissionDenied
     );
     handler.join().unwrap();
+}
+
+#[test]
+fn offline_cli_language_prefers_device_and_never_migrates_legacy_settings() {
+    use yttt::config::{
+        profile::{
+            AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        },
+        settings::LanguageSetting,
+    };
+    use yttt::ui::i18n::Locale;
+
+    let root = tempfile::tempdir().unwrap();
+    let profile = AppProfile::scoped(
+        yttt::model::ids::ProfileId::random(),
+        EnvironmentKind::Test,
+        ProfilePersistence::Ephemeral,
+        root.path(),
+        ProjectConfigPolicy::ReadOnly,
+        HostConnectPolicy::ProfileDiscovery,
+    );
+    let config = &profile.paths().config;
+    let device = config.join("device/settings.toml");
+    let system = UiText::from_language(LanguageSetting::System);
+    let (legacy_language, legacy_locale) = match system.locale() {
+        Locale::English => ("zh-CN", Locale::Chinese),
+        Locale::Chinese => ("en", Locale::English),
+    };
+    std::fs::create_dir_all(config).unwrap();
+    std::fs::write(
+        config.join("settings.toml"),
+        format!("[general]\nlanguage = \"{legacy_language}\"\n"),
+    )
+    .unwrap();
+    assert_eq!(cli::ui_text_for_profile(&profile).locale(), legacy_locale);
+    assert!(!device.exists(), "reading CLI language must not migrate legacy settings");
+
+    std::fs::create_dir_all(device.parent().unwrap()).unwrap();
+    for (language, expected) in [
+        ("en", Locale::English),
+        ("zh-CN", Locale::Chinese),
+        ("system", system.locale()),
+    ] {
+        std::fs::write(&device, format!("[general]\nlanguage = \"{language}\"\n")).unwrap();
+        assert_eq!(cli::ui_text_for_profile(&profile).locale(), expected);
+    }
+
+    std::fs::write(&device, "[invalid").unwrap();
+    assert_eq!(
+        cli::ui_text_for_profile(&profile),
+        system,
+        "an unreadable Device file must not silently reuse a stale legacy preference"
+    );
+    assert_eq!(std::fs::read_to_string(&device).unwrap(), "[invalid");
+    assert!(!profile.paths().data.exists(), "offline language lookup must not start a Host");
 }

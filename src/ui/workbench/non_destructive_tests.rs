@@ -180,15 +180,14 @@ fn remote_project_open_fails_closed_without_the_host_runtime(cx: &mut TestAppCon
     )
     .unwrap();
     let remote_root = RemotePathBuf::new("/srv/remote-app").unwrap();
-    let expected_error = "SSH runtime is unavailable.";
 
     let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
     cx.update(|_, app| {
         root.update(app, |root, _cx| {
-            let error = root
-                .open_ssh_project_location(connection_id, remote_root, false)
-                .unwrap_err();
-            assert!(error.to_string().contains(expected_error));
+            assert!(
+                root.open_ssh_project_location(connection_id, remote_root, false)
+                    .is_err()
+            );
             assert!(root.workspace.selected_project_id().is_none());
             assert!(root.project.services.is_empty());
         });

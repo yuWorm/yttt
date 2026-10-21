@@ -85,6 +85,14 @@ fn is_ssh_host_event(event: &ServerEvent) -> bool {
 }
 
 impl WorkbenchView {
+
+    fn localized_ssh_connection_error(&self, detail: impl std::fmt::Display) -> String {
+        format!(
+            "{}: {detail}",
+            self.ui_text
+                .get(UiTextKey::WorkbenchI18nSshConnectionOperationFailed)
+        )
+    }
     pub fn start_ssh_event_listener(&mut self, cx: &mut Context<Self>) {
         if self.ssh.event_task.is_some() {
             return;
@@ -274,7 +282,7 @@ impl WorkbenchView {
                         }
                     }
                     Err(error) => {
-                        self.ssh.error = Some(error.to_string());
+                        self.ssh.error = Some(self.localized_ssh_connection_error(error));
                         let runtime = self.terminal.host_runtime.clone();
                         cx.background_spawn(async move {
                             let _ = delete_host_credential(runtime, credential_id).await;
@@ -544,7 +552,7 @@ impl WorkbenchView {
                 }
                 self.ssh.error = None;
             }
-            Err(error) => self.ssh.error = Some(error.to_string()),
+            Err(error) => self.ssh.error = Some(self.localized_ssh_connection_error(error)),
         }
         cx.notify();
     }
@@ -564,7 +572,11 @@ impl WorkbenchView {
         };
         let user = input_value(&inputs.user, cx);
         if name.is_empty() || host.is_empty() || user.is_empty() {
-            self.ssh.error = Some("Name, host, and user are required.".to_string());
+            self.ssh.error = Some(
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nSshRequiredFields)
+                    .to_string(),
+            );
             return None;
         }
         let port = match input_value(&inputs.port, cx).parse::<u16>() {
@@ -581,7 +593,7 @@ impl WorkbenchView {
                 return None;
             }
             Err(error) => {
-                self.ssh.error = Some(error.to_string());
+                self.ssh.error = Some(self.localized_ssh_connection_error(error));
                 return None;
             }
         };
@@ -642,7 +654,7 @@ impl WorkbenchView {
             updated.connections.push(connection.clone());
         }
         if let Err(error) = save_ssh_connections(&self.config_paths, &updated) {
-            self.ssh.error = Some(error.to_string());
+            self.ssh.error = Some(self.localized_ssh_connection_error(error));
             return None;
         }
         self.ssh.connections = updated;
@@ -666,7 +678,7 @@ impl WorkbenchView {
             cx.spawn(async move |this, cx| {
                 if let Err(error) = disconnect_host_ssh(runtime, connection_id).await {
                     let _ = this.update(cx, |root, cx| {
-                        root.ssh.error = Some(error);
+                        root.ssh.error = Some(root.localized_ssh_connection_error(error));
                         cx.notify();
                     });
                 }
@@ -683,7 +695,7 @@ impl WorkbenchView {
                 let result = delete_task.await;
                 if let Err(error) = result {
                     let _ = this.update(cx, |root, cx| {
-                        root.ssh.error = Some(error.to_string());
+                        root.ssh.error = Some(root.localized_ssh_connection_error(error));
                         cx.notify();
                     });
                 }
@@ -761,10 +773,9 @@ impl WorkbenchView {
             self.ssh.error = Some(if password {
                 self.ui_text.get(UiTextKey::SshPasswordRequired).to_string()
             } else {
-                format!(
-                    "{} is required.",
-                    self.ui_text.get(UiTextKey::SshKeyPassphrase)
-                )
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nFieldRequired)
+                    .replace("{field}", self.ui_text.get(UiTextKey::SshKeyPassphrase))
             });
             cx.notify();
             return;
@@ -1029,7 +1040,7 @@ impl WorkbenchView {
             let result = disconnect_host_ssh(runtime, connection_id).await;
             let _ = this.update_in(cx, |root, _window, cx| {
                 if let Err(error) = result {
-                    root.ssh.error = Some(error);
+                    root.ssh.error = Some(root.localized_ssh_connection_error(error));
                 }
                 cx.notify();
             });
@@ -1083,13 +1094,13 @@ impl WorkbenchView {
             &mut self.recent_projects_config,
             &connection_id,
         ) {
-            self.ssh.error = Some(error.to_string());
+            self.ssh.error = Some(self.localized_ssh_connection_error(error));
             cx.notify();
             return;
         }
         self.palette.recent_projects = recent_projects_for_palette(&self.recent_projects_config);
         if let Err(error) = save_ssh_connections(&self.config_paths, &updated) {
-            self.ssh.error = Some(error.to_string());
+            self.ssh.error = Some(self.localized_ssh_connection_error(error));
             cx.notify();
             return;
         }
@@ -1111,7 +1122,11 @@ impl WorkbenchView {
                 },
             )
         {
-            self.ssh.error = Some(format!("Cannot remove remote restore entry: {error}"));
+            self.ssh.error = Some(format!(
+                "{}: {error}",
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nRemoteRestoreRemovalFailed)
+            ));
         }
         self.ssh.statuses.remove(&connection_id);
         cx.notify();
@@ -1127,7 +1142,7 @@ impl WorkbenchView {
             };
             if let Some(error) = disconnect_error.or(delete_error) {
                 let _ = this.update(cx, |root, cx| {
-                    root.ssh.error = Some(error);
+                    root.ssh.error = Some(root.localized_ssh_connection_error(error));
                     cx.notify();
                 });
             }
@@ -1164,7 +1179,9 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         if mode == ProjectOpenMode::Fresh && !self.shared_mutation_allowed() {
             return Err(WorkbenchError::RemoteProject(
-                "Shared editing control is required.".to_string(),
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nSharedEditingControlRequired)
+                    .to_string(),
             ));
         }
 
@@ -1176,10 +1193,11 @@ impl WorkbenchView {
             .find(|connection| connection.id == connection_id)
             .cloned()
             .ok_or_else(|| {
-                WorkbenchError::RemoteProject(format!(
-                    "SSH connection {} is not configured",
-                    connection_id.as_str()
-                ))
+                WorkbenchError::RemoteProject(
+                    self.ui_text
+                        .get(UiTextKey::WorkbenchI18nSshConnectionNotConfigured)
+                        .replace("{connection}", connection_id.as_str()),
+                )
             })?;
         if require_connected
             && !self
@@ -1189,11 +1207,15 @@ impl WorkbenchView {
                 .is_some_and(|status| status.state == ConnectionState::Connected)
         {
             return Err(WorkbenchError::RemoteProject(
-                "Connect the SSH endpoint before opening its remote project.".to_string(),
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nSshProjectConnectionRequired)
+                    .to_string(),
             ));
         }
         let runtime = self.terminal.host_runtime.clone().ok_or_else(|| {
-            WorkbenchError::RemoteProject("SSH runtime is unavailable.".to_string())
+            WorkbenchError::RemoteProject(
+                self.ui_text.get(UiTextKey::RemoteRuntimeUnavailable).to_string(),
+            )
         })?;
         let title = root
             .file_name()
@@ -1207,7 +1229,7 @@ impl WorkbenchView {
             &title,
             &mut self.default_layout_state,
         )?;
-        let source_message = layout_source_message(&opened.layout_source);
+        let source_message = layout_source_message(&opened.layout_source, self.ui_text);
         let warning_message = layout_load_warning_message(&opened.warnings);
         let services = ProjectServices::ssh(
             runtime,
@@ -1299,7 +1321,7 @@ impl WorkbenchView {
             challenge_id: challenge.challenge_id,
             answer: CredentialAnswer::HostKey(answer),
         }) {
-            self.ssh.error = Some(error.to_string());
+            self.ssh.error = Some(self.localized_ssh_connection_error(error));
         }
     }
 

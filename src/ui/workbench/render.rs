@@ -13,6 +13,7 @@ impl Render for WorkbenchView {
         self.flush_pending_project_settings_save(window, cx);
         self.flush_pending_onboarding_completion(window, cx);
         self.ensure_settings_sync(window, cx);
+        self.ui_text.activate(cx);
         if !self.command_center_is_active() {
             self.ensure_agent_initialization(window, cx);
         }
@@ -83,12 +84,12 @@ impl Render for WorkbenchView {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .child("正在恢复工作区…")
+                .child(self.ui_text.get(UiTextKey::WorkspaceRestoreLoading))
         } else if self.workspace_restore_failed() {
             let error = self
                 .workspace_restore_failure_message()
                 .map(str::to_owned)
-                .unwrap_or_else(|| "The saved workspace state could not be restored.".to_string());
+                .unwrap_or_else(|| self.ui_text.get(UiTextKey::WorkspaceRestoreFailedBody).to_string());
             div()
                 .flex()
                 .flex_1()
@@ -97,7 +98,7 @@ impl Render for WorkbenchView {
                 .justify_center()
                 .gap(appearance.style.spacing.md)
                 .px(appearance.style.spacing.xl)
-                .child(div().text_lg().child("Workspace restore failed"))
+                .child(div().text_lg().child(self.ui_text.get(UiTextKey::WorkspaceRestoreFailedTitle)))
                 .child(
                     div()
                         .text_sm()

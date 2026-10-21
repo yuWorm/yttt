@@ -125,7 +125,11 @@ impl WorkbenchView {
                 .disabled_reason
                 .as_deref()
                 .unwrap_or(self.ui_text.get(UiTextKey::CommandUnavailable));
-            self.load_error = Some(format!("Command unavailable: {reason}"));
+            self.load_error = Some(
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nCommandUnavailableDetail)
+                    .replace("{reason}", reason),
+            );
             return Ok(());
         }
 

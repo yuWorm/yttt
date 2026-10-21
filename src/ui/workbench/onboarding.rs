@@ -215,7 +215,7 @@ fn language_step(
                         } else {
                             theme.text_muted
                         })
-                        .child(language_setting_label(language)),
+                        .child(language_setting_label(language, *ui_text)),
                 ),
         );
     }

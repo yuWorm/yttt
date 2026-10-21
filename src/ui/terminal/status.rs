@@ -6,12 +6,21 @@ use crate::{
         workspace::{OpenedProject, PaneProcessState, PaneState},
     },
     runtime::agent::classify_agent,
+    ui::i18n::{UiText, UiTextKey},
 };
 
-pub fn agent_status_label(status: AgentViewState) -> &'static str {
-    status.label()
+pub fn agent_status_label(status: AgentViewState, text: &UiText) -> &'static str {
+    text.get(match status {
+        AgentViewState::Starting => UiTextKey::TerminalI18nAgentStarting,
+        AgentViewState::Idle => UiTextKey::TerminalI18nAgentIdle,
+        AgentViewState::Working => UiTextKey::TerminalI18nAgentWorking,
+        AgentViewState::Waiting => UiTextKey::TerminalI18nAgentWaiting,
+        AgentViewState::Completed => UiTextKey::TerminalI18nAgentCompleted,
+        AgentViewState::Failed => UiTextKey::TerminalI18nAgentFailed,
+        AgentViewState::Interrupted => UiTextKey::TerminalI18nAgentInterrupted,
+        AgentViewState::Stale => UiTextKey::TerminalI18nAgentStatusUnknown,
+    })
 }
-
 pub fn project_agent_status(project: &OpenedProject) -> Option<AgentViewState> {
     project
         .layout
