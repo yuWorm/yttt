@@ -112,6 +112,9 @@ impl WorkbenchView {
             return;
         }
         self.project.active_panel_page = page;
+        if page == ProjectPanelPage::AgentSessions {
+            self.refresh_agent_sessions();
+        }
         self.project.pending_project_tree_focus = true;
         cx.notify();
     }

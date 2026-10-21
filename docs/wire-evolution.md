@@ -14,7 +14,10 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 19`。v19 追加工作区 `PutAgentState` /
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 20`。v20 将 `AgentSessions` 响应改为
+  `{ sessions, warnings }`，完整会话列表与 provider／文件级部分失败分别传递；
+  不再因单个 provider 失败清空其他会话。桌面 Client、Host、远端 Server 与 CLI
+  需同步更新。v19 追加工作区 `PutAgentState` /
   `GetAgentState` 请求与 `AgentStateStored` / `AgentState` 响应，正文使用 CBOR 字节串。
   `AgentStateRef` 包含 project/tab/pane、SHA-256 与字节数，保存在 snapshot 顶层 `agent_states`；
   `Commit` 在全部引用对象持久化且校验通过后才原子发布。正文每份最大 16 MiB、每工作区最大

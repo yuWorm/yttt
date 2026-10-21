@@ -1,6 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
-use gpui::{Entity, Subscription};
+use gpui::{Entity, Subscription, Task};
 use gpui_component::input::InputState;
 
 use crate::{
@@ -19,6 +19,7 @@ pub(in super::super) struct AgentSessionsControllerState {
     pub(in super::super) generation: u64,
     pub(in super::super) pending_scan: bool,
     pub(in super::super) loading: bool,
+    pub(in super::super) refresh_task: Option<Task<()>>,
     pub(in super::super) key: Option<AgentSessionScanKey>,
     pub(in super::super) sessions: Arc<Vec<AgentSession>>,
     pub(in super::super) error: Option<String>,
@@ -32,6 +33,7 @@ impl AgentSessionsControllerState {
         self.generation = self.generation.wrapping_add(1);
         self.pending_scan = false;
         self.loading = false;
+        self.refresh_task = None;
         self.key = None;
         self.sessions = Arc::new(Vec::new());
         self.error = None;

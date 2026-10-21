@@ -1,10 +1,9 @@
 use std::{
-    cmp::Reverse,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     fs::File,
     io::{self, BufRead as _, BufReader, Read as _},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -87,7 +86,7 @@ impl AgentSessionRoots {
     }
 }
 
-/// Checks OMP's ID-based session store without the history picker's result limits.
+/// Checks saved OMP IDs independently of project-scoped history discovery.
 /// I/O errors are not evidence that a conversation is missing.
 pub fn omp_session_exists(root: &Path, session_id: &str) -> io::Result<bool> {
     if session_id.is_empty() || session_id.contains(['/', '\\']) {
@@ -119,13 +118,10 @@ pub fn omp_session_exists(root: &Path, session_id: &str) -> io::Result<bool> {
     Ok(false)
 }
 
-const MAX_SESSION_FILES: usize = 5_000;
-const MAX_SESSION_RESULTS: usize = 100;
-const MAX_TRANSCRIPT_BYTES: u64 = 512 * 1024;
-const MAX_TRANSCRIPT_LINES: usize = 256;
-const MAX_CLAUDE_INDEX_BYTES: u64 = 8 * 1024 * 1024;
+// Optional display metadata must not require reading an entire conversation.
+// Missing session identity is still searched for beyond this many records.
+const DISPLAY_METADATA_RECORDS: usize = 256;
 const MAX_TITLE_CHARS: usize = 120;
-const OPENCODE_MAX_RESULTS: &str = "200";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentSession {
@@ -151,10 +147,20 @@ impl AgentSession {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct AgentSessionScan {
+    pub sessions: Vec<AgentSession>,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentSessionScanError {
-    #[error("the home directory is unavailable")]
-    HomeDirectoryUnavailable,
+    #[error("invalid project path {path}: {source}")]
+    ProjectPath {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("failed to scan {path}: {source}")]
     Io {
         path: PathBuf,
@@ -175,26 +181,43 @@ pub fn scan_agent_sessions_for_agents_with_roots(
     project_path: &Path,
     roots: &AgentSessionRoots,
     allow_native_commands: bool,
-) -> Result<Vec<AgentSession>, AgentSessionScanError> {
+) -> Result<AgentSessionScan, AgentSessionScanError> {
+    let mut context = ScanContext::new(project_path)?;
     let mut sessions = Vec::new();
     let mut scanned_agents = HashSet::new();
-    for agent in agents {
+    for &agent in agents {
         if !scanned_agents.insert(agent.id()) {
             continue;
         }
-        sessions.extend(match agent {
-            SessionProvider::Codex => scan_codex(&roots.codex.join("sessions"), project_path)?,
-            SessionProvider::Claude => scan_claude(&roots.claude.join("projects"), project_path)?,
-            SessionProvider::Grok => scan_grok(&roots.grok, project_path)?,
-            SessionProvider::OpenCode if allow_native_commands => scan_opencode(project_path)?,
-            SessionProvider::OpenCode => Vec::new(),
-            SessionProvider::Pi => scan_pi_family(&roots.pi, project_path, SessionProvider::Pi)?,
-            SessionProvider::OhMyPi => {
-                scan_pi_family(&roots.omp, project_path, SessionProvider::OhMyPi)?
+        let result = match agent {
+            SessionProvider::Codex => Ok(scan_transcripts(
+                &roots.codex.join("sessions"),
+                &mut context,
+                agent,
+            )),
+            SessionProvider::Claude => {
+                Ok(scan_claude(&roots.claude.join("projects"), &mut context))
             }
-        });
+            SessionProvider::Grok => Ok(scan_grok(&roots.grok, &mut context)),
+            SessionProvider::OpenCode if allow_native_commands => scan_opencode(&mut context),
+            SessionProvider::OpenCode => {
+                context
+                    .warnings
+                    .push("opencode: native session commands are disabled for this profile".into());
+                Ok(Vec::new())
+            }
+            SessionProvider::Pi => Ok(scan_transcripts(&roots.pi, &mut context, agent)),
+            SessionProvider::OhMyPi => Ok(scan_transcripts(&roots.omp, &mut context, agent)),
+        };
+        match result {
+            Ok(found) => sessions.extend(found),
+            Err(error) => context.warnings.push(format!("{}: {error}", agent.id())),
+        }
     }
-    Ok(finalize_sessions(sessions))
+    Ok(AgentSessionScan {
+        sessions: finalize_sessions(sessions),
+        warnings: context.warnings,
+    })
 }
 
 #[cfg(test)]
@@ -203,49 +226,115 @@ fn scan_agent_sessions_with_roots(
     project_path: &Path,
     roots: &AgentSessionRoots,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    scan_agent_sessions_for_agents_with_roots(&[agent], project_path, roots, false)
+    scan_agent_sessions_for_agents_with_roots(&[agent], project_path, roots, false).map(|scan| {
+        assert!(scan.warnings.is_empty(), "{:?}", scan.warnings);
+        scan.sessions
+    })
 }
 
-fn scan_codex(
-    sessions_root: &Path,
-    project_path: &Path,
-) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    let files = collect_session_files(sessions_root, true)?;
-    Ok(files
-        .into_iter()
-        .filter_map(|file| parse_codex_session(&file, project_path))
-        .collect())
+fn scan_transcripts(
+    root: &Path,
+    context: &mut ScanContext,
+    provider: SessionProvider,
+) -> Vec<AgentSession> {
+    collect_files(
+        root,
+        |path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        },
+        context,
+    )
+    .into_iter()
+    .filter_map(|file| match parse_transcript(&file, context, provider) {
+        Ok(session) => session,
+        Err(error) => {
+            context.warnings.push(error.to_string());
+            None
+        }
+    })
+    .collect()
 }
 
-fn parse_codex_session(file: &SessionFile, project_path: &Path) -> Option<AgentSession> {
+fn parse_transcript(
+    file: &SessionFile,
+    context: &mut ScanContext,
+    provider: SessionProvider,
+) -> Result<Option<AgentSession>, AgentSessionScanError> {
+    let mut records = TranscriptValues::open(&file.path)?;
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
+    let mut first_prompt = None;
     let mut model = None;
-    for value in transcript_values(&file.path) {
-        let event_type = value.get("type").and_then(Value::as_str);
-        if event_type == Some("session_meta") {
-            let payload = value.get("payload")?;
-            id = string_at(payload, &["session_id", "id"]);
-            cwd = string_at(payload, &["cwd"]);
-        } else if title.is_none() {
-            title = codex_title(&value);
+    for (index, value) in records.by_ref().enumerate() {
+        let kind = value.get("type").and_then(Value::as_str);
+        match provider {
+            SessionProvider::Codex => {
+                if kind == Some("session_meta") {
+                    if let Some(payload) = value.get("payload") {
+                        id = string_at(payload, &["session_id", "id"]);
+                        cwd = string_at(payload, &["cwd"]);
+                    }
+                } else if title.is_none() {
+                    title = codex_title(&value);
+                }
+            }
+            SessionProvider::Claude => {
+                if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+                    return Ok(None);
+                }
+                id = id.or_else(|| string_at(&value, &["sessionId"]));
+                cwd = cwd.or_else(|| string_at(&value, &["cwd"]));
+                if title.is_none() && kind == Some("user") {
+                    title = user_message_title(&value);
+                }
+            }
+            SessionProvider::Pi | SessionProvider::OhMyPi => match kind {
+                Some("session") => {
+                    id = string_at(&value, &["id"]);
+                    cwd = string_at(&value, &["cwd"]);
+                }
+                Some("title") => title = string_at(&value, &["title"]).and_then(clean_title),
+                Some("message") if first_prompt.is_none() => {
+                    first_prompt = user_message_title(&value);
+                }
+                _ => {}
+            },
+            SessionProvider::Grok | SessionProvider::OpenCode => unreachable!(),
+        }
+        if let Some(cwd) = &cwd
+            && !context.belongs_to_project(Path::new(cwd))
+        {
+            return Ok(None);
         }
         model = model.or_else(|| session_model(&value));
+        if id.is_some()
+            && cwd.is_some()
+            && (((title.is_some() || first_prompt.is_some()) && model.is_some())
+                || index + 1 >= DISPLAY_METADATA_RECORDS)
+        {
+            break;
+        }
     }
-    let cwd = cwd?;
-    if !belongs_to_project(Path::new(&cwd), project_path) {
-        return None;
+    if let Some(error) = records.first_error {
+        context.warn(&file.path, error);
     }
-    let id = id?;
-    Some(AgentSession {
-        provider: SessionProvider::Codex,
-        title: title.unwrap_or_default(),
+    let Some(id) = id
+        .filter(|id| !id.trim().is_empty())
+        .filter(|_| cwd.is_some())
+    else {
+        context.warn(&file.path, "missing session ID or working directory");
+        return Ok(None);
+    };
+    Ok(Some(AgentSession {
+        provider,
+        title: title.or(first_prompt).unwrap_or_default(),
         model,
         id,
         transcript_path: Some(file.path.clone()),
         updated_at_ms: file.updated_at_ms,
-    })
+    }))
 }
 
 fn codex_title(value: &Value) -> Option<String> {
@@ -270,54 +359,72 @@ fn codex_title(value: &Value) -> Option<String> {
     None
 }
 
-fn scan_claude(
-    projects_root: &Path,
-    project_path: &Path,
-) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    if !projects_root.exists() {
-        return Ok(Vec::new());
-    }
-    let directories = fs::read_dir(projects_root).map_err(|source| AgentSessionScanError::Io {
-        path: projects_root.to_path_buf(),
-        source,
-    })?;
-    let mut sessions = Vec::new();
-    let mut indexed_ids = HashSet::new();
-    for directory in directories {
-        let directory = directory.map_err(|source| AgentSessionScanError::Io {
-            path: projects_root.to_path_buf(),
-            source,
-        })?;
-        let file_type = directory
-            .file_type()
-            .map_err(|source| AgentSessionScanError::Io {
-                path: directory.path(),
-                source,
-            })?;
-        if !file_type.is_dir() {
-            continue;
-        }
-        let directory_path = directory.path();
-        let index_path = directory_path.join("sessions-index.json");
-        if index_path.is_file() {
-            for session in parse_claude_index(&index_path, project_path)? {
-                indexed_ids.insert(session.id.clone());
-                sessions.push(session);
+fn scan_claude(projects_root: &Path, context: &mut ScanContext) -> Vec<AgentSession> {
+    let files = collect_files(
+        projects_root,
+        |path| {
+            path.file_name()
+                .is_some_and(|name| name == "sessions-index.json")
+                || path
+                    .extension()
+                    .is_some_and(|extension| extension == "jsonl")
+        },
+        context,
+    );
+    let mut sessions = HashMap::<String, AgentSession>::new();
+    for file in files.iter().filter(|file| {
+        file.path
+            .file_name()
+            .is_some_and(|name| name == "sessions-index.json")
+    }) {
+        match parse_claude_index(&file.path, context) {
+            Ok(indexed) => {
+                for session in indexed {
+                    match sessions.entry(session.id.clone()) {
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(session);
+                        }
+                        std::collections::hash_map::Entry::Occupied(mut entry)
+                            if session.updated_at_ms > entry.get().updated_at_ms =>
+                        {
+                            entry.insert(session);
+                        }
+                        _ => {}
+                    }
+                }
             }
+            Err(error) => context.warnings.push(error.to_string()),
         }
-        let files = collect_session_files(&directory_path, false)?;
-        sessions.extend(files.into_iter().filter_map(|file| {
-            let session = parse_claude_transcript(&file, project_path)?;
-            (!indexed_ids.contains(&session.id)).then_some(session)
-        }));
     }
-    Ok(sessions)
+    for file in files.iter().filter(|file| {
+        file.path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+    }) {
+        match parse_transcript(file, context, SessionProvider::Claude) {
+            Ok(Some(session)) => {
+                if let Some(indexed) = sessions.get_mut(&session.id) {
+                    indexed.updated_at_ms = indexed.updated_at_ms.max(session.updated_at_ms);
+                    indexed.model = session.model;
+                    indexed.transcript_path = session.transcript_path;
+                    if indexed.title.is_empty() {
+                        indexed.title = session.title;
+                    }
+                } else {
+                    sessions.insert(session.id.clone(), session);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => context.warnings.push(error.to_string()),
+        }
+    }
+    sessions.into_values().collect()
 }
 
 #[derive(Deserialize)]
 struct ClaudeSessionIndex {
     #[serde(default)]
-    entries: Vec<ClaudeSessionIndexEntry>,
+    entries: Vec<Value>,
 }
 
 #[derive(Deserialize)]
@@ -337,30 +444,36 @@ struct ClaudeSessionIndexEntry {
 
 fn parse_claude_index(
     index_path: &Path,
-    project_path: &Path,
+    context: &mut ScanContext,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
     let file = File::open(index_path).map_err(|source| AgentSessionScanError::Io {
         path: index_path.to_path_buf(),
         source,
     })?;
-    if file
-        .metadata()
-        .map(|metadata| metadata.len() > MAX_CLAUDE_INDEX_BYTES)
-        .unwrap_or(true)
-    {
-        return Ok(Vec::new());
-    }
     let index: ClaudeSessionIndex =
-        serde_json::from_reader(file).map_err(|error| AgentSessionScanError::InvalidOutput {
-            provider: "Claude Code",
-            message: format!("{}: {error}", index_path.display()),
+        serde_json::from_reader(BufReader::new(file)).map_err(|error| {
+            AgentSessionScanError::InvalidOutput {
+                provider: "Claude Code",
+                message: format!("{}: {error}", index_path.display()),
+            }
         })?;
     Ok(index
         .entries
         .into_iter()
-        .filter(|entry| {
-            !entry.is_sidechain && belongs_to_project(&entry.project_path, project_path)
-        })
+        .filter_map(
+            |entry| match serde_json::from_value::<ClaudeSessionIndexEntry>(entry) {
+                Ok(entry)
+                    if !entry.is_sidechain && context.belongs_to_project(&entry.project_path) =>
+                {
+                    Some(entry)
+                }
+                Ok(_) => None,
+                Err(error) => {
+                    context.warn(index_path, error);
+                    None
+                }
+            },
+        )
         .map(|entry| {
             let title = clean_title(&entry.summary)
                 .or_else(|| clean_title(&entry.first_prompt))
@@ -375,37 +488,6 @@ fn parse_claude_index(
             }
         })
         .collect())
-}
-
-fn parse_claude_transcript(file: &SessionFile, project_path: &Path) -> Option<AgentSession> {
-    let mut id = None;
-    let mut cwd = None;
-    let mut title = None;
-    let mut model = None;
-    for value in transcript_values(&file.path) {
-        id = id.or_else(|| string_at(&value, &["sessionId"]));
-        cwd = cwd.or_else(|| string_at(&value, &["cwd"]));
-        if title.is_none() && value.get("type").and_then(Value::as_str) == Some("user") {
-            title = user_message_title(&value);
-        }
-        model = model.or_else(|| session_model(&value));
-        if id.is_some() && cwd.is_some() && title.is_some() && model.is_some() {
-            break;
-        }
-    }
-    let cwd = cwd?;
-    if !belongs_to_project(Path::new(&cwd), project_path) {
-        return None;
-    }
-    let id = id?;
-    Some(AgentSession {
-        provider: SessionProvider::Claude,
-        title: title.unwrap_or_default(),
-        model,
-        id,
-        transcript_path: Some(file.path.clone()),
-        updated_at_ms: file.updated_at_ms,
-    })
 }
 
 #[derive(Deserialize)]
@@ -457,100 +539,48 @@ pub fn grok_session_kind(transcript: &Path, session_id: &str) -> Option<GrokSess
     }
 }
 
-fn scan_grok(
-    sessions_root: &Path,
-    project_path: &Path,
-) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    let files = collect_grok_summary_files(sessions_root)?;
-    Ok(files
-        .into_iter()
-        .filter_map(|file| parse_grok_summary(&file, project_path))
-        .collect())
-}
-
-fn parse_grok_summary(file: &SessionFile, project_path: &Path) -> Option<AgentSession> {
-    let source = fs::read(&file.path).ok()?;
-    if source.len() as u64 > MAX_TRANSCRIPT_BYTES {
-        return None;
-    }
-    let summary: GrokSessionSummary = serde_json::from_slice(&source).ok()?;
-    if !belongs_to_project(&summary.info.cwd, project_path) {
-        return None;
-    }
-    let id = summary.info.id.trim();
-    if id.is_empty() {
-        return None;
-    }
-    Some(AgentSession {
-        provider: SessionProvider::Grok,
-        id: id.to_string(),
-        title: clean_title(summary.generated_title)
-            .or_else(|| clean_title(summary.session_summary))
-            .unwrap_or_default(),
-        model: summary.current_model_id.and_then(clean_title),
-        transcript_path: None,
-        updated_at_ms: file.updated_at_ms,
-    })
-}
-
-fn scan_pi_family(
-    sessions_root: &Path,
-    project_path: &Path,
-    provider: SessionProvider,
-) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    let files = collect_session_files(sessions_root, true)?;
-    Ok(files
-        .into_iter()
-        .filter_map(|file| parse_pi_family_session(&file, project_path, provider))
-        .collect())
-}
-
-fn parse_pi_family_session(
-    file: &SessionFile,
-    project_path: &Path,
-    provider: SessionProvider,
-) -> Option<AgentSession> {
-    let mut id = None;
-    let mut cwd = None;
-    let mut title = None;
-    let mut first_prompt = None;
-    let mut model = None;
-    for value in transcript_values(&file.path) {
-        match value.get("type").and_then(Value::as_str) {
-            Some("session") => {
-                id = string_at(&value, &["id"]);
-                cwd = string_at(&value, &["cwd"]);
+fn scan_grok(root: &Path, context: &mut ScanContext) -> Vec<AgentSession> {
+    collect_files(
+        root,
+        |path| path.file_name().is_some_and(|name| name == "summary.json"),
+        context,
+    )
+    .into_iter()
+    .filter_map(|file| {
+        let result = File::open(&file.path)
+            .map(BufReader::new)
+            .map_err(|error| error.to_string())
+            .and_then(|reader| {
+                serde_json::from_reader::<_, GrokSessionSummary>(reader)
+                    .map_err(|error| error.to_string())
+            });
+        let summary = match result {
+            Ok(summary) => summary,
+            Err(error) => {
+                context.warn(&file.path, error);
+                return None;
             }
-            Some("title") => {
-                title = string_at(&value, &["title"]).and_then(clean_title);
-            }
-            Some("message") if first_prompt.is_none() => {
-                first_prompt = user_message_title(&value);
-            }
-            _ => {}
+        };
+        if !context.belongs_to_project(&summary.info.cwd) {
+            return None;
         }
-        model = model.or_else(|| session_model(&value));
-        if id.is_some()
-            && cwd.is_some()
-            && (title.is_some() || first_prompt.is_some())
-            && model.is_some()
-        {
-            break;
+        let id = summary.info.id.trim();
+        if id.is_empty() {
+            context.warn(&file.path, "missing session ID");
+            return None;
         }
-    }
-    let cwd = cwd?;
-    if !belongs_to_project(Path::new(&cwd), project_path) {
-        return None;
-    }
-    let id = id?;
-    Some(AgentSession {
-        provider,
-        title: title.or(first_prompt).unwrap_or_default(),
-        model,
-        id,
-        transcript_path: Some(file.path.clone()),
-        updated_at_ms: file.updated_at_ms,
+        Some(AgentSession {
+            provider: SessionProvider::Grok,
+            id: id.to_string(),
+            title: clean_title(summary.generated_title)
+                .or_else(|| clean_title(summary.session_summary))
+                .unwrap_or_default(),
+            model: summary.current_model_id.and_then(clean_title),
+            transcript_path: None,
+            updated_at_ms: file.updated_at_ms,
+        })
     })
+    .collect()
 }
 
 #[derive(Deserialize)]
@@ -562,7 +592,7 @@ struct OpenCodeSession {
     directory: PathBuf,
 }
 
-fn scan_opencode(project_path: &Path) -> Result<Vec<AgentSession>, AgentSessionScanError> {
+fn scan_opencode(context: &mut ScanContext) -> Result<Vec<AgentSession>, AgentSessionScanError> {
     let output = Command::new(SessionProvider::OpenCode.command())
         .args([
             "--pure",
@@ -570,10 +600,11 @@ fn scan_opencode(project_path: &Path) -> Result<Vec<AgentSession>, AgentSessionS
             "list",
             "--format",
             "json",
+            // Omitting this option still limits OpenCode to 100 sessions.
             "--max-count",
-            OPENCODE_MAX_RESULTS,
+            "-1",
         ])
-        .current_dir(project_path)
+        .current_dir(&context.project_path)
         .output()
         .map_err(|error| AgentSessionScanError::Command {
             program: SessionProvider::OpenCode.command().to_string(),
@@ -585,21 +616,34 @@ fn scan_opencode(project_path: &Path) -> Result<Vec<AgentSession>, AgentSessionS
             message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         });
     }
-    parse_opencode_output(&output.stdout, project_path)
+    parse_opencode_output(&output.stdout, context)
 }
 
 fn parse_opencode_output(
     output: &[u8],
-    project_path: &Path,
+    context: &mut ScanContext,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    let entries: Vec<OpenCodeSession> =
+    // The native CLI exits successfully with no output for an empty store.
+    if output.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Vec::new());
+    }
+    let entries: Vec<Value> =
         serde_json::from_slice(output).map_err(|error| AgentSessionScanError::InvalidOutput {
             provider: "OpenCode",
             message: error.to_string(),
         })?;
     Ok(entries
         .into_iter()
-        .filter(|entry| belongs_to_project(&entry.directory, project_path))
+        .filter_map(
+            |entry| match serde_json::from_value::<OpenCodeSession>(entry) {
+                Ok(entry) if context.belongs_to_project(&entry.directory) => Some(entry),
+                Ok(_) => None,
+                Err(error) => {
+                    context.warnings.push(format!("opencode: {error}"));
+                    None
+                }
+            },
+        )
         .map(|entry| AgentSession {
             provider: SessionProvider::OpenCode,
             title: clean_title(&entry.title).unwrap_or_default(),
@@ -617,83 +661,106 @@ struct SessionFile {
     updated_at_ms: u64,
 }
 
-fn collect_session_files(
-    root: &Path,
-    recursive: bool,
-) -> Result<Vec<SessionFile>, AgentSessionScanError> {
-    collect_files(root, recursive, |path| {
-        path.extension().and_then(|value| value.to_str()) == Some("jsonl")
-    })
-}
-
-fn collect_grok_summary_files(root: &Path) -> Result<Vec<SessionFile>, AgentSessionScanError> {
-    collect_files(root, true, |path| {
-        path.file_name().and_then(|value| value.to_str()) == Some("summary.json")
-    })
-}
-
 fn collect_files(
     root: &Path,
-    recursive: bool,
     accepts: impl Fn(&Path) -> bool,
-) -> Result<Vec<SessionFile>, AgentSessionScanError> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
+    context: &mut ScanContext,
+) -> Vec<SessionFile> {
     let mut directories = vec![root.to_path_buf()];
+    let mut visited = HashSet::new();
     let mut files = Vec::new();
     while let Some(directory) = directories.pop() {
-        let entries = fs::read_dir(&directory).map_err(|source| AgentSessionScanError::Io {
-            path: directory.clone(),
-            source,
-        })?;
+        if !visited.insert(normalize_path(&directory)) {
+            continue;
+        }
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && directory == root => continue,
+            Err(error) => {
+                context.warn(&directory, error);
+                continue;
+            }
+        };
         for entry in entries {
-            let entry = entry.map_err(|source| AgentSessionScanError::Io {
-                path: directory.clone(),
-                source,
-            })?;
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .map_err(|source| AgentSessionScanError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
-            if file_type.is_dir() {
-                if recursive && entry.file_name() != "subagents" {
-                    directories.push(path);
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    context.warn(&directory, error);
+                    continue;
                 }
+            };
+            let path = entry.path();
+            if entry.file_name() == "subagents" {
                 continue;
             }
-            if !file_type.is_file() || !accepts(&path) {
-                continue;
+            let metadata = match fs::metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    context.warn(&path, error);
+                    continue;
+                }
+            };
+            if metadata.is_dir() {
+                directories.push(path);
+            } else if metadata.is_file() && accepts(&path) {
+                files.push(SessionFile {
+                    path,
+                    updated_at_ms: metadata
+                        .modified()
+                        .map(system_time_millis)
+                        .unwrap_or_default(),
+                });
             }
-            let updated_at_ms = entry
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .map(system_time_millis)
-                .unwrap_or_default();
-            files.push(SessionFile {
-                path,
-                updated_at_ms,
-            });
         }
     }
-    files.sort_unstable_by_key(|file| Reverse(file.updated_at_ms));
-    files.truncate(MAX_SESSION_FILES);
-    Ok(files)
+    files
 }
 
-fn transcript_values(path: &Path) -> impl Iterator<Item = Value> {
-    let reader = File::open(path)
-        .map(|file| BufReader::new(file.take(MAX_TRANSCRIPT_BYTES)))
-        .ok();
-    reader
-        .into_iter()
-        .flat_map(|reader| reader.lines().take(MAX_TRANSCRIPT_LINES))
-        .filter_map(Result::ok)
-        .filter_map(|line| serde_json::from_str(&line).ok())
+struct TranscriptValues {
+    reader: BufReader<File>,
+    line: String,
+    first_error: Option<String>,
+    finished: bool,
+}
+
+impl TranscriptValues {
+    fn open(path: &Path) -> Result<Self, AgentSessionScanError> {
+        let file = File::open(path).map_err(|source| AgentSessionScanError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        Ok(Self {
+            reader: BufReader::new(file),
+            line: String::new(),
+            first_error: None,
+            finished: false,
+        })
+    }
+}
+
+impl Iterator for TranscriptValues {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> {
+        while !self.finished {
+            self.line.clear();
+            match self.reader.read_line(&mut self.line) {
+                Ok(0) => self.finished = true,
+                Ok(_) if self.line.trim().is_empty() => {}
+                Ok(_) => match serde_json::from_str(&self.line) {
+                    Ok(value) => return Some(value),
+                    Err(error) => {
+                        self.first_error.get_or_insert_with(|| error.to_string());
+                    }
+                },
+                Err(error) => {
+                    self.first_error.get_or_insert_with(|| error.to_string());
+                    self.finished = true;
+                }
+            }
+        }
+        None
+    }
 }
 
 fn value_text(value: &Value) -> Option<&str> {
@@ -760,15 +827,78 @@ fn clean_title(value: impl AsRef<str>) -> Option<String> {
     (!title.is_empty()).then_some(title)
 }
 
-fn belongs_to_project(session_path: &Path, project_path: &Path) -> bool {
-    session_path == project_path || session_path.starts_with(project_path)
+struct ScanContext {
+    project_path: PathBuf,
+    project_matches: HashMap<PathBuf, bool>,
+    warnings: Vec<String>,
+}
+
+impl ScanContext {
+    fn new(project_path: &Path) -> Result<Self, AgentSessionScanError> {
+        let absolute = std::path::absolute(project_path).map_err(|source| {
+            AgentSessionScanError::ProjectPath {
+                path: project_path.to_path_buf(),
+                source,
+            }
+        })?;
+        Ok(Self {
+            project_path: normalize_path(&absolute),
+            project_matches: HashMap::new(),
+            warnings: Vec::new(),
+        })
+    }
+
+    fn belongs_to_project(&mut self, path: &Path) -> bool {
+        if let Some(matches) = self.project_matches.get(path) {
+            return *matches;
+        }
+        let matches = path.is_absolute() && normalize_path(path).starts_with(&self.project_path);
+        self.project_matches.insert(path.to_path_buf(), matches);
+        matches
+    }
+
+    fn warn(&mut self, path: &Path, error: impl std::fmt::Display) {
+        self.warnings.push(format!("{}: {error}", path.display()));
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    // Resolve an existing ancestor too: a historical cwd may have been deleted
+    // beneath a still-valid directory alias.
+    let resolved = path.ancestors().skip(1).find_map(|ancestor| {
+        fs::canonicalize(ancestor).ok().map(|canonical| {
+            canonical.join(
+                path.strip_prefix(ancestor)
+                    .expect("ancestor is a path prefix"),
+            )
+        })
+    });
+    let mut normalized = PathBuf::new();
+    for component in resolved.as_deref().unwrap_or(path).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn finalize_sessions(mut sessions: Vec<AgentSession>) -> Vec<AgentSession> {
-    sessions.sort_unstable_by_key(|session| Reverse(session.updated_at_ms));
+    sessions.sort_unstable_by(|left, right| {
+        right
+            .updated_at_ms
+            .cmp(&left.updated_at_ms)
+            .then_with(|| left.provider.id().cmp(right.provider.id()))
+            .then_with(|| left.id.cmp(&right.id))
+    });
     let mut ids = HashSet::new();
     sessions.retain(|session| ids.insert((session.provider.id(), session.id.clone())));
-    sessions.truncate(MAX_SESSION_RESULTS);
     sessions
 }
 
@@ -942,7 +1072,8 @@ mod tests {
             &roots,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .sessions;
 
         assert_eq!(sessions.len(), 2);
         assert!(
@@ -1090,11 +1221,45 @@ mod tests {
         let project = Path::new("/workspace/project");
         let output = br#"[{"id":"ses_1","title":"Refactor auth","updated":99,"directory":"/workspace/project"}]"#;
 
-        let sessions = parse_opencode_output(output, project).unwrap();
+        let sessions =
+            parse_opencode_output(output, &mut ScanContext::new(project).unwrap()).unwrap();
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].provider, SessionProvider::OpenCode);
         assert_eq!(sessions[0].id, "ses_1");
         assert_eq!(sessions[0].title, "Refactor auth");
+    }
+
+    #[test]
+    fn opencode_keeps_all_valid_entries_and_reports_a_damaged_entry() {
+        let project = Path::new("/workspace/project");
+        let mut entries = (0..201)
+            .map(|n| {
+                serde_json::json!({
+                    "id": format!("session-{n}"), "title": "Conversation", "updated": n,
+                    "directory": project,
+                })
+            })
+            .collect::<Vec<_>>();
+        entries.push(serde_json::json!({"id":"damaged"}));
+        entries.push(serde_json::json!({
+            "id":"other", "title":"Other project", "updated":999,
+            "directory":"/workspace/project/../other",
+        }));
+        let mut context = ScanContext::new(project).unwrap();
+        let sessions =
+            parse_opencode_output(&serde_json::to_vec(&entries).unwrap(), &mut context).unwrap();
+        assert_eq!(sessions.len(), 201);
+        assert!(sessions.iter().any(|session| session.id == "session-0"));
+        assert!(!sessions.iter().any(|session| session.id == "other"));
+        assert_eq!(context.warnings.len(), 1);
+    }
+
+    #[test]
+    fn opencode_empty_store_is_not_a_failed_scan_but_invalid_output_is() {
+        let mut context = ScanContext::new(Path::new("/workspace/project")).unwrap();
+        assert!(parse_opencode_output(b"", &mut context).unwrap().is_empty());
+        assert!(context.warnings.is_empty());
+        assert!(parse_opencode_output(b"not a session list", &mut context).is_err());
     }
 }

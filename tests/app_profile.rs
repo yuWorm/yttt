@@ -176,7 +176,8 @@ fn isolated_profile_overlays_project_config_and_agent_roots() {
         config_paths.agent_session_access(),
     )
     .unwrap();
-    assert!(sessions.is_empty());
+    assert!(sessions.sessions.is_empty());
+    assert!(sessions.warnings.is_empty());
 }
 
 #[test]

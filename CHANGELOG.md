@@ -12,6 +12,10 @@
 - Complete English and Simplified Chinese UI coverage: resolve System on normal startup, synchronize component and settings-control locales on language changes, and localize workspace/terminal recovery, close confirmations, status bars, shortcut actions, and dates.
 - CLI 帮助和人工可读输出支持离线读取设备语言；Linux 安装脚本按环境 locale 选择语言，Windows 安装器内置中英文资源。命令、协议标识、JSON 字段及底层诊断原文保持稳定。
 - Localize CLI help and human-readable output using offline device preferences, select Linux installer language from the environment locale, and bundle both Windows installer languages. Commands, protocol identifiers, JSON fields, and underlying diagnostics remain unchanged.
+- 修复全部六种 Agent 的历史会话发现：取消合并结果和候选文件截断，OpenCode 显式读取完整列表，规范化项目路径并支持带循环保护的链接目录。Claude 索引损坏时仍读取 JSONL；单个 provider、索引或文件失败显示警告，不丢弃其他正常结果。
+- Fix history discovery for all six Agents: remove merged-result and candidate-file truncation, explicitly request complete OpenCode history, normalize project paths, and traverse linked stores with cycle protection. Fall back to Claude transcripts when an index is damaged; surface provider/file warnings without discarding healthy results.
+- 会话页搜索覆盖完整扫描结果，打开时和停留期间每 30 秒刷新；刷新保留已有列表与搜索，避免重复扫描。远程会话响应携带部分失败警告，资源协议升至 20；桌面、Host、远端 Server 与 CLI 需同步更新。
+- Search the complete discovered history; refresh on opening the session page and every 30 seconds while selected, preserving existing results/search and avoiding duplicate scans. Remote history responses carry partial-failure warnings; resource protocol is now 20, requiring Desktop, Host, remote Server, and CLI to be upgraded together.
 
 ## 0.3.16 - 2026-10-16
 

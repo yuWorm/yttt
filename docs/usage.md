@@ -1254,6 +1254,39 @@ layout.export_project_config
 layout.reset_local_override
 ```
 
+## Agent Session History
+
+The project sidebar's **Agent Sessions** page discovers saved conversations for Codex,
+Claude Code, Grok, OpenCode, Pi, and OMP. The primary Agent is included automatically;
+enable additional providers in **Settings → Agent**. This history is separate from
+running-process discovery and live Agent status.
+
+History belongs to the selected project directory and its descendants. Paths are
+normalized and directory aliases are resolved, including existing ancestors of deleted
+historical working directories. Sibling directories and external Git worktrees are not
+implicitly merged. Linked history directories are followed with cycle protection;
+`subagents` directories remain excluded.
+
+File-backed providers enumerate all candidate sessions before project filtering; results
+are deduplicated by provider and session ID and ordered by update time, without the former
+5,000-file or 100-result cutoffs. OpenCode uses its native session command with
+`--max-count -1` because omitting that option still defaults to a limited list.
+JSONL identity discovery continues beyond large preambles; optional title/model lookup
+is bounded once the session ID and working directory are known. Claude indexes supplement
+transcripts rather than preventing fallback when an index or individual entry is damaged.
+
+Search covers the entire discovered result, not only recent conversations. Opening the
+page requests a fresh scan; while selected, it refreshes every 30 seconds after the previous
+scan completes. Refreshes preserve existing results, search text, and provider expansion.
+Right-click the sidebar Agent icon and choose **Refresh Sessions** for an immediate refresh.
+Only one scan for the current selection runs at a time.
+
+A provider, directory, index, or transcript failure is shown as a warning alongside the
+available results; it does not discard unrelated providers. A failed refresh keeps the
+previous list visible. Remote Host history uses the same scanner and returns its warnings.
+Production profiles honor the provider home/session-directory environment overrides;
+development/test profiles retain their isolated stores and do not run native OpenCode commands.
+
 ## Agent Status
 
 A pane is treated as an agent pane when:
