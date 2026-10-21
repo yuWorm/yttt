@@ -1110,10 +1110,11 @@ fn scan_agent_history(
             false,
         )
     })?;
-    let sessions = scan_agent_sessions_for_agents_with_roots(&providers, &root, &roots, true)
+    let scan = scan_agent_sessions_for_agents_with_roots(&providers, &root, &roots, true)
         .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?;
-    Ok(WorkspaceResponse::AgentSessions(
-        sessions
+    Ok(WorkspaceResponse::AgentSessions {
+        sessions: scan
+            .sessions
             .into_iter()
             .map(|session| yttt_protocol::workspace::AgentSessionSummary {
                 provider: session.provider.id().to_string(),
@@ -1126,7 +1127,8 @@ fn scan_agent_history(
                 updated_at_ms: session.updated_at_ms,
             })
             .collect(),
-    ))
+        warnings: scan.warnings,
+    })
 }
 
 fn environment(

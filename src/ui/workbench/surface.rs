@@ -951,10 +951,7 @@ impl WorkbenchView {
             .selected_project_id()
             .and_then(|project_id| self.workspace.project(project_id))
             .is_some_and(|project| project.location.local_path().is_none());
-        let show_search = !remote
-            && !self.agent_sessions.loading
-            && self.agent_sessions.error.is_none()
-            && !sessions.is_empty();
+        let show_search = !remote && !sessions.is_empty();
         let search = div()
             .debug_selector(|| "agent-sessions-search".to_string())
             .flex_none()
@@ -982,7 +979,7 @@ impl WorkbenchView {
                 theme,
                 ui_style,
             )
-        } else if self.agent_sessions.loading {
+        } else if self.agent_sessions.loading && sessions.is_empty() {
             self.agent_sessions_message(
                 "agent-sessions-loading",
                 self.ui_text
@@ -991,7 +988,12 @@ impl WorkbenchView {
                 theme,
                 ui_style,
             )
-        } else if let Some(error) = self.agent_sessions.error.clone() {
+        } else if let Some(error) = self
+            .agent_sessions
+            .error
+            .clone()
+            .filter(|_| sessions.is_empty())
+        {
             div()
                 .debug_selector(|| "agent-sessions-error".to_string())
                 .flex()
@@ -1174,6 +1176,23 @@ impl WorkbenchView {
             .min_h_0()
             .child(header)
             .when(show_search, |panel| panel.child(search))
+            .when(!sessions.is_empty(), |panel| {
+                panel.when_some(self.agent_sessions.error.clone(), |panel, error| {
+                    panel.child(
+                        div()
+                            .debug_selector(|| "agent-sessions-warning".to_string())
+                            .flex_none()
+                            .max_h(px(96.0))
+                            .overflow_y_scrollbar()
+                            .px(ui_style.spacing.md)
+                            .py(ui_style.spacing.xs)
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(self.ui_text.get(UiTextKey::AgentSessionsPartial))
+                            .child(div().child(error)),
+                    )
+                })
+            })
             .child(body)
     }
 
@@ -1197,7 +1216,9 @@ impl WorkbenchView {
         } else {
             format!("{provider} · {age}")
         };
-        let session_id = session.id.clone();
+        let session_id = SharedString::from(session.id.clone());
+        let resume_id = session_id.clone();
+        let resume_provider = session.provider;
         let model = session.model.clone();
         let transcript = session
             .transcript_path
@@ -1205,7 +1226,11 @@ impl WorkbenchView {
             .and_then(|path| path.file_name())
             .map(|name| name.to_string_lossy().into_owned());
         div()
-            .id(("agent-session-row", index))
+            .id(SharedString::from(format!(
+                "agent-session-{}-{}",
+                session.provider.id(),
+                session.id
+            )))
             .debug_selector(move || format!("agent-session-row-{index}"))
             .cursor_pointer()
             .flex()
@@ -1222,7 +1247,7 @@ impl WorkbenchView {
             .hover(move |style| style.bg(theme.hover_surface))
             .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
                 if event.click_count() >= 2 {
-                    if let Err(error) = this.resume_agent_session(index) {
+                    if let Err(error) = this.resume_agent_session(resume_provider, &resume_id) {
                         this.load_error = Some(error);
                     }
                     cx.notify();
@@ -1266,7 +1291,7 @@ impl WorkbenchView {
                         .child(agent_session_tooltip_field(
                             "agent-session-tooltip-session-id",
                             tooltip_text.session_id_label,
-                            session_id.clone(),
+                            session_id.to_string(),
                             theme,
                             ui_style,
                         ))

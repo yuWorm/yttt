@@ -31,19 +31,25 @@ impl AgentSession {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct AgentSessionScan {
+    pub sessions: Vec<AgentSession>,
+    pub warnings: Vec<String>,
+}
+
 pub fn scan_agent_sessions(
     agents: &[BuiltinAgent],
     project_path: &Path,
     access: &AgentSessionAccess,
-) -> Result<Vec<AgentSession>, String> {
+) -> Result<AgentSessionScan, String> {
     if crate::config::storage::is_remote() {
         return Err("remote Agent history must be requested from its Host".to_string());
     }
     if access.policy() == AgentSessionReadPolicy::Disabled {
-        return Ok(Vec::new());
+        return Ok(AgentSessionScan::default());
     }
     let Some(roots) = access.roots() else {
-        return Ok(Vec::new());
+        return Ok(AgentSessionScan::default());
     };
     let roots = AgentSessionRoots {
         codex: roots.codex.clone(),
@@ -63,8 +69,9 @@ pub fn scan_agent_sessions(
         access.allows_native_commands(),
     )
     .map_err(|error| error.to_string())
-    .map(|sessions| {
-        sessions
+    .map(|scan| AgentSessionScan {
+        sessions: scan
+            .sessions
             .into_iter()
             .filter_map(|session| {
                 Some(AgentSession {
@@ -76,7 +83,8 @@ pub fn scan_agent_sessions(
                     updated_at_ms: session.updated_at_ms,
                 })
             })
-            .collect()
+            .collect(),
+        warnings: scan.warnings,
     })
 }
 
@@ -84,17 +92,17 @@ pub fn scan_remote_agent_sessions(
     runtime: &crate::host_runtime::DesktopHostRuntime,
     agents: &[BuiltinAgent],
     project_path: &Path,
-) -> Result<Vec<AgentSession>, String> {
+) -> Result<AgentSessionScan, String> {
     use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
     let response = runtime.workspace_request(WorkspaceRequest::AgentSessions {
         providers: agents.iter().map(|agent| agent.id().to_string()).collect(),
         project_root: yttt_protocol::HostPath::from_client_path(project_path)
             .map_err(|error| error.to_string())?,
     })?;
-    let WorkspaceResponse::AgentSessions(sessions) = response else {
+    let WorkspaceResponse::AgentSessions { sessions, warnings } = response else {
         return Err("unexpected Agent history response".to_string());
     };
-    sessions
+    let sessions = sessions
         .into_iter()
         .map(|session| {
             Ok(AgentSession {
@@ -111,5 +119,6 @@ pub fn scan_remote_agent_sessions(
                     .map_err(|error| error.to_string())?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(AgentSessionScan { sessions, warnings })
 }

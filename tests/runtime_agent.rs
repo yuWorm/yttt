@@ -254,5 +254,6 @@ fn profile_roots_do_not_scan_production_agent_sessions() {
     )
     .unwrap();
 
-    assert!(sessions.is_empty());
+    assert!(sessions.sessions.is_empty());
+    assert!(sessions.warnings.is_empty());
 }

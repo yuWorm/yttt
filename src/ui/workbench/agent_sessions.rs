@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 
@@ -109,6 +109,35 @@ impl WorkbenchView {
         }
     }
 
+    pub(super) fn ensure_agent_session_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.agent_sessions_enabled()
+            || self.project.active_panel_page != ProjectPanelPage::AgentSessions
+        {
+            self.agent_sessions.refresh_task = None;
+            return;
+        }
+        if self.agent_sessions.loading
+            || self.agent_sessions.key.is_none()
+            || self.agent_sessions.refresh_task.is_some()
+        {
+            return;
+        }
+        self.agent_sessions.refresh_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs(30))
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                root.agent_sessions.refresh_task = None;
+                if !root.command_center_is_active()
+                    && root.project.active_panel_page == ProjectPanelPage::AgentSessions
+                {
+                    root.refresh_agent_sessions();
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
     pub(super) fn refresh_agent_sessions(&mut self) {
         if !self.agent_sessions_enabled() {
             return;
@@ -129,19 +158,26 @@ impl WorkbenchView {
     }
 
     fn request_agent_session_scan(&mut self, key: AgentSessionScanKey) {
+        let changed_project_or_providers = self.agent_sessions.key.as_ref() != Some(&key);
+        if !changed_project_or_providers && self.agent_sessions.loading {
+            return;
+        }
+        self.agent_sessions.refresh_task = None;
         self.agent_sessions.generation = self.agent_sessions.generation.wrapping_add(1);
         self.agent_sessions.pending_scan = true;
         self.agent_sessions.loading = true;
-        self.agent_sessions.expanded_providers.clear();
-        if key.agents.len() > 1
-            && let Some(primary_agent) = key.agents.first()
-        {
-            self.agent_sessions
-                .expanded_providers
-                .insert(primary_agent.id());
+        if changed_project_or_providers {
+            self.agent_sessions.expanded_providers.clear();
+            if key.agents.len() > 1
+                && let Some(primary_agent) = key.agents.first()
+            {
+                self.agent_sessions
+                    .expanded_providers
+                    .insert(primary_agent.id());
+            }
+            self.agent_sessions.sessions = Arc::new(Vec::new());
         }
         self.agent_sessions.key = Some(key);
-        self.agent_sessions.sessions = Arc::new(Vec::new());
         self.agent_sessions.error = None;
     }
 
@@ -195,12 +231,12 @@ impl WorkbenchView {
                 }
                 root.agent_sessions.loading = false;
                 match result {
-                    Ok(sessions) => {
-                        root.agent_sessions.sessions = Arc::new(sessions);
-                        root.agent_sessions.error = None;
+                    Ok(scan) => {
+                        root.agent_sessions.sessions = Arc::new(scan.sessions);
+                        root.agent_sessions.error =
+                            (!scan.warnings.is_empty()).then(|| scan.warnings.join("\n"));
                     }
                     Err(error) => {
-                        root.agent_sessions.sessions = Arc::new(Vec::new());
                         root.agent_sessions.error = Some(error);
                     }
                 }
@@ -253,14 +289,18 @@ impl WorkbenchView {
         }
     }
 
-    pub(super) fn resume_agent_session(&mut self, index: usize) -> Result<(), String> {
+    pub(super) fn resume_agent_session(
+        &mut self,
+        provider: BuiltinAgent,
+        session_id: &str,
+    ) -> Result<(), String> {
         let session = self
             .agent_sessions
             .sessions
-            .get(index)
-            .cloned()
+            .iter()
+            .find(|session| session.provider == provider && session.id == session_id)
             .ok_or_else(|| "Agent session is no longer available".to_string())?;
-        let title = self.agent_session_title(&session);
+        let title = self.agent_session_title(session);
         let resume = self
             .agent_manager
             .resume_command(session.provider.id(), &session.metadata())

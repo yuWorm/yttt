@@ -89,6 +89,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AgentSessions => "Agent Sessions",
         UiTextKey::AgentSessionsRefresh => "Refresh Sessions",
         UiTextKey::AgentSessionsLoading => "Scanning agent sessions…",
+        UiTextKey::AgentSessionsPartial => {
+            "Some history could not be refreshed; available sessions remain searchable."
+        }
         UiTextKey::AgentSessionsEmpty => "No sessions found for this project",
         UiTextKey::AgentSessionsSearchPlaceholder => "Search sessions…",
         UiTextKey::AgentSessionsNoMatches => "No matching sessions",

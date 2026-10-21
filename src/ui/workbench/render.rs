@@ -30,6 +30,7 @@ impl Render for WorkbenchView {
         if !self.command_center_is_active() {
             self.ensure_agent_session_scan_requested();
             self.flush_pending_agent_session_scan(window, cx);
+            self.ensure_agent_session_refresh(cx);
         }
         self.flush_pending_project_tree_loads(window, cx);
         self.flush_pending_document_saves(window, cx);

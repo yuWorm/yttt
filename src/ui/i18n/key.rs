@@ -73,6 +73,7 @@ pub enum UiTextKey {
     AgentSessions,
     AgentSessionsRefresh,
     AgentSessionsLoading,
+    AgentSessionsPartial,
     AgentSessionsEmpty,
     AgentSessionsSearchPlaceholder,
     AgentSessionsNoMatches,

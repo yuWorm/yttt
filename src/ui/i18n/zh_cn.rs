@@ -87,6 +87,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AgentSessions => "Agent 会话",
         UiTextKey::AgentSessionsRefresh => "刷新会话",
         UiTextKey::AgentSessionsLoading => "正在扫描 Agent 会话…",
+        UiTextKey::AgentSessionsPartial => "部分历史未能刷新；已有会话仍可搜索。",
         UiTextKey::AgentSessionsEmpty => "未找到当前项目的会话",
         UiTextKey::AgentSessionsSearchPlaceholder => "搜索会话…",
         UiTextKey::AgentSessionsNoMatches => "没有匹配的会话",

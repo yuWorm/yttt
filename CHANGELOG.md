@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修复全部六种 Agent 的历史会话发现：取消合并结果和候选文件截断，OpenCode 显式读取完整列表，规范化项目路径并支持带循环保护的链接目录。Claude 索引损坏时仍读取 JSONL；单个 provider、索引或文件失败显示警告，不丢弃其他正常结果。
+- Fix history discovery for all six Agents: remove merged-result and candidate-file truncation, explicitly request complete OpenCode history, normalize project paths, and traverse linked stores with cycle protection. Fall back to Claude transcripts when an index is damaged; surface provider/file warnings without discarding healthy results.
+- 会话页搜索覆盖完整扫描结果，打开时和停留期间每 30 秒刷新；刷新保留已有列表与搜索，避免重复扫描。远程会话响应携带部分失败警告，资源协议升至 19；桌面、Host、远端 Server 与 CLI 需同步更新。
+- Search the complete discovered history; refresh on opening the session page and every 30 seconds while selected, preserving existing results/search and avoiding duplicate scans. Remote history responses carry partial-failure warnings; resource protocol is now 19, requiring Desktop, Host, remote Server, and CLI to be upgraded together.
+
 ## 0.3.16 - 2026-10-16
 
 - 本版包含未成功发布的 0.3.14 与 0.3.15 改动，详见下方对应条目。资源协议仍为 18；桌面、Host、远端 Server 与 CLI 需同步更新，并重载运行中的 Agent 扩展。

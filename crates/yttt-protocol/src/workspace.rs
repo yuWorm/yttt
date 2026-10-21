@@ -398,7 +398,7 @@ pub enum WorkspaceRequest {
         workspace_id: WorkspaceId,
         reference: DraftRef,
     },
-    /// Checks a saved OMP ID on the Host, independently of bounded history listings.
+    /// Checks a saved OMP ID on the Host independently of project-scoped history.
     OmpSessionExists {
         session_id: String,
     },
@@ -445,8 +445,11 @@ pub enum WorkspaceResponse {
     Environment(WorkspaceEnvironment),
     Workspaces(Vec<WorkspaceSummary>),
     Registered(WorkspaceSummary),
-    /// Returns one bounded Host directory listing.
-    AgentSessions(Vec<AgentSessionSummary>),
+    /// Complete matching history, with recoverable provider/file failures.
+    AgentSessions {
+        sessions: Vec<AgentSessionSummary>,
+        warnings: Vec<String>,
+    },
     AgentHooksInstalled,
     Directory(WorkspaceDirectory),
     /// Returns a configuration document, or `None` when it has not been created.

@@ -14,7 +14,10 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 18`。v18 追加
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 19`。v19 将 `AgentSessions` 响应改为
+  `{ sessions, warnings }`，完整会话列表与 provider／文件级部分失败分别传递；
+  不再因单个 provider 失败清空其他会话。桌面 Client、Host、远端 Server 与 CLI
+  需同步更新。v18 追加
   `ProfileControlRequest::ReacquireIfUnowned { context }`：仅本机入口可用，Host 原子检查
   Host/control epoch、无 owner、无交接，拒绝时返回未改变的控制状态；不能强制接管。
   桌面 Client、Host、远端 Server 与 CLI 需同步更新。
