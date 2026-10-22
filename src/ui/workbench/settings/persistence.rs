@@ -86,7 +86,11 @@ impl WorkbenchView {
         match source {
             Ok(source) => cx.write_to_clipboard(ClipboardItem::new_string(source)),
             Err(error) => {
-                self.load_error = Some(self.ui_text.get(UiTextKey::SettingsDraftCopyFailed).replace("{error}", &error.to_string()))
+                self.load_error = Some(
+                    self.ui_text
+                        .get(UiTextKey::SettingsDraftCopyFailed)
+                        .replace("{error}", &error.to_string()),
+                )
             }
         }
     }
@@ -121,7 +125,9 @@ impl WorkbenchView {
                 || !self.shared_mutation_allowed()
             {
                 return Err(WorkbenchError::SettingsUnavailable(
-                    self.ui_text.get(UiTextKey::SettingsDraftProjectControl).into(),
+                    self.ui_text
+                        .get(UiTextKey::SettingsDraftProjectControl)
+                        .into(),
                 ));
             }
             self.settings.pending_project_settings_save = Some(draft.clone());
@@ -189,7 +195,11 @@ impl WorkbenchView {
                     );
                 }
                 _ => {
-                    self.load_error = Some(self.ui_text.get(UiTextKey::SettingsDraftProjectInvalid).into());
+                    self.load_error = Some(
+                        self.ui_text
+                            .get(UiTextKey::SettingsDraftProjectInvalid)
+                            .into(),
+                    );
                 }
             }
             return;
@@ -205,7 +215,11 @@ impl WorkbenchView {
                 );
             }
             (Err(error), _) | (_, Err(error)) => {
-                self.load_error = Some(self.ui_text.get(UiTextKey::SettingsDraftInvalid).replace("{error}", &error.to_string()));
+                self.load_error = Some(
+                    self.ui_text
+                        .get(UiTextKey::SettingsDraftInvalid)
+                        .replace("{error}", &error.to_string()),
+                );
             }
         }
     }
@@ -348,7 +362,11 @@ impl WorkbenchView {
                         if same_bars_draft {
                             root.set_layout_toml_editor_error("bars", error.clone());
                         }
-                        root.load_error = Some(root.ui_text.get(UiTextKey::SettingsSaveFailed).replace("{error}", &error.to_string()));
+                        root.load_error = Some(
+                            root.ui_text
+                                .get(UiTextKey::SettingsSaveFailed)
+                                .replace("{error}", &error.to_string()),
+                        );
                         root.settings.settings_save_error = Some(error);
                         root.failed_settings_save = Some(retained);
                     }
@@ -589,8 +607,11 @@ impl WorkbenchView {
                     Err(error) => {
                         if last_error.as_ref() != Some(&error) {
                             let _ = this.update(cx, |root, cx| {
-                                root.load_error =
-                                    Some(root.ui_text.get(UiTextKey::SettingsRefreshFailed).replace("{error}", &error.to_string()));
+                                root.load_error = Some(
+                                    root.ui_text
+                                        .get(UiTextKey::SettingsRefreshFailed)
+                                        .replace("{error}", &error.to_string()),
+                                );
                                 cx.notify();
                             });
                             last_error = Some(error);

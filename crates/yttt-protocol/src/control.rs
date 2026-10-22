@@ -679,14 +679,12 @@ mod capability_tests {
 
     #[test]
     fn agent_session_mutation_requires_workspace_mutate_capability() {
-        let request = Request::Workspace(
-            crate::workspace::WorkspaceRequest::MutateAgentSession {
-                provider: "codex".to_string(),
-                session_id: "session-123".to_string(),
-                project_root: crate::HostPath::from_path(&std::env::temp_dir()).unwrap(),
-                operation: crate::workspace::AgentSessionOperation::Delete,
-            },
-        );
+        let request = Request::Workspace(crate::workspace::WorkspaceRequest::MutateAgentSession {
+            provider: "codex".to_string(),
+            session_id: "session-123".to_string(),
+            project_root: crate::HostPath::from_path(&std::env::temp_dir()).unwrap(),
+            operation: crate::workspace::AgentSessionOperation::Delete,
+        });
 
         assert_eq!(
             request.required_capability(),

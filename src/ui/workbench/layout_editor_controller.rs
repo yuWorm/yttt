@@ -120,7 +120,11 @@ impl WorkbenchView {
             &self.ui_text,
         )? {
             Some(value) => value,
-            None => serialize_layout_editor_source(self.default_layout_state.template(), &path, &self.ui_text)?,
+            None => serialize_layout_editor_source(
+                self.default_layout_state.template(),
+                &path,
+                &self.ui_text,
+            )?,
         };
 
         self.overlays.layout_toml_editor = Some(LayoutEditorSession::new(

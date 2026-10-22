@@ -484,7 +484,11 @@ impl WorkbenchView {
                         root.retire_confirmed_workspace_recovery();
                     }
                     Ok(false) => {}
-                    Err(error) => root.set_workspace_persistence_error(root.ui_text.get(UiTextKey::PersistenceClearSettingsRecoveryFailed).replace("{error}", &error.to_string())),
+                    Err(error) => root.set_workspace_persistence_error(
+                        root.ui_text
+                            .get(UiTextKey::PersistenceClearSettingsRecoveryFailed)
+                            .replace("{error}", &error.to_string()),
+                    ),
                 }
                 cx.notify();
             });
@@ -782,7 +786,10 @@ impl WorkbenchView {
             gpui::PromptLevel::Warning,
             self.ui_text.get(UiTextKey::WorkspaceFullRecoveryTitle),
             Some(self.ui_text.get(UiTextKey::WorkspaceFullRecoveryBody)),
-            &[self.ui_text.get(UiTextKey::Cancel), self.ui_text.get(UiTextKey::WorkspaceRestoreAndPublish)],
+            &[
+                self.ui_text.get(UiTextKey::Cancel),
+                self.ui_text.get(UiTextKey::WorkspaceRestoreAndPublish),
+            ],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -831,15 +838,19 @@ impl WorkbenchView {
             || self.workspace_persistence.control_request_in_flight
             || self.workspace_persistence.pending_document_restores != 0
         {
-            return Err(
-                self.ui_text.get(UiTextKey::PersistenceRecoveryWaitOperation).into(),
-            );
+            return Err(self
+                .ui_text
+                .get(UiTextKey::PersistenceRecoveryWaitOperation)
+                .into());
         }
         if !matches!(
             self.workspace_persistence.mode,
             WorkspacePersistenceMode::Active | WorkspacePersistenceMode::RestoreFailed
         ) {
-            return Err(self.ui_text.get(UiTextKey::PersistenceRecoveryReconcile).into());
+            return Err(self
+                .ui_text
+                .get(UiTextKey::PersistenceRecoveryReconcile)
+                .into());
         }
         let current = self.build_remote_workspace_snapshot(cx);
         let unpublished = self
@@ -861,17 +872,20 @@ impl WorkbenchView {
                 .is_none()
                 || self.workspace_persistence.pending_settings_recovery == draft.pending_settings);
         if unpublished && !replaces_failed_restore {
-            return Err(
-                self.ui_text.get(UiTextKey::PersistenceRecoveryPublishFirst)
-                    .into(),
-            );
+            return Err(self
+                .ui_text
+                .get(UiTextKey::PersistenceRecoveryPublishFirst)
+                .into());
         }
         let runtime = self
             .terminal
             .host_runtime
             .clone()
             .filter(|runtime| runtime.shared_editing_enabled())
-            .ok_or(self.ui_text.get(UiTextKey::PersistenceRecoveryControlUnavailable))?;
+            .ok_or(
+                self.ui_text
+                    .get(UiTextKey::PersistenceRecoveryControlUnavailable),
+            )?;
         let workspace_id = self
             .workspace_persistence
             .view
@@ -880,7 +894,10 @@ impl WorkbenchView {
             .id()
             .clone();
         if draft.scope != scope {
-            return Err(self.ui_text.get(UiTextKey::PersistenceRecoveryDifferentWorkspace).into());
+            return Err(self
+                .ui_text
+                .get(UiTextKey::PersistenceRecoveryDifferentWorkspace)
+                .into());
         }
         let candidate = materialize_recovery_snapshot(
             draft.snapshot,
@@ -937,7 +954,9 @@ impl WorkbenchView {
                 .background_executor()
                 .spawn(async move {
                     if runtime.workspace_has_view(&entry.workspace_id) {
-                        return Err(text.get(UiTextKey::PersistenceWorkspaceAlreadyOpen).to_string());
+                        return Err(text
+                            .get(UiTextKey::PersistenceWorkspaceAlreadyOpen)
+                            .to_string());
                     }
                     runtime.workspace_request(WorkspaceRequest::Forget {
                         workspace_id: entry.workspace_id,
@@ -951,8 +970,11 @@ impl WorkbenchView {
                         root.remove_workspace_history_entry(&workspace_id);
                     }
                     result => {
-                        root.palette.workspace_history.error =
-                            Some(root.ui_text.get(UiTextKey::PersistenceRemoveHistory).replace("{detail}", &format!("{result:?}")))
+                        root.palette.workspace_history.error = Some(
+                            root.ui_text
+                                .get(UiTextKey::PersistenceRemoveHistory)
+                                .replace("{detail}", &format!("{result:?}")),
+                        )
                     }
                 }
                 cx.notify();
@@ -976,9 +998,20 @@ impl WorkbenchView {
         let text = self.ui_text;
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
-            text.get(if transfer.is_some() { UiTextKey::ProfileForceControlTitle } else { UiTextKey::ProfileContinueTitle }),
-            Some(text.get(if transfer.is_some() { UiTextKey::ProfileForceControlBody } else { UiTextKey::ProfileContinueBody })),
-            &[text.get(UiTextKey::Cancel), text.get(UiTextKey::DialogContinue)],
+            text.get(if transfer.is_some() {
+                UiTextKey::ProfileForceControlTitle
+            } else {
+                UiTextKey::ProfileContinueTitle
+            }),
+            Some(text.get(if transfer.is_some() {
+                UiTextKey::ProfileForceControlBody
+            } else {
+                UiTextKey::ProfileContinueBody
+            })),
+            &[
+                text.get(UiTextKey::Cancel),
+                text.get(UiTextKey::DialogContinue),
+            ],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -1002,9 +1035,11 @@ impl WorkbenchView {
                     Ok(Ok(Response::ProfileControl(_))) => {}
                     Ok(Err(error)) => root.set_workspace_persistence_error(error.to_string()),
                     Err(error) => root.set_workspace_persistence_error(error.to_string()),
-                    Ok(Ok(_)) => {
-                        root.set_workspace_persistence_error(root.ui_text.get(UiTextKey::ProfileUnexpectedControlResponse).into())
-                    }
+                    Ok(Ok(_)) => root.set_workspace_persistence_error(
+                        root.ui_text
+                            .get(UiTextKey::ProfileUnexpectedControlResponse)
+                            .into(),
+                    ),
                 }
                 cx.notify();
             });
@@ -1064,7 +1099,9 @@ impl WorkbenchView {
         }
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::PersistenceRestoreRetryHostUnavailable).to_string(),
+                self.ui_text
+                    .get(UiTextKey::PersistenceRestoreRetryHostUnavailable)
+                    .to_string(),
             );
             return;
         };
@@ -1075,7 +1112,8 @@ impl WorkbenchView {
             .map(|view| view.id().clone())
         else {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::PersistenceRestoreRetryIdentityUnavailable)
+                self.ui_text
+                    .get(UiTextKey::PersistenceRestoreRetryIdentityUnavailable)
                     .to_string(),
             );
             return;
@@ -1127,7 +1165,9 @@ impl WorkbenchView {
         else {
             self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::PersistenceRestoreIdentityLost).to_string(),
+                self.ui_text
+                    .get(UiTextKey::PersistenceRestoreIdentityLost)
+                    .to_string(),
             );
             return;
         };
@@ -1187,10 +1227,13 @@ impl WorkbenchView {
                 view.published(
                     Some(transfer),
                     None,
-                    self.workspace_persistence
-                        .last_error
-                        .clone()
-                        .or_else(|| Some(self.ui_text.get(UiTextKey::PersistencePublishLostControl).to_string())),
+                    self.workspace_persistence.last_error.clone().or_else(|| {
+                        Some(
+                            self.ui_text
+                                .get(UiTextKey::PersistencePublishLostControl)
+                                .to_string(),
+                        )
+                    }),
                 );
             }
             return;
@@ -1237,7 +1280,11 @@ impl WorkbenchView {
                 }
                 for path in paths {
                     if let Err(error) = self.open_project_path(path) {
-                        self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceOpenInitialProject).replace("{error}", &error.to_string()));
+                        self.set_workspace_persistence_error(
+                            self.ui_text
+                                .get(UiTextKey::PersistenceOpenInitialProject)
+                                .replace("{error}", &error.to_string()),
+                        );
                     }
                 }
             }
@@ -1412,7 +1459,9 @@ impl WorkbenchView {
                         if recovery_choice == Some(WorkspaceRecoveryChoice::PublishLocal) =>
                     {
                         root.install_remote_workspace_restore(prepared, window, cx);
-                        if root.workspace_persistence.mode != WorkspacePersistenceMode::RestoreFailed {
+                        if root.workspace_persistence.mode
+                            != WorkspacePersistenceMode::RestoreFailed
+                        {
                             root.workspace_persistence.recovery_choice = None;
                             root.workspace_persistence.recovery_candidate = None;
                             root.restore_recovered_settings_draft();
@@ -1441,10 +1490,16 @@ impl WorkbenchView {
                         root.clear_workspace_persistence_error();
                     }
                     Ok(Some(prepared))
-                        if root.workspace_persistence.revision.is_none() || !preserve_local
-                            || root.build_remote_workspace_snapshot(cx).is_ok_and(|snapshot| {
-                                workspace_snapshots_match(&snapshot.0, &prepared.server_snapshot)
-                            }) =>
+                        if root.workspace_persistence.revision.is_none()
+                            || !preserve_local
+                            || root
+                                .build_remote_workspace_snapshot(cx)
+                                .is_ok_and(|snapshot| {
+                                    workspace_snapshots_match(
+                                        &snapshot.0,
+                                        &prepared.server_snapshot,
+                                    )
+                                }) =>
                     {
                         root.install_remote_workspace_restore(prepared, window, cx);
                         root.workspace_persistence.recovery_choice = None;
@@ -1469,7 +1524,18 @@ impl WorkbenchView {
                         root.preserve_unpublished_workspace_drafts(
                             &runtime,
                             &workspace_id,
-                            &root.ui_text.get(UiTextKey::PersistenceRevisionChanged).replace("{previous}", &root.workspace_persistence.revision.unwrap_or_default().to_string()).replace("{current}", &prepared.revision.to_string()),
+                            &root
+                                .ui_text
+                                .get(UiTextKey::PersistenceRevisionChanged)
+                                .replace(
+                                    "{previous}",
+                                    &root
+                                        .workspace_persistence
+                                        .revision
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )
+                                .replace("{current}", &prepared.revision.to_string()),
                             cx,
                         );
                     }
@@ -1479,11 +1545,18 @@ impl WorkbenchView {
                             root.preserve_unpublished_workspace_drafts(
                                 &runtime,
                                 &workspace_id,
-                                &root.ui_text.get(UiTextKey::PersistencePublicationRejected).replace("{error}", &error.to_string()),
+                                &root
+                                    .ui_text
+                                    .get(UiTextKey::PersistencePublicationRejected)
+                                    .replace("{error}", &error.to_string()),
                                 cx,
                             );
                         } else {
-                            root.set_workspace_persistence_error(root.ui_text.get(UiTextKey::PersistenceControlUnavailable).replace("{error}", &error.to_string()));
+                            root.set_workspace_persistence_error(
+                                root.ui_text
+                                    .get(UiTextKey::PersistenceControlUnavailable)
+                                    .replace("{error}", &error.to_string()),
+                            );
                         }
                     }
                     Err(RemoteWorkspaceOpenError::InvalidSnapshot(error)) => {
@@ -1492,7 +1565,11 @@ impl WorkbenchView {
                     Err(RemoteWorkspaceOpenError::Retryable(error)) => {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
                         root.workspace_persistence.pending_commit = None;
-                        root.set_workspace_persistence_error(root.ui_text.get(UiTextKey::PersistenceControlUnavailable).replace("{error}", &error.to_string()));
+                        root.set_workspace_persistence_error(
+                            root.ui_text
+                                .get(UiTextKey::PersistenceControlUnavailable)
+                                .replace("{error}", &error.to_string()),
+                        );
                     }
                 }
                 root.finish_workspace_persistence_close_if_ready(window, cx);
@@ -1512,7 +1589,11 @@ impl WorkbenchView {
             match Workspace::restore_persisted_state(prepared.snapshot.workspace.clone()) {
                 Ok(workspace) => workspace,
                 Err(error) => {
-                    self.set_remote_workspace_restore_failure(self.ui_text.get(UiTextKey::PersistenceStateRestoreFailed).replace("{error}", &error.to_string()));
+                    self.set_remote_workspace_restore_failure(
+                        self.ui_text
+                            .get(UiTextKey::PersistenceStateRestoreFailed)
+                            .replace("{error}", &error.to_string()),
+                    );
                     return;
                 }
             };
@@ -1542,7 +1623,11 @@ impl WorkbenchView {
             .workspace_mut()
             .restore_snapshot(prepared.snapshot.editor.clone(), &terminal_ids)
         {
-            self.set_remote_workspace_restore_failure(self.ui_text.get(UiTextKey::PersistenceEditorRestoreFailed).replace("{error}", &error.to_string()));
+            self.set_remote_workspace_restore_failure(
+                self.ui_text
+                    .get(UiTextKey::PersistenceEditorRestoreFailed)
+                    .replace("{error}", &error.to_string()),
+            );
             return;
         }
 
@@ -1602,13 +1687,21 @@ impl WorkbenchView {
         let Some(request) =
             self.begin_project_file_open(&document.project_id, &document.relative_path)
         else {
-            self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceQueueFile).replace("{path}", &document.relative_path.display().to_string()));
+            self.set_workspace_persistence_error(
+                self.ui_text
+                    .get(UiTextKey::PersistenceQueueFile)
+                    .replace("{path}", &document.relative_path.display().to_string()),
+            );
             self.finish_remote_document_restore(cx);
             return;
         };
         let Some(services) = self.project.services.get(&document.project_id).cloned() else {
             self.cancel_project_file_open(&request);
-            self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceProjectService).replace("{path}", &document.relative_path.display().to_string()));
+            self.set_workspace_persistence_error(
+                self.ui_text
+                    .get(UiTextKey::PersistenceProjectService)
+                    .replace("{path}", &document.relative_path.display().to_string()),
+            );
             self.finish_remote_document_restore(cx);
             return;
         };
@@ -1679,7 +1772,11 @@ impl WorkbenchView {
             .document(document_id)
             .cloned()
         else {
-            self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceDocumentMissing).replace("{path}", &snapshot.relative_path.display().to_string()));
+            self.set_workspace_persistence_error(
+                self.ui_text
+                    .get(UiTextKey::PersistenceDocumentMissing)
+                    .replace("{path}", &snapshot.relative_path.display().to_string()),
+            );
             return;
         };
         let mut conflict_message = None;
@@ -1687,7 +1784,11 @@ impl WorkbenchView {
             if let Some(draft) = snapshot.draft.as_ref() {
                 let matches_base = draft_matches_document(draft, document);
                 if !matches_base {
-                    conflict_message = Some(self.ui_text.get(UiTextKey::PersistenceDraftConflict).replace("{path}", &snapshot.relative_path.display().to_string()));
+                    conflict_message = Some(
+                        self.ui_text
+                            .get(UiTextKey::PersistenceDraftConflict)
+                            .replace("{path}", &snapshot.relative_path.display().to_string()),
+                    );
                 }
                 document.restore_recovered_draft(
                     draft.content.clone(),
@@ -1718,7 +1819,11 @@ impl WorkbenchView {
             .and_then(|project| project.location.local_path())
             .cloned()
         else {
-            self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceDraftProjectMissing).replace("{path}", &snapshot.relative_path.display().to_string()));
+            self.set_workspace_persistence_error(
+                self.ui_text
+                    .get(UiTextKey::PersistenceDraftProjectMissing)
+                    .replace("{path}", &snapshot.relative_path.display().to_string()),
+            );
             return;
         };
         let document_id = DocumentId {
@@ -1773,7 +1878,11 @@ impl WorkbenchView {
             subscription,
         );
         self.apply_remote_document_state(&document_id, snapshot, window, cx);
-        self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceDraftBaseMissing).replace("{path}", &snapshot.relative_path.display().to_string()));
+        self.set_workspace_persistence_error(
+            self.ui_text
+                .get(UiTextKey::PersistenceDraftBaseMissing)
+                .replace("{path}", &snapshot.relative_path.display().to_string()),
+        );
     }
 
     fn finish_remote_document_restore(&mut self, cx: &mut Context<Self>) {
@@ -1797,7 +1906,11 @@ impl WorkbenchView {
             .restore_snapshot(editor_snapshot, &terminal_ids)
         {
             self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
-            self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceEditorFinalizeFailed).replace("{error}", &error.to_string()));
+            self.set_workspace_persistence_error(
+                self.ui_text
+                    .get(UiTextKey::PersistenceEditorFinalizeFailed)
+                    .replace("{error}", &error.to_string()),
+            );
 
             return;
         }
@@ -1820,7 +1933,9 @@ impl WorkbenchView {
             WorkspacePersistenceMode::Active | WorkspacePersistenceMode::Observer
         ) {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::PersistenceDraftReconcileFirst).to_string(),
+                self.ui_text
+                    .get(UiTextKey::PersistenceDraftReconcileFirst)
+                    .to_string(),
             );
             return;
         }
@@ -1834,7 +1949,9 @@ impl WorkbenchView {
         };
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::PersistenceDraftHostUnavailable).to_string(),
+                self.ui_text
+                    .get(UiTextKey::PersistenceDraftHostUnavailable)
+                    .to_string(),
             );
             return;
         };
@@ -1845,7 +1962,8 @@ impl WorkbenchView {
             .map(|view| view.id().clone())
         else {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::PersistenceDraftIdentityUnavailable)
+                self.ui_text
+                    .get(UiTextKey::PersistenceDraftIdentityUnavailable)
                     .to_string(),
             );
             return;
@@ -1853,7 +1971,11 @@ impl WorkbenchView {
         let expected_scope = match recoverable_workspace_scope(&runtime, &workspace_id) {
             Ok(scope) => scope,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceRecoverDraftsFailed).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceRecoverDraftsFailed)
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
@@ -1861,13 +1983,18 @@ impl WorkbenchView {
             Ok(draft) if draft.scope == expected_scope => draft,
             Ok(_) => {
                 self.set_workspace_persistence_error(
-                    self.ui_text.get(UiTextKey::PersistenceDraftDifferentWorkspace)
+                    self.ui_text
+                        .get(UiTextKey::PersistenceDraftDifferentWorkspace)
                         .to_string(),
                 );
                 return;
             }
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceRecoverDraftsFailed).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceRecoverDraftsFailed)
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
@@ -1875,7 +2002,11 @@ impl WorkbenchView {
         let snapshot = match RemoteWorkspaceSnapshot::from_value(draft.snapshot) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceRecoverDraftsFailed).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceRecoverDraftsFailed)
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
@@ -1883,7 +2014,9 @@ impl WorkbenchView {
         for body in draft.drafts {
             let Ok(content) = String::from_utf8(body.content) else {
                 self.set_workspace_persistence_error(
-                    self.ui_text.get(UiTextKey::PersistenceDraftInvalidText).to_string(),
+                    self.ui_text
+                        .get(UiTextKey::PersistenceDraftInvalidText)
+                        .to_string(),
                 );
                 return;
             };
@@ -1900,14 +2033,16 @@ impl WorkbenchView {
             };
             let Some((body_reference, content)) = contents.remove(&reference.document_id) else {
                 self.set_workspace_persistence_error(
-                    self.ui_text.get(UiTextKey::PersistenceDraftMissingBody)
+                    self.ui_text
+                        .get(UiTextKey::PersistenceDraftMissingBody)
                         .to_string(),
                 );
                 return;
             };
             if body_reference != *reference {
                 self.set_workspace_persistence_error(
-                    self.ui_text.get(UiTextKey::PersistenceDraftManifestMismatch)
+                    self.ui_text
+                        .get(UiTextKey::PersistenceDraftManifestMismatch)
                         .to_string(),
                 );
                 return;
@@ -1930,15 +2065,22 @@ impl WorkbenchView {
         }
         if recovered == 0 && settings_recovery.is_none() {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::PersistenceDraftNoMatchingProjects)
+                self.ui_text
+                    .get(UiTextKey::PersistenceDraftNoMatchingProjects)
                     .to_string(),
             );
         } else if recovered != 0 {
-            let mut message = self.ui_text.get(UiTextKey::PersistenceRecoveringDrafts)
+            let mut message = self
+                .ui_text
+                .get(UiTextKey::PersistenceRecoveringDrafts)
                 .replace("{count}", &recovered.to_string());
             if unavailable_projects != 0 {
-                message.push_str(&self.ui_text.get(UiTextKey::PersistenceRecoverableProjects)
-                    .replace("{count}", &unavailable_projects.to_string()));
+                message.push_str(
+                    &self
+                        .ui_text
+                        .get(UiTextKey::PersistenceRecoverableProjects)
+                        .replace("{count}", &unavailable_projects.to_string()),
+                );
             }
             self.set_workspace_persistence_error(message);
         }
@@ -1957,7 +2099,11 @@ impl WorkbenchView {
         let scope = match recoverable_workspace_scope(runtime, workspace_id) {
             Ok(scope) => scope,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceLocalRecoveryUnavailable).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceLocalRecoveryUnavailable)
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
@@ -1966,14 +2112,22 @@ impl WorkbenchView {
             Ok(Some(path)) => path,
             Ok(None) => return,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceLocalRecoveryUnavailable).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceLocalRecoveryUnavailable)
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
         let paths = match recoverable_workspace_draft_files(&path) {
             Ok(paths) => paths,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceListRecoveryFailed).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceListRecoveryFailed)
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
@@ -1994,9 +2148,15 @@ impl WorkbenchView {
                     return;
                 }
                 Ok(_) => self.set_workspace_persistence_error(
-                    self.ui_text.get(UiTextKey::PersistenceDraftScopeMismatch).to_string(),
+                    self.ui_text
+                        .get(UiTextKey::PersistenceDraftScopeMismatch)
+                        .to_string(),
                 ),
-                Err(error) => self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceReadRecoveryFailed).replace("{error}", &error.to_string())),
+                Err(error) => self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceReadRecoveryFailed)
+                        .replace("{error}", &error.to_string()),
+                ),
             }
         }
     }
@@ -2029,7 +2189,12 @@ impl WorkbenchView {
         let (snapshot, drafts) = match self.build_workspace_snapshot(cx, None) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistencePrepareRecoveryFailed).replace("{reason}", &reason.to_string()).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistencePrepareRecoveryFailed)
+                        .replace("{reason}", reason)
+                        .replace("{error}", &error.to_string()),
+                );
                 return false;
             }
         };
@@ -2058,18 +2223,32 @@ impl WorkbenchView {
         {
             Ok(Some(path)) => path,
             Ok(None) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceRecoveryStorageUnavailable).replace("{reason}", &reason.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceRecoveryStorageUnavailable)
+                        .replace("{reason}", reason),
+                );
                 return false;
             }
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceLocateRecoveryFailed).replace("{reason}", &reason.to_string()).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceLocateRecoveryFailed)
+                        .replace("{reason}", reason)
+                        .replace("{error}", &error.to_string()),
+                );
                 return false;
             }
         };
         let scope = match recoverable_workspace_scope(runtime, workspace_id) {
             Ok(scope) => scope,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceScopeRecoveryFailed).replace("{reason}", &reason.to_string()).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceScopeRecoveryFailed)
+                        .replace("{reason}", reason)
+                        .replace("{error}", &error.to_string()),
+                );
                 return false;
             }
         };
@@ -2102,11 +2281,20 @@ impl WorkbenchView {
                     self.workspace_persistence.recovery =
                         Some(WorkspaceRecovery::new(saved_path, draft));
                 }
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceRecoverySaved).replace("{reason}", &reason.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceRecoverySaved)
+                        .replace("{reason}", reason),
+                );
                 true
             }
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceRecoveryStorageFailed).replace("{reason}", &reason.to_string()).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceRecoveryStorageFailed)
+                        .replace("{reason}", reason)
+                        .replace("{error}", &error.to_string()),
+                );
                 false
             }
         }
@@ -2160,7 +2348,8 @@ impl WorkbenchView {
             return;
         }
         self.set_workspace_resource_loss(
-            self.ui_text.get(UiTextKey::PersistenceLostTerminals)
+            self.ui_text
+                .get(UiTextKey::PersistenceLostTerminals)
                 .replace("{count}", &losses.len().to_string()),
         );
     }
@@ -2197,7 +2386,10 @@ impl WorkbenchView {
             gpui::PromptLevel::Warning,
             self.ui_text.get(UiTextKey::WorkspaceUnsavedTitle),
             self.workspace_persistence.last_error.as_deref(),
-            &[self.ui_text.get(UiTextKey::WorkspaceKeepOpen), self.ui_text.get(UiTextKey::WorkspaceCloseUnsaved)],
+            &[
+                self.ui_text.get(UiTextKey::WorkspaceKeepOpen),
+                self.ui_text.get(UiTextKey::WorkspaceCloseUnsaved),
+            ],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -2232,7 +2424,9 @@ impl WorkbenchView {
         }
         if self.settings_save_pending() || self.has_failed_settings_save() {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::WorkspaceSettingsPending).to_string(),
+                self.ui_text
+                    .get(UiTextKey::WorkspaceSettingsPending)
+                    .to_string(),
             );
             self.confirm_close_without_remote_save(window, cx);
             return false;
@@ -2242,7 +2436,9 @@ impl WorkbenchView {
         }
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::WorkspaceFlushHostUnavailable).to_string(),
+                self.ui_text
+                    .get(UiTextKey::WorkspaceFlushHostUnavailable)
+                    .to_string(),
             );
             self.confirm_close_without_remote_save(window, cx);
             return false;
@@ -2252,7 +2448,9 @@ impl WorkbenchView {
         }
         if self.workspace_persistence.mode != WorkspacePersistenceMode::Active {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::WorkspaceFlushControlUnavailable).to_string(),
+                self.ui_text
+                    .get(UiTextKey::WorkspaceFlushControlUnavailable)
+                    .to_string(),
             );
             self.confirm_close_without_remote_save(window, cx);
             return false;
@@ -2279,7 +2477,9 @@ impl WorkbenchView {
             .map(|view| view.id().clone())
         else {
             self.set_workspace_persistence_error(
-                self.ui_text.get(UiTextKey::WorkspaceFlushIdentityUnavailable).to_string(),
+                self.ui_text
+                    .get(UiTextKey::WorkspaceFlushIdentityUnavailable)
+                    .to_string(),
             );
             self.confirm_close_without_remote_save(window, cx);
             return false;
@@ -2382,7 +2582,8 @@ impl WorkbenchView {
                 };
                 entry.revision
             } else {
-                revision.ok_or_else(|| text.get(UiTextKey::PersistenceMissingRevision).to_string())?
+                revision
+                    .ok_or_else(|| text.get(UiTextKey::PersistenceMissingRevision).to_string())?
             };
             runtime.workspace_request(WorkspaceRequest::SetRestoreOnStartup {
                 workspace_id,
@@ -2404,7 +2605,11 @@ impl WorkbenchView {
                     result => {
                         root.workspace_persistence.closing = false;
                         root.workspace_persistence.discard_close_requested = false;
-                        root.set_workspace_persistence_error(root.ui_text.get(UiTextKey::PersistenceCloseSavedWorkspace).replace("{detail}", &format!("{result:?}")));
+                        root.set_workspace_persistence_error(
+                            root.ui_text
+                                .get(UiTextKey::PersistenceCloseSavedWorkspace)
+                                .replace("{detail}", &format!("{result:?}")),
+                        );
                         cx.notify();
                     }
                 }
@@ -2419,7 +2624,11 @@ impl WorkbenchView {
                 .global_mut::<crate::remote_restore::RemoteRestoreGlobal>()
                 .close_window()
         {
-            self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceUpdateClientRestore).replace("{error}", &error.to_string()));
+            self.set_workspace_persistence_error(
+                self.ui_text
+                    .get(UiTextKey::PersistenceUpdateClientRestore)
+                    .replace("{error}", &error.to_string()),
+            );
             cx.notify();
             return false;
         }
@@ -2457,7 +2666,8 @@ impl WorkbenchView {
             self.preserve_unpublished_workspace_drafts(
                 &runtime,
                 &workspace_id,
-                self.ui_text.get(UiTextKey::PersistencePublishWorkspaceChanged),
+                self.ui_text
+                    .get(UiTextKey::PersistencePublishWorkspaceChanged),
                 cx,
             );
             cx.notify();
@@ -2498,7 +2708,11 @@ impl WorkbenchView {
                 match WorkspaceOperationId::new(format!("workspace-{}", uuid::Uuid::new_v4())) {
                     Ok(operation_id) => operation_id,
                     Err(error) => {
-                        self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceOperationIdInvalid).replace("{error}", &error.to_string()));
+                        self.set_workspace_persistence_error(
+                            self.ui_text
+                                .get(UiTextKey::PersistenceOperationIdInvalid)
+                                .replace("{error}", &error.to_string()),
+                        );
                         return;
                     }
                 };
@@ -2520,7 +2734,11 @@ impl WorkbenchView {
         let snapshot = match WorkspaceSnapshot::new(pending.snapshot.clone()) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                self.set_workspace_persistence_error(self.ui_text.get(UiTextKey::PersistenceSnapshotInvalid).replace("{error}", &error.to_string()));
+                self.set_workspace_persistence_error(
+                    self.ui_text
+                        .get(UiTextKey::PersistenceSnapshotInvalid)
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
@@ -2574,23 +2792,22 @@ impl WorkbenchView {
                         .host_runtime
                         .as_deref()
                         .and_then(remote_host_epoch),
-                ) && root.workspace_persistence.mode == WorkspacePersistenceMode::Active
-                    && root
-                        .terminal
-                        .host_runtime
-                        .as_ref()
-                        .is_some_and(|runtime| {
-                            runtime.is_controller()
-                                && runtime.control_status().map(|status| status.context)
-                                    == request_control_context
-                        });
+                ) && root.workspace_persistence.mode
+                    == WorkspacePersistenceMode::Active
+                    && root.terminal.host_runtime.as_ref().is_some_and(|runtime| {
+                        runtime.is_controller()
+                            && runtime.control_status().map(|status| status.context)
+                                == request_control_context
+                    });
                 if !response_is_current {
                     root.workspace_persistence.pending_commit = None;
                     if remote_host_epoch(&runtime).is_none() {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
                         root.preserve_unpublished_workspace_drafts(
-                            &runtime, &workspace_id,
-                            root.ui_text.get(UiTextKey::PersistencePublishInterrupted), cx,
+                            &runtime,
+                            &workspace_id,
+                            root.ui_text.get(UiTextKey::PersistencePublishInterrupted),
+                            cx,
                         );
                     } else if !matches!(
                         root.workspace_persistence.mode,
@@ -2601,8 +2818,10 @@ impl WorkbenchView {
                     ) {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
                         root.preserve_unpublished_workspace_drafts(
-                            &runtime, &workspace_id,
-                            root.ui_text.get(UiTextKey::PersistencePublishStaleResponse), cx,
+                            &runtime,
+                            &workspace_id,
+                            root.ui_text.get(UiTextKey::PersistencePublishStaleResponse),
+                            cx,
                         );
                     }
                 } else {
@@ -2619,8 +2838,11 @@ impl WorkbenchView {
                                 .iter()
                                 .map(|(reference, _)| reference.content_sha256)
                                 .collect();
-                            root.workspace_persistence.confirmed_agent_states = pending.uploads
-                                .agent_states.iter().map(|(reference, _)| reference.content_sha256)
+                            root.workspace_persistence.confirmed_agent_states = pending
+                                .uploads
+                                .agent_states
+                                .iter()
+                                .map(|(reference, _)| reference.content_sha256)
                                 .collect();
                             root.workspace_persistence.last_committed_snapshot =
                                 Some(snapshot.into_value());
@@ -2633,7 +2855,10 @@ impl WorkbenchView {
                             root.preserve_unpublished_workspace_drafts(
                                 &runtime,
                                 &workspace_id,
-                                &root.ui_text.get(UiTextKey::PersistenceUnexpectedCommitResponse).replace("{detail}", &format!("{response:?}")),
+                                &root
+                                    .ui_text
+                                    .get(UiTextKey::PersistenceUnexpectedCommitResponse)
+                                    .replace("{detail}", &format!("{response:?}")),
                                 cx,
                             );
                         }
@@ -2642,22 +2867,33 @@ impl WorkbenchView {
                             root.preserve_unpublished_workspace_drafts(
                                 &runtime,
                                 &workspace_id,
-                                &root.ui_text.get(UiTextKey::PersistenceCommitControlLost).replace("{error}", &error.to_string()),
+                                &root
+                                    .ui_text
+                                    .get(UiTextKey::PersistenceCommitControlLost)
+                                    .replace("{error}", &error.to_string()),
                                 cx,
                             );
                         }
                         Err(error) if is_remote_connection_error(&error) => {
-                            root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+                            root.workspace_persistence.mode =
+                                WorkspacePersistenceMode::AwaitingControl;
                             root.workspace_persistence.pending_commit = None;
                             root.preserve_unpublished_workspace_drafts(
                                 &runtime,
                                 &workspace_id,
-                                &root.ui_text.get(UiTextKey::PersistencePublishDisconnectedDetail).replace("{error}", &error.to_string()),
+                                &root
+                                    .ui_text
+                                    .get(UiTextKey::PersistencePublishDisconnectedDetail)
+                                    .replace("{error}", &error.to_string()),
                                 cx,
                             );
                         }
                         Err(error) => {
-                            root.set_workspace_persistence_error(root.ui_text.get(UiTextKey::PersistenceCommitFailed).replace("{error}", &error.to_string()));
+                            root.set_workspace_persistence_error(
+                                root.ui_text
+                                    .get(UiTextKey::PersistenceCommitFailed)
+                                    .replace("{error}", &error.to_string()),
+                            );
                         }
                     }
                 }
@@ -2746,9 +2982,10 @@ impl WorkbenchView {
                             if limits.is_some_and(|(document_limit, _)| {
                                 draft.content.len() > document_limit
                             }) {
-                                return Err(
-                                    self.ui_text.get(UiTextKey::PersistenceDraftDocumentLimit).to_string()
-                                );
+                                return Err(self
+                                    .ui_text
+                                    .get(UiTextKey::PersistenceDraftDocumentLimit)
+                                    .to_string());
                             }
                             let key = serde_json::to_vec(&(&project.id, &relative_path))
                                 .map_err(|error| error.to_string())?;
@@ -2766,9 +3003,10 @@ impl WorkbenchView {
                         total_bytes = total_bytes.saturating_add(content.len());
                         if limits.is_some_and(|(_, workspace_limit)| total_bytes > workspace_limit)
                         {
-                            return Err(
-                                self.ui_text.get(UiTextKey::PersistenceDraftWorkspaceLimit).to_string()
-                            );
+                            return Err(self
+                                .ui_text
+                                .get(UiTextKey::PersistenceDraftWorkspaceLimit)
+                                .to_string());
                         }
                         bodies.push((reference.clone(), content.clone()));
                         Some(reference.clone())
@@ -3669,7 +3907,9 @@ mod tests {
             assert!(root.workspace_persistence.revision.is_none());
             assert!(!root.flush_workspace_persistence_on_close(window, cx));
         });
-        let discard = view.read_with(cx, |root, _| root.ui_text.get(UiTextKey::WorkspaceCloseUnsaved));
+        let discard = view.read_with(cx, |root, _| {
+            root.ui_text.get(UiTextKey::WorkspaceCloseUnsaved)
+        });
         cx.simulate_prompt_answer(discard);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -3965,7 +4205,9 @@ mod tests {
             );
         });
         if matches!(recovery, LayoutRecovery::SavedAfterColdFailure) {
-            let discard = view.read_with(cx, |root, _| root.ui_text.get(UiTextKey::WorkspaceCloseUnsaved));
+            let discard = view.read_with(cx, |root, _| {
+                root.ui_text.get(UiTextKey::WorkspaceCloseUnsaved)
+            });
             cx.simulate_prompt_answer(discard);
         }
         loop {
@@ -4235,7 +4477,8 @@ mod tests {
                     .any(|tab| tab.id == local_tab)
             );
         });
-        let keep_open = target.read_with(cx, |root, _| root.ui_text.get(UiTextKey::WorkspaceKeepOpen));
+        let keep_open =
+            target.read_with(cx, |root, _| root.ui_text.get(UiTextKey::WorkspaceKeepOpen));
         cx.simulate_prompt_answer(keep_open);
         cx.run_until_parked();
         let (_, revision) = acquire_control_and_open(&local, workspace_id.clone(), true).unwrap();

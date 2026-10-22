@@ -106,7 +106,6 @@ use std::{
 type SettingsStringSelectState = SelectState<SearchableVec<String>>;
 type SettingsFontFamilySelectState = SelectState<FontFamilyOptions>;
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsNumberField {
     WindowOpacity,
@@ -614,7 +613,11 @@ impl WorkbenchView {
                     Err(error) => {
                         self.load_error = combine_load_messages(
                             self.load_error.take(),
-                            Some(self.ui_text.get(UiTextKey::HostProjectRegistrationFailed).replace("{error}", &error.to_string())),
+                            Some(
+                                self.ui_text
+                                    .get(UiTextKey::HostProjectRegistrationFailed)
+                                    .replace("{error}", &error.to_string()),
+                            ),
                         );
                     }
                 }
@@ -669,7 +672,11 @@ impl WorkbenchView {
         if failures.is_empty() {
             Ok(())
         } else {
-            Err(WorkbenchError::HostTerminal(self.ui_text.get(UiTextKey::HostTerminalCloseRejected).replace("{details}", &failures.join("; "))))
+            Err(WorkbenchError::HostTerminal(
+                self.ui_text
+                    .get(UiTextKey::HostTerminalCloseRejected)
+                    .replace("{details}", &failures.join("; ")),
+            ))
         }
     }
 
@@ -738,7 +745,10 @@ impl WorkbenchView {
                     self.open_project_path_with_mode(path, ProjectOpenMode::RestoreLastSession)
                 }
                 ProjectLocation::Ssh { .. } => {
-                    push_unique_string(&mut messages, self.ui_text.get(UiTextKey::PreviousSshProjects).into());
+                    push_unique_string(
+                        &mut messages,
+                        self.ui_text.get(UiTextKey::PreviousSshProjects).into(),
+                    );
                     continue;
                 }
             };
@@ -1065,15 +1075,14 @@ impl WorkbenchView {
             return Ok(());
         };
         if state.step != OnboardingStep::ZedImport {
-            return Err(
-                self.ui_text.get(UiTextKey::OnboardingConfirmImport).to_string(),
-            );
+            return Err(self
+                .ui_text
+                .get(UiTextKey::OnboardingConfirmImport)
+                .to_string());
         }
 
         if !self.shared_mutation_allowed() {
-            return Err(
-                self.ui_text.get(UiTextKey::OnboardingNeedsControl).into(),
-            );
+            return Err(self.ui_text.get(UiTextKey::OnboardingNeedsControl).into());
         }
         if self.settings_save_pending() || self.onboarding_completion_in_flight {
             return Err(self.ui_text.get(UiTextKey::OnboardingWaitSettings).into());
@@ -1112,12 +1121,18 @@ impl WorkbenchView {
             })
         };
         if !can_write() {
-            return Err(UiText::from_language(state.selected_language).get(UiTextKey::OnboardingControlLost).into());
+            return Err(UiText::from_language(state.selected_language)
+                .get(UiTextKey::OnboardingControlLost)
+                .into());
         }
         if import_zed_themes && !state.zed_import_completed {
             let device_paths = crate::config::scope::device_preferences_config_paths()
                 .or_else(|| paths.is_test_fixture().then(|| paths.clone()))
-                .ok_or_else(|| UiText::from_language(state.selected_language).get(UiTextKey::DevicePreferencesUnbound).to_string())?;
+                .ok_or_else(|| {
+                    UiText::from_language(state.selected_language)
+                        .get(UiTextKey::DevicePreferencesUnbound)
+                        .to_string()
+                })?;
             import_detected_zed_themes_with_policy(
                 &state.zed_detection,
                 &device_paths,
@@ -2046,7 +2061,11 @@ impl WorkbenchView {
             }
         };
         let Some(path) = path else {
-            self.load_error = Some(self.ui_text.get(UiTextKey::ConfigurationTargetUnavailable).into());
+            self.load_error = Some(
+                self.ui_text
+                    .get(UiTextKey::ConfigurationTargetUnavailable)
+                    .into(),
+            );
             return;
         };
         self.queue_status_notification(
@@ -2591,7 +2610,12 @@ impl WorkbenchView {
                     self.default_layout_state.path().to_path_buf()
                 };
                 platform::reveal_path(&layout_file).map_err(|error| {
-                    WorkbenchError::SystemIntegration(self.ui_text.get(UiTextKey::RevealPathFailed).replace("{path}", &layout_file.display().to_string()).replace("{error}", &error.to_string()))
+                    WorkbenchError::SystemIntegration(
+                        self.ui_text
+                            .get(UiTextKey::RevealPathFailed)
+                            .replace("{path}", &layout_file.display().to_string())
+                            .replace("{error}", &error.to_string()),
+                    )
                 })?;
                 self.show_layout_file_path_status(&layout_file);
                 self.last_opened_layout_file = Some(layout_file);
@@ -2914,7 +2938,9 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         if matches!(mode, ProjectOpenMode::Fresh) && !self.require_shared_mutation_control() {
             return Err(WorkbenchError::SettingsUnavailable(
-                self.ui_text.get(UiTextKey::ProjectOpenRequiresControl).into(),
+                self.ui_text
+                    .get(UiTextKey::ProjectOpenRequiresControl)
+                    .into(),
             ));
         }
         match open_project_config(
@@ -3853,7 +3879,10 @@ impl WorkbenchView {
                 if let Err(error) =
                     result.and_then(|ready| root.agent_manager.ensure_initialized(ready))
                 {
-                    let message = root.ui_text.get(UiTextKey::AgentInitializationFailed).replace("{error}", &error.to_string());
+                    let message = root
+                        .ui_text
+                        .get(UiTextKey::AgentInitializationFailed)
+                        .replace("{error}", &error.to_string());
                     root.agent_initialization_error = Some(message.clone());
                     root.load_error = Some(message);
                 }

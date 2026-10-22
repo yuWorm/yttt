@@ -983,7 +983,7 @@ fn force_stop_provider(child: &mut Child, label: &str) -> Result<(), String> {
         {
             return Ok(());
         }
-        return Err(format!("could not stop temporary {label} process group"));
+        Err(format!("could not stop temporary {label} process group"))
     }
     #[cfg(not(unix))]
     {

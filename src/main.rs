@@ -55,7 +55,10 @@ enum DesktopCliCommand {
     OpenLogs,
 }
 
-fn desktop_cli_command(args: &[OsString], text: UiText) -> Result<Option<DesktopCliCommand>, String> {
+fn desktop_cli_command(
+    args: &[OsString],
+    text: UiText,
+) -> Result<Option<DesktopCliCommand>, String> {
     let mut selected = None;
     for (flag, command) in [
         ("--host-status", DesktopCliCommand::HostStatus),
@@ -136,7 +139,9 @@ fn run_login_startup_cli(
     let status = text.get(match state.status {
         LoginStartupStatus::Disabled => UiTextKey::CliLocalizationLoginStartupDisabled,
         LoginStartupStatus::Enabled => UiTextKey::CliLocalizationLoginStartupEnabled,
-        LoginStartupStatus::RequiresApproval => UiTextKey::CliLocalizationLoginStartupRequiresApproval,
+        LoginStartupStatus::RequiresApproval => {
+            UiTextKey::CliLocalizationLoginStartupRequiresApproval
+        }
         LoginStartupStatus::Unavailable => UiTextKey::CliLocalizationLoginStartupUnavailable,
     });
     Ok(text
@@ -243,7 +248,10 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
                         .replace("{terminals}", &status.terminal_count.to_string())
                         .replace("{clients}", &status.client_count.to_string())
                         .replace("{projects}", &status.project_count.to_string())
-                        .replace("{ssh_connections}", &status.ssh_connection_count.to_string())
+                        .replace(
+                            "{ssh_connections}",
+                            &status.ssh_connection_count.to_string(),
+                        )
                         .replace("{jobs}", &status.agent_count.to_string())),
                     response => Err(anyhow::anyhow!(
                         "{}",
@@ -291,7 +299,9 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
                 if command == DesktopCliCommand::RestartHost {
                     let process = launcher.launch_or_attach().await?;
                     drop(process);
-                    Ok(text.get(UiTextKey::CliLocalizationHostRestarted).to_string())
+                    Ok(text
+                        .get(UiTextKey::CliLocalizationHostRestarted)
+                        .to_string())
                 } else {
                     Ok(text.get(UiTextKey::CliLocalizationHostStopped).to_string())
                 }
@@ -369,10 +379,7 @@ fn host_runtime_artifacts_exist(runtime_root: &Path) -> bool {
     runtime_root.join("host-ready.json").exists() || runtime_root.join("host.pid").exists()
 }
 
-fn wait_for_host_artifacts_to_clear(
-    runtime_root: &Path,
-    text: UiText,
-) -> anyhow::Result<()> {
+fn wait_for_host_artifacts_to_clear(runtime_root: &Path, text: UiText) -> anyhow::Result<()> {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         if !host_runtime_artifacts_exist(runtime_root) {
@@ -380,10 +387,7 @@ fn wait_for_host_artifacts_to_clear(
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    anyhow::bail!(
-        "{}",
-        text.get(UiTextKey::CliLocalizationHostExitTimeout)
-    )
+    anyhow::bail!("{}", text.get(UiTextKey::CliLocalizationHostExitTimeout))
 }
 
 const INSTALLER_HOST_PREFLIGHT_ARG: &str = "--installer-host-preflight";
@@ -594,11 +598,7 @@ mod tests {
 
         assert_eq!(
             desktop_cli_command(
-                &arguments(&[
-                    "yttt",
-                    "--enable-login-startup",
-                    "--confirm-remote-access",
-                ]),
+                &arguments(&["yttt", "--enable-login-startup", "--confirm-remote-access",]),
                 UiText::english(),
             )
             .unwrap(),

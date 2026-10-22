@@ -120,7 +120,11 @@ impl WorkbenchView {
             .workspace
             .selected_project_id()
             .cloned()
-            .ok_or_else(|| self.ui_text.get(UiTextKey::SettingsOpenProjectFirst).to_string())?;
+            .ok_or_else(|| {
+                self.ui_text
+                    .get(UiTextKey::SettingsOpenProjectFirst)
+                    .to_string()
+            })?;
         let project_path = self
             .workspace
             .project(&project_id)

@@ -70,12 +70,10 @@ pub(super) struct GitDiffPanel {
 }
 
 impl WorkbenchView {
-
     fn localized_git_operation_error(&self, detail: impl std::fmt::Display) -> String {
         format!(
             "{}: {detail}",
-            self.ui_text
-                .get(UiTextKey::WorkbenchI18nGitOperationFailed)
+            self.ui_text.get(UiTextKey::WorkbenchI18nGitOperationFailed)
         )
     }
     pub fn git_diff_panel_is_open(&self) -> bool {

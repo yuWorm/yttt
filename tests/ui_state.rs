@@ -3899,7 +3899,6 @@ fn root_view_layout_commands_write_current_project_files() {
     assert!(project_config_dir.join("layout.toml").exists());
 }
 
-
 #[test]
 fn root_view_project_open_surfaces_personal_layout_warning() {
     let temp = tempdir().unwrap();
@@ -7432,7 +7431,6 @@ fn visible_tab_items_mark_selected_tab() {
     assert_eq!(items[1].id, "agent");
     assert_eq!(items[1].state, SelectableState::Active);
 }
-
 
 #[test]
 fn visible_pane_titles_come_from_selected_tab() {

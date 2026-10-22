@@ -241,11 +241,13 @@ impl WorkbenchView {
                                 });
                                 state.entries = entries;
                             }
-                            Err(error) => state.error = Some(format!(
-                                "{}: {error}",
-                                root.ui_text
-                                    .get(UiTextKey::WorkbenchI18nWorkspaceHistoryLoadError)
-                            )),
+                            Err(error) => {
+                                state.error = Some(format!(
+                                    "{}: {error}",
+                                    root.ui_text
+                                        .get(UiTextKey::WorkbenchI18nWorkspaceHistoryLoadError)
+                                ))
+                            }
                         }
                         cx.notify();
                     });

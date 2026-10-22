@@ -772,42 +772,67 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
         } else {
             UiTextKey::DesktopQuitIndependentHostBody
         })),
-        &[text.get(UiTextKey::Cancel), text.get(if stops_host {
-            UiTextKey::DesktopStopHostAndQuit
-        } else {
-            UiTextKey::DesktopDisconnect
-        })],
+        &[
+            text.get(UiTextKey::Cancel),
+            text.get(if stops_host {
+                UiTextKey::DesktopStopHostAndQuit
+            } else {
+                UiTextKey::DesktopDisconnect
+            }),
+        ],
         cx,
     );
     let window_handle = window.window_handle();
     cx.spawn(async move |cx| {
-        if !matches!(answer.await, Ok(1)) { return; }
+        if !matches!(answer.await, Ok(1)) {
+            return;
+        }
         let transfer = runtime.begin_exit_publication();
         cx.update(|cx| cx.refresh_windows());
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let publication = loop {
-            if !runtime.is_controller() { break Ok(()); }
+            if !runtime.is_controller() {
+                break Ok(());
+            }
             match runtime.exit_publication_ready(&transfer) {
                 Ok(true) => break Ok(()),
                 Err(error) => break Err(error),
-                Ok(false) if std::time::Instant::now() >= deadline => break Err(text.get(UiTextKey::DesktopPublishTimeout).to_string()),
-                Ok(false) => cx.background_executor().timer(Duration::from_millis(50)).await,
+                Ok(false) if std::time::Instant::now() >= deadline => {
+                    break Err(text.get(UiTextKey::DesktopPublishTimeout).to_string());
+                }
+                Ok(false) => {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await
+                }
             }
         };
         if let Err(error) = publication {
             let answer = cx.update(|cx| {
-                window_handle.update(cx, |_, window, cx| {
-                    let text = UiText::current(cx);
-                    window.prompt(
-                        gpui::PromptLevel::Warning,
-                        text.get(UiTextKey::DesktopUnpublishedTitle),
-                        Some(&text.get(UiTextKey::DesktopUnpublishedBody).replace("{error}", &error)),
-                        &[text.get(UiTextKey::DesktopKeepOpen), text.get(UiTextKey::DesktopQuitUnpublished)],
-                        cx,
-                    )
-                }).ok()
+                window_handle
+                    .update(cx, |_, window, cx| {
+                        let text = UiText::current(cx);
+                        window.prompt(
+                            gpui::PromptLevel::Warning,
+                            text.get(UiTextKey::DesktopUnpublishedTitle),
+                            Some(
+                                &text
+                                    .get(UiTextKey::DesktopUnpublishedBody)
+                                    .replace("{error}", &error),
+                            ),
+                            &[
+                                text.get(UiTextKey::DesktopKeepOpen),
+                                text.get(UiTextKey::DesktopQuitUnpublished),
+                            ],
+                            cx,
+                        )
+                    })
+                    .ok()
             });
-            let discard = match answer { Some(answer) => matches!(answer.await, Ok(1)), None => false };
+            let discard = match answer {
+                Some(answer) => matches!(answer.await, Ok(1)),
+                None => false,
+            };
             if !discard {
                 runtime.cancel_exit_publication();
                 cx.update(|cx| cx.refresh_windows());
@@ -815,7 +840,10 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
             }
         }
         if stops_host {
-            let result = runtime.request_lifecycle(LifecycleRequest::ForceStop, true).recv_async().await;
+            let result = runtime
+                .request_lifecycle(LifecycleRequest::ForceStop, true)
+                .recv_async()
+                .await;
             if !matches!(result, Ok(Ok(LifecycleResponse::Draining))) {
                 runtime.cancel_exit_publication();
                 cx.update(|cx| {
@@ -833,9 +861,14 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
                 return;
             }
         }
-        cx.background_executor().spawn(async move { runtime.shutdown_client(); }).await;
+        cx.background_executor()
+            .spawn(async move {
+                runtime.shutdown_client();
+            })
+            .await;
         cx.update(|cx| cx.quit());
-    }).detach();
+    })
+    .detach();
 }
 
 fn replace_host_runtime(

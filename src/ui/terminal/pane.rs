@@ -308,7 +308,6 @@ fn terminal_recovery_error_message(error: TerminalRecoveryError, text: UiText) -
     }
 }
 
-
 fn interactive_shell_args(shell: &str) -> Vec<String> {
     let name = shell
         .rsplit(['/', '\\'])
@@ -412,7 +411,6 @@ impl HostTerminalWriter {
     }
 }
 
-
 impl Write for HostTerminalWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let text = self.ui_text();
@@ -475,11 +473,9 @@ impl TerminalPaneView {
     ) -> Result<(flume::Receiver<Result<Response, ClientCoreError>>, usize), String> {
         let ui_text = UiText::current(cx);
         if self.lifecycle != PaneLifecycle::Running {
-            return Err(
-                ui_text
-                    .get(UiTextKey::TerminalI18nInputTerminalNotRunning)
-                    .to_string(),
-            );
+            return Err(ui_text
+                .get(UiTextKey::TerminalI18nInputTerminalNotRunning)
+                .to_string());
         }
         let writer = self.control_writer.as_ref().ok_or_else(|| {
             ui_text
@@ -489,11 +485,9 @@ impl TerminalPaneView {
         if !writer.runtime.shared_editing_enabled()
             || writer.mutation_context.read().lease_epoch == 0
         {
-            return Err(
-                ui_text
-                    .get(UiTextKey::TerminalI18nInputControlUnavailable)
-                    .to_string(),
-            );
+            return Err(ui_text
+                .get(UiTextKey::TerminalI18nInputControlUnavailable)
+                .to_string());
         }
         let terminal = self.terminal.as_ref().ok_or_else(|| {
             ui_text
@@ -997,11 +991,9 @@ impl TerminalPaneView {
                 })
                 .with_resize_callback(move |cols, rows, cell_width, cell_height| {
                     if !matches!(resize_runtime.state(), ConnectionState::Ready { .. }) {
-                        return Err(
-                            resize_text
-                                .get(UiTextKey::TerminalI18nHostConnectionNotReady)
-                                .to_string(),
-                        );
+                        return Err(resize_text
+                            .get(UiTextKey::TerminalI18nHostConnectionNotReady)
+                            .to_string());
                     }
                     let geometry = TerminalGeometry {
                         cols,
@@ -1355,11 +1347,9 @@ impl TerminalPaneView {
                     })?
                     .map_err(|error| error.to_string())?;
                 let Response::Resources(catalog) = response else {
-                    return Err(
-                        ui_text
-                            .get(UiTextKey::TerminalI18nHostCatalogResponseUnexpected)
-                            .to_string(),
-                    );
+                    return Err(ui_text
+                        .get(UiTextKey::TerminalI18nHostCatalogResponseUnexpected)
+                        .to_string());
                 };
                 Ok::<_, String>(catalog)
             }
@@ -1376,8 +1366,7 @@ impl TerminalPaneView {
                     }
                     match catalog {
                         Ok(catalog)
-                            if catalog.host_epoch
-                                != pending_start.attempt.expected_host_epoch =>
+                            if catalog.host_epoch != pending_start.attempt.expected_host_epoch =>
                         {
                             pane.set_spawn_failure(
                                 ui_text
@@ -1387,10 +1376,9 @@ impl TerminalPaneView {
                             );
                         }
                         Ok(catalog)
-                            if catalog
-                                .terminals
-                                .iter()
-                                .any(|placement| placement.session_id == pending_start.spec.session_id) =>
+                            if catalog.terminals.iter().any(|placement| {
+                                placement.session_id == pending_start.spec.session_id
+                            }) =>
                         {
                             pane.start_host_terminal(window, cx, pending_start.intent);
                         }
@@ -1518,11 +1506,8 @@ impl TerminalPaneView {
                     session_id: revoked_session_id,
                     ..
                 } if revoked_session_id == *session_id => {
-                    self.terminal_error = Some(
-                        ui_text
-                            .get(UiTextKey::TerminalI18nLeaseRevoked)
-                            .to_string(),
-                    );
+                    self.terminal_error =
+                        Some(ui_text.get(UiTextKey::TerminalI18nLeaseRevoked).to_string());
                     cx.notify();
                 }
                 ServerEvent::TerminalLeaseReleased {
@@ -1540,11 +1525,8 @@ impl TerminalPaneView {
                     session_id: expired_session_id,
                     ..
                 } if expired_session_id == *session_id => {
-                    self.terminal_error = Some(
-                        ui_text
-                            .get(UiTextKey::TerminalI18nLeaseExpired)
-                            .to_string(),
-                    );
+                    self.terminal_error =
+                        Some(ui_text.get(UiTextKey::TerminalI18nLeaseExpired).to_string());
                     cx.notify();
                 }
                 ServerEvent::TerminalControlRequested {
@@ -2083,20 +2065,18 @@ impl Render for TerminalPaneView {
             let recovery_intent = self.recovery_intent();
             let lost = matches!(self.lifecycle, PaneLifecycle::Lost { .. });
             let lines = match &self.lifecycle {
-                PaneLifecycle::SpawnFailed { .. } => {
-                    spawn_failure_lines(
-                        &TerminalSpawnFailure {
-                            command: self.command.clone(),
-                            cwd: self.project_path.clone(),
-                            message: terminal_start_error(
-                                &self.lifecycle,
-                                &self.terminal_error,
-                                &ui_text,
-                            ),
-                        },
-                        &ui_text,
-                    )
-                }
+                PaneLifecycle::SpawnFailed { .. } => spawn_failure_lines(
+                    &TerminalSpawnFailure {
+                        command: self.command.clone(),
+                        cwd: self.project_path.clone(),
+                        message: terminal_start_error(
+                            &self.lifecycle,
+                            &self.terminal_error,
+                            &ui_text,
+                        ),
+                    },
+                    &ui_text,
+                ),
                 PaneLifecycle::Lost { message } => vec![
                     ui_text
                         .get(UiTextKey::TerminalI18nSessionUnavailable)
@@ -2216,14 +2196,18 @@ impl Render for TerminalPaneView {
 pub fn pane_lifecycle_label(lifecycle: &PaneLifecycle, text: &UiText) -> String {
     match lifecycle {
         PaneLifecycle::Idle => text.get(UiTextKey::TerminalI18nLifecycleIdle).to_string(),
-        PaneLifecycle::Starting => text.get(UiTextKey::TerminalI18nLifecycleStarting).to_string(),
-        PaneLifecycle::Reconciling { .. } => {
-            text.get(UiTextKey::TerminalI18nLifecycleReconciling).to_string()
-        }
-        PaneLifecycle::Running => text.get(UiTextKey::TerminalI18nLifecycleRunning).to_string(),
-        PaneLifecycle::Stopping { .. } => {
-            text.get(UiTextKey::TerminalI18nLifecycleStopping).to_string()
-        }
+        PaneLifecycle::Starting => text
+            .get(UiTextKey::TerminalI18nLifecycleStarting)
+            .to_string(),
+        PaneLifecycle::Reconciling { .. } => text
+            .get(UiTextKey::TerminalI18nLifecycleReconciling)
+            .to_string(),
+        PaneLifecycle::Running => text
+            .get(UiTextKey::TerminalI18nLifecycleRunning)
+            .to_string(),
+        PaneLifecycle::Stopping { .. } => text
+            .get(UiTextKey::TerminalI18nLifecycleStopping)
+            .to_string(),
         PaneLifecycle::Exited {
             code: Some(code), ..
         } => text
@@ -2350,10 +2334,7 @@ mod tests {
         cx.read(|app| {
             let pane = pane.read(app);
             assert!(pane.terminal.is_none());
-            assert!(matches!(
-                &pane.lifecycle,
-                PaneLifecycle::SpawnFailed { .. }
-            ));
+            assert!(matches!(&pane.lifecycle, PaneLifecycle::SpawnFailed { .. }));
         });
     }
 

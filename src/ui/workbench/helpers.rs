@@ -124,10 +124,14 @@ pub(super) fn selected_index_for_settings_option(
 }
 
 pub(super) fn language_setting_labels(text: UiText) -> Vec<String> {
-    [LanguageSetting::System, LanguageSetting::English, LanguageSetting::Chinese]
-        .into_iter()
-        .map(|language| language_setting_label(language, text).to_string())
-        .collect()
+    [
+        LanguageSetting::System,
+        LanguageSetting::English,
+        LanguageSetting::Chinese,
+    ]
+    .into_iter()
+    .map(|language| language_setting_label(language, text).to_string())
+    .collect()
 }
 
 pub(super) fn language_setting_label(language: LanguageSetting, text: UiText) -> &'static str {
@@ -139,19 +143,30 @@ pub(super) fn language_setting_label(language: LanguageSetting, text: UiText) ->
 }
 
 pub(super) fn language_setting_from_label(label: &str, text: UiText) -> Option<LanguageSetting> {
-    [LanguageSetting::System, LanguageSetting::English, LanguageSetting::Chinese]
-        .into_iter()
-        .find(|language| language_setting_label(*language, text) == label)
+    [
+        LanguageSetting::System,
+        LanguageSetting::English,
+        LanguageSetting::Chinese,
+    ]
+    .into_iter()
+    .find(|language| language_setting_label(*language, text) == label)
 }
 
 pub(super) fn terminal_cursor_shape_labels(text: UiText) -> Vec<String> {
-    [TerminalCursorShape::Block, TerminalCursorShape::Underline, TerminalCursorShape::Beam]
-        .into_iter()
-        .map(|shape| terminal_cursor_shape_label(shape, text).to_string())
-        .collect()
+    [
+        TerminalCursorShape::Block,
+        TerminalCursorShape::Underline,
+        TerminalCursorShape::Beam,
+    ]
+    .into_iter()
+    .map(|shape| terminal_cursor_shape_label(shape, text).to_string())
+    .collect()
 }
 
-pub(super) fn terminal_cursor_shape_label(shape: TerminalCursorShape, text: UiText) -> &'static str {
+pub(super) fn terminal_cursor_shape_label(
+    shape: TerminalCursorShape,
+    text: UiText,
+) -> &'static str {
     text.get(match shape {
         TerminalCursorShape::Block => UiTextKey::SettingsCursorBlock,
         TerminalCursorShape::Underline => UiTextKey::SettingsCursorUnderline,
@@ -159,20 +174,34 @@ pub(super) fn terminal_cursor_shape_label(shape: TerminalCursorShape, text: UiTe
     })
 }
 
-pub(super) fn terminal_cursor_shape_from_label(label: &str, text: UiText) -> Option<TerminalCursorShape> {
-    [TerminalCursorShape::Block, TerminalCursorShape::Underline, TerminalCursorShape::Beam]
-        .into_iter()
-        .find(|shape| terminal_cursor_shape_label(*shape, text) == label)
+pub(super) fn terminal_cursor_shape_from_label(
+    label: &str,
+    text: UiText,
+) -> Option<TerminalCursorShape> {
+    [
+        TerminalCursorShape::Block,
+        TerminalCursorShape::Underline,
+        TerminalCursorShape::Beam,
+    ]
+    .into_iter()
+    .find(|shape| terminal_cursor_shape_label(*shape, text) == label)
 }
 
 pub(super) fn terminal_osc52_policy_labels(text: UiText) -> Vec<String> {
-    [TerminalOsc52Policy::Disabled, TerminalOsc52Policy::CopyOnly, TerminalOsc52Policy::ReadWrite]
-        .into_iter()
-        .map(|policy| terminal_osc52_policy_label(policy, text).to_string())
-        .collect()
+    [
+        TerminalOsc52Policy::Disabled,
+        TerminalOsc52Policy::CopyOnly,
+        TerminalOsc52Policy::ReadWrite,
+    ]
+    .into_iter()
+    .map(|policy| terminal_osc52_policy_label(policy, text).to_string())
+    .collect()
 }
 
-pub(super) fn terminal_osc52_policy_label(policy: TerminalOsc52Policy, text: UiText) -> &'static str {
+pub(super) fn terminal_osc52_policy_label(
+    policy: TerminalOsc52Policy,
+    text: UiText,
+) -> &'static str {
     text.get(match policy {
         TerminalOsc52Policy::Disabled => UiTextKey::SettingsOptionDisabled,
         TerminalOsc52Policy::CopyOnly => UiTextKey::SettingsOsc52CopyOnly,
@@ -180,10 +209,17 @@ pub(super) fn terminal_osc52_policy_label(policy: TerminalOsc52Policy, text: UiT
     })
 }
 
-pub(super) fn terminal_osc52_policy_from_label(label: &str, text: UiText) -> Option<TerminalOsc52Policy> {
-    [TerminalOsc52Policy::Disabled, TerminalOsc52Policy::CopyOnly, TerminalOsc52Policy::ReadWrite]
-        .into_iter()
-        .find(|policy| terminal_osc52_policy_label(*policy, text) == label)
+pub(super) fn terminal_osc52_policy_from_label(
+    label: &str,
+    text: UiText,
+) -> Option<TerminalOsc52Policy> {
+    [
+        TerminalOsc52Policy::Disabled,
+        TerminalOsc52Policy::CopyOnly,
+        TerminalOsc52Policy::ReadWrite,
+    ]
+    .into_iter()
+    .find(|policy| terminal_osc52_policy_label(*policy, text) == label)
 }
 
 pub(super) fn vim_mode_label(mode: VimModeSetting, text: UiText) -> &'static str {
@@ -216,10 +252,13 @@ pub(super) fn layout_source_message(source: &LayoutSource, text: UiText) -> Stri
         LayoutSource::GlobalDefault(_) => UiTextKey::LayoutSourceGlobal,
         LayoutSource::GlobalDefaultWithPersonalPatch { .. } => UiTextKey::LayoutSourceGlobalPatched,
         LayoutSource::ProjectConfig(_) => UiTextKey::LayoutSourceProject,
-        LayoutSource::ProjectConfigWithPersonalPatch { .. } => UiTextKey::LayoutSourceProjectPatched,
+        LayoutSource::ProjectConfigWithPersonalPatch { .. } => {
+            UiTextKey::LayoutSourceProjectPatched
+        }
         LayoutSource::PersonalReplace(_) => UiTextKey::LayoutSourcePersonal,
     };
-    text.get(UiTextKey::LayoutSourceLabel).replace("{source}", text.get(key))
+    text.get(UiTextKey::LayoutSourceLabel)
+        .replace("{source}", text.get(key))
 }
 
 pub(super) fn layout_load_warning_message(warnings: &[LayoutLoadWarning]) -> Option<String> {
@@ -290,7 +329,12 @@ pub(super) fn load_app_settings_messages(paths: &AppConfigPaths) -> (AppSettings
     let settings = match load_settings(paths) {
         Ok(loaded) => {
             let text = UiText::from_language(loaded.settings.general.language);
-            warnings.extend(loaded.warnings.iter().map(|warning| format_settings_warning_line(warning, text)));
+            warnings.extend(
+                loaded
+                    .warnings
+                    .iter()
+                    .map(|warning| format_settings_warning_line(warning, text)),
+            );
             loaded.settings
         }
         Err(error) => {
@@ -310,7 +354,12 @@ pub(super) fn load_theme_runtime_messages(
     let text = UiText::from_language(settings.general.language);
     let theme_store = match load_theme_store(paths) {
         Ok(loaded) => {
-            warnings.extend(loaded.warnings.iter().map(|warning| format_theme_warning_line(warning, text)));
+            warnings.extend(
+                loaded
+                    .warnings
+                    .iter()
+                    .map(|warning| format_theme_warning_line(warning, text)),
+            );
             loaded.store
         }
         Err(error) => {
@@ -334,12 +383,14 @@ pub(super) fn combine_load_messages(left: Option<String>, right: Option<String>)
 pub(super) fn format_settings_warning_line(warning: &SettingsLoadWarning, text: UiText) -> String {
     let (group, field) = match warning {
         SettingsLoadWarning::InvalidToml { path, message } => {
-            return text.get(UiTextKey::SettingsWarningFile)
+            return text
+                .get(UiTextKey::SettingsWarningFile)
                 .replace("{path}", &path.display().to_string())
                 .replace("{error}", message);
         }
         SettingsLoadWarning::InvalidBarsValue { field, value } => {
-            return text.get(UiTextKey::SettingsWarningBars)
+            return text
+                .get(UiTextKey::SettingsWarningBars)
                 .replace("{field}", field)
                 .replace("{value}", &format!("{value:?}"));
         }
@@ -360,16 +411,14 @@ pub(super) fn format_theme_warning_line(warning: &ThemeLoadWarning, text: UiText
     match warning {
         ThemeLoadWarning::ReadDir { path, message }
         | ThemeLoadWarning::ReadFile { path, message }
-        | ThemeLoadWarning::ParseFile { path, message } => {
-            text.get(UiTextKey::ThemeWarningFile)
-                .replace("{path}", &path.display().to_string())
-                .replace("{error}", message)
-        }
-        ThemeLoadWarning::InvalidColor { theme, field } => {
-            text.get(UiTextKey::ThemeWarningColor)
-                .replace("{theme}", theme)
-                .replace("{field}", field)
-        }
+        | ThemeLoadWarning::ParseFile { path, message } => text
+            .get(UiTextKey::ThemeWarningFile)
+            .replace("{path}", &path.display().to_string())
+            .replace("{error}", message),
+        ThemeLoadWarning::InvalidColor { theme, field } => text
+            .get(UiTextKey::ThemeWarningColor)
+            .replace("{theme}", theme)
+            .replace("{field}", field),
     }
 }
 

@@ -422,11 +422,10 @@ fn find_claude_target(
             }
             _ if path
                 .extension()
-                .is_some_and(|extension| extension == "jsonl") =>
+                .is_some_and(|extension| extension == "jsonl")
+                && claude_transcript_matches(&path, session_id, project_path)? =>
             {
-                if claude_transcript_matches(&path, session_id, project_path)? {
-                    target.transcripts.push(path);
-                }
+                target.transcripts.push(path);
             }
             _ => {}
         }
@@ -798,8 +797,6 @@ fn rename_omp(
             rewritten.push_str(&updated_header);
             if raw.ends_with("\r\n") {
                 rewritten.push_str("\r\n");
-            } else if raw.ends_with('\n') {
-                rewritten.push('\n');
             } else {
                 rewritten.push('\n');
             }
@@ -843,7 +840,7 @@ fn parse_omp_title_slot(line: &str, expected_bytes: usize) -> Result<Option<OmpT
     if value.get("type").and_then(Value::as_str) != Some("title") {
         return Ok(None);
     }
-    if line.as_bytes().len() != expected_bytes
+    if line.len() != expected_bytes
         || value.get("v").and_then(Value::as_u64) != Some(1)
         || value.get("title").and_then(Value::as_str).is_none()
         || value.get("updatedAt").and_then(Value::as_str).is_none()
@@ -1230,7 +1227,7 @@ fn ensure_not_open(path: &Path) -> Result<(), String> {
         ));
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() && !(output.status.code() == Some(1) && stderr.trim().is_empty()) {
+    if !(output.status.success() || output.status.code() == Some(1) && stderr.trim().is_empty()) {
         return Err(format!(
             "cannot verify whether {} is active: {}",
             path.display(),

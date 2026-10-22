@@ -36,7 +36,6 @@ struct SshPasswordAttempt {
 const SSH_PROJECT_DIRECTORY_SCROLL_ROW_LIMIT: usize = 8;
 
 impl WorkbenchView {
-
     fn localized_ssh_project_picker_error(&self, detail: impl std::fmt::Display) -> String {
         format!(
             "{}: {detail}",
@@ -76,7 +75,8 @@ impl WorkbenchView {
         ) {
             Ok(path) => PathBuf::from(path.as_str()),
             Err(error) => {
-                self.ssh.project_picker.error = Some(self.localized_ssh_project_picker_error(error));
+                self.ssh.project_picker.error =
+                    Some(self.localized_ssh_project_picker_error(error));
                 cx.notify();
                 return;
             }
@@ -1081,8 +1081,7 @@ impl WorkbenchView {
                 &value,
                 self.ssh.project_picker.home_path.as_ref(),
                 self.ui_text,
-            )
-            {
+            ) {
                 Ok((parent, prefix)) => {
                     if self.ssh.project_picker.current_path.as_ref() != Some(&parent)
                         || self.ssh.project_picker.error.is_some()
@@ -2383,7 +2382,10 @@ mod tests {
     fn remote_picker_expands_only_the_connected_users_home() {
         let home = RemotePathBuf::new("/home/remote-user").unwrap();
         let text = UiText::english();
-        assert_eq!(remote_picker_input_path("~", Some(&home), text).unwrap(), home);
+        assert_eq!(
+            remote_picker_input_path("~", Some(&home), text).unwrap(),
+            home
+        );
         assert_eq!(
             remote_picker_input_path("~/Project with spaces/../.config/", Some(&home), text)
                 .unwrap()

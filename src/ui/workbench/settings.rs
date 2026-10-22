@@ -41,7 +41,9 @@ impl WorkbenchView {
             })
             .ok_or_else(|| {
                 WorkbenchError::SettingsUnavailable(
-                    self.ui_text.get(UiTextKey::SettingsDeviceUnbound).to_string(),
+                    self.ui_text
+                        .get(UiTextKey::SettingsDeviceUnbound)
+                        .to_string(),
                 )
             })
     }
@@ -74,7 +76,12 @@ impl WorkbenchView {
                 Ok(false) if directory.pop() => {}
                 Ok(false) => return,
                 Err(error) => {
-                    self.set_keybinding_load_error(self.ui_text.get(UiTextKey::SettingsInspectKeybindings).replace("{path}", &directory.display().to_string()).replace("{error}", &error.to_string()));
+                    self.set_keybinding_load_error(
+                        self.ui_text
+                            .get(UiTextKey::SettingsInspectKeybindings)
+                            .replace("{path}", &directory.display().to_string())
+                            .replace("{error}", &error.to_string()),
+                    );
                     return;
                 }
             }
@@ -95,7 +102,12 @@ impl WorkbenchView {
                     .expect("watched directory is an ancestor of the keybindings path"),
             ),
             Err(error) => {
-                self.set_keybinding_load_error(self.ui_text.get(UiTextKey::SettingsResolveKeybindings).replace("{path}", &directory.display().to_string()).replace("{error}", &error.to_string()));
+                self.set_keybinding_load_error(
+                    self.ui_text
+                        .get(UiTextKey::SettingsResolveKeybindings)
+                        .replace("{path}", &directory.display().to_string())
+                        .replace("{error}", &error.to_string()),
+                );
                 return;
             }
         };
@@ -116,13 +128,23 @@ impl WorkbenchView {
             }) {
                 Ok(watcher) => watcher,
                 Err(error) => {
-                    self.set_keybinding_load_error(self.ui_text.get(UiTextKey::SettingsWatchKeybindings).replace("{path}", &path.display().to_string()).replace("{error}", &error.to_string()));
+                    self.set_keybinding_load_error(
+                        self.ui_text
+                            .get(UiTextKey::SettingsWatchKeybindings)
+                            .replace("{path}", &path.display().to_string())
+                            .replace("{error}", &error.to_string()),
+                    );
                     return;
                 }
             };
         use notify::Watcher as _;
         if let Err(error) = watcher.watch(&directory, notify::RecursiveMode::NonRecursive) {
-            self.set_keybinding_load_error(self.ui_text.get(UiTextKey::SettingsWatchKeybindings).replace("{path}", &path.display().to_string()).replace("{error}", &error.to_string()));
+            self.set_keybinding_load_error(
+                self.ui_text
+                    .get(UiTextKey::SettingsWatchKeybindings)
+                    .replace("{path}", &path.display().to_string())
+                    .replace("{error}", &error.to_string()),
+            );
             return;
         }
 
@@ -412,13 +434,16 @@ impl WorkbenchView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let current_target = self
-            .settings_project_target()
-            .ok_or_else(|| self.ui_text.get(UiTextKey::SettingsProjectLoading).to_string())?;
+        let current_target = self.settings_project_target().ok_or_else(|| {
+            self.ui_text
+                .get(UiTextKey::SettingsProjectLoading)
+                .to_string()
+        })?;
         if &current_target != target {
-            return Err(
-                self.ui_text.get(UiTextKey::SettingsProjectChanged).to_string(),
-            );
+            return Err(self
+                .ui_text
+                .get(UiTextKey::SettingsProjectChanged)
+                .to_string());
         }
         if self.settings_save_pending() {
             return Err("A settings save is still pending; wait for its result.".to_string());
@@ -441,9 +466,10 @@ impl WorkbenchView {
 
         let io = self.selected_project_editor_settings_io()?;
         if io.project_id != target.0 {
-            return Err(
-                self.ui_text.get(UiTextKey::SettingsProjectChanged).to_string(),
-            );
+            return Err(self
+                .ui_text
+                .get(UiTextKey::SettingsProjectChanged)
+                .to_string());
         }
         if !io.can_write_host {
             return Err(self
@@ -454,7 +480,11 @@ impl WorkbenchView {
         let confirmed = self
             .cached_project_editor_setting(key)
             .cloned()
-            .ok_or_else(|| self.ui_text.get(UiTextKey::SettingsProjectLoading).to_string())?;
+            .ok_or_else(|| {
+                self.ui_text
+                    .get(UiTextKey::SettingsProjectLoading)
+                    .to_string()
+            })?;
         if value
             .as_ref()
             .is_some_and(|candidate| candidate == &confirmed.value)
@@ -583,7 +613,11 @@ impl WorkbenchView {
         let result = value
             .ok()
             .filter(|value| (1..=16).contains(value))
-            .ok_or_else(|| self.ui_text.get(UiTextKey::SettingsTabSizeInvalid).to_string())
+            .ok_or_else(|| {
+                self.ui_text
+                    .get(UiTextKey::SettingsTabSizeInvalid)
+                    .to_string()
+            })
             .and_then(|value| {
                 self.save_project_editor_setting(
                     target,
@@ -614,7 +648,11 @@ impl WorkbenchView {
         }
         let value = input.read(cx).value().trim().to_string();
         if value.is_empty() {
-            self.load_error = Some(self.ui_text.get(UiTextKey::SettingsLanguageEmpty).to_string());
+            self.load_error = Some(
+                self.ui_text
+                    .get(UiTextKey::SettingsLanguageEmpty)
+                    .to_string(),
+            );
         } else if let Err(error) = self.save_project_editor_setting(
             target,
             crate::config::project_settings::ProjectEditorSettingKey::DefaultLanguage,
@@ -822,7 +860,6 @@ impl WorkbenchView {
         }
         Ok(())
     }
-
 
     pub fn set_terminal_shell(&mut self, shell: &str) -> Result<(), WorkbenchError> {
         self.app_settings.terminal.shell = shell.to_string();
@@ -1373,8 +1410,11 @@ impl WorkbenchView {
     }
 
     pub fn select_settings_group(&mut self, group_id: &str) -> Result<(), String> {
-        let group = SettingsGroupId::from_id(group_id)
-            .ok_or_else(|| self.ui_text.get(UiTextKey::SettingsUnknownGroup).replace("{group_id}", &group_id.to_string()))?;
+        let group = SettingsGroupId::from_id(group_id).ok_or_else(|| {
+            self.ui_text
+                .get(UiTextKey::SettingsUnknownGroup)
+                .replace("{group_id}", group_id)
+        })?;
         self.settings.settings_page.selected_group = group;
         Ok(())
     }
@@ -1530,15 +1570,19 @@ impl WorkbenchView {
         let text = self.ui_text;
         let task = cx.background_spawn(async move {
             let state = manager.status().map_err(|error| error.to_string())?;
-            let runtime = runtime.ok_or_else(|| text.get(UiTextKey::SettingsHostUnavailable).to_string())?;
-            let consent = match runtime
-                .request_blocking(yttt_protocol::Request::ReadDeviceSettings)?
-            {
-                yttt_protocol::Response::DeviceSettings(settings) => {
-                    settings.login_startup_consent_granted
-                }
-                _ => return Err(text.get(UiTextKey::SettingsUnexpectedDeviceResponse).to_string()),
-            };
+            let runtime =
+                runtime.ok_or_else(|| text.get(UiTextKey::SettingsHostUnavailable).to_string())?;
+            let consent =
+                match runtime.request_blocking(yttt_protocol::Request::ReadDeviceSettings)? {
+                    yttt_protocol::Response::DeviceSettings(settings) => {
+                        settings.login_startup_consent_granted
+                    }
+                    _ => {
+                        return Err(text
+                            .get(UiTextKey::SettingsUnexpectedDeviceResponse)
+                            .to_string());
+                    }
+                };
             Ok::<_, String>((state, consent))
         });
         cx.spawn(async move |this, cx| {
@@ -1656,7 +1700,8 @@ impl WorkbenchView {
                 .set_enabled(enabled, user_confirmed)
                 .map_err(|error| error.to_string())?;
             if enabled {
-                let runtime = runtime.ok_or_else(|| text.get(UiTextKey::SettingsHostUnavailable).to_string())?;
+                let runtime = runtime
+                    .ok_or_else(|| text.get(UiTextKey::SettingsHostUnavailable).to_string())?;
                 runtime.request_blocking(yttt_protocol::Request::SetLoginStartupConsent {
                     granted: true,
                 })?;
@@ -2284,7 +2329,8 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Entity<SettingsStringSelectState> {
         let items = language_setting_labels(self.ui_text);
-        let selected = language_setting_label(self.app_settings.general.language, self.ui_text).to_string();
+        let selected =
+            language_setting_label(self.app_settings.general.language, self.ui_text).to_string();
 
         if let Some(select) = &self.settings.settings_language_select {
             select.clone()
@@ -2308,10 +2354,14 @@ impl WorkbenchView {
         if let Some(select) = &self.settings.settings_vim_mode_select {
             return select.clone();
         }
-        let items: Vec<String> = [VimModeSetting::Global, VimModeSetting::Editor, VimModeSetting::Disabled]
-            .into_iter()
-            .map(|mode| vim_mode_label(mode, self.ui_text).to_string())
-            .collect();
+        let items: Vec<String> = [
+            VimModeSetting::Global,
+            VimModeSetting::Editor,
+            VimModeSetting::Disabled,
+        ]
+        .into_iter()
+        .map(|mode| vim_mode_label(mode, self.ui_text).to_string())
+        .collect();
         let selected = vim_mode_label(self.app_settings.vim.mode, self.ui_text);
         let selected_index = selected_index_for_settings_option(&items, selected);
         let select =
@@ -2552,7 +2602,11 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SettingsStringSelectState> {
-        let mut items = vec![self.ui_text.get(UiTextKey::SettingsIconThemeBuiltin).to_string()];
+        let mut items = vec![
+            self.ui_text
+                .get(UiTextKey::SettingsIconThemeBuiltin)
+                .to_string(),
+        ];
         for theme_name in self.available_icon_theme_names() {
             push_unique_string(&mut items, theme_name);
         }
@@ -2561,7 +2615,11 @@ impl WorkbenchView {
             .theme
             .icon_theme
             .clone()
-            .unwrap_or_else(|| self.ui_text.get(UiTextKey::SettingsIconThemeBuiltin).to_string());
+            .unwrap_or_else(|| {
+                self.ui_text
+                    .get(UiTextKey::SettingsIconThemeBuiltin)
+                    .to_string()
+            });
         push_unique_string(&mut items, selected.clone());
 
         if let Some(select) = &self.settings.settings_icon_theme_select {
@@ -2585,16 +2643,19 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SettingsStringSelectState> {
-        let mut items = vec![self.ui_text.get(UiTextKey::SettingsTerminalThemeFollowUi).to_string()];
+        let mut items = vec![
+            self.ui_text
+                .get(UiTextKey::SettingsTerminalThemeFollowUi)
+                .to_string(),
+        ];
         for theme_name in self.available_theme_names() {
             push_unique_string(&mut items, theme_name);
         }
-        let selected = self
-            .app_settings
-            .theme
-            .terminal
-            .clone()
-            .unwrap_or_else(|| self.ui_text.get(UiTextKey::SettingsTerminalThemeFollowUi).to_string());
+        let selected = self.app_settings.theme.terminal.clone().unwrap_or_else(|| {
+            self.ui_text
+                .get(UiTextKey::SettingsTerminalThemeFollowUi)
+                .to_string()
+        });
 
         if let Some(select) = &self.settings.settings_terminal_theme_select {
             select.clone()
@@ -2621,7 +2682,8 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Entity<SettingsStringSelectState> {
         let items = terminal_cursor_shape_labels(self.ui_text);
-        let selected = terminal_cursor_shape_label(self.terminal_cursor_shape(), self.ui_text).to_string();
+        let selected =
+            terminal_cursor_shape_label(self.terminal_cursor_shape(), self.ui_text).to_string();
         if let Some(select) = &self.settings.settings_terminal_cursor_shape_select {
             return select.clone();
         }
@@ -2646,7 +2708,8 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Entity<SettingsStringSelectState> {
         let items = terminal_osc52_policy_labels(self.ui_text);
-        let selected = terminal_osc52_policy_label(self.terminal_osc52_policy(), self.ui_text).to_string();
+        let selected =
+            terminal_osc52_policy_label(self.terminal_osc52_policy(), self.ui_text).to_string();
         if let Some(select) = &self.settings.settings_terminal_osc52_policy_select {
             return select.clone();
         }
@@ -2860,10 +2923,13 @@ impl WorkbenchView {
         let SelectEvent::Confirm(Some(value)) = event else {
             return;
         };
-        let Some(mode) = [VimModeSetting::Global, VimModeSetting::Editor, VimModeSetting::Disabled]
-            .into_iter()
-            .find(|mode| vim_mode_label(*mode, self.ui_text) == value.as_str())
-        else {
+        let Some(mode) = [
+            VimModeSetting::Global,
+            VimModeSetting::Editor,
+            VimModeSetting::Disabled,
+        ]
+        .into_iter()
+        .find(|mode| vim_mode_label(*mode, self.ui_text) == value.as_str()) else {
             return;
         };
         if let Err(error) = self.set_vim_mode_setting(mode, window, cx) {
@@ -2980,7 +3046,8 @@ impl WorkbenchView {
         let SelectEvent::Confirm(Some(value)) = event else {
             return;
         };
-        let icon_theme = (value != self.ui_text.get(UiTextKey::SettingsIconThemeBuiltin)).then_some(value.as_str());
+        let icon_theme = (value != self.ui_text.get(UiTextKey::SettingsIconThemeBuiltin))
+            .then_some(value.as_str());
         if let Err(error) = self.set_icon_theme_name(icon_theme) {
             self.load_error = Some(error.to_string());
         }
@@ -2997,7 +3064,8 @@ impl WorkbenchView {
         let SelectEvent::Confirm(Some(value)) = event else {
             return;
         };
-        let terminal_theme = (value != self.ui_text.get(UiTextKey::SettingsTerminalThemeFollowUi)).then_some(value.as_str());
+        let terminal_theme = (value != self.ui_text.get(UiTextKey::SettingsTerminalThemeFollowUi))
+            .then_some(value.as_str());
         if let Err(error) = self.set_terminal_theme_name(terminal_theme) {
             self.load_error = Some(error.to_string());
         }

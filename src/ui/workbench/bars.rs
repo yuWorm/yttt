@@ -1584,10 +1584,7 @@ fn waiting_reason_label(reason: WaitingReason, text: &UiText) -> &'static str {
     })
 }
 
-fn terminal_exit_reason_label(
-    reason: &yttt_terminal::ExitReason,
-    text: &UiText,
-) -> &'static str {
+fn terminal_exit_reason_label(reason: &yttt_terminal::ExitReason, text: &UiText) -> &'static str {
     text.get(match reason {
         yttt_terminal::ExitReason::Completed => UiTextKey::BarI18nTerminalExitCompleted,
         yttt_terminal::ExitReason::Failed => UiTextKey::BarI18nTerminalExitFailed,

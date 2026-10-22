@@ -183,7 +183,11 @@ fn sixel_redraw_at_bottom_does_not_scroll_or_repeat_image_bands() {
         assert_eq!(viewport.history_size, 0, "repainting must not scroll");
         assert!(row_text(&viewport.rows[0]).starts_with("keep"));
         assert!(viewport.rows[..3].iter().all(|row| row.graphics.is_empty()));
-        assert_eq!(viewport.images.len(), 1, "old repaint assets must be released");
+        assert_eq!(
+            viewport.images.len(),
+            1,
+            "old repaint assets must be released"
+        );
         let image_id = viewport.images[0].id;
         for (row, offset_y) in viewport.rows[3..].iter().zip([0, 6, 12, 18, 24]) {
             assert_eq!(row.graphics.len(), 2);
@@ -205,13 +209,9 @@ fn sixel_scrolls_only_for_pixels_beyond_the_bottom_margin() {
         let mut terminal = TerminalState::new(20, 8, EventCollector::default());
         terminal.resize_with_cell_size(20, 8, 8, 6);
         terminal.process_bytes(b"\x1b[6;1H");
-        let image = format!(
-            "\x1bPq#1;2;100;0;0{}!8~\x1b\\",
-            "!8~-".repeat(bands - 1),
-        );
+        let image = format!("\x1bPq#1;2;100;0;0{}!8~\x1b\\", "!8~-".repeat(bands - 1),);
         terminal.process_bytes(image.as_bytes());
-        let mut snapshots =
-            SemanticSnapshotter::new(TerminalSessionId::new("sixel-overflow"), 1);
+        let mut snapshots = SemanticSnapshotter::new(TerminalSessionId::new("sixel-overflow"), 1);
         snapshots.capture(&terminal, &SemanticCaptureContext::running(20, 8, 1));
         let viewport = snapshots.latest_viewport().unwrap();
 

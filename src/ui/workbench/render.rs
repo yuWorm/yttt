@@ -90,7 +90,11 @@ impl Render for WorkbenchView {
             let error = self
                 .workspace_restore_failure_message()
                 .map(str::to_owned)
-                .unwrap_or_else(|| self.ui_text.get(UiTextKey::WorkspaceRestoreFailedBody).to_string());
+                .unwrap_or_else(|| {
+                    self.ui_text
+                        .get(UiTextKey::WorkspaceRestoreFailedBody)
+                        .to_string()
+                });
             div()
                 .flex()
                 .flex_1()
@@ -99,7 +103,11 @@ impl Render for WorkbenchView {
                 .justify_center()
                 .gap(appearance.style.spacing.md)
                 .px(appearance.style.spacing.xl)
-                .child(div().text_lg().child(self.ui_text.get(UiTextKey::WorkspaceRestoreFailedTitle)))
+                .child(
+                    div()
+                        .text_lg()
+                        .child(self.ui_text.get(UiTextKey::WorkspaceRestoreFailedTitle)),
+                )
                 .child(
                     div()
                         .text_sm()

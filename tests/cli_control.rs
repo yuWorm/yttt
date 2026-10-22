@@ -218,7 +218,10 @@ fn offline_cli_language_prefers_device_and_never_migrates_legacy_settings() {
     )
     .unwrap();
     assert_eq!(cli::ui_text_for_profile(&profile).locale(), legacy_locale);
-    assert!(!device.exists(), "reading CLI language must not migrate legacy settings");
+    assert!(
+        !device.exists(),
+        "reading CLI language must not migrate legacy settings"
+    );
 
     std::fs::create_dir_all(device.parent().unwrap()).unwrap();
     for (language, expected) in [
@@ -237,5 +240,8 @@ fn offline_cli_language_prefers_device_and_never_migrates_legacy_settings() {
         "an unreadable Device file must not silently reuse a stale legacy preference"
     );
     assert_eq!(std::fs::read_to_string(&device).unwrap(), "[invalid");
-    assert!(!profile.paths().data.exists(), "offline language lookup must not start a Host");
+    assert!(
+        !profile.paths().data.exists(),
+        "offline language lookup must not start a Host"
+    );
 }

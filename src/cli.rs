@@ -2,11 +2,7 @@ use std::{collections::BTreeMap, ffi::OsString, io::Read as _, path::PathBuf};
 use yttt_protocol::desktop_control::*;
 
 use crate::{
-    config::{
-        profile::AppProfile,
-        scope::read_device_language_setting,
-        settings::LanguageSetting,
-    },
+    config::{profile::AppProfile, scope::read_device_language_setting, settings::LanguageSetting},
     desktop_shell::{DesktopShellError, control_desktop},
     ui::{
         i18n::{UiText, UiTextKey},
@@ -35,16 +31,19 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         .iter()
         .map(|arg| {
             arg.to_str().map(str::to_owned).ok_or_else(|| {
-                text.get(UiTextKey::CliLocalizationArgumentsUtf8).to_string()
+                text.get(UiTextKey::CliLocalizationArgumentsUtf8)
+                    .to_string()
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let resource = words
-        .first()
-        .ok_or_else(|| text.get(UiTextKey::CliLocalizationExpectedResource).to_string())?;
-    let action = words
-        .get(1)
-        .ok_or_else(|| text.get(UiTextKey::CliLocalizationExpectedAction).to_string())?;
+    let resource = words.first().ok_or_else(|| {
+        text.get(UiTextKey::CliLocalizationExpectedResource)
+            .to_string()
+    })?;
+    let action = words.get(1).ok_or_else(|| {
+        text.get(UiTextKey::CliLocalizationExpectedAction)
+            .to_string()
+    })?;
     let mut options = BTreeMap::new();
     let mut trailing = Vec::new();
     let mut index = 2;
@@ -92,14 +91,13 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         ("board", "show") => DesktopControlCommand::ShowCommandCenter,
         ("board", "answer") => DesktopControlCommand::AnswerAgentQuestion {
             request_id: options.remove("--request").ok_or_else(|| {
-                text.get(UiTextKey::CliLocalizationRequestRequired).to_string()
+                text.get(UiTextKey::CliLocalizationRequestRequired)
+                    .to_string()
             })?,
-            answers: serde_json::from_str(
-                &options.remove("--answers-json").ok_or_else(|| {
-                    text.get(UiTextKey::CliLocalizationAnswersJsonRequired)
-                        .to_string()
-                })?,
-            )
+            answers: serde_json::from_str(&options.remove("--answers-json").ok_or_else(|| {
+                text.get(UiTextKey::CliLocalizationAnswersJsonRequired)
+                    .to_string()
+            })?)
             .map_err(|error| {
                 text.get(UiTextKey::CliLocalizationInvalidStructuredAnswers)
                     .replace("{error}", &error.to_string())
@@ -111,7 +109,8 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         },
         ("agents", "create") => DesktopControlCommand::CreateAgent {
             provider: options.remove("--provider").ok_or_else(|| {
-                text.get(UiTextKey::CliLocalizationProviderRequired).to_string()
+                text.get(UiTextKey::CliLocalizationProviderRequired)
+                    .to_string()
             })?,
             args: std::mem::take(&mut trailing),
             title: options.remove("--title"),
@@ -131,7 +130,8 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         ("tabs" | "panes", "focus") => DesktopControlCommand::Focus,
         ("tabs" | "panes", "rename") => DesktopControlCommand::Rename {
             title: options.remove("--title").ok_or_else(|| {
-                text.get(UiTextKey::CliLocalizationTitleRequired).to_string()
+                text.get(UiTextKey::CliLocalizationTitleRequired)
+                    .to_string()
             })?,
         },
         ("tabs" | "panes", "close") => DesktopControlCommand::Close,
@@ -151,10 +151,7 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
                 .remove("--percent")
                 .map(|value| value.parse::<u8>())
                 .transpose()
-                .map_err(|_| {
-                    text.get(UiTextKey::CliLocalizationPercentRange)
-                        .to_string()
-                })?
+                .map_err(|_| text.get(UiTextKey::CliLocalizationPercentRange).to_string())?
                 .unwrap_or(5),
         },
         ("panes" | "agents", "send") => {
@@ -227,9 +224,7 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
             .to_string());
     }
     if resource == "panes" && action != "list" && pane.is_none() {
-        return Err(text
-            .get(UiTextKey::CliLocalizationPaneRequired)
-            .to_string());
+        return Err(text.get(UiTextKey::CliLocalizationPaneRequired).to_string());
     }
     let request = DesktopControlRequest {
         window,
@@ -251,7 +246,9 @@ fn error_code_label(code: &DesktopControlErrorCode, text: UiText) -> &'static st
         DesktopControlErrorCode::NotFound => UiTextKey::CliLocalizationErrorNotFound,
         DesktopControlErrorCode::AmbiguousTarget => UiTextKey::CliLocalizationErrorAmbiguousTarget,
         DesktopControlErrorCode::NotReady => UiTextKey::CliLocalizationErrorNotReady,
-        DesktopControlErrorCode::PermissionDenied => UiTextKey::CliLocalizationErrorPermissionDenied,
+        DesktopControlErrorCode::PermissionDenied => {
+            UiTextKey::CliLocalizationErrorPermissionDenied
+        }
         DesktopControlErrorCode::Busy => UiTextKey::CliLocalizationErrorBusy,
         DesktopControlErrorCode::OutcomeUnknown => UiTextKey::CliLocalizationErrorOutcomeUnknown,
         DesktopControlErrorCode::Failed => UiTextKey::CliLocalizationErrorFailed,
@@ -364,7 +361,7 @@ fn target_label(target: &ControlTarget, text: UiText) -> String {
         .replace("{pane}", &pane)
 }
 
-fn control_state_label<'a>(state: &'a str, text: UiText) -> &'a str {
+fn control_state_label(state: &str, text: UiText) -> &str {
     text.get(match state {
         "idle" => UiTextKey::TerminalI18nLifecycleIdle,
         "starting" => UiTextKey::TerminalI18nLifecycleStarting,

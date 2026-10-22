@@ -85,7 +85,6 @@ fn is_ssh_host_event(event: &ServerEvent) -> bool {
 }
 
 impl WorkbenchView {
-
     fn localized_ssh_connection_error(&self, detail: impl std::fmt::Display) -> String {
         format!(
             "{}: {detail}",
@@ -1214,7 +1213,9 @@ impl WorkbenchView {
         }
         let runtime = self.terminal.host_runtime.clone().ok_or_else(|| {
             WorkbenchError::RemoteProject(
-                self.ui_text.get(UiTextKey::RemoteRuntimeUnavailable).to_string(),
+                self.ui_text
+                    .get(UiTextKey::RemoteRuntimeUnavailable)
+                    .to_string(),
             )
         })?;
         let title = root

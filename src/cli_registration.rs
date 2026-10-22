@@ -95,9 +95,7 @@ fn privileged_registration(executable: &Path, text: UiText) -> io::Result<()> {
         .arg(format!(
             "do shell script {} with administrator privileges with prompt {}",
             applescript_string(&script),
-            applescript_string(
-                text.get(UiTextKey::CliLocalizationRegistrationPermissionPrompt)
-            )
+            applescript_string(text.get(UiTextKey::CliLocalizationRegistrationPermissionPrompt))
         ))
         .output()?;
     if output.status.success() || is_registered(Path::new(executable), Path::new(CLI_PATH)) {

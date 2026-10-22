@@ -530,7 +530,8 @@ impl WorkbenchView {
                             Err(error) => {
                                 root.ssh.remote_access_error = Some(format!(
                                     "{}: {error}",
-                                    root.ui_text.get(UiTextKey::WorkbenchI18nRemoteAccessActionFailed)
+                                    root.ui_text
+                                        .get(UiTextKey::WorkbenchI18nRemoteAccessActionFailed)
                                 ));
                             }
                         }
@@ -539,7 +540,8 @@ impl WorkbenchView {
                     Err(error) => {
                         root.ssh.remote_access_error = Some(format!(
                             "{}: {error}",
-                            root.ui_text.get(UiTextKey::WorkbenchI18nRemoteAccessActionFailed)
+                            root.ui_text
+                                .get(UiTextKey::WorkbenchI18nRemoteAccessActionFailed)
                         ));
                     }
                 }
