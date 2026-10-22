@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.17 - 2026-10-22
+
 - 修复工作区快照超过 1 MiB 后无法保存：Client 与 Host 共用 16 MiB 清单校验，Agent 状态改为 Host 管理的独立不可变对象，清单只保存引用。旧快照原子迁移，消息、人工验收与本地恢复正文保留，历史问题不会恢复为可提交状态。资源协议升至 19；桌面、Host、远端 Server 与 CLI 需同步更新。
 - Fix workspace saves failing above 1 MiB: share the 16 MiB manifest check between Client and Host, and store Agent state as separate immutable Host objects referenced by the manifest. Atomically migrate legacy snapshots while retaining messages, human acceptance and self-contained local recovery; restored questions cannot be submitted without live state. Resource protocol is now 19; upgrade Desktop, Host, remote Server and CLI together.
 - 修复 Sixel 图片贴底重绘时多滚动一行、旧图片顶部条带不断累积的问题；图片结束后光标保留在最后一行，仅实际超出底部的像素触发滚动。
