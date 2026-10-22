@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修正权限页：区分需在系统设置确认与检测失败，显示错误原因，管理操作失败不再覆盖授权状态；通知设置使用当前应用 bundle ID。明确桌面权限不代表独立 Host／Agent 的访问能力，移除系统授权的“本机偏好”标记，并说明登录启动限制。
+- Correct permission management: distinguish manual checks from detection failures, show errors, preserve authorization on failed actions, and target the running app's notification bundle ID. Clarify desktop versus Host/agent access, remove preference labels from OS permissions, and explain login startup restrictions.
+- 修复登录启动误判：读取 Host 确认记录失败不再将有效的系统启动状态改成“不可用”；无法确认历史同意时仍需显式确认。
+- Preserve the OS login startup state when Host consent storage is unavailable; require explicit confirmation when prior consent cannot be established.
+
 ## 0.3.17 - 2026-10-22
 
 - 修复发布验证中的 Rust 格式与 Clippy 错误，移除会话管理的重复分支及本地化提示的不必要字符串分配，保留原有行为。

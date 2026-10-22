@@ -105,11 +105,13 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_page: SettingsPageState,
     pub(in super::super) zed_theme_import_dialog: Option<ZedThemeImportDialogState>,
     pub(in super::super) permission_statuses: [PermissionStatus; PermissionKind::COUNT],
+    pub(in super::super) permission_errors: [Option<String>; PermissionKind::COUNT],
     pub(in super::super) permission_request_attempted: [bool; PermissionKind::COUNT],
     pub(in super::super) permission_refreshing: bool,
     pub(in super::super) permission_statuses_loaded: bool,
     pub(in super::super) permission_refresh_generation: u64,
-    pub(in super::super) permission_requesting: Option<PermissionKind>,
+    pub(in super::super) permission_requesting:
+        Option<(PermissionKind, platform::PermissionAction)>,
     pub(in super::super) login_startup_state: LoginStartupState,
     pub(in super::super) login_startup_refreshing: bool,
     pub(in super::super) login_startup_loaded: bool,
@@ -202,6 +204,7 @@ impl SettingsControllerState {
             permission_statuses: std::array::from_fn(|index| {
                 platform::initial_permission_status(PermissionKind::ALL[index])
             }),
+            permission_errors: std::array::from_fn(|_| None),
             permission_request_attempted: [false; PermissionKind::COUNT],
             permission_refreshing: false,
             permission_statuses_loaded: false,

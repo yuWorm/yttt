@@ -1570,19 +1570,18 @@ impl WorkbenchView {
         let text = self.ui_text;
         let task = cx.background_spawn(async move {
             let state = manager.status().map_err(|error| error.to_string())?;
-            let runtime =
-                runtime.ok_or_else(|| text.get(UiTextKey::SettingsHostUnavailable).to_string())?;
-            let consent =
-                match runtime.request_blocking(yttt_protocol::Request::ReadDeviceSettings)? {
-                    yttt_protocol::Response::DeviceSettings(settings) => {
-                        settings.login_startup_consent_granted
-                    }
-                    _ => {
-                        return Err(text
+            let consent = runtime
+                .ok_or_else(|| text.get(UiTextKey::SettingsHostUnavailable).to_string())
+                .and_then(|runtime| {
+                    match runtime.request_blocking(yttt_protocol::Request::ReadDeviceSettings)? {
+                        yttt_protocol::Response::DeviceSettings(settings) => {
+                            Ok(settings.login_startup_consent_granted)
+                        }
+                        _ => Err(text
                             .get(UiTextKey::SettingsUnexpectedDeviceResponse)
-                            .to_string());
+                            .to_string()),
                     }
-                };
+                });
             Ok::<_, String>((state, consent))
         });
         cx.spawn(async move |this, cx| {
@@ -1596,7 +1595,14 @@ impl WorkbenchView {
                 match result {
                     Ok((state, consent)) => {
                         root.settings.login_startup_state = state;
-                        root.settings.login_startup_consent_granted = consent;
+                        // Host consent storage does not determine OS startup availability.
+                        root.settings.login_startup_consent_granted = match consent {
+                            Ok(consent) => consent,
+                            Err(error) => {
+                                root.load_error = Some(error);
+                                false
+                            }
+                        };
                     }
                     Err(error) => {
                         root.settings.login_startup_state = LoginStartupState::unavailable();
@@ -1735,12 +1741,18 @@ impl WorkbenchView {
         self.settings.permission_statuses[kind.index()]
     }
 
+    pub fn permission_error(&self, kind: platform::PermissionKind) -> Option<&str> {
+        self.settings.permission_errors[kind.index()].as_deref()
+    }
+
     pub fn permission_refreshing(&self) -> bool {
         self.settings.permission_refreshing
     }
 
     pub fn permission_request_in_progress(&self, kind: platform::PermissionKind) -> bool {
-        self.settings.permission_requesting == Some(kind)
+        self.settings
+            .permission_requesting
+            .is_some_and(|(requested, _)| requested == kind)
     }
 
     pub fn permission_action_in_progress(&self) -> bool {
@@ -1748,6 +1760,11 @@ impl WorkbenchView {
     }
 
     pub fn permission_action(&self, kind: platform::PermissionKind) -> platform::PermissionAction {
+        if let Some((requested, action)) = self.settings.permission_requesting
+            && requested == kind
+        {
+            return action;
+        }
         platform::permission_action(
             kind,
             self.permission_status(kind),
@@ -1771,6 +1788,7 @@ impl WorkbenchView {
         let generation = self.settings.permission_refresh_generation;
         self.settings.permission_refreshing = true;
         for permission in platform::platform_permissions() {
+            self.settings.permission_errors[permission.kind.index()] = None;
             let initial = platform::initial_permission_status(permission.kind);
             self.settings.permission_statuses[permission.kind.index()] =
                 if initial == platform::PermissionStatus::Unknown {
@@ -1795,8 +1813,14 @@ impl WorkbenchView {
                     return;
                 }
                 for (kind, result) in statuses {
-                    root.settings.permission_statuses[kind.index()] =
-                        result.unwrap_or(platform::PermissionStatus::Unavailable);
+                    match result {
+                        Ok(status) => root.settings.permission_statuses[kind.index()] = status,
+                        Err(error) => {
+                            root.settings.permission_statuses[kind.index()] =
+                                platform::PermissionStatus::Unavailable;
+                            root.settings.permission_errors[kind.index()] = Some(error);
+                        }
+                    }
                 }
                 root.settings.permission_refreshing = false;
                 root.settings.permission_statuses_loaded = true;
@@ -1825,7 +1849,8 @@ impl WorkbenchView {
         self.settings.permission_refresh_generation =
             self.settings.permission_refresh_generation.wrapping_add(1);
         self.settings.permission_refreshing = false;
-        self.settings.permission_requesting = Some(kind);
+        self.settings.permission_requesting = Some((kind, action));
+        self.settings.permission_errors[kind.index()] = None;
         if action == platform::PermissionAction::Request {
             self.settings.permission_request_attempted[kind.index()] = true;
         }
@@ -1837,7 +1862,7 @@ impl WorkbenchView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |root, cx| {
-                if root.settings.permission_requesting != Some(kind) {
+                if root.settings.permission_requesting != Some((kind, action)) {
                     return;
                 }
                 root.settings.permission_requesting = None;
@@ -1847,9 +1872,8 @@ impl WorkbenchView {
                         root.settings.permission_statuses_loaded = true;
                     }
                     Err(error) => {
-                        root.settings.permission_statuses[kind.index()] =
-                            platform::PermissionStatus::Unavailable;
-                        root.load_error = Some(error);
+                        // A failed operation is not a new authorization observation.
+                        root.settings.permission_errors[kind.index()] = Some(error);
                     }
                 }
                 cx.notify();

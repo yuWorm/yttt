@@ -2464,6 +2464,8 @@ fn settings_permission_rows(
     let login_startup_state = root.login_startup_state();
     let login_startup_enabled = root.login_startup_enabled();
     let login_startup_busy = root.login_startup_busy();
+    let login_startup_disabled =
+        login_startup_busy || login_startup_state.status == LoginStartupStatus::Unavailable;
     let login_startup_control = div()
         .flex()
         .items_center()
@@ -2483,13 +2485,13 @@ fn settings_permission_rows(
                 theme,
                 style.ui_style,
                 cx.listener(move |this, checked: &bool, window, cx| {
-                    if !login_startup_busy {
+                    if !login_startup_disabled {
                         this.request_login_startup_change(*checked, window, cx);
                         cx.notify();
                     }
                 }),
             )
-            .opacity(if login_startup_busy { 0.5 } else { 1.0 })
+            .opacity(if login_startup_disabled { 0.5 } else { 1.0 })
             .debug_selector(|| "settings-login-startup".to_string()),
         )
         .into_any_element();
@@ -2597,9 +2599,7 @@ fn settings_permission_rows(
             false,
         ))
         .child(
-            device_settings_row(
-                root,
-                "permissions.status",
+            setting_row(
                 style,
                 theme,
                 text.get(UiTextKey::SettingsPermissionStatus),
@@ -2640,6 +2640,9 @@ fn permission_setting_row(
         platform::PermissionKind::Accessibility => "permissions.accessibility",
         platform::PermissionKind::ScreenCapture => "permissions.screen_capture",
     };
+    if !setting_matches_search(root, key) {
+        return div();
+    }
     let mut control = div()
         .flex()
         .items_center()
@@ -2656,7 +2659,11 @@ fn permission_setting_row(
         control = control.child(
             settings_button(
                 format!("settings-permission-{}", permission.kind.as_str()),
-                text.get(UiTextKey::SettingsPermissionRequesting),
+                text.get(if action == platform::PermissionAction::Request {
+                    UiTextKey::SettingsPermissionRequesting
+                } else {
+                    UiTextKey::SettingsPermissionOpeningSettings
+                }),
                 false,
                 theme,
                 cx,
@@ -2696,13 +2703,16 @@ fn permission_setting_row(
         );
     }
 
-    device_settings_row(
-        root,
-        key,
+    let description = text.get(description_key);
+    let description = match root.permission_error(permission.kind) {
+        Some(error) => format!("{description}\n{error}"),
+        None => description.to_string(),
+    };
+    setting_row(
         style,
         theme,
         text.get(title_key),
-        text.get(description_key),
+        description,
         control.into_any_element(),
     )
     .debug_selector(move || format!("settings-permission-{}-row", permission.kind.as_str()))
@@ -2760,6 +2770,7 @@ fn permission_status_value(
         platform::PermissionStatus::Unknown
         | platform::PermissionStatus::NotDetermined
         | platform::PermissionStatus::Unavailable
+        | platform::PermissionStatus::RequiresSystemSettings
         | platform::PermissionStatus::ManagedBySystem
         | platform::PermissionStatus::RequestedWhenNeeded
         | platform::PermissionStatus::NotRequired => theme.text_subtle,
@@ -2807,6 +2818,9 @@ fn permission_status_key(status: platform::PermissionStatus) -> UiTextKey {
         platform::PermissionStatus::Checking => UiTextKey::SettingsPermissionChecking,
         platform::PermissionStatus::Unknown | platform::PermissionStatus::Unavailable => {
             UiTextKey::SettingsPermissionUnavailable
+        }
+        platform::PermissionStatus::RequiresSystemSettings => {
+            UiTextKey::SettingsPermissionRequiresSystemSettings
         }
         platform::PermissionStatus::NotDetermined => UiTextKey::SettingsPermissionNotDetermined,
         platform::PermissionStatus::Granted => UiTextKey::SettingsPermissionGranted,

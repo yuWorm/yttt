@@ -1,5 +1,5 @@
 use std::{
-    ffi::c_void,
+    ffi::{CStr, c_void},
     io,
     sync::mpsc::{self, RecvTimeoutError},
     time::Duration,
@@ -45,7 +45,7 @@ pub(in crate::ui::app::platform) fn detect_permission_status(
         PermissionKind::Accessibility => Ok(accessibility_status()),
         PermissionKind::ScreenCapture => Ok(screen_capture_status()),
         PermissionKind::FileSystem | PermissionKind::DeveloperTools => {
-            Ok(PermissionStatus::Unavailable)
+            Ok(PermissionStatus::RequiresSystemSettings)
         }
     }
 }
@@ -58,7 +58,7 @@ pub(in crate::ui::app::platform) fn request_native_permission(
         PermissionKind::Accessibility => Ok(request_accessibility()),
         PermissionKind::ScreenCapture => Ok(request_screen_capture()),
         PermissionKind::FileSystem | PermissionKind::DeveloperTools => {
-            Ok(PermissionStatus::Unavailable)
+            Ok(PermissionStatus::RequiresSystemSettings)
         }
     }
 }
@@ -152,6 +152,32 @@ fn receive_notification_result(
 
 fn objc_io_error(error: MessageError) -> io::Error {
     io::Error::other(error.to_string())
+}
+
+pub(in crate::ui::app::platform) fn current_bundle_identifier() -> io::Result<Option<String>> {
+    autoreleasepool(|| unsafe {
+        let bundle_class = Class::get("NSBundle")
+            .ok_or_else(|| io::Error::other("NSBundle class is unavailable"))?;
+        let bundle: id = bundle_class
+            .send_message(Sel::register("mainBundle"), ())
+            .map_err(objc_io_error)?;
+        if bundle == nil {
+            return Ok(None);
+        }
+        let identifier: id = (&*bundle)
+            .send_message(Sel::register("bundleIdentifier"), ())
+            .map_err(objc_io_error)?;
+        if identifier == nil {
+            return Ok(None);
+        }
+        let utf8: *const std::ffi::c_char = (&*identifier)
+            .send_message(Sel::register("UTF8String"), ())
+            .map_err(objc_io_error)?;
+        if utf8.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(CStr::from_ptr(utf8).to_string_lossy().into_owned()))
+    })
 }
 
 fn ensure_bundled_app() -> io::Result<()> {
