@@ -154,42 +154,26 @@ fn desktop_host_cli_starts_reports_reuses_and_stops_the_profile_host() {
         "{started:?}; Host log: {:?}",
         fs::read_to_string(profile.paths().logs.join("host.log"))
     );
-    assert_eq!(
-        String::from_utf8_lossy(&started.stdout).trim(),
-        "Host started"
-    );
     let ready =
         yttt_host::read_ready_metadata(&profile.paths().runtime.join("host-ready.json")).unwrap();
     assert_eq!(ready.lifetime, yttt_host::HostLifetime::Independent);
+    let pid_path = profile.paths().runtime.join("host.pid");
+    let started_pid = fs::read_to_string(&pid_path).unwrap();
 
     let status = invoke("--host-status");
     assert!(status.status.success(), "{status:?}");
-    let status_text = String::from_utf8_lossy(&status.stdout);
-    assert!(status_text.contains("Host Running"));
-    assert!(status_text.contains("0 terminals"));
 
     let reused = invoke("--start-host");
     assert!(reused.status.success(), "{reused:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&reused.stdout).trim(),
-        "Host already running"
-    );
+    assert_eq!(fs::read_to_string(&pid_path).unwrap(), started_pid);
 
     let stopped = invoke("--stop-host");
     assert!(stopped.status.success(), "{stopped:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&stopped.stdout).trim(),
-        "Host stopped"
-    );
     assert!(!profile.paths().runtime.join("host-ready.json").exists());
     assert!(!profile.paths().runtime.join("host.pid").exists());
 
     let stopped_status = invoke("--host-status");
     assert!(stopped_status.status.success(), "{stopped_status:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&stopped_status.stdout).trim(),
-        "Host stopped"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

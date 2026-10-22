@@ -11,6 +11,7 @@ fn dev_app_bundle_script_generates_bundle_without_opening() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let output = std::process::Command::new(repo.join("scripts/run-dev-app.sh"))
+        .arg("--no-build")
         .arg("--no-open")
         .arg("--fixture")
         .arg("dev")

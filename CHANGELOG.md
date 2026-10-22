@@ -6,6 +6,10 @@
 - Correct permission management: distinguish manual checks from detection failures, show errors, preserve authorization on failed actions, and target the running app's notification bundle ID. Clarify desktop versus Host/agent access, remove preference labels from OS permissions, and explain login startup restrictions.
 - 修复登录启动误判：读取 Host 确认记录失败不再将有效的系统启动状态改成“不可用”；无法确认历史同意时仍需显式确认。
 - Preserve the OS login startup state when Host consent storage is unavailable; require explicit confirmation when prior consent cannot be established.
+- Host 生命周期测试改为验证进程复用与停止后的状态清理，不再依赖英文提示，兼容中英文 CLI。
+- Validate Host process reuse and shutdown cleanup without pinning English CLI messages, keeping lifecycle tests independent of the selected language.
+- 开发包测试复用 Cargo 已生成的程序，避免在其他进程测试期间重建并替换共用的可执行文件。
+- Reuse Cargo's built executable in development-bundle tests instead of rebuilding and replacing the shared binary during process validation.
 
 ## 0.3.17 - 2026-10-22
 
