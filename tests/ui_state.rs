@@ -6285,6 +6285,13 @@ fn enabling_login_startup_requires_confirmation_before_backend_registration(
     cx.run_until_parked();
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    root.update(cx, |root, _| {
+        assert_eq!(
+            root.login_startup_state().status,
+            yttt::login_startup::LoginStartupStatus::Disabled,
+            "missing Host consent storage must not hide the OS startup state"
+        );
+    });
 
     let toggle = cx
         .debug_bounds("settings-login-startup")

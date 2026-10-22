@@ -91,6 +91,7 @@ pub enum PermissionStatus {
     Granted,
     Denied,
     Unavailable,
+    RequiresSystemSettings,
     ManagedBySystem,
     RequestedWhenNeeded,
     NotRequired,
@@ -308,10 +309,25 @@ pub fn reveal_path(path: &Path) -> io::Result<()> {
 }
 
 pub fn open_permission_settings(kind: PermissionKind) -> io::Result<bool> {
-    let Some(command) = permission_settings_command(DesktopPlatform::current(), kind) else {
+    #[cfg(target_os = "macos")]
+    let bundle_id = if kind == PermissionKind::Notifications {
+        macos::current_bundle_identifier()?
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "macos"))]
+    let bundle_id: Option<String> = None;
+    let Some(command) =
+        permission_settings_command(DesktopPlatform::current(), kind, bundle_id.as_deref())
+    else {
         return Ok(false);
     };
-    Command::new(command.program).args(command.args).spawn()?;
+    let status = Command::new(command.program).args(command.args).status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "Could not open system settings: {status}"
+        )));
+    }
     Ok(true)
 }
 
@@ -410,14 +426,17 @@ fn reveal_command(
 fn permission_settings_command(
     platform: DesktopPlatform,
     kind: PermissionKind,
+    bundle_id: Option<&str>,
 ) -> Option<SystemSettingsCommand> {
     let (program, target) = match (platform, kind) {
-        (DesktopPlatform::MacOs, PermissionKind::Notifications) => (
-            "open",
-            OsString::from(format!(
-                "x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleIdentifier={APP_ID}"
-            )),
-        ),
+        (DesktopPlatform::MacOs, PermissionKind::Notifications) => {
+            let pane = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+            let target = match bundle_id {
+                Some(bundle_id) => format!("{pane}?bundleIdentifier={bundle_id}"),
+                None => pane.to_string(),
+            };
+            ("open", OsString::from(target))
+        }
         (DesktopPlatform::MacOs, PermissionKind::FileSystem) => (
             "open",
             OsString::from(
@@ -612,24 +631,37 @@ mod tests {
     #[test]
     fn permission_settings_commands_target_native_settings_pages() {
         assert_eq!(
-            permission_settings_command(DesktopPlatform::MacOs, PermissionKind::Notifications),
+            permission_settings_command(
+                DesktopPlatform::MacOs,
+                PermissionKind::Notifications,
+                Some("com.yttt.dev"),
+            ),
             Some(SystemSettingsCommand {
                 program: "open",
                 args: vec![OsString::from(
-                    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleIdentifier=com.yttt.app"
+                    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleIdentifier=com.yttt.dev"
                 )],
             })
         );
         assert_eq!(
-            permission_settings_command(DesktopPlatform::Windows, PermissionKind::FileSystem),
+            permission_settings_command(DesktopPlatform::Windows, PermissionKind::FileSystem, None),
             Some(SystemSettingsCommand {
                 program: "explorer.exe",
                 args: vec![OsString::from("ms-settings:privacy-broadfilesystemaccess")],
             })
         );
         assert_eq!(
-            permission_settings_command(DesktopPlatform::Linux, PermissionKind::FileSystem),
+            permission_settings_command(DesktopPlatform::Linux, PermissionKind::FileSystem, None),
             None
+        );
+        assert_eq!(
+            permission_settings_command(DesktopPlatform::MacOs, PermissionKind::Notifications, None),
+            Some(SystemSettingsCommand {
+                program: "open",
+                args: vec![OsString::from(
+                    "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+                )],
+            })
         );
     }
 

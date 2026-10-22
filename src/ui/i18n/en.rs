@@ -931,12 +931,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionCompatibility => "Compatibility & clipboard",
         UiTextKey::SettingsSectionAgentOverview => "Agent overview",
         UiTextKey::SettingsSectionProviders => "Session providers",
-        UiTextKey::SettingsSectionCorePermissions => "Core access",
+        UiTextKey::SettingsSectionCorePermissions => "Notifications and development access",
         UiTextKey::SettingsSectionOptionalPermissions => "Optional integrations",
         UiTextKey::SettingsSectionBackgroundHost => "Background Host",
         UiTextKey::SettingsLoginStartup => "Start Host at login",
         UiTextKey::SettingsLoginStartupDescription => {
-            "Keep the profile-isolated Host available after sign-in. No network listener or secret is added to the startup registration."
+            "Keep this profile's Host available after sign-in. Requires a persistent production profile and, on macOS, the packaged app. No network listener or secret is added."
         }
         UiTextKey::SettingsLoginStartupEnabled => "Enabled",
         UiTextKey::SettingsLoginStartupDisabled => "Disabled",
@@ -1081,11 +1081,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsPermissionFileSystem => "Protected file access",
         UiTextKey::SettingsPermissionFileSystemDescription => {
-            "Allow terminals and agents to work with projects in operating-system protected locations."
+            "If protected project files cannot be accessed, check the Host or application that launches the terminal or agent. On macOS, opens Full Disk Access; ordinary project access does not require it."
         }
         UiTextKey::SettingsPermissionDeveloperTools => "Developer tools",
         UiTextKey::SettingsPermissionDeveloperToolsDescription => {
-            "Enable operating-system developer controls used by debugging and local toolchains."
+            "Manage system developer controls only when a development workflow requires them; not a prerequisite for ordinary terminal or agent use."
         }
         UiTextKey::SettingsPermissionAccessibility => "Accessibility",
         UiTextKey::SettingsPermissionAccessibilityDescription => {
@@ -1097,7 +1097,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsPermissionStatus => "Authorization status",
         UiTextKey::SettingsPermissionStatusDescription => {
-            "Checked when this page opens and when yttt regains focus after system settings."
+            "Checks this local desktop application's authorization, not the access of a separate Host, terminal, or agent. Refreshes on return from system settings. System permissions are not profile preferences."
         }
         UiTextKey::SettingsPermissionRefresh => "Refresh",
         UiTextKey::SettingsPermissionChecking => "Checking...",
@@ -1105,8 +1105,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsPermissionNotDetermined => "Not requested",
         UiTextKey::SettingsPermissionDenied => "Not granted",
         UiTextKey::SettingsPermissionUnavailable => "Status unavailable",
+        UiTextKey::SettingsPermissionRequiresSystemSettings => "Check in system settings",
         UiTextKey::SettingsPermissionRequest => "Request",
         UiTextKey::SettingsPermissionRequesting => "Requesting...",
+        UiTextKey::SettingsPermissionOpeningSettings => "Opening settings...",
         UiTextKey::SettingsPermissionManage => "Manage",
         UiTextKey::SettingsPermissionOpenSystemSettings => "Open system settings",
         UiTextKey::SettingsPermissionManagedBySystem => "Managed by desktop",

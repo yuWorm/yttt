@@ -765,12 +765,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionCompatibility => "兼容性与剪贴板",
         UiTextKey::SettingsSectionAgentOverview => "Agent 概览",
         UiTextKey::SettingsSectionProviders => "会话提供方",
-        UiTextKey::SettingsSectionCorePermissions => "核心权限",
+        UiTextKey::SettingsSectionCorePermissions => "通知与开发访问",
         UiTextKey::SettingsSectionOptionalPermissions => "可选集成",
         UiTextKey::SettingsSectionBackgroundHost => "后台 Host",
         UiTextKey::SettingsLoginStartup => "登录时启动 Host",
         UiTextKey::SettingsLoginStartupDescription => {
-            "登录后保持当前 profile 的隔离 Host 可用；启动项不会添加网络监听地址或秘密。"
+            "登录后保持当前 profile 的 Host 可用。仅支持持久化的生产 profile；macOS 还需打包的应用。启动项不会添加网络监听地址或秘密。"
         }
         UiTextKey::SettingsLoginStartupEnabled => "已启用",
         UiTextKey::SettingsLoginStartupDisabled => "已停用",
@@ -897,11 +897,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsPermissionFileSystem => "受保护的文件访问",
         UiTextKey::SettingsPermissionFileSystemDescription => {
-            "允许终端和 Agent 访问操作系统保护位置中的项目文件。"
+            "受保护项目文件无法访问时，请检查实际启动终端或 Agent 的 Host 或应用。在 macOS 上打开「完全磁盘访问」；普通项目访问无需开启。"
         }
         UiTextKey::SettingsPermissionDeveloperTools => "开发者工具",
         UiTextKey::SettingsPermissionDeveloperToolsDescription => {
-            "启用调试器和本地工具链所需的操作系统开发者控制。"
+            "仅在开发工作流确实需要时配置系统开发者控制；不是普通终端或 Agent 使用的前提。"
         }
         UiTextKey::SettingsPermissionAccessibility => "辅助功能",
         UiTextKey::SettingsPermissionAccessibilityDescription => {
@@ -913,16 +913,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsPermissionStatus => "授权状态",
         UiTextKey::SettingsPermissionStatusDescription => {
-            "打开本页以及从系统设置返回 yttt 时自动检测，也可以手动刷新。"
+            "检测本机桌面应用的授权，不代表独立 Host、终端或 Agent 的实际访问能力。从系统设置返回时刷新，也可手动刷新。系统授权不是 profile 偏好设置。"
         }
         UiTextKey::SettingsPermissionRefresh => "刷新",
         UiTextKey::SettingsPermissionChecking => "检测中...",
         UiTextKey::SettingsPermissionGranted => "已授权",
         UiTextKey::SettingsPermissionNotDetermined => "尚未申请",
         UiTextKey::SettingsPermissionDenied => "未授权",
-        UiTextKey::SettingsPermissionUnavailable => "系统不支持检测",
+        UiTextKey::SettingsPermissionUnavailable => "暂时无法获取状态",
+        UiTextKey::SettingsPermissionRequiresSystemSettings => "需在系统设置确认",
         UiTextKey::SettingsPermissionRequest => "申请",
         UiTextKey::SettingsPermissionRequesting => "申请中...",
+        UiTextKey::SettingsPermissionOpeningSettings => "正在打开设置...",
         UiTextKey::SettingsPermissionManage => "管理",
         UiTextKey::SettingsPermissionOpenSystemSettings => "打开系统设置",
         UiTextKey::SettingsPermissionManagedBySystem => "由桌面环境管理",

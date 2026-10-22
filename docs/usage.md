@@ -576,18 +576,34 @@ or `Cmd+W` / `Ctrl+W` discards unsaved edits; Escape leaves the editor open.
 
 ## Desktop Permissions
 
-Open **Settings → Permissions** to inspect and request desktop access used by development
-workflows. The page checks authorization when opened, refreshes after yttt regains focus from
-system settings, and provides a manual refresh action. Notifications, protected file access, and
-developer tools are listed as core access. Accessibility and screen capture are optional and
-should only be enabled for workflows that control another application, synthesize input, or
-capture a screen or window.
+Open **Settings → Permissions** to inspect desktop authorization and open the corresponding
+system settings. Checks describe the **local desktop application**, not the effective access
+of a separate Host, terminal, or agent. System authorization is not a profile preference:
+for a failing workflow, check the executable or launching application responsible for that
+operation on the machine where it runs.
+
+The page refreshes when yttt regains focus from system settings and provides a manual refresh
+action. Notification access enables background alerts. Protected file access and developer
+controls are only needed when a workflow encounters the corresponding OS restriction; they
+are not prerequisites for ordinary terminal or agent use. Accessibility and screen capture
+are optional and should only be enabled for workflows that control another application,
+synthesize input, or capture a screen or window.
 
 On macOS, yttt detects notification, Accessibility, and Screen Recording authorization through
 their native APIs. The first request uses the native system prompt; denied or already-granted
-access can be managed in the exact Privacy & Security or Notifications pane. macOS does not expose
-a supported status API for Full Disk Access or Developer Tools, so those rows report that the
-status is unavailable and open the corresponding pane directly.
+access can be managed in Privacy & Security or Notifications. Notification management targets
+the running app's bundle identifier, including development bundles. macOS does not expose a
+supported status API for Full Disk Access or Developer Tools, so those rows display **Check in
+system settings** rather than claiming access is denied or the OS is unsupported. The protected
+file access button opens Full Disk Access; access to an ordinary project does not require it.
+Detection failures show **Status unavailable** with the error, separately from manual-only
+checks. A failed request or settings launch reports its error without overwriting the last
+authorization observation.
+
+**Start Host at login** is available only for a persistent production profile and, on macOS,
+the packaged application. An unavailable startup control cannot be toggled. Failure to read
+the Host's saved consent does not overwrite the OS startup status; enabling still requires
+explicit confirmation when consent cannot be established.
 
 On Windows, yttt opens the matching Settings page when Windows exposes one and identifies access
 that native desktop applications do not need to request separately. Linux has no single permission
