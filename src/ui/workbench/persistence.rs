@@ -525,16 +525,24 @@ impl WorkbenchView {
                 })
     }
 
-    fn can_recover_full_workspace(
+    fn show_full_workspace_recovery(
         &self,
         runtime: &crate::host_runtime::DesktopHostRuntime,
-        cx: &Context<Self>,
     ) -> bool {
         runtime.shared_editing_enabled()
             && matches!(
                 self.workspace_persistence.mode,
                 WorkspacePersistenceMode::Active | WorkspacePersistenceMode::RestoreFailed
             )
+            && self.workspace_persistence.recovery.is_some()
+    }
+
+    fn can_recover_full_workspace(
+        &self,
+        runtime: &crate::host_runtime::DesktopHostRuntime,
+        cx: &Context<Self>,
+    ) -> bool {
+        self.show_full_workspace_recovery(runtime)
             && !self.workspace_persistence.control_request_in_flight
             && !self.workspace_persistence.commit_in_flight
             && self.workspace_persistence.pending_document_restores == 0
@@ -688,7 +696,8 @@ impl WorkbenchView {
                 })),
             );
         }
-        if self.can_recover_full_workspace(&runtime, cx) {
+        if self.show_full_workspace_recovery(&runtime) {
+            let can_recover = self.can_recover_full_workspace(&runtime, cx);
             banner = banner.child(
                 yttt_button(
                     "recover-full-workspace",
@@ -699,6 +708,21 @@ impl WorkbenchView {
                     appearance.style,
                     cx,
                 )
+                .debug_selector(|| "recover-full-workspace".to_string())
+                .disabled(!can_recover)
+                .tab_stop(can_recover)
+                .when(!can_recover, |button| {
+                    button.opacity(0.5).tooltip(self.ui_text.get(
+                        if self.workspace_persistence.control_request_in_flight
+                            || self.workspace_persistence.commit_in_flight
+                            || self.workspace_persistence.pending_document_restores != 0
+                        {
+                            UiTextKey::PersistenceRecoveryWaitOperation
+                        } else {
+                            UiTextKey::PersistenceRecoveryPublishFirst
+                        },
+                    ))
+                })
                 .on_click(cx.listener(|root, _, window, cx| {
                     root.restore_full_workspace_recovery(window, cx)
                 })),

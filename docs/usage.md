@@ -389,6 +389,10 @@ the current baseline.
 The separate full-workspace recovery action restores the preserved layout, drafts and Agent state,
 including after a Host reload or application restart. Its local copy contains the Agent bodies rather
 than depending on unconfirmed Host uploads; it refuses to overwrite current unpublished changes.
+While the workspace is active or a restore has failed, **Recover full workspace** stays visible
+as long as a saved recovery copy remains. Unpublished changes or an in-flight workspace operation
+disable the action instead of hiding it; hover for the reason. It becomes available again once
+the existing recovery safety checks pass.
 A cold restore failure, or a failed Host reload whose local state still matches the preserved
 snapshot, can also be replaced by valid saved recovery. Newer local changes remain protected.
 A deleted history entry reports a stopped recovery failure instead of retrying forever.
