@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.18 - 2026-10-25
+
 - 修复“恢复完整工作区”入口随 Agent 状态同步和自动保存反复闪现：保留恢复入口，暂不可操作时置灰并说明原因，保存完成后重新启用；保留未发布更改保护。
 - Keep full-workspace recovery visible through Agent state synchronization and autosave. Disable it with an explanatory tooltip while unavailable, re-enable it after publication, and retain protection for unpublished changes.
 - 修正权限页：区分需在系统设置确认与检测失败，显示错误原因，管理操作失败不再覆盖授权状态；通知设置使用当前应用 bundle ID。明确桌面权限不代表独立 Host／Agent 的访问能力，移除系统授权的“本机偏好”标记，并说明登录启动限制。
