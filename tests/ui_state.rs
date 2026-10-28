@@ -34,12 +34,14 @@ use yttt::{
         LoginStartupState, LoginStartupStatus,
     },
     model::{
+        editor::{DocumentId, WorkItemId},
         ids::{ProfileId, ProjectId},
         layout::{
             LayoutNode, PaneKind, ProcessExitBehavior, SplitDirection, TerminalExecutionMode,
         },
         project::{ProjectDescriptor, ProjectLocation},
         split_tree::ResizeDirection,
+        work_area::{WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis},
         workspace::{PaneProcessState, Workspace},
     },
     palette::{ActivePalette, PaletteItem, PaletteKind},
@@ -48,10 +50,9 @@ use yttt::{
     runtime::update::UPDATE_MANIFEST_URL,
     ui::components::SelectableState,
     ui::editor::{
-        CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
+        CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint,
         EditorAppearance, EditorDiagnosticSeverity, EditorLanguageId, ProjectEditorDocument,
-        ProjectEditorModel, VimMode, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode,
-        WorkAreaSplitAxis, WorkItemId, read_project_file,
+        ProjectEditorModel, VimMode, read_project_file,
     },
     ui::i18n::{Locale, UiText},
     ui::notifications::{ToastTone, toast_item_for_event, visible_toast_items},
@@ -1913,7 +1914,10 @@ fn root_view_creates_project_work_item_session_on_open() {
         .session(project_id)
         .unwrap();
     assert_eq!(
-        session.file_tree().root(),
+        root.project_editor_runtime()
+            .file_tree(project_id)
+            .unwrap()
+            .root(),
         project.location.local_path().unwrap()
     );
     assert_eq!(
@@ -1958,10 +1962,8 @@ fn stale_project_tree_result_does_not_replace_refreshed_state() {
 
     let rows = root
         .project_editor_runtime()
-        .workspace()
-        .session(&project_id)
+        .file_tree(&project_id)
         .unwrap()
-        .file_tree()
         .visible_rows();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative_path, PathBuf::from("current.rs"));

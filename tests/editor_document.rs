@@ -10,9 +10,9 @@ use std::{
 };
 
 use yttt::{
-    model::ids::ProjectId,
+    model::{editor::DocumentId, ids::ProjectId},
     ui::editor::{
-        CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
+        CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint,
         EditorAppearance, ProjectEditorDocument, ProjectEditorDocumentEvent, ProjectEditorModel,
         ProjectEditorSaveState, VimMode, init_vim_mode,
     },

@@ -6,6 +6,7 @@ use yttt_agent_core::{
 use yttt::{
     commands::{ActiveSurface, CommandContext, CommandId, default_registry},
     model::{
+        editor::DocumentId,
         ids::ProjectId,
         project::{ProjectDescriptor, ProjectLocation},
         workspace::Workspace,
@@ -18,7 +19,6 @@ use yttt::{
     },
     ui::{
         components::SelectableState,
-        editor::DocumentId,
         palette::picker::{PalettePickerDelegate, PickerDelegate, PickerItem, PickerState},
         palette::visible_palette_rows,
     },

@@ -315,7 +315,7 @@ impl WorkbenchView {
 
     pub(super) fn queue_focus_change_autosave(
         &mut self,
-        document_id: crate::ui::editor::DocumentId,
+        document_id: crate::model::editor::DocumentId,
     ) {
         if self.app_settings.editor.autosave == EditorAutosave::OnFocusChange
             && !self
@@ -331,7 +331,7 @@ impl WorkbenchView {
 
     pub(super) fn schedule_delayed_autosave(
         &mut self,
-        document_id: crate::ui::editor::DocumentId,
+        document_id: crate::model::editor::DocumentId,
         generation: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -359,7 +359,7 @@ impl WorkbenchView {
 
     pub(super) fn autosave_document(
         &mut self,
-        document_id: crate::ui::editor::DocumentId,
+        document_id: crate::model::editor::DocumentId,
         expected_generation: Option<u64>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -402,7 +402,7 @@ impl WorkbenchView {
 
     pub(super) fn run_follow_up_autosave(
         &mut self,
-        document_id: &crate::ui::editor::DocumentId,
+        document_id: &crate::model::editor::DocumentId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -424,7 +424,7 @@ impl WorkbenchView {
 
     pub(super) fn save_document(
         &mut self,
-        document_id: crate::ui::editor::DocumentId,
+        document_id: crate::model::editor::DocumentId,
         force: bool,
         continuation: SaveContinuation,
         window: &mut Window,
@@ -462,7 +462,7 @@ impl WorkbenchView {
 
     pub(super) fn project_file_services(
         &self,
-        document_id: &crate::ui::editor::DocumentId,
+        document_id: &crate::model::editor::DocumentId,
     ) -> Option<(ProjectServices, PathBuf)> {
         let services = self.project.services.get(&document_id.project_id)?.clone();
         let relative_path = services
@@ -631,7 +631,7 @@ impl WorkbenchView {
     pub(super) fn complete_save_continuation(
         &mut self,
         continuation: SaveContinuation,
-        document_id: &crate::ui::editor::DocumentId,
+        document_id: &crate::model::editor::DocumentId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -663,7 +663,7 @@ impl WorkbenchView {
 
     pub(super) fn spawn_project_file_reload(
         &mut self,
-        document_id: crate::ui::editor::DocumentId,
+        document_id: crate::model::editor::DocumentId,
         restore_conflict_on_error: Option<PendingFileConflict>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -731,7 +731,7 @@ impl WorkbenchView {
 
     pub(super) fn check_document_for_external_changes(
         &mut self,
-        document_id: crate::ui::editor::DocumentId,
+        document_id: crate::model::editor::DocumentId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

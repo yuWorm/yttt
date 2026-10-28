@@ -221,20 +221,7 @@ impl Workspace {
         &mut self,
         layout: ProjectLayout,
     ) -> Result<(), WorkspaceError> {
-        layout.validate().map_err(WorkspaceError::InvalidLayout)?;
-        let project = self.selected_project_mut()?;
-        let selected_tab_id = if layout.tab(&project.selected_tab_id).is_some() {
-            project.selected_tab_id.clone()
-        } else {
-            default_tab_id(&layout).unwrap_or_default()
-        };
-        let tab_states = tab_states_for_layout(&layout, &selected_tab_id);
-
-        project.layout = layout;
-        project.selected_tab_id = selected_tab_id;
-        project.tab_states = tab_states;
-
-        Ok(())
+        self.selected_project_mut()?.replace_layout(layout)
     }
 
     pub fn select_project(&mut self, project_id: &ProjectId) -> Result<(), WorkspaceError> {
@@ -249,53 +236,13 @@ impl Workspace {
     }
 
     pub fn select_tab(&mut self, tab_id: &str) -> Result<(), WorkspaceError> {
-        let project = self.selected_project_mut()?;
-        if project.layout.tab(tab_id).is_none() {
-            return Err(WorkspaceError::TabNotFound(tab_id.to_string()));
-        }
-
-        project.selected_tab_id = tab_id.to_string();
-        let tab_state = project
-            .tab_state_mut(tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
-        tab_state.start_state = TabStartState::Started;
-        if tab_state.focused_pane_id.is_none() {
-            tab_state.focused_pane_id = tab_state
-                .pane_states
-                .first()
-                .map(|pane| pane.pane_id.clone());
-        }
-
-        Ok(())
+        self.selected_project_mut()?.select_tab(tab_id)
     }
 
     pub fn focus_pane(&mut self, pane_id: &str) -> Result<(), WorkspaceError> {
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab = project
-            .layout
-            .tabs
-            .iter()
-            .find(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-
-        if tab.layout.find_pane(pane_id).is_none() {
-            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
-        }
-
-        let tab_state = project
-            .tab_state_mut(&selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        if !tab_state
-            .pane_states
-            .iter()
-            .any(|pane| pane.pane_id == pane_id)
-        {
-            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
-        }
-
-        tab_state.focused_pane_id = Some(pane_id.to_string());
-        Ok(())
+        project.focus_pane(&selected_tab_id, pane_id)
     }
 
     pub fn focus_pane_direction(
@@ -304,34 +251,7 @@ impl Workspace {
     ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        let focused_pane_id = project
-            .tab_state(&selected_tab_id)
-            .and_then(|tab| tab.focused_pane_id.clone())
-            .or_else(|| {
-                pane_ids(&project.layout.tabs[tab_index].layout)
-                    .into_iter()
-                    .next()
-            })
-            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
-        let next_pane_id = adjacent_pane_id(
-            &project.layout.tabs[tab_index].layout,
-            &focused_pane_id,
-            direction,
-        )
-        .ok_or_else(|| WorkspaceError::PaneNotFound(format!("{direction:?}")))?;
-
-        let tab_state = project
-            .tab_state_mut(&selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        tab_state.focused_pane_id = Some(next_pane_id.clone());
-
-        Ok(next_pane_id)
+        project.focus_adjacent_pane(&selected_tab_id, direction)
     }
 
     pub fn resize_focused_split(
@@ -341,29 +261,8 @@ impl Workspace {
     ) -> Result<f32, WorkspaceError> {
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        let focused_pane_id = project
-            .tab_state(&selected_tab_id)
-            .and_then(|tab| tab.focused_pane_id.clone())
-            .or_else(|| {
-                pane_ids(&project.layout.tabs[tab_index].layout)
-                    .into_iter()
-                    .next()
-            })
-            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
-
-        resize_pane_split(
-            &mut project.layout.tabs[tab_index].layout,
-            &focused_pane_id,
-            direction,
-            delta,
-        )
-        .ok_or_else(|| WorkspaceError::PaneNotFound(format!("{direction:?}")))
+        let focused_pane_id = project.focused_or_first_pane_id(&selected_tab_id)?;
+        project.resize_pane_split(&selected_tab_id, &focused_pane_id, direction, delta)
     }
 
     pub fn select_next_tab(&mut self) -> Result<(), WorkspaceError> {
@@ -392,43 +291,8 @@ impl Workspace {
         command: impl Into<String>,
     ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
-        if project.layout.tab(&tab_id).is_some() {
-            return Err(crate::model::layout::LayoutError::DuplicateTabId(tab_id).into());
-        }
         let (_, title) = next_tab_identity(&project.layout);
-        let pane_id = "shell".to_string();
-        let command = command.into();
-
-        project.layout.tabs.push(TabConfig {
-            id: tab_id.clone(),
-            title,
-            cwd: None,
-            startup: TabStartup::Lazy,
-            layout: LayoutNode::Pane(PaneConfig {
-                id: pane_id.clone(),
-                title: "shell".to_string(),
-                command,
-                args: Vec::new(),
-                execution_mode: TerminalExecutionMode::Shell,
-                exit_behavior: ProcessExitBehavior::Close,
-                kind: PaneKind::Shell,
-                notify_on_exit: false,
-                detector: None,
-            }),
-        });
-        project.selected_tab_id = tab_id.clone();
-        project.tab_states.push(TabState {
-            tab_id: tab_id.clone(),
-            start_state: TabStartState::Started,
-            focused_pane_id: Some(pane_id.clone()),
-            pane_states: vec![PaneState {
-                pane_id,
-                process_state: PaneProcessState::Idle,
-                agent_snapshot: None,
-            }],
-        });
-
-        Ok(tab_id)
+        project.add_tab(shell_tab_config(tab_id, title, command.into()))
     }
 
     pub fn create_agent_tab(
@@ -448,43 +312,12 @@ impl Workspace {
         command: impl Into<String>,
         args: Vec<String>,
     ) -> Result<String, WorkspaceError> {
-        let project = self.selected_project_mut()?;
-        if project.layout.tab(&tab_id).is_some() {
-            return Err(crate::model::layout::LayoutError::DuplicateTabId(tab_id).into());
-        }
-        let pane_id = "agent".to_string();
-        let title = title.into();
-
-        project.layout.tabs.push(TabConfig {
-            id: tab_id.clone(),
-            title: title.clone(),
-            cwd: None,
-            startup: TabStartup::Lazy,
-            layout: LayoutNode::Pane(PaneConfig {
-                id: pane_id.clone(),
-                title,
-                command: command.into(),
-                args,
-                execution_mode: TerminalExecutionMode::Command,
-                exit_behavior: ProcessExitBehavior::ManualRestart,
-                kind: PaneKind::Agent,
-                notify_on_exit: true,
-                detector: None,
-            }),
-        });
-        project.selected_tab_id = tab_id.clone();
-        project.tab_states.push(TabState {
-            tab_id: tab_id.clone(),
-            start_state: TabStartState::Started,
-            focused_pane_id: Some(pane_id.clone()),
-            pane_states: vec![PaneState {
-                pane_id,
-                process_state: PaneProcessState::Idle,
-                agent_snapshot: None,
-            }],
-        });
-
-        Ok(tab_id)
+        self.selected_project_mut()?.add_tab(agent_tab_config(
+            tab_id,
+            title.into(),
+            command.into(),
+            args,
+        ))
     }
 
     pub fn close_selected_tab(&mut self) -> Result<String, WorkspaceError> {
@@ -492,114 +325,25 @@ impl Workspace {
         if project.layout.tabs.len() <= 1 {
             return Err(WorkspaceError::CannotCloseLastTab);
         }
-
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-
-        let removed_tab = project.layout.tabs.remove(tab_index);
-        project
-            .tab_states
-            .retain(|tab| tab.tab_id != removed_tab.id);
-        repair_default_tab_after_removal(&mut project.layout);
-
-        let next_index = tab_index.min(project.layout.tabs.len().saturating_sub(1));
-        let next_tab_id = project.layout.tabs[next_index].id.clone();
-        project.selected_tab_id = next_tab_id.clone();
-        let next_tab_state = project
-            .tab_state_mut(&next_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(next_tab_id.clone()))?;
-        next_tab_state.start_state = TabStartState::Started;
-        if next_tab_state.focused_pane_id.is_none() {
-            next_tab_state.focused_pane_id = next_tab_state
-                .pane_states
-                .first()
-                .map(|pane| pane.pane_id.clone());
+        if project.layout.tab(&selected_tab_id).is_none() {
+            return Err(WorkspaceError::TabNotFound(selected_tab_id));
         }
-
-        Ok(removed_tab.id)
+        project.close_tabs(std::slice::from_ref(&selected_tab_id))?;
+        Ok(selected_tab_id)
     }
 
     pub fn close_tabs(&mut self, tab_ids: &[String]) -> Result<Vec<String>, WorkspaceError> {
         if tab_ids.is_empty() {
             return Ok(Vec::new());
         }
-
-        let project = self.selected_project_mut()?;
-        let selected_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == project.selected_tab_id);
-        let selected_removed = tab_ids.contains(&project.selected_tab_id);
-        let removed_before_selected = selected_index
-            .map(|selected_index| {
-                project.layout.tabs[..selected_index]
-                    .iter()
-                    .filter(|tab| tab_ids.contains(&tab.id))
-                    .count()
-            })
-            .unwrap_or_default();
-        let mut removed = Vec::new();
-        project.layout.tabs.retain(|tab| {
-            if tab_ids.contains(&tab.id) {
-                removed.push(tab.id.clone());
-                false
-            } else {
-                true
-            }
-        });
-        if removed.is_empty() {
-            return Ok(removed);
-        }
-        project
-            .tab_states
-            .retain(|tab| !removed.contains(&tab.tab_id));
-        repair_default_tab_after_removal(&mut project.layout);
-
-        if selected_removed {
-            if project.layout.tabs.is_empty() {
-                project.selected_tab_id.clear();
-            } else {
-                let next_index = selected_index
-                    .unwrap_or_default()
-                    .saturating_sub(removed_before_selected)
-                    .min(project.layout.tabs.len() - 1);
-                let next_tab_id = project.layout.tabs[next_index].id.clone();
-                project.selected_tab_id = next_tab_id.clone();
-                let next_tab_state = project
-                    .tab_state_mut(&next_tab_id)
-                    .ok_or_else(|| WorkspaceError::TabNotFound(next_tab_id.clone()))?;
-                next_tab_state.start_state = TabStartState::Started;
-                if next_tab_state.focused_pane_id.is_none() {
-                    next_tab_state.focused_pane_id = next_tab_state
-                        .pane_states
-                        .first()
-                        .map(|pane| pane.pane_id.clone());
-                }
-            }
-        }
-
-        Ok(removed)
+        self.selected_project_mut()?.close_tabs(tab_ids)
     }
 
     pub fn rename_selected_tab(&mut self, title: &str) -> Result<(), WorkspaceError> {
-        let title = normalized_title(title)?;
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab = project
-            .layout
-            .tabs
-            .iter_mut()
-            .find(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-
-        tab.title = title;
-        Ok(())
+        project.rename_tab(&selected_tab_id, title)
     }
 
     pub fn split_focused_pane(
@@ -623,104 +367,21 @@ impl Workspace {
     ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        let focused_pane_id = project
-            .tab_state(&selected_tab_id)
-            .and_then(|tab| tab.focused_pane_id.clone())
-            .or_else(|| {
-                pane_ids(&project.layout.tabs[tab_index].layout)
-                    .into_iter()
-                    .next()
-            })
-            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
-        let new_pane_number = pane_count(&project.layout.tabs[tab_index].layout) + 1;
-        if project.layout.tabs[tab_index]
-            .layout
-            .find_pane(&new_pane_id)
-            .is_some()
-        {
-            return Err(crate::model::layout::LayoutError::DuplicatePaneId {
-                tab_id: selected_tab_id,
-                pane_id: new_pane_id,
-            }
-            .into());
-        }
-        let new_pane = PaneConfig {
-            id: new_pane_id.clone(),
-            title: format!("Pane {new_pane_number}"),
-            command,
-            args: Vec::new(),
-            execution_mode: TerminalExecutionMode::Shell,
-            exit_behavior: ProcessExitBehavior::Close,
-            kind: PaneKind::Shell,
-            notify_on_exit: false,
-            detector: None,
-        };
-
-        if !split_pane_node(
-            &mut project.layout.tabs[tab_index].layout,
+        let focused_pane_id = project.focused_or_first_pane_id(&selected_tab_id)?;
+        project.split_pane(
+            &selected_tab_id,
             &focused_pane_id,
             direction,
-            new_pane,
-        ) {
-            return Err(WorkspaceError::PaneNotFound(focused_pane_id));
-        }
-
-        let tab_state = project
-            .tab_state_mut(&selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        tab_state.pane_states.push(PaneState {
-            pane_id: new_pane_id.clone(),
-            process_state: PaneProcessState::Idle,
-            agent_snapshot: None,
-        });
-        tab_state.focused_pane_id = Some(new_pane_id.clone());
-
-        Ok(new_pane_id)
+            new_pane_id,
+            command,
+        )
     }
 
     pub fn close_focused_pane(&mut self) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-
-        if pane_count(&project.layout.tabs[tab_index].layout) <= 1 {
-            return Err(WorkspaceError::CannotCloseLastPane);
-        }
-
-        let focused_pane_id = project
-            .tab_state(&selected_tab_id)
-            .and_then(|tab| tab.focused_pane_id.clone())
-            .or_else(|| {
-                pane_ids(&project.layout.tabs[tab_index].layout)
-                    .into_iter()
-                    .next()
-            })
-            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
-
-        if !remove_pane_node(&mut project.layout.tabs[tab_index].layout, &focused_pane_id) {
-            return Err(WorkspaceError::PaneNotFound(focused_pane_id));
-        }
-
-        let remaining_panes = pane_ids(&project.layout.tabs[tab_index].layout);
-        let tab_state = project
-            .tab_state_mut(&selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        tab_state
-            .pane_states
-            .retain(|pane| pane.pane_id != focused_pane_id);
-        tab_state.focused_pane_id = remaining_panes.first().cloned();
-
+        let focused_pane_id = project.focused_or_first_pane_id(&selected_tab_id)?;
+        project.close_pane(&selected_tab_id, &focused_pane_id)?;
         Ok(focused_pane_id)
     }
 
@@ -730,11 +391,7 @@ impl Workspace {
         tab_id: &str,
         pane_id: &str,
     ) -> Result<PaneExitCloseOutcome, WorkspaceError> {
-        let project = self
-            .opened_projects
-            .iter_mut()
-            .find(|project| &project.id == project_id)
-            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
+        let project = self.project_mut(project_id)?;
         let tab_index = project
             .layout
             .tabs
@@ -786,48 +443,17 @@ impl Workspace {
         if project.selected_tab_id == removed_tab_id {
             let next_index = tab_index.min(project.layout.tabs.len().saturating_sub(1));
             let next_tab_id = project.layout.tabs[next_index].id.clone();
-            project.selected_tab_id = next_tab_id.clone();
-            let next_tab_state = project
-                .tab_state_mut(&next_tab_id)
-                .ok_or_else(|| WorkspaceError::TabNotFound(next_tab_id.clone()))?;
-            next_tab_state.start_state = TabStartState::Started;
-            if next_tab_state.focused_pane_id.is_none() {
-                next_tab_state.focused_pane_id = next_tab_state
-                    .pane_states
-                    .first()
-                    .map(|pane| pane.pane_id.clone());
-            }
+            project.select_tab(&next_tab_id)?;
         }
 
         Ok(PaneExitCloseOutcome::TabClosed)
     }
 
     pub fn rename_focused_pane(&mut self, title: &str) -> Result<(), WorkspaceError> {
-        let title = normalized_title(title)?;
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
-        let tab_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
-        let focused_pane_id = project
-            .tab_state(&selected_tab_id)
-            .and_then(|tab| tab.focused_pane_id.clone())
-            .or_else(|| {
-                pane_ids(&project.layout.tabs[tab_index].layout)
-                    .into_iter()
-                    .next()
-            })
-            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
-        let pane = project.layout.tabs[tab_index]
-            .layout
-            .find_pane_mut(&focused_pane_id)
-            .ok_or_else(|| WorkspaceError::PaneNotFound(focused_pane_id.clone()))?;
-
-        pane.title = title;
-        Ok(())
+        let focused_pane_id = project.focused_or_first_pane_id(&selected_tab_id)?;
+        project.rename_pane(&selected_tab_id, &focused_pane_id, title)
     }
 
     pub fn mark_pane_running(
@@ -991,19 +617,7 @@ impl Workspace {
         let next_index = (current_index as isize + offset).rem_euclid(tab_count as isize) as usize;
         let next_tab_id = project.layout.tabs[next_index].id.clone();
 
-        project.selected_tab_id = next_tab_id.clone();
-        let tab_state = project
-            .tab_state_mut(&next_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(next_tab_id.clone()))?;
-        tab_state.start_state = TabStartState::Started;
-        if tab_state.focused_pane_id.is_none() {
-            tab_state.focused_pane_id = tab_state
-                .pane_states
-                .first()
-                .map(|pane| pane.pane_id.clone());
-        }
-
-        Ok(())
+        project.select_tab(&next_tab_id)
     }
 
     fn selected_project_mut(&mut self) -> Result<&mut OpenedProject, WorkspaceError> {
@@ -1012,9 +626,16 @@ impl Workspace {
             .cloned()
             .ok_or(WorkspaceError::NoSelectedProject)?;
 
+        self.project_mut(&project_id)
+    }
+
+    pub(crate) fn project_mut(
+        &mut self,
+        project_id: &ProjectId,
+    ) -> Result<&mut OpenedProject, WorkspaceError> {
         self.opened_projects
             .iter_mut()
-            .find(|project| project.id == project_id)
+            .find(|project| &project.id == project_id)
             .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))
     }
 
@@ -1076,6 +697,339 @@ impl OpenedProject {
                     .count()
             })
             .sum()
+    }
+
+    fn tab_index(&self, tab_id: &str) -> Result<usize, WorkspaceError> {
+        self.layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))
+    }
+
+    /// The tab's focused pane, falling back to its first pane.
+    pub(crate) fn focused_or_first_pane_id(&self, tab_id: &str) -> Result<String, WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        self.tab_state(tab_id)
+            .and_then(|tab| tab.focused_pane_id.clone())
+            .or_else(|| first_pane_id(&self.layout.tabs[tab_index].layout))
+            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))
+    }
+
+    /// Selects a tab, starts it and gives it a focused pane when it has none.
+    pub(crate) fn select_tab(&mut self, tab_id: &str) -> Result<(), WorkspaceError> {
+        self.tab_index(tab_id)?;
+        let tab_state = self
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        tab_state.start_state = TabStartState::Started;
+        if tab_state.focused_pane_id.is_none() {
+            tab_state.focused_pane_id = tab_state
+                .pane_states
+                .first()
+                .map(|pane| pane.pane_id.clone());
+        }
+        self.selected_tab_id = tab_id.to_string();
+        Ok(())
+    }
+
+    pub(crate) fn focus_pane(&mut self, tab_id: &str, pane_id: &str) -> Result<(), WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        if self.layout.tabs[tab_index]
+            .layout
+            .find_pane(pane_id)
+            .is_none()
+        {
+            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+        }
+        let tab_state = self
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        if !tab_state
+            .pane_states
+            .iter()
+            .any(|pane| pane.pane_id == pane_id)
+        {
+            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+        }
+        tab_state.focused_pane_id = Some(pane_id.to_string());
+        Ok(())
+    }
+
+    pub(crate) fn focus_adjacent_pane(
+        &mut self,
+        tab_id: &str,
+        direction: FocusDirection,
+    ) -> Result<String, WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        let focused_pane_id = self.focused_or_first_pane_id(tab_id)?;
+        let next_pane_id = adjacent_pane_id(
+            &self.layout.tabs[tab_index].layout,
+            &focused_pane_id,
+            direction,
+        )
+        .ok_or_else(|| WorkspaceError::PaneNotFound(format!("{direction:?}")))?;
+        let tab_state = self
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        tab_state.focused_pane_id = Some(next_pane_id.clone());
+        Ok(next_pane_id)
+    }
+
+    pub(crate) fn resize_pane_split(
+        &mut self,
+        tab_id: &str,
+        pane_id: &str,
+        direction: ResizeDirection,
+        delta: f32,
+    ) -> Result<f32, WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        resize_pane_split(
+            &mut self.layout.tabs[tab_index].layout,
+            pane_id,
+            direction,
+            delta,
+        )
+        .ok_or_else(|| WorkspaceError::PaneNotFound(format!("{direction:?}")))
+    }
+
+    /// Appends a started tab with idle panes and selects it.
+    pub(crate) fn add_tab(&mut self, tab: TabConfig) -> Result<String, WorkspaceError> {
+        if self.layout.tab(&tab.id).is_some() {
+            return Err(crate::model::layout::LayoutError::DuplicateTabId(tab.id).into());
+        }
+        let pane_ids = pane_ids(&tab.layout);
+        let tab_id = tab.id.clone();
+        self.tab_states.push(TabState {
+            tab_id: tab_id.clone(),
+            start_state: TabStartState::Started,
+            focused_pane_id: pane_ids.first().cloned(),
+            pane_states: pane_ids
+                .into_iter()
+                .map(|pane_id| PaneState {
+                    pane_id,
+                    process_state: PaneProcessState::Idle,
+                    agent_snapshot: None,
+                })
+                .collect(),
+        });
+        self.layout.tabs.push(tab);
+        self.selected_tab_id = tab_id.clone();
+        Ok(tab_id)
+    }
+
+    /// Removes the named tabs; when the selected tab is removed, the tab that
+    /// takes its position becomes selected.
+    pub(crate) fn close_tabs(&mut self, tab_ids: &[String]) -> Result<Vec<String>, WorkspaceError> {
+        let selected_index = self
+            .layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == self.selected_tab_id);
+        let selected_removed = tab_ids.contains(&self.selected_tab_id);
+        let removed_before_selected = selected_index
+            .map(|selected_index| {
+                self.layout.tabs[..selected_index]
+                    .iter()
+                    .filter(|tab| tab_ids.contains(&tab.id))
+                    .count()
+            })
+            .unwrap_or_default();
+        let mut removed = Vec::new();
+        self.layout.tabs.retain(|tab| {
+            if tab_ids.contains(&tab.id) {
+                removed.push(tab.id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if removed.is_empty() {
+            return Ok(removed);
+        }
+        self.tab_states.retain(|tab| !removed.contains(&tab.tab_id));
+        repair_default_tab_after_removal(&mut self.layout);
+
+        if selected_removed {
+            if self.layout.tabs.is_empty() {
+                self.selected_tab_id.clear();
+            } else {
+                let next_index = selected_index
+                    .unwrap_or_default()
+                    .saturating_sub(removed_before_selected)
+                    .min(self.layout.tabs.len() - 1);
+                let next_tab_id = self.layout.tabs[next_index].id.clone();
+                self.select_tab(&next_tab_id)?;
+            }
+        }
+
+        Ok(removed)
+    }
+
+    pub(crate) fn rename_tab(&mut self, tab_id: &str, title: &str) -> Result<(), WorkspaceError> {
+        let title = normalized_title(title)?;
+        let tab_index = self.tab_index(tab_id)?;
+        self.layout.tabs[tab_index].title = title;
+        Ok(())
+    }
+
+    /// Splits `target_pane_id` and focuses the new shell pane.
+    pub(crate) fn split_pane(
+        &mut self,
+        tab_id: &str,
+        target_pane_id: &str,
+        direction: SplitDirection,
+        new_pane_id: String,
+        command: String,
+    ) -> Result<String, WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        let tab_layout = &mut self.layout.tabs[tab_index].layout;
+        if tab_layout.find_pane(&new_pane_id).is_some() {
+            return Err(crate::model::layout::LayoutError::DuplicatePaneId {
+                tab_id: tab_id.to_string(),
+                pane_id: new_pane_id,
+            }
+            .into());
+        }
+        let new_pane = PaneConfig {
+            id: new_pane_id.clone(),
+            title: format!("Pane {}", pane_count(tab_layout) + 1),
+            command,
+            args: Vec::new(),
+            execution_mode: TerminalExecutionMode::Shell,
+            exit_behavior: ProcessExitBehavior::Close,
+            kind: PaneKind::Shell,
+            notify_on_exit: false,
+            detector: None,
+        };
+        if !split_pane_node(tab_layout, target_pane_id, direction, new_pane) {
+            return Err(WorkspaceError::PaneNotFound(target_pane_id.to_string()));
+        }
+
+        let tab_state = self
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        tab_state.pane_states.push(PaneState {
+            pane_id: new_pane_id.clone(),
+            process_state: PaneProcessState::Idle,
+            agent_snapshot: None,
+        });
+        tab_state.focused_pane_id = Some(new_pane_id.clone());
+        Ok(new_pane_id)
+    }
+
+    /// Removes one pane from a multi-pane tab and focuses the first remaining pane.
+    pub(crate) fn close_pane(&mut self, tab_id: &str, pane_id: &str) -> Result<(), WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        let tab_layout = &mut self.layout.tabs[tab_index].layout;
+        if pane_count(tab_layout) <= 1 {
+            return Err(WorkspaceError::CannotCloseLastPane);
+        }
+        if !remove_pane_node(tab_layout, pane_id) {
+            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+        }
+        let first_remaining = first_pane_id(tab_layout);
+        let tab_state = self
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        tab_state.pane_states.retain(|pane| pane.pane_id != pane_id);
+        tab_state.focused_pane_id = first_remaining;
+        Ok(())
+    }
+
+    pub(crate) fn rename_pane(
+        &mut self,
+        tab_id: &str,
+        pane_id: &str,
+        title: &str,
+    ) -> Result<(), WorkspaceError> {
+        let title = normalized_title(title)?;
+        let tab_index = self.tab_index(tab_id)?;
+        let pane = self.layout.tabs[tab_index]
+            .layout
+            .find_pane_mut(pane_id)
+            .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
+        pane.title = title;
+        Ok(())
+    }
+
+    /// Replaces the layout, keeping the selected tab when it still exists.
+    /// Tab and pane runtime state is rebuilt from the new layout.
+    pub(crate) fn replace_layout(&mut self, layout: ProjectLayout) -> Result<(), WorkspaceError> {
+        layout.validate().map_err(WorkspaceError::InvalidLayout)?;
+        let selected_tab_id = if layout.tab(&self.selected_tab_id).is_some() {
+            self.selected_tab_id.clone()
+        } else {
+            default_tab_id(&layout).unwrap_or_default()
+        };
+        self.tab_states = tab_states_for_layout(&layout, &selected_tab_id);
+        self.layout = layout;
+        self.selected_tab_id = selected_tab_id;
+        Ok(())
+    }
+
+    /// The next free `tab-N` ID and its default `Tab N` title.
+    pub(crate) fn next_tab_identity(&self) -> (String, String) {
+        next_tab_identity(&self.layout)
+    }
+
+    /// The next free `pane-N` ID within one tab.
+    pub(crate) fn next_pane_id(&self, tab_id: &str) -> Result<String, WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        Ok(next_pane_id(&self.layout.tabs[tab_index].layout))
+    }
+
+    pub(crate) fn pane_addresses(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.tab_states.iter().flat_map(|tab| {
+            tab.pane_states
+                .iter()
+                .map(|pane| (tab.tab_id.as_str(), pane.pane_id.as_str()))
+        })
+    }
+}
+
+pub(crate) fn shell_tab_config(id: String, title: String, command: String) -> TabConfig {
+    TabConfig {
+        id,
+        title,
+        cwd: None,
+        startup: TabStartup::Lazy,
+        layout: LayoutNode::Pane(PaneConfig {
+            id: "shell".to_string(),
+            title: "shell".to_string(),
+            command,
+            args: Vec::new(),
+            execution_mode: TerminalExecutionMode::Shell,
+            exit_behavior: ProcessExitBehavior::Close,
+            kind: PaneKind::Shell,
+            notify_on_exit: false,
+            detector: None,
+        }),
+    }
+}
+
+pub(crate) fn agent_tab_config(
+    id: String,
+    title: String,
+    command: String,
+    args: Vec<String>,
+) -> TabConfig {
+    TabConfig {
+        id,
+        title: title.clone(),
+        cwd: None,
+        startup: TabStartup::Lazy,
+        layout: LayoutNode::Pane(PaneConfig {
+            id: "agent".to_string(),
+            title,
+            command,
+            args,
+            execution_mode: TerminalExecutionMode::Command,
+            exit_behavior: ProcessExitBehavior::ManualRestart,
+            kind: PaneKind::Agent,
+            notify_on_exit: true,
+            detector: None,
+        }),
     }
 }
 

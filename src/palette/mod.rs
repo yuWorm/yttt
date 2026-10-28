@@ -4,13 +4,13 @@ use yttt_agent_core::AgentViewState;
 use crate::{
     commands::{ActiveSurface, CommandContext, CommandId, CommandRegistry},
     model::{
+        editor::{DocumentId, WorkItemId},
         ids::ProjectId,
         layout::LayoutNode,
         project::ProjectLocation,
         workspace::{OpenedProject, PaneProcessState, TabStartState, Workspace},
     },
     ui::{
-        editor::{DocumentId, WorkItemId},
         i18n::{UiText, UiTextKey},
         terminal::status::{
             is_agent_pane, pane_agent_status, project_agent_status, tab_agent_status,

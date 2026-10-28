@@ -1,9 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
-use crate::{model::ids::ProjectId, ui::project_tree::ProjectFileTree};
+use crate::model::ids::ProjectId;
 
 use super::work_area::{
     TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitId,
@@ -29,7 +29,6 @@ pub struct ProjectWorkItemSession {
     file_ids: Vec<DocumentId>,
     work_area: WorkAreaState,
     activation_history: Vec<WorkItemId>,
-    file_tree: ProjectFileTree,
     project_panel_visible: bool,
     project_panel_width: f32,
 }
@@ -37,7 +36,7 @@ pub struct ProjectWorkItemSession {
 /// A serialized editor-session tree. It contains no GPUI entities and is
 /// validated before replacing a live session.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub(crate) struct ProjectWorkItemSessionSnapshot {
+pub struct ProjectWorkItemSessionSnapshot {
     project_id: ProjectId,
     root: PathBuf,
     file_ids: Vec<DocumentId>,
@@ -48,41 +47,22 @@ pub(crate) struct ProjectWorkItemSessionSnapshot {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
-pub(crate) struct ProjectEditorWorkspaceSnapshot {
+pub struct ProjectEditorWorkspaceSnapshot {
     sessions: Vec<ProjectWorkItemSessionSnapshot>,
 }
 
 impl ProjectEditorWorkspaceSnapshot {
-    pub(crate) fn project_ids(&self) -> HashSet<ProjectId> {
+    pub fn project_ids(&self) -> HashSet<ProjectId> {
         self.sessions
             .iter()
             .map(|session| session.project_id.clone())
             .collect()
     }
 
-    pub(crate) fn contains_document(&self, document_id: &DocumentId) -> bool {
+    pub fn contains_document(&self, document_id: &DocumentId) -> bool {
         self.sessions.iter().any(|session| {
             session.project_id == document_id.project_id && session.file_ids.contains(document_id)
         })
-    }
-
-    pub(crate) fn validate(
-        &self,
-        project_roots: &HashMap<ProjectId, PathBuf>,
-        terminal_ids: &HashMap<ProjectId, Vec<String>>,
-    ) -> Result<(), String> {
-        if self.project_ids() != project_roots.keys().cloned().collect() {
-            return Err("editor sessions do not match the workspace projects".to_string());
-        }
-        if self.sessions.iter().any(|session| {
-            project_roots
-                .get(&session.project_id)
-                .is_none_or(|root| root != &session.root)
-        }) {
-            return Err("editor session root does not match its workspace project".to_string());
-        }
-        let mut state = ProjectEditorWorkspaceState::default();
-        state.restore_snapshot(self.clone(), terminal_ids)
     }
 }
 
@@ -99,11 +79,10 @@ impl ProjectWorkItemSession {
         let root = root.into();
         Self {
             project_id,
-            root: root.clone(),
+            root,
             file_ids: Vec::new(),
             work_area: WorkAreaState::new(active_work_item),
             activation_history,
-            file_tree: ProjectFileTree::new(root),
             project_panel_visible,
             project_panel_width,
         }
@@ -111,6 +90,10 @@ impl ProjectWorkItemSession {
 
     pub fn project_id(&self) -> &ProjectId {
         &self.project_id
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn file_ids(&self) -> &[DocumentId] {
@@ -133,6 +116,10 @@ impl ProjectWorkItemSession {
         self.work_area.group_items_containing(item)
     }
 
+    pub fn group_id_containing(&self, item: &WorkItemId) -> Option<TabGroupId> {
+        self.work_area.group_id_containing(item)
+    }
+
     pub fn work_area(&self) -> &WorkAreaNode {
         self.work_area.root()
     }
@@ -145,7 +132,7 @@ impl ProjectWorkItemSession {
         &self.activation_history
     }
 
-    pub(crate) fn snapshot(&self) -> ProjectWorkItemSessionSnapshot {
+    pub fn snapshot(&self) -> ProjectWorkItemSessionSnapshot {
         ProjectWorkItemSessionSnapshot {
             project_id: self.project_id.clone(),
             root: self.root.clone(),
@@ -205,11 +192,10 @@ impl ProjectWorkItemSession {
         }
         let mut session = Self {
             project_id: snapshot.project_id,
-            root: snapshot.root.clone(),
+            root: snapshot.root,
             file_ids: snapshot.file_ids,
             work_area,
             activation_history: snapshot.activation_history,
-            file_tree: ProjectFileTree::new(snapshot.root),
             project_panel_visible: snapshot.project_panel_visible,
             project_panel_width: snapshot.project_panel_width,
         };
@@ -373,14 +359,6 @@ impl ProjectWorkItemSession {
         true
     }
 
-    pub fn file_tree(&self) -> &ProjectFileTree {
-        &self.file_tree
-    }
-
-    pub fn file_tree_mut(&mut self) -> &mut ProjectFileTree {
-        &mut self.file_tree
-    }
-
     pub fn project_panel_visible(&self) -> bool {
         self.project_panel_visible
     }
@@ -482,6 +460,10 @@ impl ProjectEditorWorkspaceState {
         self.sessions.get_mut(project_id)
     }
 
+    pub fn sessions(&self) -> impl Iterator<Item = (&ProjectId, &ProjectWorkItemSession)> {
+        self.sessions.iter()
+    }
+
     pub fn relocate_file(&mut self, old: &DocumentId, new: DocumentId) -> bool {
         if old == &new {
             return self
@@ -525,7 +507,7 @@ impl ProjectEditorWorkspaceState {
         true
     }
 
-    pub(crate) fn snapshot(&self) -> ProjectEditorWorkspaceSnapshot {
+    pub fn snapshot(&self) -> ProjectEditorWorkspaceSnapshot {
         let mut sessions = self
             .sessions
             .values()
@@ -535,7 +517,28 @@ impl ProjectEditorWorkspaceState {
         ProjectEditorWorkspaceSnapshot { sessions }
     }
 
-    pub(crate) fn restore_snapshot(
+    /// Restores a snapshot whose sessions must match `project_roots` exactly.
+    pub fn from_snapshot(
+        snapshot: ProjectEditorWorkspaceSnapshot,
+        project_roots: &HashMap<ProjectId, PathBuf>,
+        terminal_ids: &HashMap<ProjectId, Vec<String>>,
+    ) -> Result<Self, String> {
+        if snapshot.project_ids() != project_roots.keys().cloned().collect() {
+            return Err("editor sessions do not match the workspace projects".to_string());
+        }
+        if snapshot.sessions.iter().any(|session| {
+            project_roots
+                .get(&session.project_id)
+                .is_none_or(|root| root != &session.root)
+        }) {
+            return Err("editor session root does not match its workspace project".to_string());
+        }
+        let mut state = Self::default();
+        state.restore_snapshot(snapshot, terminal_ids)?;
+        Ok(state)
+    }
+
+    pub fn restore_snapshot(
         &mut self,
         snapshot: ProjectEditorWorkspaceSnapshot,
         terminal_ids: &HashMap<ProjectId, Vec<String>>,

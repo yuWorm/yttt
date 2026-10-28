@@ -1,11 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use yttt::{
-    model::ids::ProjectId,
-    ui::editor::{
-        ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkAreaDropEdge,
-        WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis, WorkItemId,
-    },
+use yttt::model::{
+    editor::{DocumentId, ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId},
+    ids::ProjectId,
+    work_area::{WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis},
 };
 
 #[test]
@@ -103,7 +101,7 @@ fn dragging_work_items_persists_one_mixed_tab_order() {
 }
 
 #[test]
-fn projects_keep_independent_file_tree_panel_and_active_file_state() {
+fn projects_keep_independent_panel_and_active_file_state() {
     let mut workspace = ProjectEditorWorkspaceState::default();
     let alpha = ProjectId::new("alpha");
     let beta = ProjectId::new("beta");
@@ -126,11 +124,6 @@ fn projects_keep_independent_file_tree_panel_and_active_file_state() {
         .session_mut(&alpha)
         .unwrap()
         .open_file("/projects/alpha/src/main.rs");
-    workspace
-        .session_mut(&alpha)
-        .unwrap()
-        .file_tree_mut()
-        .request_expand(Path::new("src"));
     let beta_file = workspace
         .session_mut(&beta)
         .unwrap()
@@ -141,7 +134,6 @@ fn projects_keep_independent_file_tree_panel_and_active_file_state() {
         alpha_session.active_work_item(),
         Some(&WorkItemId::File(alpha_file))
     );
-    assert!(alpha_session.file_tree().is_expanded(Path::new("src")));
     assert!(alpha_session.project_panel_visible());
     assert_eq!(alpha_session.project_panel_width(), 280.0);
 
@@ -150,7 +142,6 @@ fn projects_keep_independent_file_tree_panel_and_active_file_state() {
         beta_session.active_work_item(),
         Some(&WorkItemId::File(beta_file))
     );
-    assert!(!beta_session.file_tree().is_expanded(Path::new("src")));
     assert!(!beta_session.project_panel_visible());
     assert_eq!(beta_session.project_panel_width(), 340.0);
 
@@ -246,7 +237,7 @@ fn relocating_file_between_projects_moves_session_ownership() {
         .session_mut(&source_project_id)
         .unwrap()
         .open_file("/project-a/src/file.rs");
-    let new = yttt::ui::editor::DocumentId {
+    let new = DocumentId {
         project_id: destination_project_id.clone(),
         canonical_path: PathBuf::from("/project-b/file.rs"),
     };

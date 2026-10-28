@@ -15,9 +15,9 @@ use super::{WorkbenchView, performance::PerformanceInfo, state::update::UpdateSt
 use crate::{
     commands::CommandId,
     config::bars::{BarLayoutSettings, BarModuleSettings, ShellBarModule, bar_icon_path},
-    model::project::ProjectLocation,
+    model::{editor::WorkItemId, project::ProjectLocation},
     ui::{
-        editor::{EditorDiagnosticSeverity, WorkItemId},
+        editor::EditorDiagnosticSeverity,
         i18n::{UiText, UiTextKey},
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
         terminal::status::{agent_status_label, project_agent_status},

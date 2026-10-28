@@ -1,0 +1,201 @@
+{
+  "schema_version": 2,
+  "workspace": {
+    "opened_projects": [
+      {
+        "id": "fixture-project",
+        "instance_id": "4e007782-47c6-4fcf-9477-e9a3d0885732",
+        "location": {
+          "kind": "local",
+          "path": "/host/projects/fixture"
+        },
+        "layout": {
+          "project": {
+            "name": "yttt",
+            "default_tab": "dev"
+          },
+          "tabs": [
+            {
+              "id": "dev",
+              "title": "Dev",
+              "layout": {
+                "type": "split",
+                "direction": "horizontal",
+                "ratio": 0.6499999761581421,
+                "left": {
+                  "type": "split",
+                  "direction": "horizontal",
+                  "ratio": 0.5,
+                  "left": {
+                    "type": "pane",
+                    "id": "server",
+                    "title": "server",
+                    "command": "$SHELL",
+                    "execution_mode": "shell",
+                    "exit_behavior": "close",
+                    "kind": "shell",
+                    "notify_on_exit": false
+                  },
+                  "right": {
+                    "type": "pane",
+                    "id": "pane-1",
+                    "title": "Pane 3",
+                    "command": "",
+                    "execution_mode": "shell",
+                    "exit_behavior": "close",
+                    "kind": "shell",
+                    "notify_on_exit": false
+                  }
+                },
+                "right": {
+                  "type": "pane",
+                  "id": "shell",
+                  "title": "shell",
+                  "command": "$SHELL",
+                  "execution_mode": "shell",
+                  "exit_behavior": "close",
+                  "kind": "shell",
+                  "notify_on_exit": false
+                }
+              }
+            },
+            {
+              "id": "agent",
+              "title": "Agent",
+              "layout": {
+                "type": "pane",
+                "id": "codex",
+                "title": "Codex",
+                "command": "codex",
+                "execution_mode": "shell",
+                "exit_behavior": "close",
+                "kind": "agent",
+                "notify_on_exit": true
+              }
+            }
+          ]
+        },
+        "selected_tab_id": "dev",
+        "tab_states": [
+          {
+            "tab_id": "dev",
+            "start_state": "Started",
+            "focused_pane_id": "pane-1",
+            "pane_states": [
+              {
+                "pane_id": "server",
+                "process_state": "Idle",
+                "agent_snapshot": null
+              },
+              {
+                "pane_id": "shell",
+                "process_state": "Idle",
+                "agent_snapshot": null
+              },
+              {
+                "pane_id": "pane-1",
+                "process_state": "Idle",
+                "agent_snapshot": null
+              }
+            ]
+          },
+          {
+            "tab_id": "agent",
+            "start_state": "Lazy",
+            "focused_pane_id": "codex",
+            "pane_states": [
+              {
+                "pane_id": "codex",
+                "process_state": "Idle",
+                "agent_snapshot": null
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "selected_project_id": "fixture-project"
+  },
+  "editor": {
+    "sessions": [
+      {
+        "project_id": "fixture-project",
+        "root": "/host/projects/fixture",
+        "file_ids": [
+          {
+            "project_id": "fixture-project",
+            "canonical_path": "/host/projects/fixture/src/main.rs"
+          }
+        ],
+        "work_area": {
+          "root": {
+            "kind": "split",
+            "id": 1,
+            "axis": "row",
+            "ratio": 0.5,
+            "first": {
+              "kind": "group",
+              "id": 1,
+              "items": [
+                {
+                  "Terminal": "dev"
+                },
+                {
+                  "Terminal": "agent"
+                }
+              ],
+              "active_item": {
+                "Terminal": "agent"
+              }
+            },
+            "second": {
+              "kind": "group",
+              "id": 2,
+              "items": [
+                {
+                  "File": {
+                    "project_id": "fixture-project",
+                    "canonical_path": "/host/projects/fixture/src/main.rs"
+                  }
+                }
+              ],
+              "active_item": {
+                "File": {
+                  "project_id": "fixture-project",
+                  "canonical_path": "/host/projects/fixture/src/main.rs"
+                }
+              }
+            }
+          },
+          "active_group_id": 2,
+          "next_group_id": 3,
+          "next_split_id": 2,
+          "order_customized": true
+        },
+        "activation_history": [
+          {
+            "Terminal": "dev"
+          },
+          {
+            "File": {
+              "project_id": "fixture-project",
+              "canonical_path": "/host/projects/fixture/src/main.rs"
+            }
+          }
+        ],
+        "project_panel_visible": true,
+        "project_panel_width": 312.0
+      }
+    ]
+  },
+  "documents": [
+    {
+      "project_id": "fixture-project",
+      "relative_path": "src/main.rs",
+      "selection": {
+        "anchor": 0,
+        "head": 0
+      }
+    }
+  ]
+}

@@ -2,11 +2,18 @@ use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{Entity, Subscription, Task};
 
-use crate::{model::ids::ProjectId, ui::project_tree::ProjectTreeView};
-
-use super::{
-    DocumentId, ProjectEditorDocument, ProjectEditorWorkspaceState, ProjectWorkItemSession,
+use crate::{
+    model::{
+        editor::{
+            DocumentId, ProjectEditorWorkspaceSnapshot, ProjectEditorWorkspaceState,
+            ProjectWorkItemSession,
+        },
+        ids::ProjectId,
+    },
+    ui::project_tree::{ProjectFileTree, ProjectTreeView},
 };
+
+use super::ProjectEditorDocument;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectFileLoadRequest {
@@ -23,6 +30,7 @@ pub struct ProjectEditorRuntime {
     preview_subscriptions: HashMap<DocumentId, Subscription>,
     document_subscriptions: HashMap<DocumentId, Subscription>,
     trees: HashMap<ProjectId, Entity<ProjectTreeView>>,
+    file_trees: HashMap<ProjectId, ProjectFileTree>,
     tree_subscriptions: HashMap<ProjectId, Subscription>,
     pending_tree_generations: HashMap<ProjectId, u64>,
     pending_file_generations: HashMap<DocumentId, u64>,
@@ -40,6 +48,28 @@ impl ProjectEditorRuntime {
         &mut self.workspace
     }
 
+    /// Replaces every editor session; file trees survive only for projects
+    /// that keep the same root.
+    pub fn restore_workspace(
+        &mut self,
+        snapshot: ProjectEditorWorkspaceSnapshot,
+        terminal_ids: &HashMap<ProjectId, Vec<String>>,
+    ) -> Result<(), String> {
+        self.workspace.restore_snapshot(snapshot, terminal_ids)?;
+        let workspace = &self.workspace;
+        self.file_trees.retain(|project_id, tree| {
+            workspace
+                .session(project_id)
+                .is_some_and(|session| session.root() == tree.root())
+        });
+        for (project_id, session) in workspace.sessions() {
+            self.file_trees
+                .entry(project_id.clone())
+                .or_insert_with(|| ProjectFileTree::new(session.root()));
+        }
+        Ok(())
+    }
+
     pub fn open_project(
         &mut self,
         project_id: ProjectId,
@@ -48,13 +78,27 @@ impl ProjectEditorRuntime {
         project_panel_visible: bool,
         project_panel_width: f32,
     ) -> bool {
-        self.workspace.open_project(
-            project_id,
-            root,
+        let root = root.into();
+        let opened = self.workspace.open_project(
+            project_id.clone(),
+            root.clone(),
             selected_terminal_id,
             project_panel_visible,
             project_panel_width,
-        )
+        );
+        if opened {
+            self.file_trees
+                .insert(project_id, ProjectFileTree::new(root));
+        }
+        opened
+    }
+
+    pub fn file_tree(&self, project_id: &ProjectId) -> Option<&ProjectFileTree> {
+        self.file_trees.get(project_id)
+    }
+
+    pub fn file_tree_mut(&mut self, project_id: &ProjectId) -> Option<&mut ProjectFileTree> {
+        self.file_trees.get_mut(project_id)
     }
 
     pub fn close_project(&mut self, project_id: &ProjectId) -> Option<ProjectWorkItemSession> {
@@ -73,6 +117,7 @@ impl ProjectEditorRuntime {
         self.follow_up_autosaves
             .retain(|document_id, _| &document_id.project_id != project_id);
         self.trees.remove(project_id);
+        self.file_trees.remove(project_id);
         self.tree_subscriptions.remove(project_id);
         self.pending_tree_generations.remove(project_id);
         session

@@ -11606,6 +11606,7 @@ name = "yttt-core"
 version = "0.3.18"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "uuid",
  "yttt-agent-core",

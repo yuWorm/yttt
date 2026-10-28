@@ -16,6 +16,7 @@ use gpui_markdown_editor::{
 
 use crate::{
     config::settings::EditorSettings,
+    model::editor::DocumentId,
     ui::{
         i18n::{UiText, UiTextKey},
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
@@ -24,7 +25,7 @@ use crate::{
 };
 
 use super::{
-    CodeEditorState, DiskFingerprint, DocumentId, EditorLanguageId, EditorSymbol,
+    CodeEditorState, DiskFingerprint, EditorLanguageId, EditorSymbol,
     breadcrumbs::document_symbols_from_rope,
     breadcrumbs_at, code_editor_input_state, styled_code_editor_input,
     vim::{

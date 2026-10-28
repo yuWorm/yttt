@@ -2,11 +2,14 @@ use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
 use gpui_component::IconName;
 use std::{cell::Cell, mem::discriminant, rc::Rc, time::Duration};
 use yttt::config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore};
+use yttt::model::{
+    editor::{DocumentId, WorkItemId},
+    work_area::TabGroupId,
+};
 use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
     workbench_agent_notification, workbench_error_notification,
 };
-use yttt::ui::editor::{DocumentId, TabGroupId, WorkItemId};
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::notifications::{ToastItem, ToastTone};
 use yttt::ui::palette::surface::{

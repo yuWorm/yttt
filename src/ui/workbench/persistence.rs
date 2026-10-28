@@ -32,10 +32,12 @@ use yttt_protocol::{
     },
 };
 
-use crate::ui::editor::{
-    CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
-    EditorSelectionSnapshot, ProjectEditorDocument, ProjectEditorModel,
-    ProjectEditorWorkspaceSnapshot,
+use crate::{
+    model::editor::{DocumentId, ProjectEditorWorkspaceSnapshot},
+    ui::editor::{
+        CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint,
+        EditorSelectionSnapshot, ProjectEditorDocument, ProjectEditorModel,
+    },
 };
 
 use super::*;
@@ -208,10 +210,12 @@ impl RemoteWorkspaceSnapshot {
             })?;
             project_roots.insert(project.id.clone(), root.clone());
         }
-        snapshot
-            .editor
-            .validate(&project_roots, &terminal_ids_by_project(&workspace))
-            .map_err(|error| format!("remote workspace editor state is invalid: {error}"))?;
+        crate::model::editor::ProjectEditorWorkspaceState::from_snapshot(
+            snapshot.editor.clone(),
+            &project_roots,
+            &terminal_ids_by_project(&workspace),
+        )
+        .map_err(|error| format!("remote workspace editor state is invalid: {error}"))?;
         let projects = snapshot
             .workspace
             .opened_projects
@@ -1644,8 +1648,7 @@ impl WorkbenchView {
         if let Err(error) = self
             .project
             .project_editor_runtime
-            .workspace_mut()
-            .restore_snapshot(prepared.snapshot.editor.clone(), &terminal_ids)
+            .restore_workspace(prepared.snapshot.editor.clone(), &terminal_ids)
         {
             self.set_remote_workspace_restore_failure(
                 self.ui_text
@@ -1926,8 +1929,7 @@ impl WorkbenchView {
         if let Err(error) = self
             .project
             .project_editor_runtime
-            .workspace_mut()
-            .restore_snapshot(editor_snapshot, &terminal_ids)
+            .restore_workspace(editor_snapshot, &terminal_ids)
         {
             self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
             self.set_workspace_persistence_error(
@@ -4631,7 +4633,8 @@ mod tests {
     fn cold_workspace_restore_repairs_stale_default_tab_and_preserves_mixed_tabs_and_file_contents(
         cx: &mut gpui::TestAppContext,
     ) {
-        use crate::ui::editor::{WorkAreaDropEdge, WorkAreaDropPlacement, WorkItemId};
+        use crate::model::editor::WorkItemId;
+        use crate::model::work_area::{WorkAreaDropEdge, WorkAreaDropPlacement};
 
         cx.update(gpui_component::init);
         let temp = tempfile::tempdir().unwrap();

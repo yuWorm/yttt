@@ -91,7 +91,7 @@ impl WorkbenchView {
 
     fn file_work_item_view(
         &mut self,
-        document_id: &crate::ui::editor::DocumentId,
+        document_id: &crate::model::editor::DocumentId,
         group_active: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -558,15 +558,15 @@ impl WorkbenchView {
     ) -> Option<Div> {
         let project_id = self.workspace.selected_project_id()?.clone();
         let tree = self.ensure_project_tree_view(&project_id, window, cx)?;
-        let session = self
-            .project
-            .project_editor_runtime
+        let runtime = &self.project.project_editor_runtime;
+        let panel_width = runtime
             .workspace()
-            .session(&project_id)?;
-        let panel_width = session.project_panel_width();
-        let root_load_state = session.file_tree().directory_load_state(Path::new(""));
-        let root_is_empty = session.file_tree().visible_rows().is_empty();
-        let has_root_snapshot = session.file_tree().has_snapshot(Path::new(""));
+            .session(&project_id)?
+            .project_panel_width();
+        let file_tree = runtime.file_tree(&project_id)?;
+        let root_load_state = file_tree.directory_load_state(Path::new(""));
+        let root_is_empty = file_tree.visible_rows().is_empty();
+        let has_root_snapshot = file_tree.has_snapshot(Path::new(""));
         let appearance = self.theme_runtime();
         let theme = appearance.ui;
         let ui_style = appearance.style;

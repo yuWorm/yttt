@@ -157,9 +157,14 @@ use crate::{
     },
     login_startup::{LoginStartupManager, LoginStartupState, LoginStartupStatus},
     model::{
+        editor::WorkItemId,
         ids::ProjectId,
         layout::{LayoutNode, PaneConfig, ProcessExitBehavior, ProjectLayout, SplitDirection},
         project::{ProjectDescriptor, ProjectLocation},
+        work_area::{
+            TabGroup, TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode,
+            WorkAreaSplitAxis, WorkAreaSplitId,
+        },
         workspace::{
             CloseProjectDecision, CloseProjectError, PaneExitCloseOutcome, Workspace,
             WorkspaceError,
@@ -205,9 +210,8 @@ use crate::{
             EditorLanguageId, LoadedProjectFile, MarkdownDocumentConfig, ProjectEditorDocument,
             ProjectEditorDocumentEvent, ProjectEditorModel, ProjectEditorRuntime,
             ProjectEditorSaveState, ProjectFileIoError, ProjectFileLoadRequest, ReadonlyCodeRow,
-            ReadonlyCodeView, SaveProjectFileOutcome, SaveRequest, TabGroup, TabGroupId,
-            WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis,
-            WorkAreaSplitId, WorkItemId, code_editor_input_state, styled_code_editor_input,
+            ReadonlyCodeView, SaveProjectFileOutcome, SaveRequest, code_editor_input_state,
+            styled_code_editor_input,
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
@@ -476,17 +480,17 @@ enum SaveContinuation {
 
 #[derive(Clone, Debug)]
 struct PendingFileConflict {
-    document_id: crate::ui::editor::DocumentId,
+    document_id: crate::model::editor::DocumentId,
     request: SaveRequest,
     continuation: SaveContinuation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DirtyCloseIntent {
-    File(crate::ui::editor::DocumentId),
+    File(crate::model::editor::DocumentId),
     WorkItems {
         terminal_ids: Vec<String>,
-        file_ids: Vec<crate::ui::editor::DocumentId>,
+        file_ids: Vec<crate::model::editor::DocumentId>,
     },
     Project(ProjectId),
     Window,
@@ -495,9 +499,9 @@ enum DirtyCloseIntent {
 #[derive(Clone, Debug)]
 struct PendingDirtyClose {
     intent: DirtyCloseIntent,
-    dirty_documents: Vec<crate::ui::editor::DocumentId>,
+    dirty_documents: Vec<crate::model::editor::DocumentId>,
     running_pane_count: usize,
-    saving_documents: HashSet<crate::ui::editor::DocumentId>,
+    saving_documents: HashSet<crate::model::editor::DocumentId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1891,7 +1895,7 @@ impl WorkbenchView {
     fn close_work_items_immediately(
         &mut self,
         terminal_ids: &[String],
-        file_ids: &[crate::ui::editor::DocumentId],
+        file_ids: &[crate::model::editor::DocumentId],
     ) -> Result<(), WorkbenchError> {
         if !terminal_ids.is_empty() {
             let project_id = self.workspace.selected_project_id().cloned();
@@ -2397,7 +2401,7 @@ impl WorkbenchView {
             .map(|target| target.pane_id.as_str())
     }
 
-    pub fn pending_editor_focus_document_id(&self) -> Option<&crate::ui::editor::DocumentId> {
+    pub fn pending_editor_focus_document_id(&self) -> Option<&crate::model::editor::DocumentId> {
         self.project.pending_editor_focus_document_id.as_ref()
     }
 
@@ -3425,7 +3429,7 @@ impl WorkbenchView {
 
     fn close_file_work_item_immediately(
         &mut self,
-        document_id: &crate::ui::editor::DocumentId,
+        document_id: &crate::model::editor::DocumentId,
     ) -> Result<(), WorkbenchError> {
         let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
             return Ok(());

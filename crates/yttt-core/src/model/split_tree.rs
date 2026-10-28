@@ -4,7 +4,8 @@ pub enum SplitDirection {
     Vertical,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FocusDirection {
     Left,
     Right,
@@ -12,7 +13,8 @@ pub enum FocusDirection {
     Down,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResizeDirection {
     Left,
     Right,

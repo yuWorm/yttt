@@ -153,9 +153,7 @@ impl WorkbenchView {
         let request = self
             .project
             .project_editor_runtime
-            .workspace_mut()
-            .session_mut(project_id)?
-            .file_tree_mut()
+            .file_tree_mut(project_id)?
             .refresh();
         self.project
             .project_editor_runtime
@@ -167,15 +165,14 @@ impl WorkbenchView {
         &mut self,
         project_id: &ProjectId,
     ) -> Vec<DirectoryLoadRequest> {
-        let Some(session) = self
+        let Some(tree) = self
             .project
             .project_editor_runtime
-            .workspace_mut()
-            .session_mut(project_id)
+            .file_tree_mut(project_id)
         else {
             return Vec::new();
         };
-        let requests = session.file_tree_mut().refresh_expanded();
+        let requests = tree.refresh_expanded();
         if let Some(request) = requests.first() {
             self.project
                 .project_editor_runtime
@@ -189,17 +186,14 @@ impl WorkbenchView {
         project_id: &ProjectId,
         directories: &BTreeSet<PathBuf>,
     ) -> Vec<DirectoryLoadRequest> {
-        let Some(session) = self
+        let Some(tree) = self
             .project
             .project_editor_runtime
-            .workspace_mut()
-            .session_mut(project_id)
+            .file_tree_mut(project_id)
         else {
             return Vec::new();
         };
-        let requests = session
-            .file_tree_mut()
-            .refresh_directories(directories.iter().cloned());
+        let requests = tree.refresh_directories(directories.iter().cloned());
         if let Some(request) = requests.first() {
             self.project
                 .project_editor_runtime
@@ -408,9 +402,8 @@ impl WorkbenchView {
         }
         self.project
             .project_editor_runtime
-            .workspace_mut()
-            .session_mut(project_id)
-            .is_some_and(|session| session.file_tree_mut().apply_snapshot(generation, snapshot))
+            .file_tree_mut(project_id)
+            .is_some_and(|tree| tree.apply_snapshot(generation, snapshot))
     }
 
     pub fn apply_project_tree_error(
@@ -429,26 +422,17 @@ impl WorkbenchView {
         }
         self.project
             .project_editor_runtime
-            .workspace_mut()
-            .session_mut(project_id)
-            .is_some_and(|session| {
-                session
-                    .file_tree_mut()
-                    .apply_error(generation, relative_directory, error)
-            })
+            .file_tree_mut(project_id)
+            .is_some_and(|tree| tree.apply_error(generation, relative_directory, error))
     }
 
     pub(super) fn project_tree_render_snapshot(
         &self,
         project_id: &ProjectId,
     ) -> Option<ProjectTreeRenderSnapshot> {
-        let session = self
-            .project
-            .project_editor_runtime
-            .workspace()
-            .session(project_id)?;
+        let tree = self.project.project_editor_runtime.file_tree(project_id)?;
         Some(ProjectTreeRenderSnapshot::from_tree_with_text(
-            session.file_tree(),
+            tree,
             self.project.project_git_statuses.get(project_id),
             &ProjectTreeRenderText {
                 loading: self.ui_text.get(UiTextKey::ProjectFilesLoading).to_string(),
@@ -538,9 +522,7 @@ impl WorkbenchView {
         let request = self
             .project
             .project_editor_runtime
-            .workspace_mut()
-            .session_mut(project_id)?
-            .file_tree_mut()
+            .file_tree_mut(project_id)?
             .request_expand(Path::new(""));
         if let Some(request) = &request {
             self.project
@@ -585,23 +567,20 @@ impl WorkbenchView {
     ) {
         match event {
             ProjectTreeViewEvent::SelectPath(path) => {
-                if let Some(session) = self
+                if let Some(tree) = self
                     .project
                     .project_editor_runtime
-                    .workspace_mut()
-                    .session_mut(project_id)
+                    .file_tree_mut(project_id)
                 {
-                    session.file_tree_mut().select(Some(path.clone()));
+                    tree.select(Some(path.clone()));
                 }
             }
             ProjectTreeViewEvent::ToggleDirectory { path, expanded } => {
                 let request = self
                     .project
                     .project_editor_runtime
-                    .workspace_mut()
-                    .session_mut(project_id)
-                    .and_then(|session| {
-                        let tree = session.file_tree_mut();
+                    .file_tree_mut(project_id)
+                    .and_then(|tree| {
                         tree.select(Some(path.clone()));
                         if *expanded {
                             tree.request_expand(path)
@@ -618,13 +597,12 @@ impl WorkbenchView {
                 }
             }
             ProjectTreeViewEvent::OpenFile(path) => {
-                if let Some(session) = self
+                if let Some(tree) = self
                     .project
                     .project_editor_runtime
-                    .workspace_mut()
-                    .session_mut(project_id)
+                    .file_tree_mut(project_id)
                 {
-                    session.file_tree_mut().select(Some(path.clone()));
+                    tree.select(Some(path.clone()));
                 }
                 self.spawn_project_file_open(project_id.clone(), path.clone(), window, cx);
             }
@@ -734,7 +712,7 @@ impl WorkbenchView {
                 let suffix = id.canonical_path.strip_prefix(&source_base).ok()?;
                 Some((
                     id.clone(),
-                    crate::ui::editor::DocumentId {
+                    crate::model::editor::DocumentId {
                         project_id: destination_project_id.clone(),
                         canonical_path: destination_base.join(suffix),
                     },
@@ -750,7 +728,7 @@ impl WorkbenchView {
             .filter_map(|(document_id, _)| {
                 let suffix = document_id.canonical_path.strip_prefix(&source_base).ok()?;
                 let destination_relative = destination_relative_path.join(suffix);
-                let new_document_id = crate::ui::editor::DocumentId {
+                let new_document_id = crate::model::editor::DocumentId {
                     project_id: destination_project_id.clone(),
                     canonical_path: destination_base.join(suffix),
                 };
@@ -798,8 +776,8 @@ impl WorkbenchView {
 
     fn relocate_pending_document_id(
         &mut self,
-        old: &crate::ui::editor::DocumentId,
-        new: &crate::ui::editor::DocumentId,
+        old: &crate::model::editor::DocumentId,
+        new: &crate::model::editor::DocumentId,
     ) {
         for pending in self
             .documents
@@ -866,15 +844,12 @@ impl WorkbenchView {
             let _ = this.update_in(cx, |root, window, cx| {
                 match result {
                     Ok(created) => {
-                        if let Some(session) = root
+                        if let Some(tree) = root
                             .project
                             .project_editor_runtime
-                            .workspace_mut()
-                            .session_mut(&project_id)
+                            .file_tree_mut(&project_id)
                         {
-                            session
-                                .file_tree_mut()
-                                .select(Some(created.relative_path.clone()));
+                            tree.select(Some(created.relative_path.clone()));
                         }
                         root.load_error = None;
                         root.refresh_project_tree_after_mutation(
@@ -985,15 +960,12 @@ impl WorkbenchView {
                             window,
                             cx,
                         );
-                        if let Some(session) = root
+                        if let Some(tree) = root
                             .project
                             .project_editor_runtime
-                            .workspace_mut()
-                            .session_mut(&project_id)
+                            .file_tree_mut(&project_id)
                         {
-                            session
-                                .file_tree_mut()
-                                .select(Some(renamed.relative_path.clone()));
+                            tree.select(Some(renamed.relative_path.clone()));
                         }
                         root.load_error = None;
                         root.refresh_project_tree_after_mutation(
@@ -1119,13 +1091,12 @@ impl WorkbenchView {
             let _ = this.update_in(cx, |root, window, cx| {
                 match result {
                     Ok(()) => {
-                        if let Some(session) = root
+                        if let Some(tree) = root
                             .project
                             .project_editor_runtime
-                            .workspace_mut()
-                            .session_mut(&project_id)
+                            .file_tree_mut(&project_id)
                         {
-                            session.file_tree_mut().select(None);
+                            tree.select(None);
                         }
                         root.load_error = None;
                         root.refresh_project_tree_after_mutation(
@@ -1208,15 +1179,12 @@ impl WorkbenchView {
                         {
                             root.project.project_tree_clipboard = None;
                         }
-                        if let Some(session) = root
+                        if let Some(tree) = root
                             .project
                             .project_editor_runtime
-                            .workspace_mut()
-                            .session_mut(&destination_project_id)
+                            .file_tree_mut(&destination_project_id)
                         {
-                            session
-                                .file_tree_mut()
-                                .select(Some(pasted.relative_path.clone()));
+                            tree.select(Some(pasted.relative_path.clone()));
                         }
                         root.load_error = None;
                         if clipboard.source_project_id != destination_project_id
@@ -1450,7 +1418,7 @@ impl WorkbenchView {
             .project_editor_runtime
             .workspace()
             .session(project_id)?;
-        let document_id = crate::ui::editor::DocumentId {
+        let document_id = crate::model::editor::DocumentId {
             project_id: project_id.clone(),
             canonical_path: document_path,
         };
@@ -1499,7 +1467,7 @@ impl WorkbenchView {
             .services
             .get(&project_id)
             .and_then(|services| services.document_path(&relative_path))
-            .map(|canonical_path| crate::ui::editor::DocumentId {
+            .map(|canonical_path| crate::model::editor::DocumentId {
                 project_id: project_id.clone(),
                 canonical_path,
             });
@@ -1591,7 +1559,7 @@ impl WorkbenchView {
         {
             return false;
         }
-        let document_id = crate::ui::editor::DocumentId {
+        let document_id = crate::model::editor::DocumentId {
             project_id: request.document_id.project_id.clone(),
             canonical_path: loaded.canonical_path.clone(),
         };

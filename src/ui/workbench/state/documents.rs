@@ -1,4 +1,4 @@
-use crate::{model::ids::ProjectId, ui::editor::DocumentId};
+use crate::model::{editor::DocumentId, ids::ProjectId};
 
 use super::super::{PendingDirtyClose, PendingFileConflict};
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::editor::DocumentId;
+use crate::model::editor::DocumentId;
 use crate::ui::editor::preview::{
     FilePreview, FilePreviewEvent, MAX_PREVIEW_BYTES, decode_preview, is_svg_path,
 };

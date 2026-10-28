@@ -1197,7 +1197,7 @@ mod tests {
             )
             .unwrap();
         let workspace_id = WorkspaceId::new("existing-window").unwrap();
-        let mut editor = crate::ui::editor::ProjectEditorWorkspaceState::default();
+        let mut editor = crate::model::editor::ProjectEditorWorkspaceState::default();
         editor.open_project(
             project_id.clone(),
             host.root.path(),

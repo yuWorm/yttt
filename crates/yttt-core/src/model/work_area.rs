@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
-use super::workspace::{DocumentId, WorkItemId};
+use super::editor::{DocumentId, WorkItemId};
 
 const MIN_SPLIT_RATIO: f32 = 0.05;
 const MAX_SPLIT_RATIO: f32 = 0.95;
 const PLACEHOLDER_GROUP_ID: TabGroupId = TabGroupId(0);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct TabGroupId(u64);
 
 impl TabGroupId {
@@ -19,7 +19,7 @@ impl TabGroupId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct WorkAreaSplitId(u64);
 
 impl WorkAreaSplitId {
@@ -34,7 +34,8 @@ pub enum WorkAreaSplitAxis {
     Column,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkAreaDropEdge {
     Left,
     Right,
@@ -55,7 +56,8 @@ impl WorkAreaDropEdge {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkAreaDropPlacement {
     TabIndex(usize),
     Center,

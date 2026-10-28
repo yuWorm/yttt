@@ -10,12 +10,13 @@ use gpui_component::{
 
 use crate::{
     model::{
+        editor::{DocumentId, WorkItemId},
         ids::ProjectId,
+        work_area::TabGroupId,
         workspace::{TabStartState, Workspace},
     },
     ui::{
         components::SelectableState,
-        editor::{DocumentId, TabGroupId, WorkItemId},
         i18n::{UiText, UiTextKey},
         interaction::actions::{
             TabClose, TabCloseAfter, TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals,

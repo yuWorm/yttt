@@ -9,8 +9,6 @@ mod runtime;
 mod state;
 mod view;
 mod vim;
-mod work_area;
-mod workspace;
 
 pub use breadcrumbs::{EditorSymbol, EditorSymbolKind, breadcrumbs_at, document_symbols};
 pub use document::{
@@ -40,9 +38,3 @@ pub use vim::{
     default_bindable_keybindings, init as init_vim_mode,
     rebind_keybindings as rebind_vim_keybindings,
 };
-pub use work_area::{
-    TabGroup, TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis,
-    WorkAreaSplitId,
-};
-pub(crate) use workspace::ProjectEditorWorkspaceSnapshot;
-pub use workspace::{DocumentId, ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId};

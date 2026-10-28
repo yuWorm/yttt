@@ -5,8 +5,9 @@ use gpui_component::{input::InputState, kbd::Kbd};
 
 use crate::{
     config::settings::VimModeSetting,
+    model::editor::WorkItemId,
     ui::{
-        editor::{ProjectEditorDocument, WorkItemId},
+        editor::ProjectEditorDocument,
         interaction::{
             actions::{VimEnterInsert, VimEnterNormal, VimEnterTerminal},
             input_owner::InputOwnerKind,

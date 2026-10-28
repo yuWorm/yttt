@@ -173,7 +173,7 @@ impl ProjectLocation {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct ProjectDescriptor {
     pub id: ProjectId,
     pub instance_id: ProjectInstanceId,

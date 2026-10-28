@@ -1,10 +1,10 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    model::ids::ProjectId,
+    model::{editor::DocumentId, ids::ProjectId},
     runtime::{git_status::ProjectGitStatus, project::ProjectServices},
     ui::{
-        editor::{DocumentId, ProjectEditorRuntime},
+        editor::ProjectEditorRuntime,
         project_tree::{DirectoryLoadRequest, ProjectEntryPasteMode},
     },
 };
