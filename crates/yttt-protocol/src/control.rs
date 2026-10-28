@@ -62,6 +62,20 @@ pub struct HostResponse {
     pub result: Result<Response, ProtocolFailure>,
 }
 
+impl HostResponse {
+    /// Answer to a request this build cannot interpret; the connection stays usable.
+    pub fn unsupported(request_id: u64) -> Self {
+        Self {
+            request_id,
+            result: Err(ProtocolFailure::new(
+                FailureCode::Unsupported,
+                "the peer does not support this request",
+                false,
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalTerminationResult {
     pub request_id: u64,
@@ -188,6 +202,12 @@ pub enum Request {
     },
     RemoteAccess(crate::remote_access::RemoteAccessRequest),
     AgentCommand(AgentCommandRequest),
+    /// Terminals this client currently renders. Once reported, attachments outside
+    /// the set receive metadata and exit frames only. Answered with `Applied`.
+    SetTerminalVisibility {
+        revision: u64,
+        visible: Vec<TerminalSessionId>,
+    },
 }
 
 impl Request {
@@ -205,7 +225,8 @@ impl Request {
             | Self::SearchTerminal(_)
             | Self::RequestCheckpoint { .. }
             | Self::AcknowledgeTerminalExit { .. }
-            | Self::ReadAgentSnapshots { .. } => None,
+            | Self::ReadAgentSnapshots { .. }
+            | Self::SetTerminalVisibility { .. } => None,
             Self::SpawnTerminal { .. }
             | Self::TerminalInput(_)
             | Self::AgentCommand(_)
@@ -299,9 +320,10 @@ impl Request {
                 .map(|request| request.session_id.as_str())
                 .collect::<Vec<_>>()
                 .join(","),
-            Self::Ping { .. } | Self::ListResources | Self::ReadAgentSnapshots { .. } => {
-                String::new()
-            }
+            Self::Ping { .. }
+            | Self::ListResources
+            | Self::ReadAgentSnapshots { .. }
+            | Self::SetTerminalVisibility { .. } => String::new(),
         }
     }
 }
@@ -506,6 +528,7 @@ pub enum FailureCode {
     HostStopping,
     Internal,
     ResyncRequired,
+    Unsupported,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

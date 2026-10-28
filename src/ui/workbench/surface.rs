@@ -1806,12 +1806,50 @@ impl WorkbenchView {
         Some(pane_view)
     }
 
+    /// Reports the terminal panes this render placed on screen; the Host stops
+    /// streaming frames for every other terminal attached by this client.
+    pub(super) fn report_visible_terminals(&mut self, window: &Window) {
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            self.terminal.visibility_report = None;
+            return;
+        };
+        let scope = window.window_handle().window_id().as_u64();
+        let rendered = &self.terminal.rendered_terminals;
+        match &mut self.terminal.visibility_report {
+            Some(report) if Arc::ptr_eq(&report.runtime, &runtime) && report.scope == scope => {
+                if report.sessions == *rendered {
+                    return;
+                }
+                report.sessions.clone_from(rendered);
+                runtime.set_visible_terminals(scope, rendered.iter().cloned());
+            }
+            slot => {
+                runtime.set_visible_terminals(scope, rendered.iter().cloned());
+                // Dropping a report for another runtime withdraws it there.
+                *slot = Some(
+                    crate::ui::workbench::state::terminal::TerminalVisibilityReport {
+                        runtime,
+                        scope,
+                        sessions: rendered.clone(),
+                    },
+                );
+            }
+        }
+    }
+
     pub(super) fn render_terminal_pane(
         &mut self,
         input: RenderTerminalPaneInput<'_>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        self.terminal
+            .rendered_terminals
+            .insert(TerminalSessionId::new(terminal_pane_key(
+                input.project_id,
+                input.tab_id,
+                &input.pane.id,
+            )));
         let remote_lost = self.terminal.host_runtime.as_ref().is_some()
             && self
                 .workspace

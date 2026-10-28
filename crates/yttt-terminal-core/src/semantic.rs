@@ -304,17 +304,10 @@ impl SemanticSnapshotter {
         self.previous.as_ref()
     }
 
-    pub fn checkpoint(
-        &self,
-        raw_replay_tail: Vec<u8>,
-        raw_tail_start_sequence: u64,
-    ) -> Option<TerminalCheckpoint> {
-        self.previous.clone().map(|viewport| TerminalCheckpoint {
-            viewport,
-            raw_replay_tail,
-            raw_tail_start_sequence,
-        })
+    pub fn checkpoint(&self) -> Option<TerminalCheckpoint> {
+        self.previous.clone().map(TerminalCheckpoint::new)
     }
+
     pub fn read_viewport<L: EventListener>(
         &mut self,
         state: &TerminalState<L>,

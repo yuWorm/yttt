@@ -8,7 +8,7 @@ use yttt_host::{
         EXIT_ACK_TTL, HostRuntime, HostRuntimeConfig, HostRuntimeError, TerminalControlOutcome,
         UnattendedTakeoverPolicy,
     },
-    terminal::{HostTerminalEvent, ReplayBudget},
+    terminal::HostTerminalEvent,
 };
 use yttt_protocol::terminal::{
     SemanticViewport, TerminalExecutionSpec, TerminalGeometry, TerminalLeaseMode,
@@ -291,7 +291,6 @@ async fn after_idle_policy_grants_pending_request_and_emits_expired() {
             idle: Duration::from_secs(5),
         },
         control_request_timeout: Duration::from_secs(30),
-        replay_budget: ReplayBudget::default(),
     });
     let mut events = runtime.subscribe();
     runtime.set_now_millis(1_000);
@@ -529,57 +528,36 @@ async fn unsubscribed_output_is_parsed_without_semantic_encoding() {
 }
 
 #[tokio::test]
-async fn control_checkpoint_stays_within_the_frame_limit_after_raw_replay_wraps() {
-    use yttt_host::terminal::RAW_REPLAY_BYTES;
-    use yttt_protocol::{
-        ControlMessage, FrameKind, HostResponse, MAX_FRAME_BYTES, Response, TerminalLease,
-        encode_message,
-    };
-
+async fn current_viewport_catches_up_on_output_nobody_rendered() {
     let runtime = HostRuntime::new();
-    let mut events = runtime.subscribe();
     let terminal = runtime
-        .spawn(spec("replay-wrap", "printf visible-marker; sleep 30"))
+        .spawn(spec("hidden-output", "printf hidden-marker; sleep 30"))
         .unwrap();
-    terminal.set_subscriber_count(1);
-    wait_for_text(&mut events, "visible-marker").await;
-    terminal.append_raw_replay_for_tests(&vec![b'x'; RAW_REPLAY_BYTES.saturating_mul(2)]);
-
-    let checkpoint = terminal.control_checkpoint().unwrap();
-    assert!(checkpoint.raw_replay_tail.is_empty());
-    assert!(viewport_text(&checkpoint.viewport).contains("visible-marker"));
-    assert!(checkpoint.raw_tail_start_sequence >= RAW_REPLAY_BYTES as u64);
-    let encoded = encode_message(
-        FrameKind::Control,
-        &ControlMessage::Response(HostResponse {
-            request_id: 1,
-            result: Ok(Response::TerminalAttached {
-                lease: TerminalLease {
-                    session_id: TerminalSessionId::new("replay-wrap"),
-                    owner: ClientInstanceId::new("client"),
-                    mode: TerminalLeaseMode::Interactive,
-                    lease_epoch: 1,
-                },
-                checkpoint,
-            }),
-        }),
-    )
-    .expect("wrapped-replay attach response must encode");
-    assert!(encoded.len() <= MAX_FRAME_BYTES);
+    terminal.set_subscriber_count(0);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let diagnostics = terminal.diagnostics();
+        if diagnostics.skipped_unsubscribed_captures != 0 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "output capture was never skipped: {diagnostics:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(
-        terminal.diagnostics().checkpoint_encode_high_water > 0,
-        "control checkpoint encode diagnostics must be recorded"
+        !terminal
+            .latest_viewport()
+            .is_some_and(|viewport| viewport_text(&viewport).contains("hidden-marker")),
+        "the published viewport must still lag the skipped output"
     );
-    assert!(matches!(
-        terminal.raw_replay_chunks(0),
-        Err(yttt_host::terminal::HostedTerminalError::ResyncRequired {
-            requested: 0,
-            available_from_sequence,
-        }) if available_from_sequence >= RAW_REPLAY_BYTES as u64
-    ));
+
+    let viewport = terminal.current_viewport(0).unwrap();
+    assert!(viewport_text(&viewport).contains("hidden-marker"));
 
     runtime
-        .terminate(&TerminalSessionId::new("replay-wrap"))
+        .terminate(&TerminalSessionId::new("hidden-output"))
         .unwrap();
 }
 

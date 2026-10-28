@@ -300,6 +300,18 @@ pub struct TerminalCheckpoint {
     pub raw_tail_start_sequence: u64,
 }
 
+impl TerminalCheckpoint {
+    /// Hosts no longer keep raw PTY replay; the raw fields stay on the wire for
+    /// v22 peers and are always empty.
+    pub fn new(viewport: SemanticViewport) -> Self {
+        Self {
+            viewport,
+            raw_replay_tail: Vec::new(),
+            raw_tail_start_sequence: 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminalStreamUpdate {
     Snapshot(SemanticViewport),

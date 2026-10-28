@@ -11,9 +11,10 @@ use yttt_core::model::{
 };
 use yttt_host::{HostBootstrap, HostLifetime, run};
 use yttt_protocol::{
-    BuildIdentity, ClientRequest, ConnectionChannel, ControlMessage, FailureCode, HostBlocker,
-    LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope,
-    LifecycleResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response, ServerEvent,
+    BuildIdentity, ClientRequest, ConnectionChannel, ControlMessage, FailureCode, FrameKind,
+    HostBlocker, HostResponse, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest,
+    LifecycleRequestEnvelope, LifecycleResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request,
+    Response, ServerEvent, TerminalInteractiveMessage, encode_message,
     session::{ControlContext, ControlStatus, ProfileControlRequest, TransferPhase},
     workspace::{
         WorkspaceOperationId, WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse,
@@ -23,7 +24,8 @@ use yttt_protocol::{
 use yttt_transport::{
     AuthToken, ClientIdentity, MemoryConnector, TransportConnector as _, TransportStream,
     client_handshake, memory_pair, new_session_nonce, receive_control, receive_lifecycle,
-    receive_state_event, send_control, send_lifecycle,
+    receive_state_event, receive_terminal_interactive, send_control, send_frame, send_lifecycle,
+    send_terminal_interactive,
 };
 
 struct RunningHost {
@@ -493,4 +495,95 @@ async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
         .expect("Host shutdown timeout")
         .unwrap()
         .unwrap();
+}
+
+#[derive(serde::Serialize)]
+enum FutureBody {
+    SummonDragon { size: u32 },
+}
+
+#[derive(serde::Serialize)]
+struct FutureRequest {
+    request_id: u64,
+    control: Option<()>,
+    body: FutureBody,
+}
+
+#[derive(serde::Serialize)]
+enum FutureEnvelope {
+    Request(FutureRequest),
+}
+
+async fn send_future_request(stream: &mut TransportStream, kind: FrameKind, request_id: u64) {
+    let message = FutureEnvelope::Request(FutureRequest {
+        request_id,
+        control: None,
+        body: FutureBody::SummonDragon { size: 3 },
+    });
+    send_frame(stream, &encode_message(kind, &message).unwrap())
+        .await
+        .unwrap();
+}
+
+fn assert_unsupported(response: HostResponse, request_id: u64) {
+    assert_eq!(response.request_id, request_id);
+    assert!(matches!(
+        response.result,
+        Err(failure) if failure.code == FailureCode::Unsupported
+    ));
+}
+
+#[tokio::test]
+async fn requests_from_a_newer_client_are_unsupported_without_dropping_the_connection() {
+    let host = RunningHost::start().await;
+
+    let mut control = host.control_client("newer-client").await;
+    send_future_request(&mut control, FrameKind::Control, 41).await;
+    let response = loop {
+        match receive_control(&mut control).await.unwrap() {
+            ControlMessage::Response(response) => break response,
+            ControlMessage::Event(_) => {}
+            message => panic!("unexpected control message: {message:?}"),
+        }
+    };
+    assert_unsupported(response, 41);
+    assert!(matches!(
+        control_request(&mut control, 42, Request::Ping { sent_millis: 1 }, None).await,
+        Ok(Response::Pong { .. })
+    ));
+
+    let mut interactive = host
+        .client(
+            "newer-interactive-client",
+            ConnectionChannel::TerminalInteractive,
+            RESOURCE_PROTOCOL_VERSION,
+        )
+        .await;
+    send_future_request(&mut interactive, FrameKind::TerminalInteractive, 43).await;
+    let TerminalInteractiveMessage::Response(response) =
+        receive_terminal_interactive(&mut interactive)
+            .await
+            .unwrap()
+    else {
+        panic!("the interactive channel must answer the unsupported request");
+    };
+    assert_unsupported(response, 43);
+    send_terminal_interactive(
+        &mut interactive,
+        &TerminalInteractiveMessage::Request(ClientRequest::new(
+            44,
+            Request::Ping { sent_millis: 2 },
+        )),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        receive_terminal_interactive(&mut interactive)
+            .await
+            .unwrap(),
+        TerminalInteractiveMessage::Response(HostResponse {
+            request_id: 44,
+            result: Ok(Response::Pong { .. }),
+        })
+    ));
 }

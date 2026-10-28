@@ -79,6 +79,7 @@ impl Render for WorkbenchView {
             .is_some_and(|state| state.step == OnboardingStep::Font)
             .then(|| self.settings_font_family_select(window, cx));
         let command_center_active = self.command_center_is_active();
+        self.terminal.rendered_terminals.clear();
         let body = if self.workspace_is_loading() {
             div()
                 .flex()
@@ -276,6 +277,7 @@ impl Render for WorkbenchView {
                 workbench
             }
         };
+        self.report_visible_terminals(window);
         let default_active_content_focus_scheduled = default_active_content_focus_requested
             && match self.active_work_item() {
                 Some(WorkItemId::Terminal(_)) => self.terminal.pending_terminal_focus.is_none(),

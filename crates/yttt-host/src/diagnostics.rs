@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 5;
+pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 6;
 pub const DEFAULT_DIAGNOSTICS_LOG_BYTES: u64 = 4 * 1024 * 1024;
 const LATENCY_BUCKETS: usize = 64;
 
@@ -127,7 +127,6 @@ pub struct QueueDiagnosticsSnapshot {
     pub high_water: usize,
     pub capacity: usize,
     pub dropped: u64,
-    pub resyncs: u64,
     pub service: LatencyDiagnosticsSnapshot,
 }
 
@@ -137,7 +136,6 @@ pub(crate) struct QueueDiagnostics {
     current: AtomicUsize,
     high_water: AtomicUsize,
     dropped: AtomicU64,
-    resyncs: AtomicU64,
     service: LatencyDiagnostics,
 }
 
@@ -149,7 +147,6 @@ impl QueueDiagnostics {
             current: AtomicUsize::new(0),
             high_water: AtomicUsize::new(0),
             dropped: AtomicU64::new(0),
-            resyncs: AtomicU64::new(0),
             service: LatencyDiagnostics::default(),
         })
     }
@@ -164,10 +161,6 @@ impl QueueDiagnostics {
         self.dropped.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn resync(&self) {
-        self.resyncs.fetch_add(1, Ordering::Relaxed);
-    }
-
     pub(crate) fn record_service(&self, duration: Duration) {
         self.service.record(duration);
     }
@@ -176,7 +169,6 @@ impl QueueDiagnostics {
         self.current.store(0, Ordering::Release);
         self.high_water.store(0, Ordering::Release);
         self.dropped.store(0, Ordering::Release);
-        self.resyncs.store(0, Ordering::Release);
         self.service.reset();
     }
 
@@ -187,7 +179,6 @@ impl QueueDiagnostics {
             high_water: self.high_water.load(Ordering::Acquire),
             capacity: self.capacity,
             dropped: self.dropped.load(Ordering::Acquire),
-            resyncs: self.resyncs.load(Ordering::Acquire),
             service: self.service.snapshot(),
         }
     }
@@ -205,14 +196,6 @@ pub struct TerminalPipelineDiagnosticsSnapshot {
     pub checkpoint_encode_bytes: u64,
     #[serde(default)]
     pub checkpoint_encode_high_water: u64,
-    #[serde(default)]
-    pub replay_bytes: usize,
-    #[serde(default)]
-    pub replay_capacity: usize,
-    #[serde(default)]
-    pub replay_dropped_bytes: u64,
-    #[serde(default)]
-    pub replay_high_water: usize,
     pub parser: LatencyDiagnosticsSnapshot,
     pub semantic_encode: LatencyDiagnosticsSnapshot,
     pub input_to_pty: LatencyDiagnosticsSnapshot,

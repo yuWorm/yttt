@@ -28,13 +28,11 @@ fn identity() -> ClientIdentity {
 
 fn context(connector: SharedConnector) -> (ClientSessionContext, watch::Sender<bool>) {
     let (shutdown, shutdown_rx) = watch::channel(false);
-    let (checkpoint_requests, _) = mpsc::channel(CHECKPOINT_CAPACITY);
     let (catalog_requests, _) = mpsc::channel(1);
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     (
         ClientSessionContext {
             data_connects: Arc::new(Semaphore::new(4)),
-            checkpoint_requests,
             catalog_requests,
             events,
             terminal_state: Arc::new(RwLock::new(TerminalState {
@@ -51,7 +49,7 @@ fn context(connector: SharedConnector) -> (ClientSessionContext, watch::Sender<b
             project_token_usage: Arc::default(),
             next_request_id: Arc::new(AtomicU64::new(1)),
             diagnostics: Arc::default(),
-            deferred_terminal_events: Arc::default(),
+            visibility: watch::channel(None).1,
             shutdown: shutdown_rx,
             control: Arc::default(),
             local_control_recovery: Arc::default(),
@@ -203,33 +201,200 @@ async fn permanent_transport_rejection_is_fatal() {
 }
 
 #[tokio::test]
-async fn late_checkpoint_cannot_replace_a_newer_terminal_mirror() {
+async fn attach_checkpoint_cannot_replace_a_mirror_owned_by_its_data_lane() {
     let (_, connector) = memory_pair();
     let (context, _shutdown) = context(SharedConnector::new(connector));
     let newer = viewport(105);
     let id = newer.session_id.clone();
+    register_terminal(&context.terminal_state, context.host_epoch, id.clone());
     context
         .terminal_state
         .write()
         .mirrors
         .insert(id.clone(), TerminalMirror::new(newer.clone()));
     let mut events = context.events.subscribe();
-    handle_response(
-        PendingRequest::Checkpoint(id.clone()),
-        Ok(Response::TerminalCheckpoint(TerminalCheckpoint {
-            viewport: viewport(100),
-            raw_replay_tail: Vec::new(),
-            raw_tail_start_sequence: 0,
-        })),
-        &context,
-    );
+    let mut scrolled = viewport(110);
+    scrolled.display_offset = 25;
+    seed_terminal_mirror(&scrolled, &context.terminal_state, 1, &context.events);
     assert_eq!(
         context.terminal_state.read().mirrors[&id].viewport(),
         &newer
     );
     assert!(
         events.try_recv().is_err(),
-        "stale snapshots must not reach the UI"
+        "only the data lane may change an existing mirror"
+    );
+}
+
+/// A data lane registered for `id` at `generation`, as `start_terminal_data_channel` leaves it.
+fn open_data_lane(
+    context: &ClientSessionContext,
+    id: &TerminalSessionId,
+    generation: u64,
+) -> watch::Receiver<bool> {
+    register_terminal(&context.terminal_state, context.host_epoch, id.clone());
+    let (desired, desired_rx) = watch::channel(true);
+    context.terminal_state.write().data_channels.insert(
+        id.clone(),
+        TerminalDataChannel {
+            generation,
+            desired,
+        },
+    );
+    desired_rx
+}
+
+fn exit_event(final_sequence: u64) -> HostEvent {
+    HostEvent {
+        host_sequence: 1,
+        body: ServerEvent::TerminalExit {
+            session_id: viewport(1).session_id,
+            session_epoch: 1,
+            code: Some(0),
+            final_sequence,
+        },
+    }
+}
+
+fn data_frame(update: TerminalStreamUpdate) -> HostEvent {
+    HostEvent {
+        host_sequence: 1,
+        body: ServerEvent::Terminal(update),
+    }
+}
+
+#[test]
+fn exit_waits_for_the_final_frame_on_its_data_lane() {
+    let (_, connector) = memory_pair();
+    let (context, _shutdown) = context(SharedConnector::new(connector));
+    let id = viewport(1).session_id;
+    let _desired = open_data_lane(&context, &id, 3);
+    let mut events = context.events.subscribe();
+    assert_eq!(
+        handle_terminal_data_event(
+            data_frame(TerminalStreamUpdate::Snapshot(viewport(4))),
+            &context.terminal_state,
+            1,
+            3,
+            &context.events,
+            &context.diagnostics,
+        ),
+        Ok(false)
+    );
+    assert!(matches!(
+        events.try_recv(),
+        Ok(ClientEvent::TerminalUpdated(_))
+    ));
+
+    assert!(defer_exit_until_final_frame(
+        &context.terminal_state,
+        1,
+        &exit_event(5)
+    ));
+    let mut exited = viewport(5);
+    exited.process_state = TerminalProcessState::Exited { code: Some(0) };
+    assert_eq!(
+        handle_terminal_data_event(
+            data_frame(TerminalStreamUpdate::Snapshot(exited)),
+            &context.terminal_state,
+            1,
+            3,
+            &context.events,
+            &context.diagnostics,
+        ),
+        Ok(true)
+    );
+    assert!(matches!(
+        events.try_recv(),
+        Ok(ClientEvent::TerminalUpdated(_))
+    ));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(ClientEvent::Server(event)) if matches!(event.body, ServerEvent::TerminalExit { .. })
+    ));
+}
+
+#[test]
+fn exit_without_a_data_lane_is_published_immediately() {
+    let (_, connector) = memory_pair();
+    let (context, _shutdown) = context(SharedConnector::new(connector));
+    let id = viewport(1).session_id;
+    register_terminal(&context.terminal_state, context.host_epoch, id.clone());
+    assert!(!defer_exit_until_final_frame(
+        &context.terminal_state,
+        1,
+        &exit_event(5)
+    ));
+
+    let _desired = open_data_lane(&context, &id, 3);
+    assert!(defer_exit_until_final_frame(
+        &context.terminal_state,
+        1,
+        &exit_event(5)
+    ));
+    assert!(
+        context
+            .terminal_state
+            .write()
+            .take_ready_exit(&id)
+            .is_none()
+    );
+    stop_terminal_data_channel_if_current(&context.terminal_state, &id, 1, 3);
+    assert!(
+        context
+            .terminal_state
+            .write()
+            .take_ready_exit(&id)
+            .is_some(),
+        "a stopped lane releases the exit it was holding"
+    );
+}
+
+#[test]
+fn sequence_gap_resets_the_data_lane_instead_of_requesting_a_checkpoint() {
+    let (_, connector) = memory_pair();
+    let (context, _shutdown) = context(SharedConnector::new(connector));
+    let id = viewport(1).session_id;
+    let _desired = open_data_lane(&context, &id, 3);
+    handle_terminal_data_event(
+        data_frame(TerminalStreamUpdate::Snapshot(viewport(4))),
+        &context.terminal_state,
+        1,
+        3,
+        &context.events,
+        &context.diagnostics,
+    )
+    .unwrap();
+    for update in [
+        TerminalStreamUpdate::ResyncRequired {
+            session_id: id.clone(),
+            available_from_sequence: 9,
+        },
+        TerminalStreamUpdate::RawTail {
+            session_id: id.clone(),
+            session_epoch: 1,
+            sequence: 9,
+            bytes: Vec::new(),
+        },
+    ] {
+        assert_eq!(
+            handle_terminal_data_event(
+                data_frame(update),
+                &context.terminal_state,
+                1,
+                3,
+                &context.events,
+                &context.diagnostics,
+            ),
+            Err(())
+        );
+    }
+    assert_eq!(context.diagnostics.snapshot().data_lane_resets, 2);
+    assert_eq!(
+        context.terminal_state.read().mirrors[&id]
+            .viewport()
+            .sequence,
+        4
     );
 }
 
@@ -292,7 +457,7 @@ fn stale_terminal_worker_cannot_restore_a_removed_or_replaced_session() {
         TerminalStreamUpdate::Snapshot(viewport(8)),
         &context.terminal_state,
         context.host_epoch,
-        Some(7),
+        7,
         &context.events,
     );
     handle_response(
@@ -329,10 +494,10 @@ fn stale_terminal_worker_cannot_restore_a_removed_or_replaced_session() {
             TerminalStreamUpdate::Snapshot(viewport(9)),
             &context.terminal_state,
             context.host_epoch,
-            Some(7),
+            7,
             &context.events,
         ),
-        None
+        MirrorApply::Ignored
     );
     stop_terminal_data_channel_if_current(
         &context.terminal_state,
@@ -357,13 +522,7 @@ fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
         context.host_epoch,
         session_id.clone(),
     );
-    apply_terminal_update(
-        TerminalStreamUpdate::Snapshot(viewport(9)),
-        &context.terminal_state,
-        1,
-        None,
-        &context.events,
-    );
+    seed_terminal_mirror(&viewport(9), &context.terminal_state, 1, &context.events);
     apply_agent_snapshots(
         vec![agent_snapshot(1)],
         &context.agent_snapshots,
@@ -381,7 +540,6 @@ fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
             catalog: &context.catalog,
             agent_snapshots: &context.agent_snapshots,
             project_token_usage: &context.project_token_usage,
-            deferred_terminal_events: &context.deferred_terminal_events,
             profile_control: &context.control,
             events: &context.events,
         },
@@ -394,15 +552,9 @@ fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
     ));
 
     register_terminal(&context.terminal_state, 2, session_id.clone());
-    assert_eq!(
-        apply_terminal_update(
-            TerminalStreamUpdate::Snapshot(viewport(2)),
-            &context.terminal_state,
-            1,
-            None,
-            &context.events,
-        ),
-        None,
+    seed_terminal_mirror(&viewport(2), &context.terminal_state, 1, &context.events);
+    assert!(
+        context.terminal_state.read().mirrors.is_empty(),
         "a frame from the old Host cannot recreate a reused terminal session"
     );
     apply_agent_snapshots(
@@ -414,13 +566,7 @@ fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
     );
     assert!(context.agent_snapshots.read().is_empty());
 
-    apply_terminal_update(
-        TerminalStreamUpdate::Snapshot(viewport(1)),
-        &context.terminal_state,
-        2,
-        None,
-        &context.events,
-    );
+    seed_terminal_mirror(&viewport(1), &context.terminal_state, 2, &context.events);
     assert_eq!(
         context.terminal_state.read().mirrors[&session_id]
             .viewport()
@@ -522,39 +668,6 @@ async fn silent_interactive_connection_is_detected_without_control_requests() {
     assert!(result.is_some_and(|message| message.contains("heartbeat")));
 }
 
-#[tokio::test]
-async fn equal_sequence_viewport_navigation_is_preserved() {
-    let (_, connector) = memory_pair();
-    let (context, _shutdown) = context(SharedConnector::new(connector));
-    let initial = viewport(100);
-    let id = initial.session_id.clone();
-    context
-        .terminal_state
-        .write()
-        .mirrors
-        .insert(id.clone(), TerminalMirror::new(initial.clone()));
-    let mut scrolled = initial;
-    scrolled.display_offset = 25;
-    let (reply, response) = oneshot::channel();
-    handle_response(
-        PendingRequest::User(reply),
-        Ok(Response::TerminalScrolled(TerminalViewportRead {
-            viewport: scrolled,
-            bottom_line_id: None,
-            checkpoint_sequence: 100,
-            unseen_output: 0,
-        })),
-        &context,
-    );
-    assert!(response.await.unwrap().is_ok());
-    assert_eq!(
-        context.terminal_state.read().mirrors[&id]
-            .viewport()
-            .display_offset,
-        25
-    );
-}
-
 fn host_identity() -> yttt_transport::HostIdentity {
     let client = identity();
     yttt_transport::HostIdentity {
@@ -584,7 +697,6 @@ fn handshake_rejections_have_explicit_retry_policy() {
         VersionMismatch {
             supported: ProtocolRange::exact(1),
         },
-        BuildMismatch,
         ProfileMismatch,
         AuthenticationFailed,
         InvalidMessage,
@@ -861,7 +973,6 @@ async fn expired_queued_request_is_rejected_before_transmission() {
     let (context, shutdown) = context(SharedConnector::new(connector));
     let (client, mut server) = tokio::io::duplex(8192);
     let (commands, mut commands_rx) = mpsc::channel(1);
-    let (_checkpoints, mut checkpoint_rx) = mpsc::channel(1);
     let (_catalog, mut catalog_rx) = mpsc::channel(1);
     let (reply, response) = oneshot::channel();
     commands
@@ -878,7 +989,6 @@ async fn expired_queued_request_is_rejected_before_transmission() {
         connected_control_session(
             Box::new(client),
             &mut commands_rx,
-            &mut checkpoint_rx,
             &mut catalog_rx,
             &context,
         )

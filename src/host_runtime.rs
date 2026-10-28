@@ -708,6 +708,18 @@ impl DesktopHostRuntime {
         self.client.terminal_metadata(session_id)
     }
 
+    pub fn set_visible_terminals(
+        &self,
+        scope: u64,
+        sessions: impl IntoIterator<Item = TerminalSessionId>,
+    ) {
+        self.client.set_visible_terminals(scope, sessions);
+    }
+
+    pub fn clear_visible_terminals(&self, scope: u64) {
+        self.client.clear_visible_terminals(scope);
+    }
+
     pub fn resource_catalog(&self) -> Option<Arc<ResourceCatalog>> {
         self.client.resource_catalog()
     }

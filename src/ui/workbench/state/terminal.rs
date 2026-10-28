@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -33,6 +33,23 @@ pub(in super::super) struct TerminalControllerState {
     pub(in super::super) host_agent_epoch: Option<u64>,
     pub(in super::super) pending_host_agent_snapshots:
         HashMap<TerminalSessionId, AgentSnapshotUpdate>,
+    /// Terminal panes placed in the element tree by the current render.
+    pub(in super::super) rendered_terminals: HashSet<TerminalSessionId>,
+    pub(in super::super) visibility_report: Option<TerminalVisibilityReport>,
+}
+
+/// The terminal set this window last reported to its Host runtime. Dropping it
+/// (window closed or runtime replaced) withdraws the window's terminals.
+pub(in super::super) struct TerminalVisibilityReport {
+    pub(in super::super) runtime: Arc<DesktopHostRuntime>,
+    pub(in super::super) scope: u64,
+    pub(in super::super) sessions: HashSet<TerminalSessionId>,
+}
+
+impl Drop for TerminalVisibilityReport {
+    fn drop(&mut self) {
+        self.runtime.clear_visible_terminals(self.scope);
+    }
 }
 
 impl TerminalControllerState {
@@ -52,6 +69,8 @@ impl TerminalControllerState {
             agent_process_monitor_task: None,
             host_agent_epoch: None,
             pending_host_agent_snapshots: HashMap::new(),
+            rendered_terminals: HashSet::new(),
+            visibility_report: None,
         }
     }
 }

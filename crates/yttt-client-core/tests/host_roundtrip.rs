@@ -1034,6 +1034,174 @@ async fn host_terminal_scale_performance_probe() {
     assert!(results.iter().all(|result| result.result.is_ok()));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual Host terminal sync traffic probe"]
+async fn host_terminal_sync_traffic_probe() {
+    const TERMINALS: usize = 8;
+    const OUTPUT_SECONDS: u64 = 3;
+
+    let host = RunningHost::start().await;
+    let gate = host.bootstrap.state_root.join("sync-traffic-gate");
+    let owner = host.client("sync-traffic-owner").await;
+    let observer = host.client("sync-traffic-observer").await;
+    let mut sessions = Vec::with_capacity(TERMINALS);
+    for index in 0..TERMINALS {
+        let mut spec = spawn_spec();
+        spec.session_id = TerminalSessionId::new(format!("sync-traffic-{index}"));
+        spec.execution = TerminalExecutionSpec::Command {
+            shell: "/bin/sh".to_string(),
+            program: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                format!(
+                    "while [ ! -f '{}' ]; do sleep 0.05; done; end=$(( $(date +%s) + {OUTPUT_SECONDS} )); while [ $(date +%s) -lt $end ]; do seq 1 500; done; printf 'sync-done\\n'; sleep 30",
+                    gate.display()
+                ),
+            ],
+            return_to_shell: false,
+        };
+        let session_id = spec.session_id.clone();
+        let Response::TerminalSpawned { session_epoch, .. } = owner
+            .request(spawn_request(spec, host.host_epoch()))
+            .await
+            .unwrap()
+        else {
+            panic!("unexpected sync traffic spawn response");
+        };
+        observer
+            .request(Request::AttachTerminal(AttachTerminal {
+                session_id: session_id.clone(),
+                known_session_epoch: Some(session_epoch),
+                after_sequence: None,
+                mode: TerminalLeaseMode::Observer,
+                query_palette: Vec::new(),
+                palette_revision: 1,
+                geometry: geometry(),
+                geometry_epoch: 1,
+            }))
+            .await
+            .unwrap();
+        sessions.push((session_id, session_epoch));
+    }
+    let clients = [("owner", &owner), ("observer", &observer)];
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !clients.iter().all(|(_, client)| {
+            sessions
+                .iter()
+                .all(|(session_id, _)| client.terminal_snapshot(session_id).is_some())
+        }) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("sync traffic initial mirrors timeout");
+    // With YTTT_SYNC_PROBE_OBSERVER_HIDDEN set, the observer renders none of the
+    // terminals during the burst and reveals them afterwards.
+    let observer_hidden = std::env::var_os("YTTT_SYNC_PROBE_OBSERVER_HIDDEN").is_some();
+    if observer_hidden {
+        observer.set_visible_terminals(0, std::iter::empty());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    let before = clients.map(|(_, client)| client.diagnostics());
+    let started = std::time::Instant::now();
+    fs::write(&gate, b"go").unwrap();
+    let rendering = if observer_hidden {
+        &clients[..1]
+    } else {
+        &clients[..]
+    };
+    tokio::time::timeout(Duration::from_secs(OUTPUT_SECONDS + 15), async {
+        while !rendering.iter().all(|(_, client)| {
+            sessions.iter().all(|(session_id, _)| {
+                client
+                    .terminal_snapshot(session_id)
+                    .is_some_and(|viewport| viewport_text(&viewport).contains("sync-done"))
+            })
+        }) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("sync traffic final mirrors timeout");
+    let elapsed = started.elapsed();
+    for ((name, client), before) in clients.iter().zip(before) {
+        let after = client.diagnostics();
+        eprintln!(
+            "SYNC_TRAFFIC client={name} terminals={TERMINALS} elapsed_ms={} payload_bytes={} data_lane_resets={} reconnects={}",
+            elapsed.as_millis(),
+            after.ipc_payload_bytes - before.ipc_payload_bytes,
+            after.data_lane_resets - before.data_lane_resets,
+            after.reconnects - before.reconnects,
+        );
+    }
+    if observer_hidden {
+        let before = observer.diagnostics();
+        observer
+            .set_visible_terminals(0, sessions.iter().map(|(session_id, _)| session_id.clone()));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !sessions.iter().all(|(session_id, _)| {
+                observer
+                    .terminal_snapshot(session_id)
+                    .is_some_and(|viewport| viewport_text(&viewport).contains("sync-done"))
+            }) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("revealed observer mirrors timeout");
+        eprintln!(
+            "SYNC_TRAFFIC_REVEAL client=observer payload_bytes={}",
+            observer.diagnostics().ipc_payload_bytes - before.ipc_payload_bytes,
+        );
+    }
+
+    let diagnostics_path = host.bootstrap.runtime_root.join("host-diagnostics.jsonl");
+    let finished_lines =
+        fs::read_to_string(&diagnostics_path).map_or(0, |contents| contents.lines().count());
+    let snapshot = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(contents) = fs::read_to_string(&diagnostics_path)
+                && contents.lines().count() > finished_lines
+                && let Some(snapshot) = contents
+                    .lines()
+                    .next_back()
+                    .and_then(|line| serde_json::from_str::<HostDiagnosticsSnapshot>(line).ok())
+            {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("Host diagnostics snapshot timeout");
+    let attachment_queues = snapshot
+        .queues
+        .iter()
+        .filter(|queue| queue.name == "attachment_output_bytes");
+    let (dropped, high_water) = attachment_queues.fold((0, 0), |acc, queue| {
+        (acc.0 + queue.dropped, acc.1.max(queue.high_water))
+    });
+    eprintln!(
+        "SYNC_TRAFFIC host semantic_encodes={} shared_ipc_encodes={} attachment_drops={dropped} attachment_high_water={high_water} lagged_events={}",
+        snapshot
+            .terminals
+            .iter()
+            .map(|terminal| terminal.semantic_encode_count)
+            .sum::<u64>(),
+        snapshot
+            .terminals
+            .iter()
+            .map(|terminal| terminal.shared_ipc_encode_count)
+            .sum::<u64>(),
+        snapshot
+            .attachment_resyncs
+            .iter()
+            .map(|attachment| attachment.lagged_events)
+            .sum::<u64>(),
+    );
+}
+
 async fn wait_for_mirror(client: &ClientCore, expected: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -1352,7 +1520,6 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!host.task.is_finished());
     let second = host.client("second-client").await;
-    wait_for_mirror(&second, "client-core-ready").await;
 
     let reattached_geometry = TerminalGeometry {
         cols: 100,
@@ -1364,9 +1531,7 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
         .request(Request::AttachTerminal(AttachTerminal {
             session_id: TerminalSessionId::new("host-owned"),
             known_session_epoch: Some(session_epoch),
-            after_sequence: second
-                .terminal_snapshot(&TerminalSessionId::new("host-owned"))
-                .map(|viewport| viewport.sequence),
+            after_sequence: None,
             mode: yttt_protocol::terminal::TerminalLeaseMode::Interactive,
             query_palette: Vec::new(),
             palette_revision: 1,
@@ -1381,6 +1546,7 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
     assert_eq!(lease.owner.as_str(), "second-client");
     assert_eq!(checkpoint.viewport.geometry, reattached_geometry);
     assert!(viewport_text(&checkpoint.viewport).contains("client-core-ready"));
+    wait_for_mirror(&second, "client-core-ready").await;
     assert_eq!(
         second
             .request(Request::TerminalInput(TerminalInput {
@@ -1984,29 +2150,11 @@ async fn exited_terminal_reconnects_with_its_final_checkpoint_until_acknowledged
     tokio::time::sleep(Duration::from_millis(1_200)).await;
 
     let second = host.client("exit-second").await;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if second
-                .terminal_snapshot(&session_id)
-                .is_some_and(|viewport| {
-                    viewport_text(&viewport).contains("final-before-exit")
-                        && viewport.process_state == TerminalProcessState::Exited { code: Some(7) }
-                })
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("reconnected final checkpoint timeout");
     let attached = second
         .request(Request::AttachTerminal(AttachTerminal {
             session_id: session_id.clone(),
             known_session_epoch: Some(session_epoch),
-            after_sequence: second
-                .terminal_snapshot(&session_id)
-                .map(|viewport| viewport.sequence),
+            after_sequence: None,
             mode: TerminalLeaseMode::Observer,
             query_palette: Vec::new(),
             palette_revision: 1,
@@ -2941,18 +3089,20 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
     assert_eq!(checkpoint.viewport.geometry, geometry());
     let mut slow_data =
         raw_terminal_data_client(&host, "slow-raw-observer", session_id.clone()).await;
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), receive_control(&mut slow_data))
-            .await
-            .expect("slow observer snapshot timeout")
-            .unwrap(),
-        ControlMessage::Event(yttt_protocol::HostEvent {
-            body: yttt_protocol::ServerEvent::Terminal(
-                yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(_)
+    let first_frame = tokio::time::timeout(Duration::from_secs(5), receive_control(&mut slow_data))
+        .await
+        .expect("slow observer snapshot timeout")
+        .unwrap();
+    let ControlMessage::Event(yttt_protocol::HostEvent {
+        body:
+            yttt_protocol::ServerEvent::Terminal(
+                yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(mut slow_mirror),
             ),
-            ..
-        })
-    ));
+        ..
+    }) = first_frame
+    else {
+        panic!("data lane must open with a snapshot: {first_frame:?}");
+    };
     let observer_resize = raw_interactive_request(
         &mut slow_interactive,
         2,
@@ -3008,6 +3158,36 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
         owner.terminal_snapshot(&session_id).unwrap().geometry,
         geometry()
     );
+    // The observer read nothing during the burst. It catches up with merged
+    // frames that continue its mirror: no gap and no resync request.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !viewport_text(&slow_mirror).contains("burst-done") {
+            let ControlMessage::Event(event) = receive_control(&mut slow_data).await.unwrap()
+            else {
+                panic!("data lane carries only events");
+            };
+            let yttt_protocol::ServerEvent::Terminal(update) = event.body else {
+                continue;
+            };
+            assert!(
+                !matches!(
+                    update,
+                    yttt_protocol::terminal::TerminalStreamUpdate::ResyncRequired { .. }
+                        | yttt_protocol::terminal::TerminalStreamUpdate::RawTail { .. }
+                ),
+                "slow observer was asked to resync: {update:?}"
+            );
+            assert!(
+                !matches!(
+                    slow_mirror.apply_stream_update(update),
+                    yttt_protocol::terminal::TerminalStreamApply::SequenceGap
+                ),
+                "slow observer received a frame that skips its mirror"
+            );
+        }
+    })
+    .await
+    .expect("slow observer catch-up timeout");
     drop(slow_data);
 
     let terminated = owner
@@ -3039,6 +3219,98 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
         .await
         .expect("Host shutdown timeout")
         .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn hidden_terminal_streams_metadata_only_until_revealed() {
+    let host = RunningHost::start().await;
+    let client = host.client("visibility-client").await;
+    let gate = host.bootstrap.state_root.join("visibility-gate");
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("visibility-terminal");
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-c".to_string(),
+            format!(
+                "printf 'visible-ready\\n'; while [ ! -f '{}' ]; do sleep 0.05; done; printf 'hidden-output\\n'; sleep 0.2; printf '\\033]0;hidden-title\\007'; sleep 30",
+                gate.display()
+            ),
+        ],
+        return_to_shell: false,
+    };
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned { session_epoch, .. } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected visibility spawn response");
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !client
+            .terminal_snapshot(&session_id)
+            .is_some_and(|viewport| viewport_text(&viewport).contains("visible-ready"))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial visible output timeout");
+
+    client.set_visible_terminals(0, std::iter::empty());
+    // The report travels on the control lane; let it land before the output.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    fs::write(&gate, b"go").unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while client
+            .terminal_metadata(&session_id)
+            .is_none_or(|metadata| metadata.title.as_deref() != Some("hidden-title"))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("hidden terminal title timeout");
+    assert!(
+        !viewport_text(&client.terminal_snapshot(&session_id).unwrap()).contains("hidden-output"),
+        "a hidden terminal must not stream screen content"
+    );
+
+    client.set_visible_terminals(0, [session_id.clone()]);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !client
+            .terminal_snapshot(&session_id)
+            .is_some_and(|viewport| viewport_text(&viewport).contains("hidden-output"))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("revealed terminal snapshot timeout");
+    assert_eq!(client.diagnostics().data_lane_resets, 0);
+
+    let terminated = client
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap();
+    let Response::TerminalTerminated(terminated) = terminated else {
+        panic!("unexpected terminate response");
+    };
+    client
+        .request(Request::AcknowledgeTerminalExit {
+            session_id,
+            session_epoch,
+            final_sequence: terminated.final_sequence,
+        })
+        .await
         .unwrap();
 }
 
@@ -4498,6 +4770,17 @@ async fn catalog_refresh_and_status_poll_preserve_history_and_live_input() {
         }))
         .await
         .unwrap();
+    // The data lane, not the scroll response, moves the mirror.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while client
+            .terminal_snapshot(&session_id)
+            .is_none_or(|viewport| viewport.display_offset != 30)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("scrolled mirror timeout");
 
     // Exercise both the tray's read-only query and a genuine catalog change.
     host.lifecycle_request(LifecycleRequest::Status, false)
@@ -4524,11 +4807,6 @@ async fn catalog_refresh_and_status_poll_preserve_history_and_live_input() {
     })
     .await
     .expect("catalog refresh timeout");
-    // The control response is a barrier behind checkpoint requests from that catalog.
-    client
-        .request(Request::Ping { sent_millis: 0 })
-        .await
-        .unwrap();
     let viewport = client.terminal_snapshot(&session_id).unwrap();
     assert_eq!(
         viewport.display_offset, 30,

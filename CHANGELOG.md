@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- 资源协议升至 v22 稳定基线：这是最后一次要求桌面、Host、远端 Server 与 CLI 同步更新。此后新增请求、响应或事件无需升版本；旧端收到不认识的请求回复 `Unsupported`、不认识的响应转为 `Unsupported` 失败、不认识的事件直接跳过，连接不再断开，只失去该功能。
+- Raise the resource protocol to the v22 stable baseline, the last change that requires the desktop, Host, remote Server, and CLI to update together. Later requests, responses, and events append without a version bump: an older peer answers an unknown request with `Unsupported`, resolves an unknown response as `Unsupported`, and skips an unknown event instead of dropping the connection.
+- 桌面升级后直接接入协议兼容的现有 Host，即使 build 不同也不再要求停止；忙碌的独立 Host 不再阻止新版本启动。只有协议不兼容时才在 Host 空闲后替换。
+- Attach to an existing protocol-compatible Host after a desktop upgrade even when its build differs, so a busy independent Host no longer blocks the new version from starting. Hosts are replaced only on protocol incompatibility, and only once idle.
+- 终端同步改为单写者：Host 的 terminal-data 连接是镜像唯一来源，序号中断时重建该连接并以当前画面重新开始，不再经控制通道补快照。慢客户端恢复读取后直接收到合并后的最新画面，不再触发整屏重同步。
+- Make terminal sync single-writer: the Host's terminal-data connection is the only source for a mirror, and a sequence gap rebuilds that connection from the current screen instead of patching it over the control channel. A slow client that resumes reading receives the coalesced latest frame instead of a full resync.
+- 窗口不可见的终端不再接收画面更新，只同步标题、目录与退出状态；再次显示时立即收到当前画面。所有窗口都隐藏的终端在 Host 侧也跳过输出捕获。CLI `panes read` 改为读取 Host 当前内容，隐藏的 pane 也返回最新输出。
+- Stop sending screen updates for terminals that no window shows, syncing only title, directory, and exit state; showing them again delivers the current screen at once. Terminals hidden in every window also skip output capture on the Host. CLI `panes read` now reads the Host's current content, so hidden panes return the latest output.
+- Host 不再保留每终端最多 8 MiB 的原始输出回放，降低内存占用。
+- Drop the Host's per-terminal raw output replay of up to 8 MiB, reducing memory use.
+
 ## 0.3.18 - 2026-10-25
 
 - 修复“恢复完整工作区”入口随 Agent 状态同步和自动保存反复闪现：保留恢复入口，暂不可操作时置灰并说明原因，保存完成后重新启用；保留未发布更改保护。

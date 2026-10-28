@@ -62,9 +62,9 @@ use yttt_protocol::{
     RESOURCE_PROTOCOL_VERSION, Request, ResourceCatalog, Response, ServerEvent,
     TerminalInteractiveMessage, TerminalTerminationResult,
     terminal::{
-        AttachTerminal, TerminalLeaseMode, TerminalSpawnSpec, TerminalStreamApply,
-        TerminalStreamUpdate, TerminalViewportAnchor, TerminalViewportRead, TerminatedTerminal,
-        TerminationMode,
+        AttachTerminal, SemanticDelta, SemanticViewport, TerminalLeaseMode, TerminalModes,
+        TerminalProcessState, TerminalSpawnSpec, TerminalStreamApply, TerminalStreamUpdate,
+        TerminalViewportAnchor, TerminalViewportRead, TerminatedTerminal, TerminationMode,
     },
     workspace::WorkspaceProjectConfig,
 };
@@ -1068,6 +1068,7 @@ fn recovery_request(request: &Request) -> bool {
             | Request::ListResources
             | Request::RequestCheckpoint { .. }
             | Request::ReadAgentSnapshots { .. }
+            | Request::SetTerminalVisibility { .. }
     )
 }
 
@@ -1101,7 +1102,15 @@ async fn serve_control_connection(
             }
             tokio::select! {
                 message = &mut incoming, if queued.len() < MAX_QUEUED_REQUESTS => {
-                    let ControlMessage::Request(request) = message.map_err(|_| ())? else { return Err(()); };
+                    let message = match message {
+                        Ok(message) => message,
+                        Err(error) => {
+                            let request_id = error.unsupported_request_id().ok_or(())?;
+                            send_control(&mut writer, &ControlMessage::Response(HostResponse::unsupported(request_id))).await.map_err(|_| ())?;
+                            break;
+                        }
+                    };
+                    let ControlMessage::Request(request) = message else { return Err(()); };
                     if recovery_request(&request.body) {
                         let (response, changed) = dispatch_control_request(request, &client_id, &attachments, &request_journal, context).await;
                         send_control(&mut writer, &ControlMessage::Response(response)).await.map_err(|_| ())?;
@@ -1378,7 +1387,19 @@ async fn serve_terminal_interactive_connection(
     loop {
         tokio::select! {
             message = receive_terminal_interactive(&mut reader) => {
-                let message = message.map_err(|_| ())?;
+                let message = match message {
+                    Ok(message) => message,
+                    Err(error) => {
+                        let request_id = error.unsupported_request_id().ok_or(())?;
+                        send_terminal_interactive(
+                            &mut writer,
+                            &TerminalInteractiveMessage::Response(HostResponse::unsupported(request_id)),
+                        )
+                        .await
+                        .map_err(|_| ())?;
+                        continue;
+                    }
+                };
                 let (request, reply) = match message {
                     TerminalInteractiveMessage::Input { input, control } => (
                         ClientRequest {
@@ -1863,6 +1884,109 @@ async fn serve_lifecycle_connection(
     }
 }
 
+/// What the client mirror holds once every frame queued on a data lane is applied.
+struct SentBaseline {
+    session_epoch: u64,
+    sequence: u64,
+    geometry_epoch: u64,
+    scrollback_epoch: u64,
+    history_size: u64,
+    display_offset: u64,
+    modes: TerminalModes,
+    process_state: TerminalProcessState,
+    /// The rows equal the Host's live view at `sequence`, so shared deltas apply.
+    follows_live: bool,
+}
+
+impl SentBaseline {
+    fn from_viewport(viewport: &SemanticViewport) -> Self {
+        Self {
+            session_epoch: viewport.session_epoch,
+            sequence: viewport.sequence,
+            geometry_epoch: viewport.geometry_epoch,
+            scrollback_epoch: viewport.scrollback_epoch,
+            history_size: viewport.history_size,
+            display_offset: viewport.display_offset,
+            modes: viewport.modes.clone(),
+            process_state: viewport.process_state,
+            follows_live: viewport.display_offset == 0,
+        }
+    }
+
+    fn advance(&mut self, update: &TerminalStreamUpdate) {
+        match update {
+            TerminalStreamUpdate::Snapshot(viewport) => *self = Self::from_viewport(viewport),
+            TerminalStreamUpdate::Delta(delta) => {
+                self.sequence = delta.sequence;
+                self.geometry_epoch = delta.geometry_epoch;
+                self.scrollback_epoch = delta.scrollback_epoch;
+                self.history_size = delta.history_size;
+                self.display_offset = delta.display_offset;
+                if let Some(modes) = &delta.modes {
+                    self.modes.clone_from(modes);
+                }
+                if let Some(process_state) = delta.process_state {
+                    self.process_state = process_state;
+                }
+            }
+            TerminalStreamUpdate::RawTail { .. } | TerminalStreamUpdate::ResyncRequired { .. } => {}
+        }
+    }
+
+    fn metadata_differs(&self, update: &TerminalStreamUpdate) -> bool {
+        match update {
+            TerminalStreamUpdate::Snapshot(viewport) => {
+                viewport.modes != self.modes || viewport.process_state != self.process_state
+            }
+            TerminalStreamUpdate::Delta(delta) => {
+                delta
+                    .modes
+                    .as_ref()
+                    .is_some_and(|modes| *modes != self.modes)
+                    || delta
+                        .process_state
+                        .is_some_and(|process_state| process_state != self.process_state)
+            }
+            TerminalStreamUpdate::RawTail { .. } | TerminalStreamUpdate::ResyncRequired { .. } => {
+                false
+            }
+        }
+    }
+
+    /// Title, cwd, mode bits and process state for a client that does not render
+    /// the rows. The rows it holds stay as they are.
+    fn metadata_delta(&self, current: &SemanticViewport) -> Option<SemanticDelta> {
+        if current.session_epoch != self.session_epoch || current.sequence <= self.sequence {
+            return None;
+        }
+        let modes = (current.modes != self.modes).then(|| current.modes.clone());
+        let process_state =
+            (current.process_state != self.process_state).then_some(current.process_state);
+        if modes.is_none() && process_state.is_none() {
+            return None;
+        }
+        Some(SemanticDelta {
+            session_id: current.session_id.clone(),
+            session_epoch: self.session_epoch,
+            base_sequence: self.sequence,
+            sequence: current.sequence,
+            geometry_epoch: self.geometry_epoch,
+            scrollback_epoch: self.scrollback_epoch,
+            history_size: self.history_size,
+            display_offset: self.display_offset,
+            changed_rows: Vec::new(),
+            cursor: None,
+            modes,
+            palette: None,
+            process_state,
+            images: None,
+            placements: None,
+        })
+    }
+}
+
+/// The newest frame a data lane owes its client. It keeps merging while the
+/// writer is busy, so a slow client receives one combined frame, never a gap.
 enum PendingTerminalFrame {
     Shared(Arc<SharedTerminalUpdate>),
     Update(Box<TerminalStreamUpdate>),
@@ -1870,13 +1994,18 @@ enum PendingTerminalFrame {
 }
 
 impl PendingTerminalFrame {
-    fn push(&mut self, update: Arc<SharedTerminalUpdate>) {
+    fn push(
+        current: Option<Self>,
+        baseline: &SentBaseline,
+        update: Arc<SharedTerminalUpdate>,
+    ) -> Option<Self> {
+        let Some(current) = current else {
+            return Self::start(baseline, update);
+        };
         if matches!(update.update(), TerminalStreamUpdate::Snapshot(_)) {
-            *self = Self::Shared(update);
-            return;
+            return Some(Self::Shared(update));
         }
-        let current = std::mem::replace(self, Self::SnapshotRequired);
-        *self = match current {
+        Some(match current {
             Self::Shared(current) => {
                 let mut current = current.update().clone();
                 if merge_terminal_updates(&mut current, update.update()) {
@@ -1893,7 +2022,33 @@ impl PendingTerminalFrame {
                 }
             }
             Self::SnapshotRequired => Self::SnapshotRequired,
-        };
+        })
+    }
+
+    fn start(baseline: &SentBaseline, update: Arc<SharedTerminalUpdate>) -> Option<Self> {
+        match update.update() {
+            TerminalStreamUpdate::Snapshot(viewport)
+                if viewport.session_epoch == baseline.session_epoch
+                    && viewport.sequence < baseline.sequence =>
+            {
+                None
+            }
+            TerminalStreamUpdate::Snapshot(_) => Some(Self::Shared(update)),
+            TerminalStreamUpdate::Delta(delta)
+                if delta.session_epoch == baseline.session_epoch
+                    && delta.sequence <= baseline.sequence =>
+            {
+                None
+            }
+            TerminalStreamUpdate::Delta(delta)
+                if baseline.follows_live
+                    && delta.session_epoch == baseline.session_epoch
+                    && delta.base_sequence == baseline.sequence =>
+            {
+                Some(Self::Shared(update))
+            }
+            _ => Some(Self::SnapshotRequired),
+        }
     }
 
     fn enqueue(
@@ -1901,16 +2056,25 @@ impl PendingTerminalFrame {
         terminal: &HostedTerminal,
         output: &TerminalDataWriter,
         host_sequence: &AtomicU64,
+        baseline: &mut SentBaseline,
+        display_offset: u64,
     ) -> Result<(), ()> {
         match self {
-            Self::Shared(update) => output.enqueue_shared(host_sequence, update.as_ref()),
-            Self::Update(update) => output.enqueue(host_sequence, *update),
+            Self::Shared(update) => {
+                output
+                    .enqueue_shared(host_sequence, update.as_ref())
+                    .map_err(|_| ())?;
+                baseline.advance(update.update());
+            }
+            Self::Update(update) => {
+                baseline.advance(&update);
+                output.enqueue(host_sequence, *update).map_err(|_| ())?;
+            }
             Self::SnapshotRequired => {
-                let viewport = terminal.latest_viewport().ok_or(())?;
-                output.enqueue(host_sequence, TerminalStreamUpdate::Snapshot(viewport))
+                *baseline = send_snapshot(terminal, output, host_sequence, display_offset)?;
             }
         }
-        .map_err(|_| ())
+        Ok(())
     }
 }
 
@@ -1928,6 +2092,23 @@ fn merge_terminal_updates(current: &mut TerminalStreamUpdate, next: &TerminalStr
     }
 }
 
+fn send_snapshot(
+    terminal: &HostedTerminal,
+    output: &TerminalDataWriter,
+    host_sequence: &AtomicU64,
+    display_offset: u64,
+) -> Result<SentBaseline, ()> {
+    let viewport = terminal.current_viewport(display_offset).ok_or(())?;
+    let baseline = SentBaseline::from_viewport(&viewport);
+    output
+        .enqueue(host_sequence, TerminalStreamUpdate::Snapshot(viewport))
+        .map_err(|_| ())?;
+    Ok(baseline)
+}
+
+/// Streams one terminal to one client. The lane opens with a Snapshot and then
+/// only sends frames that apply to what it already sent: contiguous deltas,
+/// Snapshots, or metadata deltas while the client does not render the rows.
 async fn serve_terminal_data_connection(
     stream: TransportStream,
     client_id: ClientInstanceId,
@@ -1940,74 +2121,21 @@ async fn serve_terminal_data_connection(
     let mut attachment = runtime
         .attachment_receiver(&session_id, &client_id)
         .ok_or(())?;
-    let mut attachment_state = *attachment.borrow();
-    if !attachment_state.attached {
+    let mut view = *attachment.borrow();
+    if !view.attached {
         return Err(());
     }
+    let live = |view: &runtime::AttachmentStreamState| view.visible && view.display_offset == 0;
     let mut terminal_events = terminal.subscribe();
     let output = TerminalDataWriter::new(stream, runtime.new_attachment_queue_diagnostics());
     let mut output_failure = output.subscribe_failure();
-    let checkpoint = terminal
-        .control_checkpoint_for_offset(attachment_state.display_offset)
-        .ok_or(())?;
-    output
-        .enqueue(
-            host_sequence,
-            TerminalStreamUpdate::Snapshot(checkpoint.viewport),
-        )
-        .map_err(|_| ())?;
-    if let Some(after_sequence) = attachment_state.pending_raw_after {
-        runtime.set_pending_raw_after(&session_id, &client_id, None);
-        match terminal.raw_replay_chunks(after_sequence) {
-            Ok(chunks) => {
-                for bytes in chunks {
-                    output
-                        .enqueue_paced(
-                            host_sequence,
-                            TerminalStreamUpdate::RawTail {
-                                session_id: session_id.clone(),
-                                session_epoch: terminal.session_epoch(),
-                                sequence: terminal
-                                    .latest_viewport()
-                                    .map_or(0, |viewport| viewport.sequence),
-                                bytes,
-                            },
-                        )
-                        .await
-                        .map_err(|_| ())?;
-                }
-            }
-            Err(HostedTerminalError::ResyncRequired {
-                available_from_sequence,
-                ..
-            }) => {
-                output
-                    .enqueue(
-                        host_sequence,
-                        TerminalStreamUpdate::ResyncRequired {
-                            session_id: session_id.clone(),
-                            available_from_sequence,
-                        },
-                    )
-                    .map_err(|_| ())?;
-            }
-            Err(_) => return Err(()),
-        }
-    }
+    let mut baseline = send_snapshot(&terminal, &output, host_sequence, view.display_offset)?;
     if terminal.is_exited() {
-        let checkpoint = terminal
-            .control_checkpoint_for_offset(attachment_state.display_offset)
-            .ok_or(())?;
-        output
-            .enqueue(
-                host_sequence,
-                TerminalStreamUpdate::Snapshot(checkpoint.viewport),
-            )
-            .map_err(|_| ())?;
         drain_terminal_data(&output).await?;
         return Ok(());
     }
     let mut pending_frame = None::<PendingTerminalFrame>;
+    let mut metadata_dirty = false;
     // Keep scheduler lateness from accumulating into a slower-than-display stream.
     // Skip missed ticks after idle periods instead of bursting to catch up.
     let mut frame_interval = tokio::time::interval(TERMINAL_FRAME_INTERVAL);
@@ -2019,65 +2147,33 @@ async fn serve_terminal_data_connection(
                     Ok(HostTerminalEvent::Update {
                         session_id: update_session_id,
                         update,
-                    }) if update_session_id == session_id
-                        && attachment_state.display_offset == 0 =>
-                    {
-                        if matches!(
-                            update.update(),
-                            TerminalStreamUpdate::Snapshot(_) | TerminalStreamUpdate::Delta(_)
-                        ) {
-                            if let Some(pending) = pending_frame.as_mut() {
-                                pending.push(update.clone());
-                            } else {
-                                pending_frame =
-                                    Some(PendingTerminalFrame::Shared(update.clone()));
-                            }
-                        } else {
-                            if let Some(pending) = pending_frame.take() {
-                                pending.enqueue(&terminal, &output, host_sequence)?;
-                            }
-                            output
-                                .enqueue_shared(host_sequence, update.as_ref())
-                                .map_err(|_| ())?;
+                    }) if update_session_id == session_id => {
+                        if live(&view) {
+                            pending_frame =
+                                PendingTerminalFrame::push(pending_frame.take(), &baseline, update);
+                        } else if baseline.metadata_differs(update.update()) {
+                            metadata_dirty = true;
                         }
                     }
                     Ok(HostTerminalEvent::Exited {
                         session_id: exited_session_id,
                         ..
                     }) if exited_session_id == session_id => {
-                        let checkpoint = terminal
-                            .control_checkpoint_for_offset(attachment_state.display_offset)
-                            .ok_or(())?;
-                        output
-                            .enqueue(
-                                host_sequence,
-                                TerminalStreamUpdate::Snapshot(checkpoint.viewport),
-                            )
-                            .map_err(|_| ())?;
+                        // The final frame goes out even to hidden attachments, after
+                        // everything already queued.
+                        drain_terminal_data(&output).await?;
+                        send_snapshot(&terminal, &output, host_sequence, view.display_offset)?;
                         drain_terminal_data(&output).await?;
                         return Ok(());
                     }
                     Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(skipped))
-                        if attachment_state.display_offset == 0 =>
-                    {
-                        pending_frame = None;
-                        runtime.note_attachment_lag(&session_id, &client_id, skipped, false);
-                        let available_from_sequence = terminal
-                            .latest_viewport()
-                            .map_or(0, |viewport| viewport.sequence);
-                        output
-                            .enqueue(
-                                host_sequence,
-                                TerminalStreamUpdate::ResyncRequired {
-                                    session_id: session_id.clone(),
-                                    available_from_sequence,
-                                },
-                            )
-                            .map_err(|_| ())?;
-                    }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        runtime.note_attachment_lag(&session_id, &client_id, skipped, true);
+                        runtime.note_attachment_lag(&session_id, &client_id, skipped, !live(&view));
+                        if live(&view) {
+                            pending_frame = Some(PendingTerminalFrame::SnapshotRequired);
+                        } else {
+                            metadata_dirty = true;
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 }
@@ -2086,32 +2182,49 @@ async fn serve_terminal_data_connection(
                 if changed.is_err() {
                     return Ok(());
                 }
-                let previous_offset = attachment_state.display_offset;
-                attachment_state = *attachment.borrow();
-                if attachment_state.display_offset != 0 {
-                    pending_frame = None;
-                }
-                if !attachment_state.attached {
+                let previous = view;
+                view = *attachment.borrow();
+                if !view.attached {
                     return Ok(());
                 }
-                if previous_offset != 0 && attachment_state.display_offset == 0 {
-                    runtime.mark_attachment_resync(
-                        &session_id,
-                        &client_id,
-                        AttachmentResyncReason::ReturnToBottom,
-                    );
-                    let checkpoint = terminal.control_checkpoint().ok_or(())?;
-                    output
-                        .enqueue(
-                            host_sequence,
-                            TerminalStreamUpdate::Snapshot(checkpoint.viewport),
-                        )
-                        .map_err(|_| ())?;
+                if !view.visible {
+                    pending_frame = None;
+                } else if !previous.visible
+                    || previous.display_offset != view.display_offset
+                    || previous.view_revision != view.view_revision
+                {
+                    if previous.display_offset != 0 && view.display_offset == 0 {
+                        runtime.mark_attachment_resync(
+                            &session_id,
+                            &client_id,
+                            AttachmentResyncReason::ReturnToBottom,
+                        );
+                    }
+                    pending_frame = Some(PendingTerminalFrame::SnapshotRequired);
                 }
             }
-            _ = frame_interval.tick(), if pending_frame.is_some() => {
-                if let Some(pending) = pending_frame.take() {
-                    pending.enqueue(&terminal, &output, host_sequence)?;
+            _ = frame_interval.tick(), if pending_frame.is_some() || metadata_dirty => {
+                // One frame in flight at a time: a busy writer leaves the frame
+                // merging in its slot instead of growing the queue.
+                if output.is_idle() {
+                    if let Some(pending) = pending_frame.take() {
+                        pending.enqueue(
+                            &terminal,
+                            &output,
+                            host_sequence,
+                            &mut baseline,
+                            view.display_offset,
+                        )?;
+                    } else if let Some(delta) = terminal
+                        .latest_viewport()
+                        .and_then(|current| baseline.metadata_delta(&current))
+                    {
+                        let update = TerminalStreamUpdate::Delta(delta);
+                        baseline.advance(&update);
+                        baseline.follows_live = false;
+                        output.enqueue(host_sequence, update).map_err(|_| ())?;
+                    }
+                    metadata_dirty = false;
                 }
             }
             _ = output_failure.changed() => return Err(()),
@@ -2510,17 +2623,11 @@ async fn handle_request(
             })
         })()
         .map_err(runtime_failure),
-        Request::RequestCheckpoint {
-            session_id,
-            after_sequence,
-        } => (|| {
+        // v22 clients still ask; the raw replay cursor is ignored.
+        Request::RequestCheckpoint { session_id, .. } => (|| {
             let terminal = runtime
                 .terminal(&session_id)
                 .ok_or_else(|| HostRuntimeError::NotFound(session_id.clone()))?;
-            if let Some(after_sequence) = after_sequence {
-                terminal.raw_replay_chunks(after_sequence)?;
-                runtime.set_pending_raw_after(&session_id, client_id, Some(after_sequence));
-            }
             let display_offset = attachments
                 .get(&session_id)
                 .map_or(0, |attachment| attachment.display_offset);
@@ -2664,6 +2771,10 @@ async fn handle_request(
             })
         }
         Request::AgentCommand(request) => agent_hooks.command(request).map(|()| Response::Applied),
+        Request::SetTerminalVisibility { revision, visible } => {
+            runtime.set_client_visibility(client_id, revision, visible.into_iter().collect());
+            Ok(Response::Applied)
+        }
         Request::Workspace(request) => {
             let workspaces = context.workspaces.clone();
             let requesting_client = client_id.clone();
@@ -3141,9 +3252,6 @@ fn runtime_failure(error: HostRuntimeError) -> ProtocolFailure {
         | HostRuntimeError::StaleSearchGeneration { .. }
         | HostRuntimeError::Terminal(HostedTerminalError::UnknownLineId(_)) => {
             FailureCode::StaleSequence
-        }
-        HostRuntimeError::Terminal(HostedTerminalError::ResyncRequired { .. }) => {
-            FailureCode::ResyncRequired
         }
         HostRuntimeError::Terminal(HostedTerminalError::Backpressure) => FailureCode::Backpressure,
         HostRuntimeError::Terminal(HostedTerminalError::Stopped) => FailureCode::TransportClosed,

@@ -1,9 +1,12 @@
 use std::io::{self, Read, Write};
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned, de::IgnoredAny};
 use thiserror::Error;
 
-use crate::{FRAME_FORMAT_VERSION, HEADER_LEN, MAX_FRAME_BYTES, PROTOCOL_MAGIC};
+use crate::{
+    ControlMessage, FRAME_FORMAT_VERSION, HEADER_LEN, HostEvent, MAX_FRAME_BYTES, PROTOCOL_MAGIC,
+    TerminalInteractiveMessage,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
@@ -64,6 +67,11 @@ pub enum ProtocolCodecError {
     Encode(String),
     #[error("message deserialization failed: {0}")]
     Decode(String),
+    #[error("unrecognized {message:?}: {detail}")]
+    Unrecognized {
+        message: Unrecognized,
+        detail: String,
+    },
     #[error("frame I/O failed: {0}")]
     Io(#[from] io::Error),
 }
@@ -81,6 +89,90 @@ pub fn encode_message<T: Serialize>(
 pub fn decode_message<T: DeserializeOwned>(frame: &DecodedFrame) -> Result<T, ProtocolCodecError> {
     ciborium::from_reader(frame.payload.as_slice())
         .map_err(|error| ProtocolCodecError::Decode(error.to_string()))
+}
+
+/// A checksum-valid frame whose envelope this build recognizes but whose content it
+/// cannot decode, typically a request, response, or event added by a newer peer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unrecognized {
+    /// The receiver answers `FailureCode::Unsupported` and keeps the connection.
+    Request { request_id: u64 },
+    /// The receiver resolves the pending request as `FailureCode::Unsupported`.
+    Response { request_id: u64 },
+    /// The receiver skips the event.
+    Event,
+}
+
+#[derive(Deserialize)]
+struct RequestIdProbe {
+    request_id: u64,
+}
+
+#[derive(Deserialize)]
+enum ControlEnvelopeProbe {
+    Request(RequestIdProbe),
+    Response(RequestIdProbe),
+    Event(IgnoredAny),
+}
+
+#[derive(Deserialize)]
+enum TerminalInteractiveEnvelopeProbe {
+    Request(RequestIdProbe),
+    Response(RequestIdProbe),
+}
+
+#[derive(Deserialize)]
+struct HostEventProbe {
+    #[serde(rename = "host_sequence")]
+    _host_sequence: u64,
+}
+
+/// Decodes `T`; when that fails but the payload still matches the envelope probe `P`,
+/// reports which part of the stable protocol the newer peer used instead of a decode error.
+fn decode_or_classify<T: DeserializeOwned, P: DeserializeOwned>(
+    frame: &DecodedFrame,
+    classify: impl FnOnce(P) -> Unrecognized,
+) -> Result<T, ProtocolCodecError> {
+    let error = match ciborium::from_reader::<T, _>(frame.payload.as_slice()) {
+        Ok(message) => return Ok(message),
+        Err(error) => error.to_string(),
+    };
+    match ciborium::from_reader::<P, _>(frame.payload.as_slice()) {
+        Ok(probe) => Err(ProtocolCodecError::Unrecognized {
+            message: classify(probe),
+            detail: error,
+        }),
+        Err(_) => Err(ProtocolCodecError::Decode(error)),
+    }
+}
+
+pub fn decode_control_message(frame: &DecodedFrame) -> Result<ControlMessage, ProtocolCodecError> {
+    decode_or_classify(frame, |probe| match probe {
+        ControlEnvelopeProbe::Request(RequestIdProbe { request_id }) => {
+            Unrecognized::Request { request_id }
+        }
+        ControlEnvelopeProbe::Response(RequestIdProbe { request_id }) => {
+            Unrecognized::Response { request_id }
+        }
+        ControlEnvelopeProbe::Event(_) => Unrecognized::Event,
+    })
+}
+
+pub fn decode_terminal_interactive_message(
+    frame: &DecodedFrame,
+) -> Result<TerminalInteractiveMessage, ProtocolCodecError> {
+    decode_or_classify(frame, |probe| match probe {
+        TerminalInteractiveEnvelopeProbe::Request(RequestIdProbe { request_id }) => {
+            Unrecognized::Request { request_id }
+        }
+        TerminalInteractiveEnvelopeProbe::Response(RequestIdProbe { request_id }) => {
+            Unrecognized::Response { request_id }
+        }
+    })
+}
+
+pub fn decode_host_event(frame: &DecodedFrame) -> Result<HostEvent, ProtocolCodecError> {
+    decode_or_classify(frame, |_: HostEventProbe| Unrecognized::Event)
 }
 
 pub fn encode_frame(kind: FrameKind, payload: &[u8]) -> Result<Vec<u8>, ProtocolCodecError> {

@@ -4,17 +4,39 @@
 
 ## 兼容原则
 
-1. **枚举变体只追加，不重排、不复用名称。** 未知变体必须解码失败并映射为 typed 拒绝，不得错位成另一个变体。
+v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变已有字段语义才升版本。**
+
+1. **枚举变体只追加，不重排、不复用名称。** 旧端收到不认识的变体时按外层信封降级,不断线:
+   - 请求 → Host 回复该 `request_id` 的 `FailureCode::Unsupported`,连接继续服务后续请求。
+   - 响应 → 接收端把它转成该 `request_id` 的 `Unsupported` 失败,等待者照常得到结果。
+   - 事件(control 通道与 state-event 通道)→ 跳过,下一事件照常交付。
+   - 外层信封本身不认识(不是 Request/Response/Event,或请求缺 `request_id`)→ 仍是解码错误并断线。
+   新功能在旧端只失去这一个功能;调用方据 `Unsupported` 隐藏或降级该功能。
 2. **结构体字段只追加。** 新字段必须带 `#[serde(default)]` 或本身可缺省；旧对端忽略未知字段。
-3. **字段名即标签。** 不得复用已废弃的字段名；废弃字段保留占位直到明确的大版本切割。
+3. **字段名即标签。** CBOR 按名称携带变体与字段;不得复用已废弃的名称。
+   `crates/yttt-protocol/tests/wire_shapes.rs` 从 serde derive 的静态名称表遍历握手、lifecycle、
+   control、terminal-interactive 与 state-event 的全部 wire 类型,与
+   `tests/fixtures/wire-shapes-v22.json` 比较:删除/改名直接失败并要求升版本;追加也会失败,
+   确认新字段带缺省后以 `YTTT_BLESS_WIRE_SHAPES=1 cargo test -p yttt-protocol --test wire_shapes`
+   重写样本。`serde_json::Value`、内部标签(`tag = ...`)、untagged 与 flatten 类型只经过
+   `deserialize_any`,其内部名称不在样本内,修改它们时需人工确认兼容。
 4. **不要在控制消息上使用 `skip_serializing_if` 来表达协议缺省。** 缺省应通过 `serde(default)` 在解码侧完成，避免两端对“字段是否存在”产生分歧。
-5. **握手用 `protocol_range` 协商，而不是 `build_fingerprint`。** 区间有交集即可通信；`build_fingerprint` / `resource_compatibility` 只作诊断，不作为 fail-closed 条件。无交集时返回 `RejectReason::VersionMismatch`。
+5. **握手用 `protocol_range` 协商，而不是 `build_fingerprint`。** 区间有交集即可通信；`BuildIdentity` 只用于诊断与握手 transcript。无交集时返回 `RejectReason::VersionMismatch`。launcher 只按握手结果决定:协商成功即 attach(不同 build 的 Independent Host 不被替换);`VersionMismatch` 才走“空闲则停止替换、忙碌报 blockers”。
 6. **`FRAME_FORMAT_VERSION` 只描述 16 字节帧头。** payload schema 演进走 `RESOURCE_PROTOCOL_VERSION` / `LIFECYCLE_PROTOCOL_VERSION` / `DESKTOP_SHELL_PROTOCOL_VERSION`。
+7. **必须升版本时**,Host 声明包含新旧版本的区间并同时服务两者,直到旧版本下线;不得让一次破坏性修改再次要求全部组件同步升级。
+8. **lifecycle 协议保持封闭集合。** 它是新 launcher 停止旧 Host 的唯一通道,任何修改都要升版本,且 Host 必须继续支持旧版本。
 
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 21`。v21 追加 `MutateAgentSession`
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 22`。v22 是稳定基线:新增 `FailureCode::Unsupported`,
+  未知请求/响应/事件按上文降级,wire 名称冻结在样本中。这是最后一次要求桌面、Host、远端
+  Server 与 CLI 同步更新;此后的追加无需升版本。
+  v22 内追加(未升版本):`SetTerminalVisibility { revision, visible }` 请求,Host 以 `Applied` 回复;
+  旧 Host 回复 `Unsupported`,Client 停止上报,所有 attachment 按可见处理。Host 不再保留原始 PTY 回放:
+  `after_sequence` 字段保留但被忽略,`raw_replay_tail` 恒为空;Host 不再发送 `ResyncRequired`,
+  新 Client 收到旧 Host 发来的该事件时重建 terminal-data 连接。
+  v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，
   不接受客户端提供的历史文件删除路径。桌面、Host、远端 Server 与 CLI 需同步更新。

@@ -20,7 +20,7 @@ use yttt_protocol::{
 use yttt_ssh::TransportService;
 
 use crate::diagnostics::{QueueDiagnostics, QueueDiagnosticsSnapshot};
-use crate::terminal::{HostTerminalEvent, HostedTerminal, HostedTerminalError, ReplayBudget};
+use crate::terminal::{HostTerminalEvent, HostedTerminal, HostedTerminalError};
 
 const RUNTIME_EVENT_CAPACITY: usize = 256;
 const RETAINED_ATTACHMENT_QUEUE_DIAGNOSTICS: usize = 4_096;
@@ -37,7 +37,6 @@ pub enum UnattendedTakeoverPolicy {
 pub struct HostRuntimeConfig {
     pub takeover_policy: UnattendedTakeoverPolicy,
     pub control_request_timeout: Duration,
-    pub replay_budget: ReplayBudget,
 }
 
 impl Default for HostRuntimeConfig {
@@ -45,7 +44,6 @@ impl Default for HostRuntimeConfig {
         Self {
             takeover_policy: UnattendedTakeoverPolicy::Never,
             control_request_timeout: DEFAULT_CONTROL_REQUEST_TIMEOUT,
-            replay_budget: ReplayBudget::default(),
         }
     }
 }
@@ -94,8 +92,11 @@ impl AttachmentResyncReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AttachmentStreamState {
     pub attached: bool,
+    /// The client renders this terminal; hidden attachments get metadata and exit only.
+    pub visible: bool,
     pub display_offset: u64,
-    pub pending_raw_after: Option<u64>,
+    /// Bumped by every scroll or viewport read so the data lane re-sends the view.
+    pub view_revision: u64,
     pub lagged_events: u64,
     pub pending_scroll_resync: bool,
     pub last_resync_reason: Option<AttachmentResyncReason>,
@@ -105,8 +106,9 @@ impl AttachmentStreamState {
     pub(crate) fn attached() -> Self {
         Self {
             attached: true,
+            visible: true,
             display_offset: 0,
-            pending_raw_after: None,
+            view_revision: 0,
             lagged_events: 0,
             pending_scroll_resync: false,
             last_resync_reason: None,
@@ -121,9 +123,16 @@ impl AttachmentStreamState {
     }
 }
 
+struct ClientVisibility {
+    revision: u64,
+    visible: HashSet<TerminalSessionId>,
+}
+
 pub struct HostRuntime {
     terminals: Mutex<HashMap<TerminalSessionId, HostedTerminal>>,
     control: Mutex<ControlState>,
+    /// Lock order: `visibility` before `attachments`.
+    visibility: Mutex<HashMap<ClientInstanceId, ClientVisibility>>,
     attachments:
         Mutex<HashMap<(ClientInstanceId, TerminalSessionId), watch::Sender<AttachmentStreamState>>>,
     next_session_epoch: AtomicU64,
@@ -147,6 +156,7 @@ impl HostRuntime {
                 leases: HashMap::new(),
                 pending: HashMap::new(),
             }),
+            visibility: Mutex::new(HashMap::new()),
             attachments: Mutex::new(HashMap::new()),
             next_session_epoch: AtomicU64::new(1),
             next_lease_epoch: AtomicU64::new(1),
@@ -199,20 +209,14 @@ impl HostRuntime {
         let session_epoch = self.next_session_epoch.fetch_add(1, Ordering::Relaxed);
         prepare_environment(&mut spec, session_epoch);
         let terminal = match &spec.execution {
-            TerminalExecutionSpec::Ssh { .. } => HostedTerminal::spawn_remote_with_budget(
+            TerminalExecutionSpec::Ssh { .. } => HostedTerminal::spawn_remote(
                 spec.clone(),
                 session_epoch,
                 ssh.as_ref()
                     .ok_or(HostedTerminalError::UnsupportedExecution)?,
-                self.config.replay_budget,
             )?,
             TerminalExecutionSpec::Shell { .. } | TerminalExecutionSpec::Command { .. } => {
-                HostedTerminal::spawn_in_with_budget(
-                    spec.clone(),
-                    session_epoch,
-                    local_cwd,
-                    self.config.replay_budget,
-                )?
+                HostedTerminal::spawn_in(spec.clone(), session_epoch, local_cwd)?
             }
         };
         self.terminals
@@ -508,6 +512,8 @@ impl HostRuntime {
         control
             .pending
             .retain(|_, pending| pending.requester != *client_id);
+        drop(control);
+        self.visibility.lock().remove(client_id);
         let affected = {
             let mut attachments = self.attachments.lock();
             let affected = attachments
@@ -657,23 +663,71 @@ impl HostRuntime {
         client_id: &ClientInstanceId,
     ) {
         let key = (client_id.clone(), session_id.clone());
+        let visibility = self.visibility.lock();
+        let visible = visibility
+            .get(client_id)
+            .is_none_or(|reported| reported.visible.contains(session_id));
         let mut attachments = self.attachments.lock();
         if let Some(attached) = attachments.get(&key) {
-            // Re-attaching an already tracked stream must not discard the raw cursor,
-            // scroll offset or pending resync the client is still waiting on.
+            // Re-attaching an already tracked stream keeps its scroll offset.
             let current = *attached.borrow();
             if !current.attached {
                 let _ = attached.send(AttachmentStreamState {
                     attached: true,
+                    visible,
                     ..current
                 });
             }
         } else {
-            let (attached, _) = watch::channel(AttachmentStreamState::attached());
+            let (attached, _) = watch::channel(AttachmentStreamState {
+                visible,
+                ..AttachmentStreamState::attached()
+            });
             attachments.insert(key, attached);
         }
         drop(attachments);
+        drop(visibility);
         self.refresh_terminal_subscriber_count(session_id);
+    }
+
+    /// Records which terminals `client_id` renders. Returns `false` for a
+    /// revision not newer than the one already applied.
+    pub fn set_client_visibility(
+        &self,
+        client_id: &ClientInstanceId,
+        revision: u64,
+        visible: HashSet<TerminalSessionId>,
+    ) -> bool {
+        let mut visibility = self.visibility.lock();
+        if visibility
+            .get(client_id)
+            .is_some_and(|current| current.revision >= revision)
+        {
+            return false;
+        }
+        let changed = {
+            let attachments = self.attachments.lock();
+            attachments
+                .iter()
+                .filter(|((owner, _), _)| owner == client_id)
+                .filter_map(|((_, session_id), attached)| {
+                    let shown = visible.contains(session_id);
+                    attached
+                        .send_if_modified(|state| {
+                            let modified = state.visible != shown;
+                            state.visible = shown;
+                            modified
+                        })
+                        .then(|| session_id.clone())
+                })
+                .collect::<Vec<_>>()
+        };
+        visibility.insert(client_id.clone(), ClientVisibility { revision, visible });
+        drop(visibility);
+        for session_id in changed {
+            self.refresh_terminal_subscriber_count(&session_id);
+        }
+        true
     }
 
     pub fn attachment_receiver(
@@ -722,32 +776,13 @@ impl HostRuntime {
             let _ = attached.send(AttachmentStreamState {
                 attached: true,
                 display_offset,
-                pending_raw_after: current.pending_raw_after,
-                lagged_events: current.lagged_events,
+                view_revision: current.view_revision.wrapping_add(1),
                 pending_scroll_resync: if display_offset == 0 {
                     false
                 } else {
                     current.pending_scroll_resync
                 },
                 last_resync_reason,
-            });
-        }
-    }
-
-    pub(crate) fn set_pending_raw_after(
-        &self,
-        session_id: &TerminalSessionId,
-        client_id: &ClientInstanceId,
-        after_sequence: Option<u64>,
-    ) {
-        if let Some(attached) = self
-            .attachments
-            .lock()
-            .get(&(client_id.clone(), session_id.clone()))
-        {
-            let current = *attached.borrow();
-            let _ = attached.send(AttachmentStreamState {
-                pending_raw_after: after_sequence,
                 ..current
             });
         }
@@ -833,8 +868,10 @@ impl HostRuntime {
         let count = self
             .attachments
             .lock()
-            .keys()
-            .filter(|(_, attached_session_id)| attached_session_id == session_id)
+            .iter()
+            .filter(|((_, attached_session_id), attached)| {
+                attached_session_id == session_id && attached.borrow().visible
+            })
             .count();
         if let Some(terminal) = self.terminal(session_id) {
             terminal.set_subscriber_count(count);
@@ -1082,7 +1119,7 @@ mod attachment_state_tests {
     use super::*;
 
     #[tokio::test]
-    async fn reattaching_preserves_pending_raw_cursor_and_scroll_offset() {
+    async fn reattaching_preserves_scroll_offset() {
         let runtime = HostRuntime::new();
         let client = ClientInstanceId::new("viewer");
         let session_id = TerminalSessionId::new("reattach");
@@ -1091,14 +1128,47 @@ mod attachment_state_tests {
         let receiver = runtime
             .attachment_receiver(&session_id, &client)
             .expect("attachment is tracked");
-        runtime.set_pending_raw_after(&session_id, &client, Some(42));
         runtime.update_attachment_display_offset(&session_id, &client, 7);
         runtime.register_attachment(&session_id, &client);
 
         let state = *receiver.borrow();
         assert!(state.attached);
-        assert_eq!(state.pending_raw_after, Some(42));
         assert_eq!(state.display_offset, 7);
+    }
+
+    #[tokio::test]
+    async fn visibility_applies_to_current_and_later_attachments_until_the_client_leaves() {
+        let runtime = HostRuntime::new();
+        let client = ClientInstanceId::new("viewer");
+        let shown = TerminalSessionId::new("shown");
+        let hidden = TerminalSessionId::new("hidden");
+        let visible = |runtime: &HostRuntime, session_id: &TerminalSessionId| {
+            runtime
+                .attachment_receiver(session_id, &client)
+                .expect("attachment is tracked")
+                .borrow()
+                .visible
+        };
+
+        runtime.register_attachment(&shown, &client);
+        assert!(
+            visible(&runtime, &shown),
+            "unreported clients see everything"
+        );
+        assert!(runtime.set_client_visibility(&client, 2, HashSet::from([shown.clone()])));
+        runtime.register_attachment(&hidden, &client);
+        assert!(visible(&runtime, &shown));
+        assert!(!visible(&runtime, &hidden));
+
+        assert!(!runtime.set_client_visibility(&client, 1, HashSet::from([hidden.clone()])));
+        assert!(!visible(&runtime, &hidden), "stale revisions are ignored");
+
+        runtime.release_client(&client);
+        runtime.register_attachment(&hidden, &client);
+        assert!(
+            visible(&runtime, &hidden),
+            "a new connection starts unreported"
+        );
     }
 
     #[tokio::test]
@@ -1108,7 +1178,7 @@ mod attachment_state_tests {
         let session_id = TerminalSessionId::new("reattach-after-release");
 
         runtime.register_attachment(&session_id, &client);
-        runtime.set_pending_raw_after(&session_id, &client, Some(42));
+        runtime.update_attachment_display_offset(&session_id, &client, 7);
         runtime.release_attachment(&session_id, &client);
         runtime.register_attachment(&session_id, &client);
 

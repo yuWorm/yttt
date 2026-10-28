@@ -337,8 +337,7 @@ fn ensure_protocol_compatible(status: &HostLifecycleStatus) -> Result<(), Server
 fn active_host_error(error: ServerError) -> ServerError {
     match error {
         ServerError::Handshake(yttt_transport_local::HandshakeError::Rejected(
-            yttt_protocol::RejectReason::VersionMismatch { .. }
-            | yttt_protocol::RejectReason::BuildMismatch,
+            yttt_protocol::RejectReason::VersionMismatch { .. },
         )) => ServerError::Busy("the existing Host uses an incompatible protocol".to_string()),
         other => ServerError::Busy(other.to_string()),
     }

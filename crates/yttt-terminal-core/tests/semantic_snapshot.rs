@@ -287,7 +287,7 @@ fn kitty_animation_frame_switches_change_only_the_scene_and_keep_all_frame_asset
     assert!(all_frame_ids.contains(&switched_placement.image_id));
 
     let checkpoint = snapshots
-        .checkpoint(Vec::new(), 0)
+        .checkpoint()
         .expect("latest Kitty scene checkpoints");
     assert_eq!(image_ids(&checkpoint.viewport), all_frame_ids);
     assert_eq!(
@@ -460,7 +460,7 @@ fn geometry_and_alternate_screen_changes_force_resynchronizing_snapshots() {
 }
 
 #[test]
-fn checkpoint_carries_semantic_viewport_and_raw_replay_tail() {
+fn checkpoint_carries_the_semantic_viewport_without_replaying_terminal_queries() {
     let events = EventCollector::default();
     let observed = events.clone();
     let mut terminal = TerminalState::new(8, 2, events);
@@ -468,9 +468,8 @@ fn checkpoint_carries_semantic_viewport_and_raw_replay_tail() {
     terminal.process_bytes(b"hello\x1b[c");
     snapshots.capture(&terminal, &SemanticCaptureContext::running(8, 2, 1));
 
-    let checkpoint = snapshots.checkpoint(b"raw-tail".to_vec(), 7).unwrap();
-    assert_eq!(checkpoint.raw_replay_tail, b"raw-tail");
-    assert_eq!(checkpoint.raw_tail_start_sequence, 7);
+    let checkpoint = snapshots.checkpoint().unwrap();
+    assert!(checkpoint.raw_replay_tail.is_empty());
     assert_eq!(checkpoint.viewport.sequence, 1);
     assert_eq!(
         observed
@@ -536,7 +535,7 @@ fn phone_screenshot_survives_chunked_upload_and_semantic_capture() {
         (882, 1568)
     );
     assert_eq!(viewport.images[0].rgba.len(), 882 * 1568 * 4);
-    let checkpoint = snapshots.checkpoint(Vec::new(), 0).unwrap();
+    let checkpoint = snapshots.checkpoint().unwrap();
     let encoded = yttt_protocol::encode_message(yttt_protocol::FrameKind::Control, &checkpoint)
         .expect("a reconnect checkpoint must carry both full-resolution images");
     let decoded: yttt_protocol::terminal::TerminalCheckpoint =

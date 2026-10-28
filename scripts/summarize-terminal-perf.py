@@ -550,39 +550,20 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
                 failures.append(f"Host queue {name} ended with backlog {current}")
             if high_water >= capacity:
                 failures.append(f"Host queue {name} saturated ({high_water}/{capacity})")
-            dropped = queue.get("dropped")
-            resyncs = queue.get("resyncs")
-            if not all(isinstance(value, int) for value in (dropped, resyncs)):
-                failures.append(f"Host queue {name} is missing drop/resync metrics")
+            if not isinstance(queue.get("dropped"), int):
+                failures.append(f"Host queue {name} is missing drop metrics")
     if backend == "host":
         attachment_queues = [
             queue
             for queue in all_queues(host)
             if queue.get("name") == "attachment_output_bytes"
         ]
-        if cohort == "clients-slow":
-            if len(attachment_queues) < 2:
-                failures.append("slow-client cohort has fewer than two attachment queues")
-            resyncing = [
-                queue
-                for queue in attachment_queues
-                if isinstance(queue.get("resyncs"), int) and queue["resyncs"] > 0
-            ]
-            if len(resyncing) != 1:
-                failures.append(
-                    f"slow-client cohort resynced {len(resyncing)} attachment queues, expected one"
-                )
-            if any(
-                queue not in resyncing
-                and (queue.get("dropped", 0) != 0 or queue.get("resyncs", 0) != 0)
-                for queue in attachment_queues
-            ):
-                failures.append("slow-client cohort affected a live attachment queue")
-        elif any(
-            queue.get("dropped", 0) != 0 or queue.get("resyncs", 0) != 0
-            for queue in attachment_queues
-        ):
-            failures.append("unexpected attachment drop/resync outside slow-client cohort")
+        # A slow client merges frames in its render slot; no attachment queue may
+        # refuse a frame, including the suspended client's.
+        if cohort == "clients-slow" and len(attachment_queues) < 2:
+            failures.append("slow-client cohort has fewer than two attachment queues")
+        if any(queue.get("dropped", 0) != 0 for queue in attachment_queues):
+            failures.append("an attachment queue refused a frame")
 
     sentinel_written = nested(workload, "final_sentinel_written_at_unix_ns")
     sentinel_seen = nested(metrics, "counters", "final_sentinel_seen_at_unix_ns")

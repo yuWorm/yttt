@@ -48,7 +48,6 @@ pub enum ProcessRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExistingHostAction {
     Attach,
-    ReplaceBuild,
     ReplaceProtocol,
     ReplaceLifetime,
     Spawn,
@@ -281,22 +280,11 @@ impl HostLauncher {
             ExistingHostAction::Attach => {
                 return self.attach_existing(token_file, &token).await;
             }
-            action @ (ExistingHostAction::ReplaceBuild
-            | ExistingHostAction::ReplaceProtocol
-            | ExistingHostAction::ReplaceLifetime) => {
+            action
+            @ (ExistingHostAction::ReplaceProtocol | ExistingHostAction::ReplaceLifetime) => {
                 let mut lifecycle = self.connect_lifecycle_with_token(&token, false).await?;
-                let replacement_became_unnecessary = match action {
-                    ExistingHostAction::ReplaceBuild => {
-                        self.live_host_metadata().is_ok_and(|live| {
-                            !host_build_requires_replacement(&self.build, &live.build)
-                        })
-                    }
-                    ExistingHostAction::ReplaceProtocol => {
-                        self.connect_with_token(&token).await.is_ok()
-                    }
-                    ExistingHostAction::ReplaceLifetime => false,
-                    ExistingHostAction::Attach | ExistingHostAction::Spawn => unreachable!(),
-                };
+                let replacement_became_unnecessary = action == ExistingHostAction::ReplaceProtocol
+                    && self.connect_with_token(&token).await.is_ok();
                 if replacement_became_unnecessary {
                     return self.attach_existing(token_file, &token).await;
                 }
@@ -549,20 +537,12 @@ impl HostLauncher {
         let deadline = tokio::time::Instant::now() + HOST_READY_TIMEOUT;
         loop {
             let lock_held = yttt_host::profile_lock_is_held(&self.profile.paths().runtime)?;
-            if lock_held
-                && let Ok(metadata) = self.live_host_metadata()
-                && host_build_requires_replacement(&self.build, &metadata.build)
-            {
-                return Ok(ExistingHostAction::ReplaceBuild);
-            }
             match self.connect_with_token(token).await {
                 Ok(_) => {
                     let metadata = self.live_host_metadata()?;
                     // A successful handshake confirms that this metadata belongs
-                    // to the Host we must attach to or replace.
-                    if host_build_requires_replacement(&self.build, &metadata.build) {
-                        return Ok(ExistingHostAction::ReplaceBuild);
-                    }
+                    // to the Host we must attach to or replace. A different build
+                    // that negotiates the protocol is attached, not replaced.
                     if self.lifetime == yttt_host::HostLifetime::Independent
                         && metadata.lifetime == yttt_host::HostLifetime::DesktopOwned
                     {
@@ -634,17 +614,11 @@ impl HostLauncher {
         ))
     }
 }
-fn host_build_requires_replacement(current: &BuildIdentity, live: &BuildIdentity) -> bool {
-    current.build_fingerprint != live.build_fingerprint
-        || current.resource_compatibility != live.resource_compatibility
-}
-
 fn is_resource_incompatibility(error: &HostLaunchError) -> bool {
     matches!(
         error,
         HostLaunchError::Handshake(yttt_transport_local::HandshakeError::Rejected(
-            yttt_protocol::RejectReason::BuildMismatch
-                | yttt_protocol::RejectReason::VersionMismatch { .. }
+            yttt_protocol::RejectReason::VersionMismatch { .. }
         ))
     )
 }

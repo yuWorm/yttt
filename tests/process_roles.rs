@@ -363,7 +363,7 @@ async fn unreachable_live_host_lock_prevents_duplicate_spawn() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
+async fn previous_build_host_with_the_same_protocol_is_attached_while_busy() {
     let temp = tempdir().unwrap();
     let profile = isolated_profile(temp.path());
     let token = [73; 32];
@@ -415,11 +415,19 @@ async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
         panic!("previous-build Host did not register the project");
     };
 
-    let Err(error) = launcher.launch_or_attach().await else {
-        panic!("a busy previous-build Host must not be replaced");
-    };
-    assert!(matches!(error, HostLaunchError::HostBusy(blockers) if !blockers.is_empty()));
+    let attached = launcher.launch_or_attach().await.unwrap_or_else(|error| {
+        let log = fs::read_to_string(profile.paths().logs.join("host.log")).unwrap_or_default();
+        panic!("attaching the previous-build Host failed: {error}; host.log:\n{log}");
+    });
+    assert!(!attached.spawned());
     assert!(!old_host.is_finished());
+    let live =
+        yttt_host::read_ready_metadata(&profile.paths().runtime.join("host-ready.json")).unwrap();
+    assert_eq!(live.build.build_fingerprint, "previous-build");
+    assert_ne!(
+        launcher.build_identity().build_fingerprint,
+        live.build.build_fingerprint
+    );
 
     assert_eq!(
         client
@@ -434,17 +442,12 @@ async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
     );
     client.shutdown().await;
 
-    let replacement = launcher.launch_or_attach().await.unwrap_or_else(|error| {
-        let log = fs::read_to_string(profile.paths().logs.join("host.log")).unwrap_or_default();
-        panic!("replacement Host failed: {error}; host.log:\n{log}");
-    });
-    assert!(replacement.spawned());
+    attached.drain_and_stop().await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), old_host)
         .await
-        .expect("previous-build Host did not exit after idle replacement")
+        .expect("previous-build Host did not exit after drain")
         .unwrap()
         .unwrap();
-    replacement.drain_and_stop().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

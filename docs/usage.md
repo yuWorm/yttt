@@ -1329,7 +1329,7 @@ Only one history mutation runs at a time. Resume and other mutations are disable
 it runs; completion rescans the selected project, and older scans cannot overwrite its
 result. Failures remain visible separately from scan warnings. Remote operations execute
 on the target Host and require workspace write permission. Desktop, Host, remote Server,
-and CLI must all support resource protocol 21.
+and CLI must all support resource protocol 22, the stable baseline.
 
 ## Agent Status
 

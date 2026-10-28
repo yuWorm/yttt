@@ -112,7 +112,6 @@ pub struct HostReady {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RejectReason {
     VersionMismatch { supported: ProtocolRange },
-    BuildMismatch,
     ProfileMismatch,
     AuthenticationFailed,
     StaleHostEpoch,

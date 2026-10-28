@@ -1,0 +1,1837 @@
+{
+  "AgentAction": {
+    "": [
+      "detail",
+      "id",
+      "name"
+    ]
+  },
+  "AgentAnswerSource": {
+    "board": [],
+    "native": []
+  },
+  "AgentBoardMessage": {
+    "": [
+      "execution_id",
+      "id",
+      "role",
+      "text",
+      "timestamp",
+      "truncated"
+    ]
+  },
+  "AgentBoardSnapshot": {
+    "": [
+      "dropped_messages",
+      "executions",
+      "messages",
+      "questions",
+      "tasks"
+    ]
+  },
+  "AgentCommandRequest": {
+    "": [
+      "command",
+      "host_epoch",
+      "instance_id",
+      "scope"
+    ]
+  },
+  "AgentExecutionRecord": {
+    "": [
+      "current_action",
+      "ended_at",
+      "id",
+      "name",
+      "parent_id",
+      "started_at",
+      "state",
+      "task",
+      "telemetry",
+      "updated_at"
+    ]
+  },
+  "AgentExecutionTelemetry": {
+    "": [
+      "cache_read_tokens",
+      "cache_write_tokens",
+      "context_tokens",
+      "context_window",
+      "cost_microusd",
+      "duration_ms",
+      "input_tokens",
+      "model",
+      "observed_at",
+      "output_tokens",
+      "requests",
+      "self_estimated_completion",
+      "tokens",
+      "tool_calls"
+    ]
+  },
+  "AgentExitReason": {
+    "completed": [],
+    "disconnected": [],
+    "failed": [],
+    "killed_by_user": []
+  },
+  "AgentHookScope": {
+    "": [
+      "generation",
+      "pane_id",
+      "project_id",
+      "tab_id"
+    ]
+  },
+  "AgentMessageRole": {
+    "assistant": [],
+    "user": []
+  },
+  "AgentProcessExit": {
+    "": [
+      "code",
+      "reason"
+    ]
+  },
+  "AgentProcessState": {
+    "exited": [],
+    "registered": [],
+    "running": [],
+    "starting": []
+  },
+  "AgentQuestion": {
+    "": [
+      "header",
+      "id",
+      "multi",
+      "options",
+      "question",
+      "recommended"
+    ]
+  },
+  "AgentQuestionAnswer": {
+    "": [
+      "custom_input",
+      "question_id",
+      "selected_options"
+    ]
+  },
+  "AgentQuestionOption": {
+    "": [
+      "description",
+      "label",
+      "preview"
+    ]
+  },
+  "AgentQuestionRecord": {
+    "": [
+      "answer_source",
+      "answers",
+      "created_at",
+      "request",
+      "state",
+      "updated_at"
+    ]
+  },
+  "AgentQuestionRequest": {
+    "": [
+      "answerable",
+      "execution_id",
+      "id",
+      "questions",
+      "tool_call_id"
+    ]
+  },
+  "AgentQuestionState": {
+    "answered": [],
+    "cancelled": [],
+    "pending": [],
+    "submitted": [],
+    "unavailable": []
+  },
+  "AgentSessionMetadata": {
+    "": [
+      "model",
+      "session_id",
+      "title",
+      "transcript_path"
+    ]
+  },
+  "AgentSessionOperation": {
+    "Delete": [],
+    "Rename": [
+      "title"
+    ]
+  },
+  "AgentSessionSummary": {
+    "": [
+      "id",
+      "model",
+      "provider",
+      "title",
+      "transcript_path",
+      "updated_at_ms"
+    ]
+  },
+  "AgentSnapshot": {
+    "": [
+      "board",
+      "children",
+      "current_action",
+      "generation",
+      "instance_id",
+      "last_action_failed",
+      "process_exit",
+      "process_state",
+      "provider_id",
+      "session",
+      "state_started_at",
+      "task",
+      "turn_state",
+      "updated_at",
+      "waiting_message",
+      "waiting_reason"
+    ]
+  },
+  "AgentSnapshotCursor": {
+    "": [
+      "host_epoch",
+      "scope",
+      "sequence"
+    ]
+  },
+  "AgentSnapshotUpdate": {
+    "": [
+      "host_epoch",
+      "scope",
+      "sequence",
+      "snapshot",
+      "terminal_session_id"
+    ]
+  },
+  "AgentStateRef": {
+    "": [
+      "bytes",
+      "content_sha256",
+      "pane_id",
+      "project_id",
+      "tab_id"
+    ]
+  },
+  "AgentTask": {
+    "": [
+      "source",
+      "title"
+    ]
+  },
+  "AgentTaskSource": {
+    "external": [],
+    "initial_launch_prompt": [],
+    "user_prompt_hook": [],
+    "worktree_launch": []
+  },
+  "AgentTurnState": {
+    "completed": [],
+    "failed": [],
+    "idle": [],
+    "interrupted": [],
+    "unknown": [],
+    "waiting": [],
+    "working": []
+  },
+  "AttachTerminal": {
+    "": [
+      "after_sequence",
+      "geometry",
+      "geometry_epoch",
+      "known_session_epoch",
+      "mode",
+      "palette_revision",
+      "query_palette",
+      "session_id"
+    ]
+  },
+  "BuildIdentity": {
+    "": [
+      "build_fingerprint",
+      "product_version",
+      "resource_compatibility"
+    ]
+  },
+  "ChildAgentSnapshot": {
+    "": [
+      "current_action",
+      "id",
+      "name",
+      "started_at",
+      "task",
+      "turn_state",
+      "updated_at"
+    ]
+  },
+  "ClientAuthenticate": {
+    "": [
+      "client_instance_id",
+      "client_nonce",
+      "host_epoch",
+      "host_nonce",
+      "proof"
+    ]
+  },
+  "ClientHello": {
+    "": [
+      "build",
+      "can_force_stop",
+      "channel",
+      "client_instance_id",
+      "credential_generation",
+      "host_epoch_hint",
+      "nonce",
+      "profile_id",
+      "session_nonce",
+      "supported",
+      "terminal_session_id"
+    ]
+  },
+  "ClientRequest": {
+    "": [
+      "actor_device_id",
+      "body",
+      "control",
+      "lease_epoch",
+      "request_id"
+    ]
+  },
+  "ConnectionChannel": {
+    "Control": [],
+    "DesktopOwner": [],
+    "Lifecycle": [],
+    "StateEvents": [],
+    "TerminalData": [],
+    "TerminalInteractive": []
+  },
+  "ContentRevision": {
+    "": [
+      "content_sha256",
+      "revision_number",
+      "workspace_epoch"
+    ]
+  },
+  "ControlContext": {
+    "": [
+      "control_epoch",
+      "host_epoch"
+    ]
+  },
+  "ControlMessage": {
+    "Event": [],
+    "Request": [],
+    "Response": [],
+    "TerminalInput": []
+  },
+  "ControlStatus": {
+    "": [
+      "context",
+      "owner",
+      "revision",
+      "transfer"
+    ]
+  },
+  "ControlTransfer": {
+    "": [
+      "deadline_millis",
+      "id",
+      "phase",
+      "previous_owner",
+      "requester"
+    ]
+  },
+  "CredentialAnswer": {
+    "Cancelled": [],
+    "HostKey": [],
+    "KeyboardInteractive": [],
+    "Secret": []
+  },
+  "CredentialChallenge": {
+    "": [
+      "attempt",
+      "challenge_id",
+      "connection_id",
+      "kind"
+    ]
+  },
+  "CredentialChallengeKind": {
+    "HostKey": [
+      "algorithm",
+      "fingerprint",
+      "host",
+      "port",
+      "previous_fingerprint"
+    ],
+    "KeyboardInteractive": [
+      "prompts"
+    ],
+    "Passphrase": [
+      "key_path"
+    ],
+    "Password": []
+  },
+  "CursorShape": {
+    "Beam": [],
+    "Block": [],
+    "HollowBlock": [],
+    "Underline": []
+  },
+  "DraftBase": {
+    "File": [
+      "base_fingerprint",
+      "path"
+    ],
+    "Json": [
+      "metadata"
+    ]
+  },
+  "DraftRef": {
+    "": [
+      "base",
+      "bytes",
+      "content_sha256",
+      "document_id",
+      "revision"
+    ]
+  },
+  "DynamicColor": {
+    "": [
+      "blue",
+      "green",
+      "index",
+      "red"
+    ]
+  },
+  "FailureCode": {
+    "AddressConflict": [],
+    "AlreadyExists": [],
+    "AuthenticationFailed": [],
+    "Backpressure": [],
+    "Conflict": [],
+    "HostStopping": [],
+    "Internal": [],
+    "InvalidRequest": [],
+    "NotFound": [],
+    "OutcomeUnknown": [],
+    "PermissionDenied": [],
+    "ResourceLimit": [],
+    "ResyncRequired": [],
+    "StaleEpoch": [],
+    "StaleSequence": [],
+    "TransportClosed": [],
+    "Unsupported": [],
+    "VersionMismatch": []
+  },
+  "HandshakeMessage": {
+    "ClientAuthenticate": [],
+    "ClientHello": [],
+    "HostChallenge": [],
+    "HostReady": [],
+    "Rejected": []
+  },
+  "HostBlocker": {
+    "ConnectedClients": [
+      "count"
+    ],
+    "ExitedTerminalAwaitingAck": [
+      "final_sequence",
+      "session_epoch",
+      "session_id"
+    ],
+    "PendingResourceOperations": [
+      "count"
+    ],
+    "Project": [],
+    "RunningTerminal": [],
+    "SshConnection": []
+  },
+  "HostChallenge": {
+    "": [
+      "build",
+      "client_nonce",
+      "credential_generation",
+      "environment_id",
+      "host_epoch",
+      "host_id",
+      "host_nonce",
+      "profile_id",
+      "proof",
+      "selected_version"
+    ]
+  },
+  "HostEvent": {
+    "": [
+      "body",
+      "host_sequence"
+    ]
+  },
+  "HostKeyDecision": {
+    "AcceptAndStore": [],
+    "AcceptOnce": [],
+    "Reject": []
+  },
+  "HostLifecycleState": {
+    "draining": [],
+    "force_stopping": [],
+    "running": []
+  },
+  "HostLifecycleStatus": {
+    "": [
+      "agent_count",
+      "blockers",
+      "build",
+      "client_count",
+      "lifecycle_protocol",
+      "project_count",
+      "resource_protocol",
+      "ssh_connection_count",
+      "state",
+      "terminal_count"
+    ]
+  },
+  "HostPath": {
+    "": [
+      "segments",
+      "volume"
+    ]
+  },
+  "HostReady": {
+    "": [
+      "connection_sequence",
+      "host_epoch",
+      "host_id",
+      "selected_version"
+    ]
+  },
+  "HostResponse": {
+    "": [
+      "request_id",
+      "result"
+    ]
+  },
+  "LifecycleMessage": {
+    "Request": [],
+    "Response": []
+  },
+  "LifecycleRequest": {
+    "BeginDrain": [],
+    "ForceStop": [],
+    "Probe": [],
+    "Status": [],
+    "StopIfIdle": []
+  },
+  "LifecycleRequestEnvelope": {
+    "": [
+      "body",
+      "request_id"
+    ]
+  },
+  "LifecycleResponse": {
+    "Busy": [
+      "blockers"
+    ],
+    "Draining": [],
+    "PermissionDenied": [],
+    "Pong": [],
+    "Status": [],
+    "Stopping": []
+  },
+  "LifecycleResponseEnvelope": {
+    "": [
+      "request_id",
+      "result"
+    ]
+  },
+  "PathSegmentWire": {
+    "Bytes": [],
+    "Utf8": []
+  },
+  "ProfileControlRequest": {
+    "Cancel": [
+      "transfer_id"
+    ],
+    "ConfirmForce": [
+      "transfer_id"
+    ],
+    "ReacquireIfUnowned": [
+      "context"
+    ],
+    "Ready": [
+      "revisions",
+      "transfer_id"
+    ],
+    "Release": [],
+    "RequestControl": [],
+    "Status": []
+  },
+  "ProjectChange": {
+    "": [
+      "project_id",
+      "refresh_all",
+      "refresh_status",
+      "refresh_tree",
+      "registration_epoch",
+      "relative_paths"
+    ]
+  },
+  "ProjectDirectory": {
+    "": [
+      "entries",
+      "relative_directory"
+    ]
+  },
+  "ProjectEntry": {
+    "": [
+      "kind",
+      "name",
+      "relative_path"
+    ]
+  },
+  "ProjectEntryKind": {
+    "Directory": [],
+    "File": [],
+    "SymlinkDirectory": [],
+    "SymlinkFile": []
+  },
+  "ProjectEntryMutation": {
+    "": [
+      "kind",
+      "relative_path"
+    ]
+  },
+  "ProjectFileChunk": {
+    "": [
+      "bytes",
+      "modified_nanos",
+      "total_bytes"
+    ]
+  },
+  "ProjectFileContent": {
+    "": [
+      "fingerprint",
+      "relative_path",
+      "text"
+    ]
+  },
+  "ProjectFileFingerprint": {
+    "": [
+      "byte_len",
+      "content_hash",
+      "exists",
+      "modified_nanos",
+      "revision"
+    ]
+  },
+  "ProjectFileState": {
+    "Missing": [],
+    "Present": []
+  },
+  "ProjectGitOperation": {
+    "Diff": [
+      "ignore_whitespace",
+      "staged"
+    ],
+    "DiffUntracked": [
+      "ignore_whitespace",
+      "relative_path"
+    ],
+    "Init": [
+      "quiet",
+      "work_tree"
+    ],
+    "ListFiles": [
+      "cached",
+      "exclude_standard",
+      "others"
+    ],
+    "ListRefs": [
+      "reference"
+    ],
+    "Status": [
+      "work_tree"
+    ],
+    "Switch": [
+      "name",
+      "track_remote"
+    ]
+  },
+  "ProjectGitOutput": {
+    "": [
+      "exit_code",
+      "stderr",
+      "stdout",
+      "success"
+    ]
+  },
+  "ProjectPasteMode": {
+    "Copy": [],
+    "Cut": []
+  },
+  "ProjectRelativePath": {
+    "": [
+      "segments"
+    ]
+  },
+  "ProjectRequest": {
+    "Close": [
+      "project_id",
+      "registration_epoch",
+      "view_id"
+    ],
+    "CreateEntry": [
+      "input",
+      "project_id",
+      "relative_parent"
+    ],
+    "DeleteEntry": [
+      "project_id",
+      "relative_path"
+    ],
+    "Git": [
+      "operation",
+      "project_id"
+    ],
+    "Observe": [
+      "project_id",
+      "view_id"
+    ],
+    "PasteEntry": [
+      "destination_project_id",
+      "destination_relative_directory",
+      "mode",
+      "source_project_id",
+      "source_relative_path"
+    ],
+    "ReadFile": [
+      "project_id",
+      "relative_path"
+    ],
+    "ReadFileChunk": [
+      "offset",
+      "project_id",
+      "relative_path"
+    ],
+    "Register": [
+      "project_id",
+      "root",
+      "view_id"
+    ],
+    "RegisterSsh": [
+      "connection_id",
+      "project_id",
+      "root",
+      "view_id"
+    ],
+    "RenameEntry": [
+      "new_name",
+      "project_id",
+      "relative_path"
+    ],
+    "SaveFile": [
+      "mode",
+      "project_id",
+      "relative_path",
+      "text"
+    ],
+    "ScanDirectory": [
+      "project_id",
+      "relative_directory",
+      "show_hidden"
+    ]
+  },
+  "ProjectResponse": {
+    "Closed": [],
+    "Deleted": [],
+    "Directory": [],
+    "File": [],
+    "FileChunk": [],
+    "Git": [],
+    "Mutation": [],
+    "Registered": [
+      "null_device",
+      "registration_epoch",
+      "watch_error"
+    ],
+    "Save": []
+  },
+  "ProjectSaveMode": {
+    "Check": [],
+    "Force": []
+  },
+  "ProjectSaveResult": {
+    "Conflict": [],
+    "Saved": []
+  },
+  "ProjectTokenUsage": {
+    "": [
+      "observed_sources",
+      "partial",
+      "project_id",
+      "reported_sources",
+      "tokens",
+      "updated_at"
+    ]
+  },
+  "ProtocolFailure": {
+    "": [
+      "code",
+      "message",
+      "retryable"
+    ]
+  },
+  "ProtocolRange": {
+    "": [
+      "maximum",
+      "minimum"
+    ]
+  },
+  "ReadTerminalViewport": {
+    "": [
+      "anchor",
+      "scrollback_epoch",
+      "session_epoch",
+      "session_id"
+    ]
+  },
+  "RejectReason": {
+    "AlreadyConnected": [],
+    "AuthenticationFailed": [],
+    "HostShuttingDown": [],
+    "InvalidMessage": [],
+    "PermissionDenied": [],
+    "ProfileMismatch": [],
+    "StaleHostEpoch": [],
+    "VersionMismatch": [
+      "supported"
+    ]
+  },
+  "RemoteAccessRequest": {
+    "DisconnectAll": [],
+    "DisconnectClient": [
+      "client_id"
+    ],
+    "ExportConnectionInfo": [],
+    "ResetCredentials": [],
+    "SetEnabled": [
+      "confirm_non_loopback",
+      "enabled",
+      "listen_address"
+    ],
+    "Status": []
+  },
+  "RemoteAccessResponse": {
+    "ConnectionInfo": [],
+    "Status": []
+  },
+  "RemoteAccessSettings": {
+    "": [
+      "enabled",
+      "listen_address",
+      "login_startup_consent_granted"
+    ]
+  },
+  "RemoteAccessState": {
+    "Disabled": [],
+    "Failed": [],
+    "Listening": [],
+    "Starting": [],
+    "Stopping": []
+  },
+  "RemoteAccessStatus": {
+    "": [
+      "bound_address",
+      "clients",
+      "control",
+      "effective",
+      "error",
+      "settings",
+      "sharing_ready"
+    ]
+  },
+  "RemoteClientSummary": {
+    "": [
+      "client_id",
+      "connected_millis",
+      "streams"
+    ]
+  },
+  "RemoteCommandRequest": {
+    "": [
+      "command",
+      "project_id"
+    ]
+  },
+  "RemoteCommandResponse": {
+    "": [
+      "exit_status",
+      "stderr",
+      "stdout"
+    ]
+  },
+  "RemoteConnectionInfo": {
+    "": [
+      "certificate_der",
+      "certificate_sha256",
+      "credential_generation",
+      "environment_id",
+      "profile_id",
+      "server_name",
+      "work_secret"
+    ]
+  },
+  "RemoteDirectory": {
+    "": [
+      "entries",
+      "relative_directory"
+    ]
+  },
+  "RemoteEntryMutation": {
+    "": [
+      "kind",
+      "relative_path"
+    ]
+  },
+  "RemoteFileContent": {
+    "": [
+      "bytes",
+      "fingerprint",
+      "relative_path"
+    ]
+  },
+  "RemoteFileEntry": {
+    "": [
+      "kind",
+      "name",
+      "relative_path"
+    ]
+  },
+  "RemoteFileFingerprint": {
+    "": [
+      "byte_len",
+      "content_hash",
+      "modified_seconds",
+      "revision"
+    ]
+  },
+  "RemoteFileKind": {
+    "Directory": [],
+    "File": [],
+    "SymlinkDirectory": [],
+    "SymlinkFile": []
+  },
+  "RemoteFileRequest": {
+    "BrowseDirectory": [
+      "connection_id",
+      "relative_directory",
+      "root",
+      "show_hidden"
+    ],
+    "Create": [
+      "directory",
+      "project_id",
+      "relative_path"
+    ],
+    "Delete": [
+      "project_id",
+      "relative_path"
+    ],
+    "Read": [
+      "maximum_bytes",
+      "project_id",
+      "relative_path"
+    ],
+    "ReadChunk": [
+      "offset",
+      "project_id",
+      "relative_path"
+    ],
+    "Rename": [
+      "new_name",
+      "project_id",
+      "relative_path"
+    ],
+    "ResolveHome": [
+      "connection_id"
+    ],
+    "Save": [
+      "bytes",
+      "expected",
+      "force",
+      "maximum_bytes",
+      "project_id",
+      "relative_path"
+    ],
+    "ScanDirectory": [
+      "project_id",
+      "relative_directory",
+      "show_hidden"
+    ]
+  },
+  "RemoteFileResponse": {
+    "Chunk": [],
+    "Deleted": [],
+    "Directory": [],
+    "File": [],
+    "Home": [],
+    "Mutation": [],
+    "Save": []
+  },
+  "RemoteFileState": {
+    "Missing": [],
+    "Present": []
+  },
+  "RemoteHostCommand": {
+    "Git": [
+      "operation"
+    ],
+    "Privileged": [
+      "args",
+      "program"
+    ]
+  },
+  "RemoteSaveResult": {
+    "Conflict": [],
+    "Saved": []
+  },
+  "RemoteTerminalExecutionSpec": {
+    "Command": [
+      "args",
+      "program"
+    ],
+    "Shell": [
+      "command"
+    ]
+  },
+  "Request": {
+    "AcknowledgeTerminalExit": [
+      "final_sequence",
+      "session_epoch",
+      "session_id"
+    ],
+    "AcquireTerminalLease": [
+      "mode",
+      "session_id"
+    ],
+    "AgentCommand": [],
+    "AttachTerminal": [],
+    "CredentialAnswer": [
+      "answer",
+      "challenge_id"
+    ],
+    "DeleteSshCredential": [
+      "credential_id"
+    ],
+    "DetachTerminal": [
+      "session_id"
+    ],
+    "ListResources": [],
+    "Ping": [
+      "sent_millis"
+    ],
+    "ProfileControl": [],
+    "Project": [],
+    "ReadAgentSnapshots": [
+      "acknowledged"
+    ],
+    "ReadDeviceSettings": [],
+    "ReadTerminalViewport": [],
+    "ReleaseTerminalControl": [
+      "session_id"
+    ],
+    "ReleaseTerminalLease": [
+      "session_id"
+    ],
+    "RemoteAccess": [],
+    "RemoteCommand": [],
+    "RemoteFile": [],
+    "RequestCheckpoint": [
+      "after_sequence",
+      "session_id"
+    ],
+    "RequestTerminalControl": [
+      "session_id"
+    ],
+    "ResizeTerminal": [],
+    "ScrollTerminal": [],
+    "SearchTerminal": [],
+    "SetLoginStartupConsent": [
+      "granted"
+    ],
+    "SetTerminalQueryPalette": [],
+    "SetTerminalVisibility": [
+      "revision",
+      "visible"
+    ],
+    "SpawnTerminal": [
+      "expected_host_epoch",
+      "spec",
+      "start_id"
+    ],
+    "SshConnect": [],
+    "SshDisconnect": [
+      "connection_id"
+    ],
+    "TerminalInput": [],
+    "TerminateMany": [
+      "requests"
+    ],
+    "TerminateTerminal": [
+      "host_epoch",
+      "mode",
+      "session_epoch",
+      "session_id"
+    ],
+    "Workspace": []
+  },
+  "ResizeTerminal": {
+    "": [
+      "context",
+      "geometry",
+      "session_id"
+    ]
+  },
+  "ResourceCatalog": {
+    "": [
+      "host_epoch",
+      "host_id",
+      "profile_id",
+      "projects",
+      "revision",
+      "ssh_connections",
+      "terminals"
+    ]
+  },
+  "Response": {
+    "AgentSnapshots": [
+      "has_more",
+      "project_token_usage",
+      "snapshots"
+    ],
+    "Applied": [],
+    "CredentialAccepted": [],
+    "CredentialDeleted": [],
+    "DeviceSettings": [],
+    "Pong": [
+      "host_millis",
+      "sent_millis"
+    ],
+    "ProfileControl": [],
+    "Project": [],
+    "RemoteAccess": [],
+    "RemoteCommand": [],
+    "RemoteFile": [],
+    "Resources": [],
+    "SshConnected": [
+      "connection_id",
+      "epoch"
+    ],
+    "SshDisconnected": [],
+    "TerminalAttached": [
+      "checkpoint",
+      "lease"
+    ],
+    "TerminalCheckpoint": [],
+    "TerminalControlPending": [
+      "holder",
+      "session_id"
+    ],
+    "TerminalDetached": [],
+    "TerminalExitAcknowledged": [],
+    "TerminalInputAccepted": [
+      "client_sequence"
+    ],
+    "TerminalLease": [],
+    "TerminalPaletteAccepted": [
+      "revision"
+    ],
+    "TerminalResized": [
+      "geometry_epoch"
+    ],
+    "TerminalScrolled": [],
+    "TerminalSearch": [],
+    "TerminalSpawned": [
+      "lease",
+      "session_epoch"
+    ],
+    "TerminalTerminated": [],
+    "TerminalViewport": [],
+    "TerminalsTerminated": [
+      "results"
+    ],
+    "Workspace": []
+  },
+  "Result": {
+    "Err": [],
+    "Ok": []
+  },
+  "ScrollTerminal": {
+    "": [
+      "context",
+      "display_offset",
+      "session_id"
+    ]
+  },
+  "SearchTerminal": {
+    "": [
+      "case_sensitive",
+      "generation",
+      "max_results",
+      "query",
+      "scrollback_epoch",
+      "session_epoch",
+      "session_id"
+    ]
+  },
+  "SemanticColor": {
+    "Indexed": [],
+    "Named": [],
+    "Rgb": [
+      "blue",
+      "green",
+      "red"
+    ]
+  },
+  "SemanticCursor": {
+    "": [
+      "blinking",
+      "column",
+      "row",
+      "shape",
+      "visible"
+    ]
+  },
+  "SemanticDelta": {
+    "": [
+      "base_sequence",
+      "changed_rows",
+      "cursor",
+      "display_offset",
+      "geometry_epoch",
+      "history_size",
+      "images",
+      "modes",
+      "palette",
+      "placements",
+      "process_state",
+      "scrollback_epoch",
+      "sequence",
+      "session_epoch",
+      "session_id"
+    ]
+  },
+  "SemanticGraphicCell": {
+    "": [
+      "cell_height",
+      "column",
+      "image_id",
+      "offset_x",
+      "offset_y"
+    ]
+  },
+  "SemanticImagePlacement": {
+    "": [
+      "clip_height",
+      "clip_width",
+      "clip_x",
+      "clip_y",
+      "height",
+      "image_id",
+      "order",
+      "source_height",
+      "source_width",
+      "source_x",
+      "source_y",
+      "width",
+      "x",
+      "y",
+      "z_index"
+    ]
+  },
+  "SemanticRow": {
+    "": [
+      "graphics",
+      "line_id",
+      "spans",
+      "viewport_row"
+    ]
+  },
+  "SemanticSpan": {
+    "": [
+      "hyperlink",
+      "start_column",
+      "style",
+      "text",
+      "width"
+    ]
+  },
+  "SemanticStyle": {
+    "": [
+      "background",
+      "flags",
+      "foreground",
+      "underline_color"
+    ]
+  },
+  "SemanticViewport": {
+    "": [
+      "cursor",
+      "display_offset",
+      "geometry",
+      "geometry_epoch",
+      "history_size",
+      "images",
+      "modes",
+      "palette",
+      "placements",
+      "process_state",
+      "rows",
+      "scrollback_epoch",
+      "sequence",
+      "session_epoch",
+      "session_id"
+    ]
+  },
+  "ServerEvent": {
+    "AgentSnapshot": [],
+    "CredentialChallenge": [],
+    "HostDraining": [],
+    "HostStopping": [],
+    "ProfileControl": [],
+    "ProjectChanged": [],
+    "ProjectTokenUsage": [],
+    "ResourceCatalogChanged": [],
+    "SshCredentialSaved": [
+      "connection_id",
+      "credential",
+      "epoch"
+    ],
+    "SshStateChanged": [],
+    "Terminal": [],
+    "TerminalControlDenied": [
+      "reason",
+      "requester",
+      "session_id"
+    ],
+    "TerminalControlGranted": [
+      "lease"
+    ],
+    "TerminalControlRequested": [
+      "requester",
+      "session_id"
+    ],
+    "TerminalExit": [
+      "code",
+      "final_sequence",
+      "session_epoch",
+      "session_id"
+    ],
+    "TerminalLeaseExpired": [
+      "previous_owner",
+      "session_id"
+    ],
+    "TerminalLeaseReleased": [
+      "previous_owner",
+      "session_id"
+    ],
+    "TerminalLeaseRevoked": [
+      "previous_owner",
+      "session_id"
+    ]
+  },
+  "SetTerminalQueryPalette": {
+    "": [
+      "colors",
+      "context",
+      "revision",
+      "session_id"
+    ]
+  },
+  "SshAuthentication": {
+    "Agent": [],
+    "Auto": [
+      "credential",
+      "identity_file",
+      "passphrase"
+    ],
+    "Password": [
+      "save_as",
+      "secret"
+    ],
+    "PrivateKey": [
+      "passphrase",
+      "path"
+    ],
+    "StoredPassword": []
+  },
+  "SshConnectSpec": {
+    "": [
+      "authentication",
+      "connection_id",
+      "endpoint",
+      "reconnect"
+    ]
+  },
+  "SshConnectionState": {
+    "Authenticating": [],
+    "Connected": [],
+    "Connecting": [],
+    "Disconnected": [],
+    "Failed": [],
+    "Reconnecting": [],
+    "VerifyingHostKey": []
+  },
+  "SshConnectionStatus": {
+    "": [
+      "connection_id",
+      "epoch",
+      "error",
+      "state"
+    ]
+  },
+  "SshEndpoint": {
+    "": [
+      "host",
+      "port",
+      "username"
+    ]
+  },
+  "StoredSshCredential": {
+    "": [
+      "effective_user",
+      "id",
+      "private_key_identity"
+    ]
+  },
+  "TerminalCheckpoint": {
+    "": [
+      "raw_replay_tail",
+      "raw_tail_start_sequence",
+      "viewport"
+    ]
+  },
+  "TerminalControlDeniedReason": {
+    "TimedOut": []
+  },
+  "TerminalExecutionSpec": {
+    "Command": [
+      "args",
+      "program",
+      "return_to_shell",
+      "shell"
+    ],
+    "Shell": [
+      "args",
+      "initial_command",
+      "program"
+    ],
+    "Ssh": [
+      "connection_id",
+      "execution"
+    ]
+  },
+  "TerminalGeometry": {
+    "": [
+      "cell_height",
+      "cell_width",
+      "cols",
+      "rows"
+    ]
+  },
+  "TerminalImage": {
+    "": [
+      "height",
+      "id",
+      "rgba",
+      "width"
+    ]
+  },
+  "TerminalInput": {
+    "": [
+      "bytes",
+      "context",
+      "session_id"
+    ]
+  },
+  "TerminalInteractiveMessage": {
+    "Input": [
+      "control",
+      "input"
+    ],
+    "Request": [],
+    "Response": []
+  },
+  "TerminalLease": {
+    "": [
+      "lease_epoch",
+      "mode",
+      "owner",
+      "session_id"
+    ]
+  },
+  "TerminalLeaseMode": {
+    "Interactive": [],
+    "Observer": []
+  },
+  "TerminalModes": {
+    "": [
+      "bits",
+      "cwd",
+      "title"
+    ]
+  },
+  "TerminalMutationContext": {
+    "": [
+      "client_sequence",
+      "geometry_epoch",
+      "host_epoch",
+      "lease_epoch",
+      "session_epoch"
+    ]
+  },
+  "TerminalPalette": {
+    "": [
+      "colors",
+      "revision"
+    ]
+  },
+  "TerminalPlacement": {
+    "": [
+      "geometry",
+      "geometry_epoch",
+      "last_sequence",
+      "owner",
+      "process_state",
+      "project_id",
+      "session_epoch",
+      "session_id",
+      "spawn_fingerprint"
+    ]
+  },
+  "TerminalProcessState": {
+    "Exited": [
+      "code"
+    ],
+    "Failed": [],
+    "Running": [],
+    "Starting": []
+  },
+  "TerminalSearchMatch": {
+    "": [
+      "end_column",
+      "line_id",
+      "start_column"
+    ]
+  },
+  "TerminalSearchResults": {
+    "": [
+      "generation",
+      "matches",
+      "scrollback_epoch",
+      "session_epoch",
+      "session_id",
+      "truncated"
+    ]
+  },
+  "TerminalSpawnSpec": {
+    "": [
+      "cwd",
+      "environment",
+      "execution",
+      "geometry",
+      "geometry_epoch",
+      "palette_revision",
+      "project_id",
+      "query_palette",
+      "removed_environment",
+      "scrollback_limit",
+      "session_id"
+    ]
+  },
+  "TerminalStreamUpdate": {
+    "Delta": [],
+    "RawTail": [
+      "bytes",
+      "sequence",
+      "session_epoch",
+      "session_id"
+    ],
+    "ResyncRequired": [
+      "available_from_sequence",
+      "session_id"
+    ],
+    "Snapshot": []
+  },
+  "TerminalTerminationResult": {
+    "": [
+      "request_id",
+      "result",
+      "session_id"
+    ]
+  },
+  "TerminalViewportAnchor": {
+    "Bottom": [],
+    "DisplayOffset": [],
+    "LineId": []
+  },
+  "TerminalViewportRead": {
+    "": [
+      "bottom_line_id",
+      "checkpoint_sequence",
+      "unseen_output",
+      "viewport"
+    ]
+  },
+  "TerminateTerminalRequest": {
+    "": [
+      "host_epoch",
+      "request_id",
+      "session_epoch",
+      "session_id"
+    ]
+  },
+  "TerminatedTerminal": {
+    "": [
+      "final_sequence",
+      "session_epoch"
+    ]
+  },
+  "TerminationMode": {
+    "Detach": [],
+    "Terminate": [],
+    "TerminateMany": []
+  },
+  "TransferPhase": {
+    "Fencing": [],
+    "ForceConfirmationRequired": [],
+    "Preparing": []
+  },
+  "WaitingReason": {
+    "approval": [],
+    "external": [],
+    "user_input": []
+  },
+  "WorkspaceConfig": {
+    "": [
+      "bytes",
+      "relative_path",
+      "revision"
+    ]
+  },
+  "WorkspaceConfigRevision": {
+    "": [
+      "content_sha256"
+    ]
+  },
+  "WorkspaceDirectory": {
+    "": [
+      "entries",
+      "path"
+    ]
+  },
+  "WorkspaceDirectoryEntry": {
+    "": [
+      "kind",
+      "name",
+      "path"
+    ]
+  },
+  "WorkspaceDirectoryEntryKind": {
+    "Directory": [],
+    "File": [],
+    "Other": [],
+    "Symlink": [],
+    "SymlinkDirectory": []
+  },
+  "WorkspaceEnvironment": {
+    "": [
+      "config_root",
+      "environment_id",
+      "home",
+      "platform",
+      "project_config",
+      "shell",
+      "shell_candidates",
+      "workspace_history_initialized"
+    ]
+  },
+  "WorkspaceProjectConfigFile": {
+    "layout": [],
+    "settings": []
+  },
+  "WorkspaceRequest": {
+    "AgentSessions": [
+      "project_root",
+      "providers"
+    ],
+    "Browse": [
+      "include_hidden",
+      "path"
+    ],
+    "Commit": [
+      "drafts",
+      "expected_revision",
+      "operation_id",
+      "snapshot",
+      "workspace_id"
+    ],
+    "CreateConfigDirectory": [
+      "relative_directory"
+    ],
+    "DeleteConfig": [
+      "expected_revision",
+      "relative_path"
+    ],
+    "DeleteProjectConfig": [
+      "expected_revision",
+      "file",
+      "project_root"
+    ],
+    "Environment": [],
+    "Forget": [
+      "expected_revision",
+      "workspace_id"
+    ],
+    "GetAgentState": [
+      "reference",
+      "workspace_id"
+    ],
+    "GetDraft": [
+      "reference",
+      "workspace_id"
+    ],
+    "InstallAgentHooks": [],
+    "List": [],
+    "ListConfig": [
+      "relative_directory"
+    ],
+    "MutateAgentSession": [
+      "operation",
+      "project_root",
+      "provider",
+      "session_id"
+    ],
+    "OmpSessionExists": [
+      "session_id"
+    ],
+    "Open": [
+      "workspace_id"
+    ],
+    "OpenExisting": [
+      "workspace_id"
+    ],
+    "PutAgentState": [
+      "content",
+      "reference",
+      "workspace_id"
+    ],
+    "PutDraft": [
+      "content",
+      "reference",
+      "workspace_id"
+    ],
+    "ReadConfig": [
+      "relative_path"
+    ],
+    "ReadProjectConfig": [
+      "file",
+      "project_root"
+    ],
+    "Register": [
+      "name",
+      "workspace_id"
+    ],
+    "RemoveConfigDirectory": [
+      "relative_directory"
+    ],
+    "RenameConfigDirectory": [
+      "relative_from",
+      "relative_to"
+    ],
+    "SetRestoreOnStartup": [
+      "expected_revision",
+      "restore",
+      "workspace_id"
+    ],
+    "WriteConfig": [
+      "bytes",
+      "expected_revision",
+      "relative_path"
+    ],
+    "WriteProjectConfig": [
+      "bytes",
+      "expected_revision",
+      "file",
+      "project_root"
+    ]
+  },
+  "WorkspaceResponse": {
+    "AgentHooksInstalled": [],
+    "AgentSessionMutated": [],
+    "AgentSessions": [
+      "sessions",
+      "warnings"
+    ],
+    "AgentState": [
+      "content",
+      "reference"
+    ],
+    "AgentStateStored": [
+      "reference"
+    ],
+    "Committed": [
+      "revision",
+      "snapshot",
+      "workspace_id"
+    ],
+    "Config": [],
+    "ConfigDeleted": [],
+    "ConfigDirectory": [],
+    "ConfigDirectoryCreated": [],
+    "ConfigDirectoryRenamed": [],
+    "ConfigWritten": [
+      "relative_path",
+      "revision"
+    ],
+    "Directory": [],
+    "Draft": [
+      "content",
+      "reference"
+    ],
+    "DraftStored": [
+      "reference"
+    ],
+    "Environment": [],
+    "Forgotten": [
+      "workspace_id"
+    ],
+    "OmpSessionExists": [],
+    "Opened": [
+      "drafts",
+      "revision",
+      "snapshot"
+    ],
+    "Registered": [],
+    "Workspaces": []
+  },
+  "WorkspaceRevision": {
+    "": [
+      "revision",
+      "workspace_id"
+    ]
+  },
+  "WorkspaceSummary": {
+    "": [
+      "name",
+      "restore_on_startup",
+      "revision",
+      "saved_millis",
+      "workspace_id"
+    ]
+  }
+}

@@ -16,8 +16,9 @@ pub mod terminal;
 pub mod workspace;
 
 pub use codec::{
-    DecodedFrame, FrameHeader, FrameKind, ProtocolCodecError, decode_frame, decode_header,
-    decode_message, encode_frame, encode_message, read_frame, write_frame,
+    DecodedFrame, FrameHeader, FrameKind, ProtocolCodecError, Unrecognized, decode_control_message,
+    decode_frame, decode_header, decode_host_event, decode_message,
+    decode_terminal_interactive_message, encode_frame, encode_message, read_frame, write_frame,
 };
 pub use control::{
     Capability, ClientRequest, ControlMessage, FailureCode, HostBlocker, HostEvent, HostResponse,
@@ -44,7 +45,7 @@ pub use project::{
 
 pub const PROTOCOL_MAGIC: [u8; 4] = *b"YTTT";
 pub const FRAME_FORMAT_VERSION: u16 = 1;
-pub const RESOURCE_PROTOCOL_VERSION: u16 = 21;
+pub const RESOURCE_PROTOCOL_VERSION: u16 = 22;
 pub const LIFECYCLE_PROTOCOL_VERSION: u16 = 3;
 pub const DESKTOP_SHELL_PROTOCOL_VERSION: u16 = 5;
 pub const MAX_DESKTOP_SHELL_FRAME_BYTES: usize = 16 * 1024 * 1024;

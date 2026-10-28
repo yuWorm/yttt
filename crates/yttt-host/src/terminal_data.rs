@@ -12,7 +12,6 @@ use tokio::{
     sync::{Notify, watch},
     task::JoinHandle,
 };
-use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
     ControlMessage, FrameKind, HostEvent, ProtocolCodecError, ServerEvent, encode_message,
     terminal::TerminalStreamUpdate,
@@ -54,37 +53,16 @@ impl SharedTerminalUpdate {
         Ok(frame)
     }
 
-    fn session_id(&self) -> &TerminalSessionId {
-        update_session_id(&self.update)
-    }
-
-    fn sequence(&self) -> u64 {
-        update_sequence(&self.update)
-    }
-
     pub fn update(&self) -> &TerminalStreamUpdate {
         &self.update
     }
 }
 
-struct OutputFrame {
-    bytes: Arc<[u8]>,
-    is_resync: bool,
-}
-
-struct PendingResync {
-    host_sequence: u64,
-    session_id: TerminalSessionId,
-    available_from_sequence: u64,
-}
-
 #[derive(Default)]
 struct OutputState {
-    frames: VecDeque<OutputFrame>,
+    frames: VecDeque<Arc<[u8]>>,
     bytes_in_use: usize,
     in_flight_bytes: usize,
-    resync_pending: bool,
-    pending_resync: Option<PendingResync>,
     closed: bool,
 }
 
@@ -92,6 +70,17 @@ struct AttachmentOutputQueue {
     state: Mutex<OutputState>,
     ready: Notify,
     diagnostics: Arc<QueueDiagnostics>,
+}
+
+/// The queue refused a frame: it would exceed the attachment budget, or the
+/// connection is closing. The stream cannot continue from the sent baseline.
+#[derive(Debug)]
+pub(crate) struct FrameRejected;
+
+impl From<ProtocolCodecError> for FrameRejected {
+    fn from(_: ProtocolCodecError) -> Self {
+        Self
+    }
 }
 
 impl AttachmentOutputQueue {
@@ -111,123 +100,51 @@ impl AttachmentOutputQueue {
         })
     }
 
-    async fn enqueue_paced(
-        &self,
-        host_sequence: u64,
-        update: TerminalStreamUpdate,
-    ) -> Result<(), ProtocolCodecError> {
-        let session_id = update_session_id(&update).clone();
-        let available_from_sequence = update_sequence(&update);
-        let is_resync = matches!(update, TerminalStreamUpdate::ResyncRequired { .. });
-        let message = terminal_message(host_sequence, update);
-        let frame = Arc::<[u8]>::from(encode_message(FrameKind::Control, &message)?);
-        // Images can exceed the normal text backlog budget. Admit one such
-        // frame only after the queue (including its in-flight write) drains.
-        // encode_message has already enforced the hard wire frame limit.
-        let budget = MAX_ATTACHMENT_OUTPUT_BYTES.max(frame.len());
-        loop {
-            let notified = self.ready.notified();
-            {
-                let state = self.state.lock();
-                if state.closed {
-                    return Ok(());
-                }
-                if !state.resync_pending && frame.len() <= budget.saturating_sub(state.bytes_in_use)
-                {
-                    drop(state);
-                    self.enqueue_frame(
-                        host_sequence,
-                        session_id,
-                        available_from_sequence,
-                        is_resync,
-                        frame,
-                    );
-                    return Ok(());
-                }
-            }
-            notified.await;
-        }
-    }
-
     fn enqueue(
         &self,
         host_sequence: u64,
         update: TerminalStreamUpdate,
-    ) -> Result<(), ProtocolCodecError> {
-        let session_id = update_session_id(&update).clone();
-        let available_from_sequence = update_sequence(&update);
-        let is_resync = matches!(update, TerminalStreamUpdate::ResyncRequired { .. });
+    ) -> Result<(), FrameRejected> {
         let message = terminal_message(host_sequence, update);
         let frame = Arc::<[u8]>::from(encode_message(FrameKind::Control, &message)?);
-        self.enqueue_frame(
-            host_sequence,
-            session_id,
-            available_from_sequence,
-            is_resync,
-            frame,
-        );
-        Ok(())
+        self.enqueue_frame(frame)
     }
 
     fn enqueue_shared(
         &self,
         host_sequence: &AtomicU64,
         update: &SharedTerminalUpdate,
-    ) -> Result<(), ProtocolCodecError> {
+    ) -> Result<(), FrameRejected> {
         let frame = update.encoded(host_sequence)?;
-        self.enqueue_frame(
-            update.sequence(),
-            update.session_id().clone(),
-            update.sequence(),
-            false,
-            frame,
-        );
-        Ok(())
+        self.enqueue_frame(frame)
     }
 
-    fn enqueue_frame(
-        &self,
-        host_sequence: u64,
-        session_id: TerminalSessionId,
-        available_from_sequence: u64,
-        is_resync: bool,
-        frame: Arc<[u8]>,
-    ) {
+    /// Admits a frame while the queue stays within its byte budget. A frame
+    /// larger than the budget (images) is admitted only into an empty queue;
+    /// `encode_message` already enforced the hard wire frame limit.
+    fn enqueue_frame(&self, frame: Arc<[u8]>) -> Result<(), FrameRejected> {
         let mut state = self.state.lock();
-        if state.closed || state.resync_pending {
-            return;
+        if state.closed {
+            return Err(FrameRejected);
         }
         let budget = MAX_ATTACHMENT_OUTPUT_BYTES.max(frame.len());
-        if frame.len() <= budget.saturating_sub(state.bytes_in_use) {
-            state.bytes_in_use = state.bytes_in_use.saturating_add(frame.len());
-            state.resync_pending = is_resync;
-            state.frames.push_back(OutputFrame {
-                bytes: frame,
-                is_resync,
-            });
-            self.diagnostics.observe(state.bytes_in_use);
-            drop(state);
-            self.ready.notify_one();
-            return;
+        if frame.len() > budget.saturating_sub(state.bytes_in_use) {
+            self.diagnostics.dropped();
+            return Err(FrameRejected);
         }
-
-        while let Some(frame) = state.frames.pop_front() {
-            state.bytes_in_use = state.bytes_in_use.saturating_sub(frame.bytes.len());
-        }
-        self.diagnostics.dropped();
-        self.diagnostics.resync();
-        state.resync_pending = true;
-        state.pending_resync = Some(PendingResync {
-            host_sequence,
-            session_id,
-            available_from_sequence,
-        });
+        state.bytes_in_use = state.bytes_in_use.saturating_add(frame.len());
+        state.frames.push_back(frame);
         self.diagnostics.observe(state.bytes_in_use);
         drop(state);
         self.ready.notify_one();
+        Ok(())
     }
 
-    async fn next_frame(&self) -> Option<OutputFrame> {
+    fn is_idle(&self) -> bool {
+        self.state.lock().bytes_in_use == 0
+    }
+
+    async fn next_frame(&self) -> Option<Arc<[u8]>> {
         loop {
             let notified = self.ready.notified();
             {
@@ -236,45 +153,18 @@ impl AttachmentOutputQueue {
                     return None;
                 }
                 if let Some(frame) = state.frames.pop_front() {
-                    state.in_flight_bytes = frame.bytes.len();
-                    return Some(frame);
-                }
-                if state.in_flight_bytes == 0
-                    && let Some(pending) = state.pending_resync.take()
-                {
-                    let message = terminal_message(
-                        pending.host_sequence,
-                        TerminalStreamUpdate::ResyncRequired {
-                            session_id: pending.session_id,
-                            available_from_sequence: pending.available_from_sequence,
-                        },
-                    );
-                    let frame =
-                        Arc::<[u8]>::from(encode_message(FrameKind::Control, &message).ok()?);
-                    if frame.len() > MAX_ATTACHMENT_OUTPUT_BYTES {
-                        state.closed = true;
-                        return None;
-                    }
-                    state.bytes_in_use = state.bytes_in_use.saturating_add(frame.len());
                     state.in_flight_bytes = frame.len();
-                    self.diagnostics.observe(state.bytes_in_use);
-                    return Some(OutputFrame {
-                        bytes: frame,
-                        is_resync: true,
-                    });
+                    return Some(frame);
                 }
             }
             notified.await;
         }
     }
 
-    fn complete(&self, bytes: usize, is_resync: bool) {
+    fn complete(&self) {
         let mut state = self.state.lock();
-        state.bytes_in_use = state.bytes_in_use.saturating_sub(bytes);
+        state.bytes_in_use = state.bytes_in_use.saturating_sub(state.in_flight_bytes);
         state.in_flight_bytes = 0;
-        if is_resync {
-            state.resync_pending = false;
-        }
         self.diagnostics.observe(state.bytes_in_use);
         drop(state);
         self.ready.notify_waiters();
@@ -288,7 +178,7 @@ impl AttachmentOutputQueue {
                 if state.closed {
                     return Err(());
                 }
-                if state.bytes_in_use == 0 && state.pending_resync.is_none() {
+                if state.bytes_in_use == 0 {
                     return Ok(());
                 }
             }
@@ -300,7 +190,6 @@ impl AttachmentOutputQueue {
         let mut state = self.state.lock();
         state.closed = true;
         state.frames.clear();
-        state.pending_resync = None;
         state.bytes_in_use = 0;
         state.in_flight_bytes = 0;
         self.diagnostics.observe(0);
@@ -324,11 +213,9 @@ impl TerminalDataWriter {
         let task = tokio::spawn(async move {
             let write = async {
                 while let Some(frame) = writer_queue.next_frame().await {
-                    let bytes = frame.bytes.len();
                     let write_started_at = std::time::Instant::now();
-                    let is_resync = frame.is_resync;
-                    let result = yttt_transport::send_frame(&mut writer, &frame.bytes).await;
-                    writer_queue.complete(bytes, is_resync);
+                    let result = yttt_transport::send_frame(&mut writer, &frame).await;
+                    writer_queue.complete();
                     writer_queue
                         .diagnostics
                         .record_service(write_started_at.elapsed());
@@ -357,27 +244,22 @@ impl TerminalDataWriter {
         &self,
         host_sequence: &AtomicU64,
         update: TerminalStreamUpdate,
-    ) -> Result<(), ProtocolCodecError> {
+    ) -> Result<(), FrameRejected> {
         self.queue
             .enqueue(host_sequence.fetch_add(1, Ordering::Relaxed), update)
-    }
-
-    pub(crate) async fn enqueue_paced(
-        &self,
-        host_sequence: &AtomicU64,
-        update: TerminalStreamUpdate,
-    ) -> Result<(), ProtocolCodecError> {
-        self.queue
-            .enqueue_paced(host_sequence.fetch_add(1, Ordering::Relaxed), update)
-            .await
     }
 
     pub(crate) fn enqueue_shared(
         &self,
         host_sequence: &AtomicU64,
         update: &SharedTerminalUpdate,
-    ) -> Result<(), ProtocolCodecError> {
+    ) -> Result<(), FrameRejected> {
         self.queue.enqueue_shared(host_sequence, update)
+    }
+
+    /// No frame is queued or being written.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.queue.is_idle()
     }
 
     pub(crate) fn subscribe_failure(&self) -> watch::Receiver<bool> {
@@ -403,68 +285,55 @@ fn terminal_message(host_sequence: u64, update: TerminalStreamUpdate) -> Control
     })
 }
 
-fn update_session_id(update: &TerminalStreamUpdate) -> &TerminalSessionId {
-    match update {
-        TerminalStreamUpdate::Snapshot(viewport) => &viewport.session_id,
-        TerminalStreamUpdate::Delta(delta) => &delta.session_id,
-        TerminalStreamUpdate::RawTail { session_id, .. }
-        | TerminalStreamUpdate::ResyncRequired { session_id, .. } => session_id,
-    }
-}
-
-fn update_sequence(update: &TerminalStreamUpdate) -> u64 {
-    match update {
-        TerminalStreamUpdate::Snapshot(viewport) => viewport.sequence,
-        TerminalStreamUpdate::Delta(delta) => delta.sequence,
-        TerminalStreamUpdate::RawTail { sequence, .. } => *sequence,
-        TerminalStreamUpdate::ResyncRequired {
-            available_from_sequence,
-            ..
-        } => *available_from_sequence,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yttt_core::model::ids::TerminalSessionId;
     use yttt_protocol::{decode_frame, decode_message};
 
-    #[tokio::test]
-    async fn overflow_drops_only_this_queue_and_emits_one_resync() {
-        let queue = AttachmentOutputQueue::new();
-        let session_id = TerminalSessionId::new("overflow");
-        let update = |sequence| TerminalStreamUpdate::RawTail {
-            session_id: session_id.clone(),
+    fn raw(sequence: u64, bytes: usize) -> TerminalStreamUpdate {
+        TerminalStreamUpdate::RawTail {
+            session_id: TerminalSessionId::new("budget"),
             session_epoch: 1,
             sequence,
-            bytes: vec![b'x'; 300 * 1024],
-        };
-        queue.enqueue(1, update(1)).unwrap();
-        queue.enqueue(2, update(2)).unwrap();
-        queue.enqueue(3, update(3)).unwrap();
+            bytes: vec![b'x'; bytes],
+        }
+    }
+
+    #[tokio::test]
+    async fn over_budget_frames_are_refused_without_dropping_queued_frames() {
+        let queue = AttachmentOutputQueue::new();
+        queue.enqueue(1, raw(1, 300 * 1024)).unwrap();
+        assert!(queue.enqueue(2, raw(2, 300 * 1024)).is_err());
+        assert_eq!(queue.state.lock().frames.len(), 1);
+        assert_eq!(queue.diagnostics.snapshot().dropped, 1);
 
         let frame = queue.next_frame().await.unwrap();
-        assert!(frame.bytes.len() <= MAX_ATTACHMENT_OUTPUT_BYTES);
-        let decoded = decode_frame(&frame.bytes).unwrap();
+        assert!(!queue.is_idle(), "an in-flight frame keeps the queue busy");
+        let decoded = decode_frame(&frame).unwrap();
         let message: ControlMessage = decode_message(&decoded).unwrap();
         assert!(matches!(
             message,
             ControlMessage::Event(HostEvent {
-                body: ServerEvent::Terminal(TerminalStreamUpdate::ResyncRequired {
-                    session_id: received,
-                    available_from_sequence: 2,
-                }),
+                body: ServerEvent::Terminal(TerminalStreamUpdate::RawTail { sequence: 1, .. }),
                 ..
-            }) if received == session_id
+            })
         ));
-        let bytes = frame.bytes.len();
-        queue.complete(bytes, frame.is_resync);
-        assert!(queue.state.lock().frames.is_empty());
-        assert_eq!(queue.state.lock().bytes_in_use, 0);
-        let diagnostics = queue.diagnostics.snapshot();
-        assert_eq!(diagnostics.dropped, 1);
-        assert_eq!(diagnostics.resyncs, 1);
-        assert_eq!(diagnostics.current, 0);
+        queue.complete();
+        assert!(queue.is_idle());
+        assert_eq!(queue.diagnostics.snapshot().current, 0);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_frame_is_admitted_only_into_an_empty_queue() {
+        let queue = AttachmentOutputQueue::new();
+        queue.enqueue(1, raw(1, 16)).unwrap();
+        let oversized = MAX_ATTACHMENT_OUTPUT_BYTES + 1024;
+        assert!(queue.enqueue(2, raw(2, oversized)).is_err());
+        let _ = queue.next_frame().await.unwrap();
+        queue.complete();
+        queue.enqueue(3, raw(3, oversized)).unwrap();
+        assert!(!queue.is_idle());
     }
 
     #[tokio::test]
@@ -487,7 +356,7 @@ mod tests {
 
         let first_frame = first.next_frame().await.unwrap();
         let second_frame = second.next_frame().await.unwrap();
-        assert!(Arc::ptr_eq(&first_frame.bytes, &second_frame.bytes));
+        assert!(Arc::ptr_eq(&first_frame, &second_frame));
         assert_eq!(encode_count.load(Ordering::Acquire), 1);
         assert_eq!(host_sequence.load(Ordering::Acquire), 12);
     }

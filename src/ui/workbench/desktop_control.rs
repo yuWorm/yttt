@@ -243,41 +243,46 @@ impl WorkbenchView {
             }
             let mut target = self.control_target(request, window_id)?;
             if matches!(request.command, DesktopControlCommand::Read) {
-                let key = terminal_pane_key(
+                let session_id = TerminalSessionId::new(terminal_pane_key(
                     &target.project,
                     &target.tab,
                     target.pane.as_deref().unwrap_or_default(),
-                );
-                let viewport = self
-                    .terminal
-                    .host_runtime
-                    .as_ref()
-                    .and_then(|runtime| runtime.terminal_snapshot(&TerminalSessionId::new(key)))
-                    .ok_or_else(|| {
-                        control_error(
+                ));
+                let runtime = self.terminal.host_runtime.clone().ok_or_else(|| {
+                    control_error(
+                        DesktopControlErrorCode::NotReady,
+                        "No live terminal viewport is available",
+                    )
+                })?;
+                // Hidden panes stream no frames, so the local mirror may lag;
+                // read the Host's current view instead.
+                let checkpoint = runtime.request(yttt_protocol::Request::RequestCheckpoint {
+                    session_id,
+                    after_sequence: None,
+                });
+                let reply = reply.clone();
+                let target = target.clone();
+                cx.spawn(async move |_, _| {
+                    let result = match checkpoint.recv_async().await {
+                        Ok(Ok(yttt_protocol::Response::TerminalCheckpoint(checkpoint))) => {
+                            Ok(DesktopControlResponse::Text {
+                                target,
+                                text: viewport_plain_text(&checkpoint.viewport),
+                            })
+                        }
+                        Ok(Ok(_)) => Err(control_error(
+                            DesktopControlErrorCode::Failed,
+                            "Host returned an unexpected terminal checkpoint response",
+                        )),
+                        Ok(Err(_)) | Err(_) => Err(control_error(
                             DesktopControlErrorCode::NotReady,
                             "No live terminal viewport is available",
-                        )
-                    })?;
-                let text = viewport
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        let mut line = String::new();
-                        let mut column = 0;
-                        for span in &row.spans {
-                            line.extend(std::iter::repeat_n(
-                                ' ',
-                                usize::from(span.start_column.saturating_sub(column)),
-                            ));
-                            line.push_str(&span.text);
-                            column = span.start_column.saturating_add(span.width);
-                        }
-                        line.trim_end().to_string()
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Ok(Some(DesktopControlResponse::Text { target, text }));
+                        )),
+                    };
+                    let _ = reply.send(result);
+                })
+                .detach();
+                return Ok(None);
             }
             if self.workspace_is_loading() {
                 return Err(control_error(
@@ -621,6 +626,27 @@ impl WorkbenchView {
             .map(|pane| pane.read(cx).control_state())
             .unwrap_or_else(|| "pending".into())
     }
+}
+
+fn viewport_plain_text(viewport: &yttt_protocol::terminal::SemanticViewport) -> String {
+    viewport
+        .rows
+        .iter()
+        .map(|row| {
+            let mut line = String::new();
+            let mut column = 0;
+            for span in &row.spans {
+                line.extend(std::iter::repeat_n(
+                    ' ',
+                    usize::from(span.start_column.saturating_sub(column)),
+                ));
+                line.push_str(&span.text);
+                column = span.start_column.saturating_add(span.width);
+            }
+            line.trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
