@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划,不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试,再做最小实现;只有验收条件实际通过后才能勾选。
 
-**状态:** C1、C2 完成;C3–C4 未开始。
+**状态:** C1、C2、C3 完成;C4 未开始。
 
 **依据:** [`2026-10-28-cs-convergence-analysis.md`](./2026-10-28-cs-convergence-analysis.md)(对照 herdr 的根因分析)、`docs/host-client-architecture.md`、`docs/wire-evolution.md`。
 
@@ -89,6 +89,8 @@
 - 慢请求并发执行,大响应分块。
 - **完成标志:** 删除 terminal-interactive、state-events、terminal-data 独立连接及其各自的 epoch 校验与重连状态机;0.3.16 引入的乱序栅栏由队列顺序取代并删除。
 
+**C3 删除项:** `ConnectionChannel::{Control, TerminalInteractive, StateEvents, TerminalData}`、`TerminalInteractiveMessage` 及其收发函数;Host 的 interactive/state-event/terminal-data 独立连接入口、每终端 512 KiB `TerminalDataWriter`、`SessionBinding.connections`/`control_connected`;ClientCore 的 `SessionLanes`、跨连接 epoch 重试、每终端 data worker 与 generation 栅栏、`deferred_exits`、`data_lane_resets`。实际做法与计划原文的差异(不加帧头通道 id、慢请求并发未做)及验收数据见 [`2026-10-28-c3-single-connection-design.md`](./2026-10-28-c3-single-connection-design.md)。
+
 # C4:布局归 Host
 
 **前置:** 单独设计文档并评审。
@@ -107,3 +109,4 @@
 | 2026-10-28 | 分析与计划 | 落盘本计划与分析文档 |
 | 2026-10-28 | C1 | 协议/传输/Host/launcher 落地;protocol、transport、transport-local、host、client-core、server 套件与 `process_roles`、`desktop_tray_lifecycle` 通过;真实二进制冒烟:不同 build 的 `--start-host` 复用同一 Host pid |
 | 2026-10-28 | C2 | 发送基线/渲染槽/可见性上报落地;workspace 测试除 `desktop_tray_lifecycle` 外全部通过(该套件在 `cargo test` 下 Host 8 s 未就绪,改造前 worktree 同样失败,直接执行测试二进制通过);流量探针:observer 全部隐藏时输出期间 0 字节,重新可见一次 50 KB;真实桌面冒烟:隐藏的高输出终端 PTY 吞吐约 2.3 倍,桌面 CPU 4–5% → 1–2% |
+| 2026-10-28 | C3 | 单 Session 连接 + 三级写端调度 + 大消息分块落地;workspace 测试除 `gpui-component` 的 `drag_inside_dialog_still_selects_its_text`(vendor,单独重跑通过)与 `desktop_tray_lifecycle`(同 C2,直接执行测试二进制通过)外全部通过;探针帧率、字节/帧、输入延迟与 C2 持平;真实桌面冒烟:每 Client 一条 Session 连接,退出桌面后 Host 约 300 ms 退出 |

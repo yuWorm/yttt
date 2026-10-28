@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 hmac = "0.12"
+parking_lot = "0.12"
 rand = "0.8"
 sha2 = "0.10"
 serde = "1"

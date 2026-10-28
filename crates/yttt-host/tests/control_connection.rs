@@ -14,7 +14,7 @@ use yttt_protocol::{
     BuildIdentity, ClientRequest, ConnectionChannel, ControlMessage, FailureCode, FrameKind,
     HostBlocker, HostResponse, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest,
     LifecycleRequestEnvelope, LifecycleResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request,
-    Response, ServerEvent, TerminalInteractiveMessage, encode_message,
+    Response, ServerEvent, encode_message,
     session::{ControlContext, ControlStatus, ProfileControlRequest, TransferPhase},
     workspace::{
         WorkspaceOperationId, WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse,
@@ -24,8 +24,7 @@ use yttt_protocol::{
 use yttt_transport::{
     AuthToken, ClientIdentity, MemoryConnector, TransportConnector as _, TransportStream,
     client_handshake, memory_pair, new_session_nonce, receive_control, receive_lifecycle,
-    receive_state_event, receive_terminal_interactive, send_control, send_frame, send_lifecycle,
-    send_terminal_interactive,
+    send_control, send_frame, send_lifecycle,
 };
 
 struct RunningHost {
@@ -89,32 +88,47 @@ impl RunningHost {
     }
 
     async fn control_client(&self, id: &str) -> TransportStream {
-        self.client(id, ConnectionChannel::Control, RESOURCE_PROTOCOL_VERSION)
-            .await
+        self.session_client(id, new_session_nonce()).await
     }
 
-    async fn state_event_client(&self, id: &str) -> TransportStream {
+    async fn session_client(
+        &self,
+        id: &str,
+        session_nonce: yttt_protocol::Nonce,
+    ) -> TransportStream {
         self.client(
             id,
-            ConnectionChannel::StateEvents,
+            ConnectionChannel::Session,
             RESOURCE_PROTOCOL_VERSION,
+            session_nonce,
         )
         .await
     }
 
     async fn lifecycle_client(&self, id: &str) -> TransportStream {
-        self.client(id, ConnectionChannel::Lifecycle, LIFECYCLE_PROTOCOL_VERSION)
-            .await
+        self.client(
+            id,
+            ConnectionChannel::Lifecycle,
+            LIFECYCLE_PROTOCOL_VERSION,
+            new_session_nonce(),
+        )
+        .await
     }
 
-    async fn client(&self, id: &str, channel: ConnectionChannel, protocol: u16) -> TransportStream {
+    async fn client(
+        &self,
+        id: &str,
+        channel: ConnectionChannel,
+        protocol: u16,
+        session_nonce: yttt_protocol::Nonce,
+    ) -> TransportStream {
         let mut stream = self.connector.connect().await.unwrap();
         client_handshake(
             &mut stream,
             &ClientIdentity {
                 expected_environment: None,
                 credential_generation: 0,
-                session_nonce: new_session_nonce(),
+                session_nonce,
                 supported: ProtocolRange::exact(protocol),
                 build: self.bootstrap.build.clone(),
                 profile_id: self.bootstrap.profile_id.clone(),
@@ -122,7 +136,6 @@ impl RunningHost {
                 host_epoch_hint: None,
                 can_force_stop: false,
                 channel,
-                terminal_session_id: None,
             },
             &AuthToken::from_bytes(self.token),
         )
@@ -130,6 +143,55 @@ impl RunningHost {
         .unwrap();
         stream
     }
+}
+
+async fn ping(stream: &mut TransportStream, request_id: u64) -> bool {
+    if send_control(
+        stream,
+        &ControlMessage::Request(ClientRequest::new(
+            request_id,
+            Request::Ping { sent_millis: 0 },
+        )),
+    )
+    .await
+    .is_err()
+    {
+        return false;
+    }
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), receive_control(stream)).await {
+            Ok(Ok(ControlMessage::Response(response))) if response.request_id == request_id => {
+                return matches!(response.result, Ok(Response::Pong { .. }));
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => return false,
+            Err(_) => panic!("a Session connection neither answered nor closed"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_session_connection_replaces_its_predecessor_and_refuses_another_session() {
+    let host = RunningHost::start().await;
+    let nonce = new_session_nonce();
+    let mut first = host.session_client("one-connection", nonce).await;
+    assert!(ping(&mut first, 1).await);
+
+    let mut second = host.session_client("one-connection", nonce).await;
+    assert!(ping(&mut second, 2).await);
+    assert!(
+        !ping(&mut first, 3).await,
+        "the replaced connection must be closed"
+    );
+
+    let mut foreign = host
+        .session_client("one-connection", new_session_nonce())
+        .await;
+    assert!(
+        !ping(&mut foreign, 4).await,
+        "a different authenticated session cannot take over the Client"
+    );
+    assert!(ping(&mut second, 5).await);
 }
 
 async fn control_request(
@@ -171,8 +233,9 @@ async fn profile_request(
 
 async fn next_profile_event(stream: &mut TransportStream) -> ControlStatus {
     loop {
-        let event = receive_state_event(stream).await.unwrap();
-        if let ServerEvent::ProfileControl(status) = event.body {
+        if let ControlMessage::Event(event) = receive_control(stream).await.unwrap()
+            && let ServerEvent::ProfileControl(status) = event.body
+        {
             return status;
         }
     }
@@ -317,7 +380,7 @@ async fn preparation_deadline_emits_force_confirmation_without_status_polling() 
     )
     .await;
 
-    let mut events = host.state_event_client("observer").await;
+    let mut events = host.control_client("observer").await;
     assert_eq!(
         next_profile_event(&mut events).await.owner,
         Some(ClientInstanceId::new("owner"))
@@ -550,40 +613,5 @@ async fn requests_from_a_newer_client_are_unsupported_without_dropping_the_conne
     assert!(matches!(
         control_request(&mut control, 42, Request::Ping { sent_millis: 1 }, None).await,
         Ok(Response::Pong { .. })
-    ));
-
-    let mut interactive = host
-        .client(
-            "newer-interactive-client",
-            ConnectionChannel::TerminalInteractive,
-            RESOURCE_PROTOCOL_VERSION,
-        )
-        .await;
-    send_future_request(&mut interactive, FrameKind::TerminalInteractive, 43).await;
-    let TerminalInteractiveMessage::Response(response) =
-        receive_terminal_interactive(&mut interactive)
-            .await
-            .unwrap()
-    else {
-        panic!("the interactive channel must answer the unsupported request");
-    };
-    assert_unsupported(response, 43);
-    send_terminal_interactive(
-        &mut interactive,
-        &TerminalInteractiveMessage::Request(ClientRequest::new(
-            44,
-            Request::Ping { sent_millis: 2 },
-        )),
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        receive_terminal_interactive(&mut interactive)
-            .await
-            .unwrap(),
-        TerminalInteractiveMessage::Response(HostResponse {
-            request_id: 44,
-            result: Ok(Response::Pong { .. }),
-        })
     ));
 }

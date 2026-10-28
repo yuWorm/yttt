@@ -289,8 +289,7 @@
       "nonce",
       "profile_id",
       "session_nonce",
-      "supported",
-      "terminal_session_id"
+      "supported"
     ]
   },
   "ClientRequest": {
@@ -303,12 +302,9 @@
     ]
   },
   "ConnectionChannel": {
-    "Control": [],
     "DesktopOwner": [],
     "Lifecycle": [],
-    "StateEvents": [],
-    "TerminalData": [],
-    "TerminalInteractive": []
+    "Session": []
   },
   "ContentRevision": {
     "": [
@@ -324,10 +320,14 @@
     ]
   },
   "ControlMessage": {
+    "Chunk": [],
     "Event": [],
     "Request": [],
     "Response": [],
-    "TerminalInput": []
+    "TerminalInput": [
+      "control",
+      "input"
+    ]
   },
   "ControlStatus": {
     "": [
@@ -546,6 +546,13 @@
     "": [
       "request_id",
       "result"
+    ]
+  },
+  "MessageChunk": {
+    "": [
+      "bytes",
+      "last",
+      "stream"
     ]
   },
   "PathSegmentWire": {
@@ -1457,14 +1464,6 @@
       "context",
       "session_id"
     ]
-  },
-  "TerminalInteractiveMessage": {
-    "Input": [
-      "control",
-      "input"
-    ],
-    "Request": [],
-    "Response": []
   },
   "TerminalLease": {
     "": [

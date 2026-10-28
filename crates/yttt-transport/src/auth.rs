@@ -64,7 +64,6 @@ pub struct ClientIdentity {
     pub session_nonce: Nonce,
     pub can_force_stop: bool,
     pub channel: ConnectionChannel,
-    pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,7 +86,6 @@ pub struct AuthenticatedClient {
     pub selected_version: u16,
     pub can_force_stop: bool,
     pub channel: ConnectionChannel,
-    pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
     pub session: AuthenticatedSession,
 }
 
@@ -182,7 +180,6 @@ where
         can_force_stop: identity.can_force_stop,
         nonce: client_nonce,
         channel: identity.channel,
-        terminal_session_id: identity.terminal_session_id.clone(),
     };
     send_handshake(stream, &HandshakeMessage::ClientHello(hello.clone())).await?;
     let challenge = match receive_handshake(stream).await? {
@@ -278,36 +275,11 @@ where
         reject(stream, RejectReason::AuthenticationFailed).await;
         return Err(HandshakeError::AuthenticationFailed);
     }
-    if !matches!(
-        (
-            hello.channel,
-            hello.terminal_session_id.as_ref(),
-            hello.can_force_stop
-        ),
-        (ConnectionChannel::Control, None, _)
-            | (ConnectionChannel::TerminalData, Some(_), false)
-            | (
-                ConnectionChannel::TerminalInteractive | ConnectionChannel::StateEvents,
-                None,
-                false
-            )
-            | (
-                ConnectionChannel::Lifecycle | ConnectionChannel::DesktopOwner,
-                None,
-                _
-            )
-    ) {
-        reject(stream, RejectReason::InvalidMessage).await;
-        return Err(HandshakeError::Rejected(RejectReason::InvalidMessage));
-    }
     let host_supported = match hello.channel {
         ConnectionChannel::Lifecycle | ConnectionChannel::DesktopOwner => {
             identity.lifecycle_supported
         }
-        ConnectionChannel::Control
-        | ConnectionChannel::TerminalInteractive
-        | ConnectionChannel::TerminalData
-        | ConnectionChannel::StateEvents => identity.resource_supported,
+        ConnectionChannel::Session => identity.resource_supported,
     };
     let Some(selected_version) = host_supported.negotiate(hello.supported) else {
         reject(
@@ -382,7 +354,6 @@ where
         can_force_stop: hello.can_force_stop,
         selected_version,
         channel: hello.channel,
-        terminal_session_id: hello.terminal_session_id,
         session: AuthenticatedSession {
             ingress: identity.ingress,
             credential_generation: identity.credential_generation,
@@ -415,11 +386,11 @@ fn verify_mac(token: &AuthToken, payload: &[u8], proof: &AuthMac) -> Result<(), 
 }
 
 fn host_proof_bytes(hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
-    transcript(b"yttt-host-proof-v2", hello, challenge)
+    transcript(b"yttt-host-proof-v3", hello, challenge)
 }
 
 fn client_proof_bytes(hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
-    transcript(b"yttt-client-proof-v2", hello, challenge)
+    transcript(b"yttt-client-proof-v3", hello, challenge)
 }
 
 fn transcript(label: &[u8], hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
@@ -435,17 +406,10 @@ fn transcript(label: &[u8], hello: &ClientHello, challenge: &HostChallenge) -> V
     bytes.extend_from_slice(&hello.session_nonce.0);
     bytes.push(u8::from(hello.can_force_stop));
     bytes.push(match hello.channel {
-        ConnectionChannel::Control => 0,
-        ConnectionChannel::TerminalInteractive => 1,
-        ConnectionChannel::TerminalData => 2,
-        ConnectionChannel::StateEvents => 3,
-        ConnectionChannel::Lifecycle => 4,
-        ConnectionChannel::DesktopOwner => 5,
+        ConnectionChannel::Session => 0,
+        ConnectionChannel::Lifecycle => 1,
+        ConnectionChannel::DesktopOwner => 2,
     });
-    bytes.push(u8::from(hello.terminal_session_id.is_some()));
-    if let Some(session) = &hello.terminal_session_id {
-        push_field(&mut bytes, session.as_str().as_bytes());
-    }
     bytes.push(u8::from(hello.host_epoch_hint.is_some()));
     if let Some(epoch) = hello.host_epoch_hint {
         bytes.extend_from_slice(&epoch.to_be_bytes());

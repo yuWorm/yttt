@@ -112,6 +112,35 @@ v22 尚未发布(只在 `CHANGELOG.md` Unreleased 中)。两个选择:
 - 桌面冒烟:与 C2 相同的 `yttt ctl` 驱动场景;Host 侧每 Client 只有一条连接(`lsof` 计数)。
 - 文档:`host-client-architecture.md` 通道与背压章节、`wire-evolution.md`、`CHANGELOG.md`、计划进度。
 
+### 结果(2026-10-28)
+
+删除清单全部落地:上表符号在 `crates/`、`src/`、`tests/` 中均无残留;`FrameKind` 只剩 Handshake/Control/Lifecycle/DesktopShell(5、6 保留不复用)。
+
+覆盖验收的测试:
+
+| 验收项 | 测试 |
+|---|---|
+| 最终帧先于退出 | `host_roundtrip::one_session_connection_carries_requests_output_and_ordered_exit`(自然退出 `exit 7`,连续 8 次通过) |
+| 分块期间交互穿插 | `yttt-transport` session 测试 `interactive_messages_pass_between_the_chunks_of_a_large_message`、`interactive_then_reliable_then_render_once_the_writer_is_free`;拼接器拒绝嵌套块与超量 stream |
+| 可靠队列超限 | `reliable_overflow_closes_the_connection` |
+| 慢 Client / 慢请求 | `slow_observer_does_not_block_the_owner_or_change_canonical_geometry`、`blocked_project_request_does_not_delay_terminal_input`、`many_terminals_keep_catalog_and_interactive_lanes_responsive` |
+| 每会话一条连接 | `control_connection::a_session_connection_replaces_its_predecessor_and_refuses_another_session` |
+
+探针(release,与 C3 动工前的 `d51facb` 交替运行各 4 次;8 终端输出时长随 `date +%s` 对齐在 2–3 s 间浮动,故按每毫秒归一):
+
+| 指标 | C2 | C3 |
+|---|---|---|
+| 终端帧/ms(每 Client) | 0.490–0.500 | 0.455–0.497 |
+| 字节/帧 | 1,979–2,479 | 1,963–2,158 |
+| Host 语义捕获/ms | 1.36–1.38 | 1.26–1.34 |
+| 输入 ping p50 / p95(µs) | 18 / 27–32 | 14–19 / 26–35 |
+| 8 MiB 输出吞吐(MiB/s) | 26.6–27.2 | 25.3–27.1 |
+| reconnects / attachment drops | 0 / 0 | 0 / 0 |
+
+帧率受 16 ms cadence 约束(8 终端 ≈ 0.5 帧/ms),两者持平;C3 的 Client 字节计数包含整条连接的全部消息,仍不高于 C2 只计 data 连接的数值。
+
+桌面冒烟(debug,隔离 `YTTT_PROFILE_ROOT`,`yttt ctl` 驱动):3 个终端(一个输出 200,000 行)时 Host 只持有监听 socket 与 2 条已接受连接(Session + DesktopOwner);`panes send`/`panes read` 回显往返 83–87 ms(含两次 CLI 进程启动);高输出终端读到 `BURST-DONE`;Host diagnostics `lagged_events` 全为 0、日志无 error/panic;结束桌面进程后 DesktopOwned Host 约 300 ms 内退出。
+
 ## 5. 非目标
 
 - 不改变请求并发模型(仍是一个排队请求 + 内联恢复请求 + 交互 worker)。是否让只读慢请求并发,等 C3 后用 perf 数据决定。

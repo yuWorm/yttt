@@ -3,11 +3,9 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize, de::DeserializeOwned, de::IgnoredAny};
 use thiserror::Error;
 
-use crate::{
-    ControlMessage, FRAME_FORMAT_VERSION, HEADER_LEN, HostEvent, MAX_FRAME_BYTES, PROTOCOL_MAGIC,
-    TerminalInteractiveMessage,
-};
+use crate::{ControlMessage, FRAME_FORMAT_VERSION, HEADER_LEN, MAX_FRAME_BYTES, PROTOCOL_MAGIC};
 
+/// Values 5 and 6 belonged to the retired per-lane connections and stay unused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum FrameKind {
@@ -15,8 +13,6 @@ pub enum FrameKind {
     Control = 2,
     Lifecycle = 3,
     DesktopShell = 4,
-    TerminalInteractive = 5,
-    StateEvent = 6,
 }
 
 impl TryFrom<u16> for FrameKind {
@@ -28,8 +24,6 @@ impl TryFrom<u16> for FrameKind {
             2 => Ok(Self::Control),
             3 => Ok(Self::Lifecycle),
             4 => Ok(Self::DesktopShell),
-            5 => Ok(Self::TerminalInteractive),
-            6 => Ok(Self::StateEvent),
             other => Err(ProtocolCodecError::UnknownFrameKind(other)),
         }
     }
@@ -115,29 +109,17 @@ enum ControlEnvelopeProbe {
     Event(IgnoredAny),
 }
 
-#[derive(Deserialize)]
-enum TerminalInteractiveEnvelopeProbe {
-    Request(RequestIdProbe),
-    Response(RequestIdProbe),
-}
-
-#[derive(Deserialize)]
-struct HostEventProbe {
-    #[serde(rename = "host_sequence")]
-    _host_sequence: u64,
-}
-
 /// Decodes `T`; when that fails but the payload still matches the envelope probe `P`,
 /// reports which part of the stable protocol the newer peer used instead of a decode error.
 fn decode_or_classify<T: DeserializeOwned, P: DeserializeOwned>(
-    frame: &DecodedFrame,
+    payload: &[u8],
     classify: impl FnOnce(P) -> Unrecognized,
 ) -> Result<T, ProtocolCodecError> {
-    let error = match ciborium::from_reader::<T, _>(frame.payload.as_slice()) {
+    let error = match ciborium::from_reader::<T, _>(payload) {
         Ok(message) => return Ok(message),
         Err(error) => error.to_string(),
     };
-    match ciborium::from_reader::<P, _>(frame.payload.as_slice()) {
+    match ciborium::from_reader::<P, _>(payload) {
         Ok(probe) => Err(ProtocolCodecError::Unrecognized {
             message: classify(probe),
             detail: error,
@@ -147,7 +129,12 @@ fn decode_or_classify<T: DeserializeOwned, P: DeserializeOwned>(
 }
 
 pub fn decode_control_message(frame: &DecodedFrame) -> Result<ControlMessage, ProtocolCodecError> {
-    decode_or_classify(frame, |probe| match probe {
+    decode_control_payload(&frame.payload)
+}
+
+/// Decodes a control payload, either one frame's or a reassembled chunk stream's.
+pub fn decode_control_payload(payload: &[u8]) -> Result<ControlMessage, ProtocolCodecError> {
+    decode_or_classify(payload, |probe| match probe {
         ControlEnvelopeProbe::Request(RequestIdProbe { request_id }) => {
             Unrecognized::Request { request_id }
         }
@@ -156,23 +143,6 @@ pub fn decode_control_message(frame: &DecodedFrame) -> Result<ControlMessage, Pr
         }
         ControlEnvelopeProbe::Event(_) => Unrecognized::Event,
     })
-}
-
-pub fn decode_terminal_interactive_message(
-    frame: &DecodedFrame,
-) -> Result<TerminalInteractiveMessage, ProtocolCodecError> {
-    decode_or_classify(frame, |probe| match probe {
-        TerminalInteractiveEnvelopeProbe::Request(RequestIdProbe { request_id }) => {
-            Unrecognized::Request { request_id }
-        }
-        TerminalInteractiveEnvelopeProbe::Response(RequestIdProbe { request_id }) => {
-            Unrecognized::Response { request_id }
-        }
-    })
-}
-
-pub fn decode_host_event(frame: &DecodedFrame) -> Result<HostEvent, ProtocolCodecError> {
-    decode_or_classify(frame, |_: HostEventProbe| Unrecognized::Event)
 }
 
 pub fn encode_frame(kind: FrameKind, payload: &[u8]) -> Result<Vec<u8>, ProtocolCodecError> {
@@ -347,17 +317,20 @@ mod tests {
 
     #[test]
     fn one_way_terminal_input_round_trips_as_a_control_message() {
-        let message = ControlMessage::TerminalInput(TerminalInput {
-            session_id: TerminalSessionId::new("session"),
-            context: TerminalMutationContext {
-                host_epoch: 1,
-                session_epoch: 2,
-                lease_epoch: 3,
-                client_sequence: 4,
-                geometry_epoch: 5,
+        let message = ControlMessage::TerminalInput {
+            input: TerminalInput {
+                session_id: TerminalSessionId::new("session"),
+                context: TerminalMutationContext {
+                    host_epoch: 1,
+                    session_epoch: 2,
+                    lease_epoch: 3,
+                    client_sequence: 4,
+                    geometry_epoch: 5,
+                },
+                bytes: b"typed".to_vec(),
             },
-            bytes: b"typed".to_vec(),
-        });
+            control: None,
+        };
 
         let encoded = encode_message(FrameKind::Control, &message).unwrap();
         let decoded: ControlMessage = decode_message(&decode_frame(&encoded).unwrap()).unwrap();

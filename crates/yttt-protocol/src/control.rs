@@ -107,22 +107,30 @@ pub struct HostEvent {
     pub body: ServerEvent,
 }
 
+/// Every message on a `Session` connection. Requests, responses, and events
+/// keep their own routing keys; `Chunk` carries one piece of a large message.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ControlMessage {
     Request(ClientRequest),
     Response(HostResponse),
     Event(HostEvent),
-    TerminalInput(TerminalInput),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TerminalInteractiveMessage {
-    Input {
+    /// One-way terminal input without a response.
+    TerminalInput {
         input: TerminalInput,
         control: Option<crate::session::ControlContext>,
     },
-    Request(ClientRequest),
-    Response(HostResponse),
+    Chunk(MessageChunk),
+}
+
+/// A slice of one encoded `ControlMessage` payload too large to send as a
+/// single frame without stalling the connection. Pieces of one `stream` arrive
+/// in order; `last` completes it. Chunks never nest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageChunk {
+    pub stream: u64,
+    pub last: bool,
+    #[serde(with = "serde_bytes")]
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

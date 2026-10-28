@@ -383,7 +383,6 @@ async fn connect_lifecycle(
             host_epoch_hint: None,
             can_force_stop: false,
             channel: ConnectionChannel::Lifecycle,
-            terminal_session_id: None,
         },
         &token.auth,
     )

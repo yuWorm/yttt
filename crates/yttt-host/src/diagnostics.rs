@@ -184,6 +184,20 @@ impl QueueDiagnostics {
     }
 }
 
+impl yttt_transport::RenderObserver for QueueDiagnostics {
+    fn observe(&self, queued_bytes: usize) {
+        QueueDiagnostics::observe(self, queued_bytes);
+    }
+
+    fn dropped(&self) {
+        QueueDiagnostics::dropped(self);
+    }
+
+    fn record_service(&self, elapsed: Duration) {
+        QueueDiagnostics::record_service(self, elapsed);
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalPipelineDiagnosticsSnapshot {
     pub session_id: String,

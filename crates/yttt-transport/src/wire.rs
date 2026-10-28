@@ -2,10 +2,8 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use yttt_protocol::{
     ControlMessage, DecodedFrame, DesktopShellMessage, FrameKind, HEADER_LEN, HandshakeMessage,
-    HostEvent, HostResponse, LifecycleMessage, MAX_DESKTOP_SHELL_FRAME_BYTES, MAX_FRAME_BYTES,
-    ProtocolCodecError, TerminalInteractiveMessage, Unrecognized, decode_control_message,
-    decode_frame, decode_header, decode_host_event, decode_message,
-    decode_terminal_interactive_message, encode_message,
+    HostResponse, LifecycleMessage, MAX_DESKTOP_SHELL_FRAME_BYTES, MAX_FRAME_BYTES,
+    ProtocolCodecError, Unrecognized, decode_frame, decode_header, decode_message, encode_message,
 };
 
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -57,6 +55,8 @@ pub enum WireError {
         encoded_bytes: usize,
         max_bytes: usize,
     },
+    #[error("invalid chunked message: {0}")]
+    InvalidChunk(&'static str),
 }
 
 impl WireError {
@@ -105,7 +105,7 @@ async fn send_bounded<T: serde::Serialize>(
     send_frame(stream, &frame).await
 }
 
-async fn receive(
+pub(crate) async fn receive_frame(
     stream: &mut (impl AsyncRead + Unpin),
     expected_kind: FrameKind,
     max_encoded_bytes: usize,
@@ -151,7 +151,8 @@ pub async fn send_handshake(
 pub async fn receive_handshake(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<HandshakeMessage, WireError> {
-    let (frame, _) = receive(stream, FrameKind::Handshake, MAX_FRAME_BYTES + HEADER_LEN).await?;
+    let (frame, _) =
+        receive_frame(stream, FrameKind::Handshake, MAX_FRAME_BYTES + HEADER_LEN).await?;
     Ok(decode_message(&frame)?)
 }
 
@@ -165,7 +166,8 @@ pub async fn send_lifecycle(
 pub async fn receive_lifecycle(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<LifecycleMessage, WireError> {
-    let (frame, _) = receive(stream, FrameKind::Lifecycle, MAX_FRAME_BYTES + HEADER_LEN).await?;
+    let (frame, _) =
+        receive_frame(stream, FrameKind::Lifecycle, MAX_FRAME_BYTES + HEADER_LEN).await?;
     Ok(decode_message(&frame)?)
 }
 
@@ -185,7 +187,7 @@ pub async fn send_desktop_shell(
 pub async fn receive_desktop_shell(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<DesktopShellMessage, WireError> {
-    let (frame, _) = receive(
+    let (frame, _) = receive_frame(
         stream,
         FrameKind::DesktopShell,
         MAX_DESKTOP_SHELL_FRAME_BYTES,
@@ -194,58 +196,6 @@ pub async fn receive_desktop_shell(
     Ok(decode_message(&frame)?)
 }
 
-pub async fn send_terminal_interactive(
-    stream: &mut (impl AsyncWrite + Unpin),
-    message: &TerminalInteractiveMessage,
-) -> Result<(), WireError> {
-    send(stream, FrameKind::TerminalInteractive, message).await
-}
-
-/// Unrecognized responses resolve as `FailureCode::Unsupported`; unrecognized requests
-/// surface as `WireError::unsupported_request_id`.
-pub async fn receive_terminal_interactive(
-    stream: &mut (impl AsyncRead + Unpin),
-) -> Result<TerminalInteractiveMessage, WireError> {
-    let (frame, _) = receive(
-        stream,
-        FrameKind::TerminalInteractive,
-        MAX_FRAME_BYTES + HEADER_LEN,
-    )
-    .await?;
-    match decode_terminal_interactive_message(&frame) {
-        Err(ProtocolCodecError::Unrecognized {
-            message: Unrecognized::Response { request_id },
-            ..
-        }) => Ok(TerminalInteractiveMessage::Response(
-            HostResponse::unsupported(request_id),
-        )),
-        result => Ok(result?),
-    }
-}
-
-pub async fn send_state_event(
-    stream: &mut (impl AsyncWrite + Unpin),
-    event: &HostEvent,
-) -> Result<(), WireError> {
-    send(stream, FrameKind::StateEvent, event).await
-}
-
-/// Skips events added by a newer Host.
-pub async fn receive_state_event(
-    stream: &mut (impl AsyncRead + Unpin),
-) -> Result<HostEvent, WireError> {
-    loop {
-        let (frame, _) =
-            receive(stream, FrameKind::StateEvent, MAX_FRAME_BYTES + HEADER_LEN).await?;
-        match decode_host_event(&frame) {
-            Err(ProtocolCodecError::Unrecognized {
-                message: Unrecognized::Event,
-                ..
-            }) => continue,
-            result => return Ok(result?),
-        }
-    }
-}
 pub async fn send_control(
     stream: &mut (impl AsyncWrite + Unpin),
     message: &ControlMessage,
@@ -261,51 +211,41 @@ pub async fn send_control_bounded(
     send_bounded(stream, FrameKind::Control, message, max_bytes).await
 }
 
+/// Reads one message from a connection that never interleaves interactive
+/// traffic with a chunked message, such as a request/response tool. Long-lived
+/// readers keep a [`crate::SessionReader`] so chunk state survives between messages.
 pub async fn receive_control(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<ControlMessage, WireError> {
-    receive_control_observed(stream)
-        .await
-        .map(|(message, _)| message)
+    crate::SessionReader::new(stream).receive().await
 }
 
-/// Skips events added by a newer peer, resolves unrecognized responses as
-/// `FailureCode::Unsupported`, and surfaces unrecognized requests as
+/// Maps a decoded control message to what the receiver acts on: events added by
+/// a newer peer are skipped (`None`), unrecognized responses resolve as
+/// `FailureCode::Unsupported`, and unrecognized requests surface as
 /// `WireError::unsupported_request_id`.
-pub async fn receive_control_observed(
-    stream: &mut (impl AsyncRead + Unpin),
-) -> Result<(ControlMessage, WireReceiveDiagnostics), WireError> {
-    loop {
-        let (frame, payload_read_and_check) =
-            receive(stream, FrameKind::Control, MAX_FRAME_BYTES + HEADER_LEN).await?;
-        let payload_bytes = frame.payload.len();
-        let started_at = Instant::now();
-        let message = match decode_control_message(&frame) {
-            Err(ProtocolCodecError::Unrecognized {
-                message: Unrecognized::Event,
-                ..
-            }) => continue,
-            Err(ProtocolCodecError::Unrecognized {
-                message: Unrecognized::Response { request_id },
-                ..
-            }) => ControlMessage::Response(HostResponse::unsupported(request_id)),
-            result => result?,
-        };
-        return Ok((
-            message,
-            WireReceiveDiagnostics {
-                payload_bytes,
-                payload_read_and_check,
-                message_decode: started_at.elapsed(),
-            },
-        ));
+pub(crate) fn resolve_control(
+    decoded: Result<ControlMessage, ProtocolCodecError>,
+) -> Result<Option<ControlMessage>, WireError> {
+    match decoded {
+        Err(ProtocolCodecError::Unrecognized {
+            message: Unrecognized::Event,
+            ..
+        }) => Ok(None),
+        Err(ProtocolCodecError::Unrecognized {
+            message: Unrecognized::Response { request_id },
+            ..
+        }) => Ok(Some(ControlMessage::Response(HostResponse::unsupported(
+            request_id,
+        )))),
+        result => Ok(Some(result?)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use serde::Serialize;
-    use yttt_protocol::{ClientRequest, FailureCode, Request, ServerEvent};
+    use yttt_protocol::{ClientRequest, FailureCode, Request};
 
     use super::*;
 
@@ -391,37 +331,5 @@ mod tests {
         let error = receive_control(&mut local).await.unwrap_err();
         assert_eq!(error.unsupported_request_id(), Some(7));
         assert_eq!(receive_control(&mut local).await.unwrap(), ping);
-    }
-
-    #[tokio::test]
-    async fn state_events_from_a_newer_host_are_skipped() {
-        let (mut peer, mut local) = tokio::io::duplex(64 * 1024);
-        write(&mut peer, FrameKind::StateEvent, &future_event()).await;
-        let known = HostEvent {
-            host_sequence: 4,
-            body: ServerEvent::ResourceCatalogChanged,
-        };
-        write(&mut peer, FrameKind::StateEvent, &known).await;
-        assert_eq!(receive_state_event(&mut local).await.unwrap(), known);
-    }
-
-    #[tokio::test]
-    async fn interactive_responses_from_a_newer_host_resolve_as_unsupported() {
-        let (mut peer, mut local) = tokio::io::duplex(64 * 1024);
-        write(
-            &mut peer,
-            FrameKind::TerminalInteractive,
-            &FutureMessage::Response(FutureResponse {
-                request_id: 12,
-                result: Ok(FutureBody::Dragon { size: 4 }),
-            }),
-        )
-        .await;
-        let TerminalInteractiveMessage::Response(response) =
-            receive_terminal_interactive(&mut local).await.unwrap()
-        else {
-            panic!("the unrecognized response must resolve its request");
-        };
-        assert_unsupported(&response, 12);
     }
 }

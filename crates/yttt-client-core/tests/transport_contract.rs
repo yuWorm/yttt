@@ -108,8 +108,7 @@ async fn connect_client<C: TransportConnector + Clone>(
             client_instance_id: ClientInstanceId::new(id),
             host_epoch_hint: None,
             can_force_stop: false,
-            channel: yttt_protocol::ConnectionChannel::Control,
-            terminal_session_id: None,
+            channel: yttt_protocol::ConnectionChannel::Session,
         },
         AuthToken::from_bytes(host.token),
     )
@@ -316,8 +315,7 @@ async fn a_new_session_cannot_inherit_an_existing_actors_journal_or_terminals() 
         client_instance_id: ClientInstanceId::new("bound-owner"),
         host_epoch_hint: None,
         can_force_stop: false,
-        channel: yttt_protocol::ConnectionChannel::Control,
-        terminal_session_id: None,
+        channel: yttt_protocol::ConnectionChannel::Session,
     };
     let impersonation = ClientCore::connect(
         host.connector.clone(),
@@ -430,8 +428,7 @@ async fn tls_existing_host_authentication_rotation_and_shutdown_preserve_local_r
         client_instance_id: ClientInstanceId::new("tls-observer"),
         host_epoch_hint: None,
         can_force_stop: false,
-        channel: yttt_protocol::ConnectionChannel::Control,
-        terminal_session_id: None,
+        channel: yttt_protocol::ConnectionChannel::Session,
     };
     let untrusted = rcgen::generate_simple_self_signed(vec![TLS_SERVER_NAME.into()]).unwrap();
     assert!(
@@ -667,8 +664,7 @@ async fn ssh_work_credential_cannot_administer_host_and_survives_tcp_disable() {
         client_instance_id: ClientInstanceId::new("ssh-work"),
         host_epoch_hint: None,
         can_force_stop: false,
-        channel: yttt_protocol::ConnectionChannel::Control,
-        terminal_session_id: None,
+        channel: yttt_protocol::ConnectionChannel::Session,
     };
     assert!(
         ClientCore::connect(

@@ -17,13 +17,13 @@ pub mod workspace;
 
 pub use codec::{
     DecodedFrame, FrameHeader, FrameKind, ProtocolCodecError, Unrecognized, decode_control_message,
-    decode_frame, decode_header, decode_host_event, decode_message,
-    decode_terminal_interactive_message, encode_frame, encode_message, read_frame, write_frame,
+    decode_control_payload, decode_frame, decode_header, decode_message, encode_frame,
+    encode_message, read_frame, write_frame,
 };
 pub use control::{
     Capability, ClientRequest, ControlMessage, FailureCode, HostBlocker, HostEvent, HostResponse,
-    ProtocolFailure, Request, ResourceCatalog, Response, ServerEvent, TerminalControlDeniedReason,
-    TerminalInteractiveMessage, TerminalLease, TerminalPlacement, TerminalTerminationResult,
+    MessageChunk, ProtocolFailure, Request, ResourceCatalog, Response, ServerEvent,
+    TerminalControlDeniedReason, TerminalLease, TerminalPlacement, TerminalTerminationResult,
 };
 pub use desktop::{
     DesktopShellMessage, DesktopShellRejectReason, DesktopShellRequest,

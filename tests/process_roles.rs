@@ -385,8 +385,7 @@ async fn previous_build_host_with_the_same_protocol_is_attached_while_busy() {
             client_instance_id: ClientInstanceId::new("previous-build-client"),
             host_epoch_hint: None,
             can_force_stop: true,
-            channel: ConnectionChannel::Control,
-            terminal_session_id: None,
+            channel: ConnectionChannel::Session,
         },
         AuthToken::from_bytes(token),
     )

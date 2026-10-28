@@ -304,10 +304,8 @@ impl HostRuntime {
     }
 
     pub(crate) fn new_attachment_queue_diagnostics(&self) -> Arc<QueueDiagnostics> {
-        let diagnostics = QueueDiagnostics::new(
-            "attachment_output_bytes",
-            crate::terminal_data::MAX_ATTACHMENT_OUTPUT_BYTES,
-        );
+        let diagnostics =
+            QueueDiagnostics::new("attachment_output_bytes", yttt_transport::RENDER_LANE_BYTES);
         let mut queues = self.attachment_queues.lock();
         if queues.len() == RETAINED_ATTACHMENT_QUEUE_DIAGNOSTICS {
             queues.pop_front();

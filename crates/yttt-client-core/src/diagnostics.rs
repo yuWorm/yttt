@@ -41,7 +41,6 @@ pub struct ClientPipelineDiagnosticsSnapshot {
     pub ipc_payload_bytes: u64,
     pub ipc_read_and_decode: ClientLatencyDiagnosticsSnapshot,
     pub terminal_merge: ClientLatencyDiagnosticsSnapshot,
-    pub data_lane_resets: u64,
     pub connection_attempts: u64,
     pub reconnects: u64,
     pub heartbeat_round_trip: ClientLatencyDiagnosticsSnapshot,
@@ -52,7 +51,6 @@ pub(crate) struct ClientPipelineDiagnostics {
     ipc_payload_bytes: AtomicU64,
     ipc_read_and_decode: ClientLatencyDiagnostics,
     terminal_merge: ClientLatencyDiagnostics,
-    data_lane_resets: AtomicU64,
     connection_attempts: AtomicU64,
     reconnects: AtomicU64,
     heartbeat_round_trip: ClientLatencyDiagnostics,
@@ -73,10 +71,6 @@ impl ClientPipelineDiagnostics {
         self.terminal_merge.record(duration);
     }
 
-    pub(crate) fn record_data_lane_reset(&self) {
-        self.data_lane_resets.fetch_add(1, Ordering::Relaxed);
-    }
-
     pub(crate) fn record_connection_attempt(&self) {
         self.connection_attempts.fetch_add(1, Ordering::Relaxed);
     }
@@ -94,7 +88,6 @@ impl ClientPipelineDiagnostics {
             ipc_payload_bytes: self.ipc_payload_bytes.load(Ordering::Acquire),
             ipc_read_and_decode: self.ipc_read_and_decode.snapshot(),
             terminal_merge: self.terminal_merge.snapshot(),
-            data_lane_resets: self.data_lane_resets.load(Ordering::Acquire),
             connection_attempts: self.connection_attempts.load(Ordering::Acquire),
             reconnects: self.reconnects.load(Ordering::Acquire),
             heartbeat_round_trip: self.heartbeat_round_trip.snapshot(),

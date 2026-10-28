@@ -3,8 +3,7 @@ use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_protocol::{
     BuildIdentity, ClientHello, ControlMessage, DecodedFrame, FrameKind, Nonce, ProtocolCodecError,
     ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Unrecognized, decode_control_message,
-    decode_frame, decode_host_event, decode_message, decode_terminal_interactive_message,
-    encode_message,
+    decode_frame, decode_message, encode_message,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,28 +198,22 @@ fn newer_peer_messages_are_classified_by_their_envelope() {
         body: FutureServerEvent::DragonSighted { at: 1 },
     };
     assert_eq!(
-        unrecognized(decode_host_event(&frame(FrameKind::StateEvent, &event))),
-        Unrecognized::Event
-    );
-    assert_eq!(
         unrecognized(decode_control_message(&frame(
             FrameKind::Control,
             &FutureControlMessage::Event(event),
         ))),
         Unrecognized::Event
     );
+}
 
-    #[derive(Serialize)]
-    enum FutureInteractiveMessage {
-        Request(FutureClientRequest),
+#[test]
+fn retired_lane_frame_kinds_are_rejected() {
+    for kind in [5_u16, 6] {
+        assert!(matches!(
+            FrameKind::try_from(kind),
+            Err(ProtocolCodecError::UnknownFrameKind(value)) if value == kind
+        ));
     }
-    assert_eq!(
-        unrecognized(decode_terminal_interactive_message(&frame(
-            FrameKind::TerminalInteractive,
-            &FutureInteractiveMessage::Request(future_request(11)),
-        ))),
-        Unrecognized::Request { request_id: 11 }
-    );
 }
 
 #[test]

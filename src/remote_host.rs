@@ -305,8 +305,7 @@ pub fn connect(
                 )),
                 host_epoch_hint: None,
                 can_force_stop: false,
-                channel: ConnectionChannel::Control,
-                terminal_session_id: None,
+                channel: ConnectionChannel::Session,
             };
             cancellation.check(&events)?;
             initialize_environment(
@@ -509,8 +508,7 @@ fn connect_ssh(
         )),
         host_epoch_hint: None,
         can_force_stop: false,
-        channel: ConnectionChannel::Control,
-        terminal_session_id: None,
+        channel: ConnectionChannel::Session,
     };
     initialize_environment(
         runtime,

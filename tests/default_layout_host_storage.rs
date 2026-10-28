@@ -86,8 +86,7 @@ fn missing_default_layout_loads_without_writing_and_updates_through_host_storage
             client_instance_id: ClientInstanceId::new("layout-client"),
             host_epoch_hint: None,
             can_force_stop: false,
-            channel: ConnectionChannel::Control,
-            terminal_session_id: None,
+            channel: ConnectionChannel::Session,
         };
         let host = tokio::spawn(yttt_host::run_with_remote_work(bootstrap, || async move {
             Ok::<_, yttt_transport::TransportError>((listener, None))

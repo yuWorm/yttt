@@ -63,17 +63,14 @@ pub struct ClientHello {
     pub nonce: Nonce,
     #[serde(default)]
     pub channel: ConnectionChannel,
-    #[serde(default)]
-    pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
 }
 
+/// One authenticated Client session uses one `Session` connection for requests,
+/// terminal input, state events, and terminal frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionChannel {
     #[default]
-    Control,
-    TerminalInteractive,
-    TerminalData,
-    StateEvents,
+    Session,
     Lifecycle,
     DesktopOwner,
 }

@@ -43,8 +43,8 @@ use crate::{
     project::{HostProjectError, HostProjectRuntime},
     runtime::{AttachmentResyncReason, HostRuntime, HostRuntimeError, TerminalControlOutcome},
     ssh_runtime::HostSshRuntime,
-    terminal::{HostTerminalEvent, HostedTerminal, HostedTerminalError},
-    terminal_data::TerminalDataWriter,
+    terminal::{HostTerminalEvent, HostedTerminalError},
+    terminal_data::{TerminalStream, TerminalStreamContext},
 };
 use fs2::FileExt as _;
 use parking_lot::Mutex;
@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::{
     io::AsyncReadExt as _,
-    sync::{broadcast, watch},
+    sync::{broadcast, mpsc, watch},
 };
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId, TerminalSessionId};
 use yttt_protocol::{
@@ -60,21 +60,18 @@ use yttt_protocol::{
     HostResponse, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest,
     LifecycleResponse, LifecycleResponseEnvelope, ProtocolFailure, ProtocolRange,
     RESOURCE_PROTOCOL_VERSION, Request, ResourceCatalog, Response, ServerEvent,
-    TerminalInteractiveMessage, TerminalTerminationResult,
+    TerminalTerminationResult,
     terminal::{
-        AttachTerminal, SemanticDelta, SemanticViewport, TerminalLeaseMode, TerminalModes,
-        TerminalProcessState, TerminalSpawnSpec, TerminalStreamApply, TerminalStreamUpdate,
-        TerminalViewportAnchor, TerminalViewportRead, TerminatedTerminal, TerminationMode,
+        AttachTerminal, TerminalLeaseMode, TerminalSpawnSpec, TerminalViewportAnchor,
+        TerminalViewportRead, TerminatedTerminal, TerminationMode,
     },
     workspace::WorkspaceProjectConfig,
 };
 use yttt_transport::{
-    AuthToken, HostIdentity, TransportListener, TransportStream, receive_control,
-    receive_lifecycle, receive_terminal_interactive, send_control, send_lifecycle,
-    send_state_event, send_terminal_interactive, server_handshake,
+    AuthToken, HostIdentity, SessionReader, SessionWriter, TransportListener, TransportStream,
+    receive_lifecycle, send_lifecycle, server_handshake,
 };
 
-const TERMINAL_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const HOST_DIAGNOSTICS_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -782,8 +779,11 @@ const CLIENT_SESSION_RETENTION: Duration = Duration::from_secs(300);
 
 struct SessionBinding {
     authentication: yttt_transport::AuthenticatedSession,
-    control_connected: bool,
-    connections: usize,
+    /// Closes the current Session connection when a newer one replaces it.
+    connection: Option<watch::Sender<bool>>,
+    generation: u64,
+    /// Held by a connection until it has released the Client's resources.
+    slot: Arc<tokio::sync::Mutex<()>>,
     last_disconnected: std::time::Instant,
 }
 
@@ -793,7 +793,7 @@ fn expired_sessions(
 ) -> Vec<ClientInstanceId> {
     let mut idle = sessions
         .iter()
-        .filter(|(_, binding)| binding.connections == 0)
+        .filter(|(_, binding)| binding.connection.is_none())
         .map(|(id, binding)| (id.clone(), binding.last_disconnected))
         .collect::<Vec<_>>();
     idle.sort_by_key(|(_, disconnected)| *disconnected);
@@ -823,22 +823,19 @@ fn prune_inactive_sessions(context: &ConnectionContext) {
     }
 }
 
-struct ControlConnectionGuard {
-    is_control: bool,
+struct SessionConnectionGuard {
     sessions: Arc<Mutex<HashMap<ClientInstanceId, SessionBinding>>>,
     client_id: ClientInstanceId,
+    generation: u64,
 }
 
-impl Drop for ControlConnectionGuard {
+impl Drop for SessionConnectionGuard {
     fn drop(&mut self) {
-        if let Some(binding) = self.sessions.lock().get_mut(&self.client_id) {
-            if self.is_control {
-                binding.control_connected = false;
-            }
-            binding.connections = binding.connections.saturating_sub(1);
-            if binding.connections == 0 {
-                binding.last_disconnected = std::time::Instant::now();
-            }
+        if let Some(binding) = self.sessions.lock().get_mut(&self.client_id)
+            && binding.generation == self.generation
+        {
+            binding.connection = None;
+            binding.last_disconnected = std::time::Instant::now();
         }
     }
 }
@@ -871,13 +868,42 @@ async fn serve_connection(
         None
     };
     prune_inactive_sessions(&context);
-    let _control_connection = if !matches!(
-        authenticated.channel,
-        yttt_protocol::ConnectionChannel::Lifecycle
-            | yttt_protocol::ConnectionChannel::DesktopOwner
-    ) {
+    match authenticated.channel {
+        yttt_protocol::ConnectionChannel::DesktopOwner => {
+            if !context.lifecycle.desktop_owner_connected() {
+                return Err(());
+            }
+            let result = serve_desktop_owner_connection(stream, context.stop.clone()).await;
+            context.lifecycle.desktop_owner_disconnected();
+            context.lifecycle.resource_changed();
+            result
+        }
+        yttt_protocol::ConnectionChannel::Lifecycle => {
+            context.lifecycle.client_connected();
+            let result =
+                serve_lifecycle_connection(stream, authenticated.can_force_stop, &context).await;
+            context.lifecycle.client_disconnected();
+            result
+        }
+        yttt_protocol::ConnectionChannel::Session => {
+            serve_client_session(stream, authenticated, &context).await
+        }
+    }
+}
+
+/// Binds the Session connection to its Client session, replacing an earlier
+/// connection of the same session, and releases the Client's resources when
+/// the connection ends.
+async fn serve_client_session(
+    stream: TransportStream,
+    authenticated: yttt_transport::AuthenticatedClient,
+    context: &ConnectionContext,
+) -> Result<(), ()> {
+    let client_id = authenticated.client_instance_id;
+    let (replace, replaced) = watch::channel(false);
+    let (slot, generation) = {
         let mut sessions = context.sessions.lock();
-        if let Some(binding) = sessions.get(&authenticated.client_instance_id) {
+        if let Some(binding) = sessions.get(&client_id) {
             if binding.authentication != authenticated.session {
                 return Err(());
             }
@@ -886,113 +912,74 @@ async fn serve_connection(
                 return Err(());
             }
             sessions.insert(
-                authenticated.client_instance_id.clone(),
+                client_id.clone(),
                 SessionBinding {
                     authentication: authenticated.session.clone(),
-                    control_connected: false,
-                    connections: 0,
+                    connection: None,
+                    generation: 0,
+                    slot: Arc::new(tokio::sync::Mutex::new(())),
                     last_disconnected: std::time::Instant::now(),
                 },
             );
         }
-        let binding = sessions
-            .get_mut(&authenticated.client_instance_id)
-            .expect("registered session");
-        let is_control = authenticated.channel == yttt_protocol::ConnectionChannel::Control;
-        if is_control {
-            if binding.control_connected {
-                return Err(());
-            }
-            binding.control_connected = true;
+        let binding = sessions.get_mut(&client_id).expect("registered session");
+        if let Some(previous) = binding.connection.replace(replace) {
+            previous.send_replace(true);
         }
-        binding.connections += 1;
-        Some(ControlConnectionGuard {
-            is_control,
-            sessions: context.sessions.clone(),
-            client_id: authenticated.client_instance_id.clone(),
-        })
-    } else {
-        None
+        binding.generation += 1;
+        (binding.slot.clone(), binding.generation)
     };
-    if authenticated.channel == yttt_protocol::ConnectionChannel::DesktopOwner {
-        if !context.lifecycle.desktop_owner_connected() {
-            return Err(());
-        }
-        let result = serve_desktop_owner_connection(stream, context.stop.clone()).await;
-        context.lifecycle.desktop_owner_disconnected();
-        context.lifecycle.resource_changed();
-        return result;
+    let _connection = SessionConnectionGuard {
+        sessions: context.sessions.clone(),
+        client_id: client_id.clone(),
+        generation,
+    };
+    // The replaced connection finishes releasing the Client's resources first,
+    // so it cannot release what this connection registers.
+    let _slot = slot.lock_owned().await;
+    if *replaced.borrow() {
+        return Ok(());
     }
-
     context.lifecycle.client_connected();
-    let client_id = authenticated.client_instance_id;
-    let result = match authenticated.channel {
-        yttt_protocol::ConnectionChannel::Lifecycle => {
-            serve_lifecycle_connection(stream, authenticated.can_force_stop, &context).await
-        }
-        yttt_protocol::ConnectionChannel::TerminalData => {
-            let session_id = authenticated.terminal_session_id.ok_or(())?;
-            serve_terminal_data_connection(
-                stream,
-                client_id,
-                session_id,
-                &context.runtime,
-                &context.host_sequence,
-                context.stop.clone(),
-            )
-            .await
-        }
-        yttt_protocol::ConnectionChannel::TerminalInteractive => {
-            let attachments = shared_terminal_attachments(&context, &client_id);
-            serve_terminal_interactive_connection(stream, client_id, attachments, &context).await
-        }
-        yttt_protocol::ConnectionChannel::StateEvents => {
-            let attachments = shared_terminal_attachments(&context, &client_id);
-            serve_state_event_connection(stream, client_id, attachments, &context).await
-        }
-        yttt_protocol::ConnectionChannel::Control => {
-            let attachments = shared_terminal_attachments(&context, &client_id);
-            let request_journal = {
-                let mut journals = context.request_journals.lock();
-                journals
-                    .entry(client_id.clone())
-                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(RequestJournal::default())))
-                    .clone()
-            };
-            let result = serve_control_connection(
-                stream,
-                client_id.clone(),
-                attachments.clone(),
-                request_journal,
-                &context,
-            )
-            .await;
-            {
-                let _fence = context.mutation_gate.write().await;
-                context.workspaces.control.disconnect(&client_id);
-                context.runtime.release_client(&client_id);
-                context.projects.disconnect(&client_id);
-                context
-                    .profile_changes
-                    .send_modify(|revision| *revision = revision.wrapping_add(1));
-            }
-            context.ssh.abandon_challenges(&client_id);
-            attachments.lock().await.clear();
-            let mut all_attachments = context.client_attachments.lock();
-            if all_attachments
-                .get(&client_id)
-                .is_some_and(|current| Arc::ptr_eq(current, &attachments))
-            {
-                all_attachments.remove(&client_id);
-            }
-            result
-        }
-        yttt_protocol::ConnectionChannel::DesktopOwner => unreachable!(),
+    let attachments = shared_terminal_attachments(context, &client_id);
+    let request_journal = {
+        let mut journals = context.request_journals.lock();
+        journals
+            .entry(client_id.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(RequestJournal::default())))
+            .clone()
     };
-    context.lifecycle.client_disconnected();
-    if authenticated.channel == yttt_protocol::ConnectionChannel::Control {
-        context.lifecycle.resource_changed();
+    let result = serve_session_connection(
+        stream,
+        client_id.clone(),
+        attachments.clone(),
+        request_journal,
+        replaced,
+        context,
+    )
+    .await;
+    {
+        let _fence = context.mutation_gate.write().await;
+        context.workspaces.control.disconnect(&client_id);
+        context.runtime.release_client(&client_id);
+        context.projects.disconnect(&client_id);
+        context
+            .profile_changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
+    context.ssh.abandon_challenges(&client_id);
+    attachments.lock().await.clear();
+    {
+        let mut all_attachments = context.client_attachments.lock();
+        if all_attachments
+            .get(&client_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &attachments))
+        {
+            all_attachments.remove(&client_id);
+        }
+    }
+    context.lifecycle.client_disconnected();
+    context.lifecycle.resource_changed();
     result
 }
 
@@ -1072,20 +1059,68 @@ fn recovery_request(request: &Request) -> bool {
     )
 }
 
-async fn serve_control_connection(
+/// Aborts a connection's helper task when the connection ends.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// How long a stopping Host waits for a connection to write `HostStopping`.
+const STOPPING_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Serves one authenticated Client over its single Session connection:
+/// requests and responses, terminal input, state events, and terminal frames.
+async fn serve_session_connection(
     stream: TransportStream,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
     request_journal: Arc<tokio::sync::Mutex<RequestJournal>>,
+    mut replaced: watch::Receiver<bool>,
     context: &ConnectionContext,
 ) -> Result<(), ()> {
     const MAX_QUEUED_REQUESTS: usize = 64;
+    let (reader, writer) = tokio::io::split(stream);
+    let mut reader = SessionReader::new(reader);
+    let (writer, _writer_task) = SessionWriter::spawn(writer);
+    let mut streams = TerminalStreams {
+        context: TerminalStreamContext {
+            writer: writer.clone(),
+            runtime: context.runtime.clone(),
+            host_sequence: context.host_sequence.clone(),
+            client_id: client_id.clone(),
+        },
+        streams: HashMap::new(),
+    };
+    let _state_events = AbortOnDrop(tokio::spawn({
+        let events = forward_state_events(
+            writer.clone(),
+            client_id.clone(),
+            attachments.clone(),
+            context.clone(),
+        );
+        let writer = writer.clone();
+        async move {
+            if events.await.is_err() {
+                writer.close();
+            }
+        }
+    }));
+    let (interactive, interactive_requests) = mpsc::channel(MAX_QUEUED_INTERACTIVE_REQUESTS);
+    let _interactive_worker = AbortOnDrop(tokio::spawn(run_interactive_requests(
+        interactive_requests,
+        writer.clone(),
+        client_id.clone(),
+        attachments.clone(),
+        context.clone(),
+    )));
     let mut stop = context.stop.clone();
-    let (mut reader, mut writer) = tokio::io::split(stream);
-    let mut queued = VecDeque::new();
+    let mut queued = VecDeque::<ClientRequest>::new();
     let mut running = tokio::task::JoinSet::new();
     loop {
-        let incoming = receive_control(&mut reader);
+        let incoming = reader.receive();
         tokio::pin!(incoming);
         loop {
             if running.is_empty()
@@ -1096,8 +1131,18 @@ async fn serve_control_connection(
                 let attachments = attachments.clone();
                 let journal = request_journal.clone();
                 running.spawn(async move {
-                    dispatch_control_request(request, &client_id, &attachments, &journal, &context)
-                        .await
+                    let session_id = attached_session(&request.body).cloned();
+                    let uses_attachments = request_uses_terminal_attachments(&request.body);
+                    let (response, changed) = dispatch_control_request(
+                        request,
+                        &client_id,
+                        &attachments,
+                        &journal,
+                        &context,
+                    )
+                    .await;
+                    let attached = session_id.filter(|_| response.result.is_ok());
+                    (response, changed, uses_attachments, attached)
                 });
             }
             tokio::select! {
@@ -1106,28 +1151,141 @@ async fn serve_control_connection(
                         Ok(message) => message,
                         Err(error) => {
                             let request_id = error.unsupported_request_id().ok_or(())?;
-                            send_control(&mut writer, &ControlMessage::Response(HostResponse::unsupported(request_id))).await.map_err(|_| ())?;
+                            writer
+                                .send_reliable(&ControlMessage::Response(HostResponse::unsupported(request_id)))
+                                .map_err(|_| ())?;
                             break;
                         }
                     };
-                    let ControlMessage::Request(request) = message else { return Err(()); };
-                    if recovery_request(&request.body) {
-                        let (response, changed) = dispatch_control_request(request, &client_id, &attachments, &request_journal, context).await;
-                        send_control(&mut writer, &ControlMessage::Response(response)).await.map_err(|_| ())?;
-                        if changed { context.lifecycle.resource_changed(); }
-                    } else {
-                        queued.push_back(request);
+                    match message {
+                        ControlMessage::TerminalInput { input, control } => {
+                            let request = ClientRequest {
+                                request_id: 0,
+                                actor_device_id: Some(client_id.to_string()),
+                                lease_epoch: None,
+                                control,
+                                body: Request::TerminalInput(input),
+                            };
+                            interactive
+                                .try_send(InteractiveRequest::Input(request))
+                                .map_err(|_| ())?;
+                        }
+                        ControlMessage::Request(request) => {
+                            if let Request::Ping { sent_millis } = request.body {
+                                writer
+                                    .send_interactive(&ControlMessage::Response(HostResponse {
+                                        request_id: request.request_id,
+                                        result: Ok(Response::Pong {
+                                            sent_millis,
+                                            host_millis: now_millis(),
+                                        }),
+                                    }))
+                                    .map_err(|_| ())?;
+                            } else if interactive_lane_request(&request.body) {
+                                interactive
+                                    .try_send(InteractiveRequest::Request(request))
+                                    .map_err(|_| ())?;
+                            } else if recovery_request(&request.body) {
+                                let uses_attachments =
+                                    request_uses_terminal_attachments(&request.body);
+                                let (response, changed) = dispatch_control_request(
+                                    request,
+                                    &client_id,
+                                    &attachments,
+                                    &request_journal,
+                                    context,
+                                )
+                                .await;
+                                writer
+                                    .send_reliable(&ControlMessage::Response(response))
+                                    .map_err(|_| ())?;
+                                if uses_attachments {
+                                    streams.reconcile(&attachments, None).await;
+                                }
+                                if changed {
+                                    context.lifecycle.resource_changed();
+                                }
+                            } else {
+                                queued.push_back(request);
+                            }
+                        }
+                        ControlMessage::Response(_)
+                        | ControlMessage::Event(_)
+                        | ControlMessage::Chunk(_) => return Err(()),
                     }
                     break;
                 }
-                response = running.join_next(), if !running.is_empty() => {
-                    let (response, changed) = response.ok_or(())?.map_err(|_| ())?;
-                    send_control(&mut writer, &ControlMessage::Response(response)).await.map_err(|_| ())?;
-                    if changed { context.lifecycle.resource_changed(); }
+                finished = running.join_next(), if !running.is_empty() => {
+                    let (response, changed, uses_attachments, attached) =
+                        finished.ok_or(())?.map_err(|_| ())?;
+                    writer
+                        .send_reliable(&ControlMessage::Response(response))
+                        .map_err(|_| ())?;
+                    // Streams start after the response that attached them is queued.
+                    if uses_attachments {
+                        streams.reconcile(&attachments, attached.as_ref()).await;
+                    }
+                    if changed {
+                        context.lifecycle.resource_changed();
+                    }
+                }
+                () = writer.closed() => return Err(()),
+                changed = replaced.changed() => {
+                    if changed.is_err() || *replaced.borrow() {
+                        return Ok(());
+                    }
                 }
                 changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow() { return Ok(()); }
+                    if changed.is_err() || *stop.borrow() {
+                        let _ = send_host_state_event(&writer, context, ServerEvent::HostStopping);
+                        let _ = tokio::time::timeout(STOPPING_FLUSH_TIMEOUT, writer.flush()).await;
+                        return Ok(());
+                    }
                 }
+            }
+        }
+    }
+}
+
+/// The terminal a successful request attaches anew; its stream restarts with a Snapshot.
+fn attached_session(request: &Request) -> Option<&TerminalSessionId> {
+    match request {
+        Request::SpawnTerminal { spec, .. } => Some(&spec.session_id),
+        Request::AttachTerminal(attach) => Some(&attach.session_id),
+        _ => None,
+    }
+}
+
+/// The terminal streams of one Session connection: one per terminal attachment.
+struct TerminalStreams {
+    context: TerminalStreamContext,
+    streams: HashMap<TerminalSessionId, TerminalStream>,
+}
+
+impl TerminalStreams {
+    /// Matches the streams to the connection's attachments. A stream that
+    /// finished, for example after its terminal exited, is not restarted
+    /// unless `attached` names it.
+    async fn reconcile(
+        &mut self,
+        attachments: &SharedTerminalAttachments,
+        attached: Option<&TerminalSessionId>,
+    ) {
+        let attachments = attachments.lock().await;
+        self.streams
+            .retain(|session_id, _| attachments.contains_key(session_id));
+        if let Some(session_id) = attached.filter(|id| attachments.contains_key(*id)) {
+            self.streams.insert(
+                session_id.clone(),
+                TerminalStream::start(&self.context, session_id.clone()),
+            );
+        }
+        for session_id in attachments.keys() {
+            if !self.streams.contains_key(session_id) {
+                self.streams.insert(
+                    session_id.clone(),
+                    TerminalStream::start(&self.context, session_id.clone()),
+                );
             }
         }
     }
@@ -1141,16 +1299,7 @@ async fn dispatch_control_request(
     context: &ConnectionContext,
 ) -> (HostResponse, bool) {
     let resource_changed = request_changes_resource_catalog(&request.body);
-    let response = if interactive_lane_request(&request.body) {
-        HostResponse {
-            request_id: request.request_id,
-            result: Err(ProtocolFailure::new(
-                FailureCode::InvalidRequest,
-                "terminal mutation must use the interactive channel",
-                false,
-            )),
-        }
-    } else if request_uses_terminal_attachments(&request.body) {
+    let response = if request_uses_terminal_attachments(&request.body) {
         let mut attachments = attachments.lock().await;
         process_control_request(
             request,
@@ -1376,135 +1525,89 @@ fn apply_terminal_response_effects(
     }
 }
 
-async fn serve_terminal_interactive_connection(
-    stream: TransportStream,
+/// A terminal mutation read from the Session connection, executed in arrival
+/// order by the connection's interactive worker.
+enum InteractiveRequest {
+    /// One-way input; a rejection is only logged.
+    Input(ClientRequest),
+    /// Input, resize, or scroll that expects a response.
+    Request(ClientRequest),
+}
+
+/// Requests a connection may queue for its interactive worker before it is
+/// closed as unresponsive.
+const MAX_QUEUED_INTERACTIVE_REQUESTS: usize = 1024;
+
+async fn run_interactive_requests(
+    mut requests: mpsc::Receiver<InteractiveRequest>,
+    writer: SessionWriter,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
-    context: &ConnectionContext,
-) -> Result<(), ()> {
-    let (mut reader, mut writer) = tokio::io::split(stream);
-    let mut stop = context.stop.clone();
-    loop {
-        tokio::select! {
-            message = receive_terminal_interactive(&mut reader) => {
-                let message = match message {
-                    Ok(message) => message,
-                    Err(error) => {
-                        let request_id = error.unsupported_request_id().ok_or(())?;
-                        send_terminal_interactive(
-                            &mut writer,
-                            &TerminalInteractiveMessage::Response(HostResponse::unsupported(request_id)),
-                        )
-                        .await
-                        .map_err(|_| ())?;
-                        continue;
-                    }
-                };
-                let (request, reply) = match message {
-                    TerminalInteractiveMessage::Input { input, control } => (
-                        ClientRequest {
-                            request_id: 0,
-                            actor_device_id: Some(client_id.to_string()),
-                            lease_epoch: None,
-                            control,
-                            body: Request::TerminalInput(input),
-                        },
-                        false,
-                    ),
-                    TerminalInteractiveMessage::Request(request)
-                        if matches!(request.body, Request::Ping { .. }) => {
-                        let Request::Ping { sent_millis } = request.body else { unreachable!() };
-                        send_terminal_interactive(&mut writer, &TerminalInteractiveMessage::Response(
-                            HostResponse { request_id: request.request_id, result: Ok(Response::Pong {
-                                sent_millis, host_millis: now_millis(),
-                            }) },
-                        )).await.map_err(|_| ())?;
-                        continue;
-                    }
-                    TerminalInteractiveMessage::Request(request)
-                        if interactive_lane_request(&request.body) => (request, true),
-                    TerminalInteractiveMessage::Request(request) => {
-                        let response = HostResponse {
-                            request_id: request.request_id,
-                            result: Err(ProtocolFailure::new(
-                                FailureCode::InvalidRequest,
-                                "interactive channel accepts only terminal mutations",
-                                false,
-                            )),
-                        };
-                        send_terminal_interactive(
-                            &mut writer,
-                            &TerminalInteractiveMessage::Response(response),
-                        )
-                        .await
-                        .map_err(|_| ())?;
-                        continue;
-                    }
-                    TerminalInteractiveMessage::Response(_) => return Err(()),
-                };
-                let mut attachments = attachments.lock().await;
-                let admission = admit_mutation(&request, context, &client_id).await;
-                let response = match &admission {
-                    Ok(guard) => handle_request(
-                        request, context, &client_id, &mut attachments,
-                        context.host_sequence.fetch_add(1, Ordering::Relaxed), guard.blocking.clone(),
-                    ).await,
-                    Err(failure) => HostResponse { request_id: request.request_id, result: Err(failure.clone()) },
-                };
-                if let Ok(result) = &response.result {
-                    apply_terminal_response_effects(
-                        result,
-                        &mut attachments,
-                        &client_id,
-                        &context.runtime,
-                    );
-                }
-                drop(attachments);
-                if reply {
-                    send_terminal_interactive(
-                        &mut writer,
-                        &TerminalInteractiveMessage::Response(response),
-                    )
-                    .await
-                    .map_err(|_| ())?;
-                } else if let Err(error) = response.result {
-                    eprintln!("one-way terminal input rejected: {error:?}");
-                }
+    context: ConnectionContext,
+) {
+    while let Some(request) = requests.recv().await {
+        let (request, reply) = match request {
+            InteractiveRequest::Input(request) => (request, false),
+            InteractiveRequest::Request(request) => (request, true),
+        };
+        let mut attachments = attachments.lock().await;
+        let admission = admit_mutation(&request, &context, &client_id).await;
+        let response = match &admission {
+            Ok(guard) => {
+                handle_request(
+                    request,
+                    &context,
+                    &client_id,
+                    &mut attachments,
+                    context.host_sequence.fetch_add(1, Ordering::Relaxed),
+                    guard.blocking.clone(),
+                )
+                .await
             }
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    return Ok(());
-                }
+            Err(failure) => HostResponse {
+                request_id: request.request_id,
+                result: Err(failure.clone()),
+            },
+        };
+        if let Ok(result) = &response.result {
+            apply_terminal_response_effects(result, &mut attachments, &client_id, &context.runtime);
+        }
+        drop(attachments);
+        if reply {
+            if writer
+                .send_interactive(&ControlMessage::Response(response))
+                .is_err()
+            {
+                return;
             }
+        } else if let Err(error) = response.result {
+            eprintln!("one-way terminal input rejected: {error:?}");
         }
     }
 }
 
-async fn send_host_state_event(
-    stream: &mut (impl tokio::io::AsyncWrite + Unpin),
+fn send_host_state_event(
+    writer: &SessionWriter,
     context: &ConnectionContext,
     body: ServerEvent,
 ) -> Result<(), ()> {
-    send_state_event(
-        stream,
-        &HostEvent {
+    writer
+        .send_reliable(&ControlMessage::Event(HostEvent {
             host_sequence: context.host_sequence.fetch_add(1, Ordering::Relaxed),
             body,
-        },
-    )
-    .await
-    .map_err(|_| ())
+        }))
+        .map_err(|_| ())
 }
 
-async fn serve_state_event_connection(
-    stream: TransportStream,
+/// Forwards Host state changes to one Session connection as reliable events.
+/// Terminal exits travel with their terminal's stream instead.
+async fn forward_state_events(
+    writer: SessionWriter,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
-    context: &ConnectionContext,
+    context: ConnectionContext,
 ) -> Result<(), ()> {
-    use tokio::io::AsyncReadExt;
-    let (mut reader, mut stream) = tokio::io::split(stream);
-    let mut unexpected_input = [0];
+    let context = &context;
     let mut ssh_events = context.ssh.subscribe();
     let mut agent_hook_events = context.agent_hooks.subscribe();
     let mut token_usage_events = context.agent_hooks.subscribe_token_usage();
@@ -1513,7 +1616,7 @@ async fn serve_state_event_connection(
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
     let mut profile_changes = context.profile_changes.subscribe();
     send_host_state_event(
-        &mut stream,
+        &writer,
         context,
         ServerEvent::ProfileControl(
             context
@@ -1521,35 +1624,26 @@ async fn serve_state_event_connection(
                 .control
                 .status(context.identity.host_epoch),
         ),
-    )
-    .await?;
-    let mut stop = context.stop.clone();
+    )?;
     for update in context.agent_hooks.snapshots_after(&[]) {
         send_host_state_event(
-            &mut stream,
+            &writer,
             context,
             ServerEvent::AgentSnapshot(Box::new(update)),
-        )
-        .await?;
+        )?;
     }
     for summary in context.agent_hooks.project_token_usage() {
-        send_host_state_event(
-            &mut stream,
-            context,
-            ServerEvent::ProjectTokenUsage(summary),
-        )
-        .await?;
+        send_host_state_event(&writer, context, ServerEvent::ProjectTokenUsage(summary))?;
     }
     for change in context.projects.resync_changes() {
-        send_host_state_event(&mut stream, context, ServerEvent::ProjectChanged(change)).await?;
+        send_host_state_event(&writer, context, ServerEvent::ProjectChanged(change))?;
     }
     loop {
         tokio::select! {
-            _ = reader.read(&mut unexpected_input) => return Ok(()),
             changed = profile_changes.changed() => {
                 changed.map_err(|_| ())?;
-                send_host_state_event(&mut stream, context,
-                    ServerEvent::ProfileControl(context.workspaces.control.status(context.identity.host_epoch))).await?;
+                send_host_state_event(&writer, context,
+                    ServerEvent::ProfileControl(context.workspaces.control.status(context.identity.host_epoch)))?;
             }
             event = runtime_events.recv() => {
                 let server_event = {
@@ -1563,19 +1657,6 @@ async fn serve_state_event_connection(
                                     attachment.unseen_output.saturating_add(1);
                             }
                             None
-                        }
-                        Ok(HostTerminalEvent::Exited {
-                            session_id,
-                            session_epoch,
-                            code,
-                            final_sequence,
-                        }) if subscriptions.contains_key(&session_id) => {
-                            Some(ServerEvent::TerminalExit {
-                                session_id,
-                                session_epoch,
-                                code,
-                                final_sequence,
-                            })
                         }
                         Ok(HostTerminalEvent::LeaseRevoked {
                             session_id,
@@ -1667,7 +1748,7 @@ async fn serve_state_event_connection(
                     }
                 };
                 if let Some(body) = server_event {
-                    send_host_state_event(&mut stream, context, body).await?;
+                    send_host_state_event(&writer, context, body)?;
                 }
             }
             event = ssh_events.recv() => {
@@ -1679,26 +1760,24 @@ async fn serve_state_event_connection(
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
-                send_host_state_event(&mut stream, context, body).await?;
+                send_host_state_event(&writer, context, body)?;
             }
             event = project_events.recv() => {
                 match event {
                     Ok(change) => {
                         send_host_state_event(
-                            &mut stream,
+                            &writer,
                             context,
                             ServerEvent::ProjectChanged(change),
-                        )
-                        .await?;
+                        )?;
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         for change in context.projects.resync_changes() {
                             send_host_state_event(
-                                &mut stream,
+                                &writer,
                                 context,
                                 ServerEvent::ProjectChanged(change),
-                            )
-                            .await?;
+                            )?;
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
@@ -1714,11 +1793,10 @@ async fn serve_state_event_connection(
                 };
                 for update in updates {
                     send_host_state_event(
-                        &mut stream,
+                        &writer,
                         context,
                         ServerEvent::AgentSnapshot(Box::new(update)),
-                    )
-                    .await?;
+                    )?;
                 }
             }
             event = token_usage_events.recv() => {
@@ -1731,11 +1809,10 @@ async fn serve_state_event_connection(
                 };
                 for summary in summaries {
                     send_host_state_event(
-                        &mut stream,
+                        &writer,
                         context,
                         ServerEvent::ProjectTokenUsage(summary),
-                    )
-                    .await?;
+                    )?;
                 }
             }
             changed = resource_changes.changed() => {
@@ -1743,22 +1820,10 @@ async fn serve_state_event_connection(
                     return Err(());
                 }
                 send_host_state_event(
-                    &mut stream,
+                    &writer,
                     context,
                     ServerEvent::ResourceCatalogChanged,
-                )
-                .await?;
-            }
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    let _ = send_host_state_event(
-                        &mut stream,
-                        context,
-                        ServerEvent::HostStopping,
-                    )
-                    .await;
-                    return Ok(());
-                }
+                )?;
             }
         }
     }
@@ -1884,364 +1949,6 @@ async fn serve_lifecycle_connection(
     }
 }
 
-/// What the client mirror holds once every frame queued on a data lane is applied.
-struct SentBaseline {
-    session_epoch: u64,
-    sequence: u64,
-    geometry_epoch: u64,
-    scrollback_epoch: u64,
-    history_size: u64,
-    display_offset: u64,
-    modes: TerminalModes,
-    process_state: TerminalProcessState,
-    /// The rows equal the Host's live view at `sequence`, so shared deltas apply.
-    follows_live: bool,
-}
-
-impl SentBaseline {
-    fn from_viewport(viewport: &SemanticViewport) -> Self {
-        Self {
-            session_epoch: viewport.session_epoch,
-            sequence: viewport.sequence,
-            geometry_epoch: viewport.geometry_epoch,
-            scrollback_epoch: viewport.scrollback_epoch,
-            history_size: viewport.history_size,
-            display_offset: viewport.display_offset,
-            modes: viewport.modes.clone(),
-            process_state: viewport.process_state,
-            follows_live: viewport.display_offset == 0,
-        }
-    }
-
-    fn advance(&mut self, update: &TerminalStreamUpdate) {
-        match update {
-            TerminalStreamUpdate::Snapshot(viewport) => *self = Self::from_viewport(viewport),
-            TerminalStreamUpdate::Delta(delta) => {
-                self.sequence = delta.sequence;
-                self.geometry_epoch = delta.geometry_epoch;
-                self.scrollback_epoch = delta.scrollback_epoch;
-                self.history_size = delta.history_size;
-                self.display_offset = delta.display_offset;
-                if let Some(modes) = &delta.modes {
-                    self.modes.clone_from(modes);
-                }
-                if let Some(process_state) = delta.process_state {
-                    self.process_state = process_state;
-                }
-            }
-            TerminalStreamUpdate::RawTail { .. } | TerminalStreamUpdate::ResyncRequired { .. } => {}
-        }
-    }
-
-    fn metadata_differs(&self, update: &TerminalStreamUpdate) -> bool {
-        match update {
-            TerminalStreamUpdate::Snapshot(viewport) => {
-                viewport.modes != self.modes || viewport.process_state != self.process_state
-            }
-            TerminalStreamUpdate::Delta(delta) => {
-                delta
-                    .modes
-                    .as_ref()
-                    .is_some_and(|modes| *modes != self.modes)
-                    || delta
-                        .process_state
-                        .is_some_and(|process_state| process_state != self.process_state)
-            }
-            TerminalStreamUpdate::RawTail { .. } | TerminalStreamUpdate::ResyncRequired { .. } => {
-                false
-            }
-        }
-    }
-
-    /// Title, cwd, mode bits and process state for a client that does not render
-    /// the rows. The rows it holds stay as they are.
-    fn metadata_delta(&self, current: &SemanticViewport) -> Option<SemanticDelta> {
-        if current.session_epoch != self.session_epoch || current.sequence <= self.sequence {
-            return None;
-        }
-        let modes = (current.modes != self.modes).then(|| current.modes.clone());
-        let process_state =
-            (current.process_state != self.process_state).then_some(current.process_state);
-        if modes.is_none() && process_state.is_none() {
-            return None;
-        }
-        Some(SemanticDelta {
-            session_id: current.session_id.clone(),
-            session_epoch: self.session_epoch,
-            base_sequence: self.sequence,
-            sequence: current.sequence,
-            geometry_epoch: self.geometry_epoch,
-            scrollback_epoch: self.scrollback_epoch,
-            history_size: self.history_size,
-            display_offset: self.display_offset,
-            changed_rows: Vec::new(),
-            cursor: None,
-            modes,
-            palette: None,
-            process_state,
-            images: None,
-            placements: None,
-        })
-    }
-}
-
-/// The newest frame a data lane owes its client. It keeps merging while the
-/// writer is busy, so a slow client receives one combined frame, never a gap.
-enum PendingTerminalFrame {
-    Shared(Arc<SharedTerminalUpdate>),
-    Update(Box<TerminalStreamUpdate>),
-    SnapshotRequired,
-}
-
-impl PendingTerminalFrame {
-    fn push(
-        current: Option<Self>,
-        baseline: &SentBaseline,
-        update: Arc<SharedTerminalUpdate>,
-    ) -> Option<Self> {
-        let Some(current) = current else {
-            return Self::start(baseline, update);
-        };
-        if matches!(update.update(), TerminalStreamUpdate::Snapshot(_)) {
-            return Some(Self::Shared(update));
-        }
-        Some(match current {
-            Self::Shared(current) => {
-                let mut current = current.update().clone();
-                if merge_terminal_updates(&mut current, update.update()) {
-                    Self::Update(Box::new(current))
-                } else {
-                    Self::SnapshotRequired
-                }
-            }
-            Self::Update(mut current) => {
-                if merge_terminal_updates(current.as_mut(), update.update()) {
-                    Self::Update(current)
-                } else {
-                    Self::SnapshotRequired
-                }
-            }
-            Self::SnapshotRequired => Self::SnapshotRequired,
-        })
-    }
-
-    fn start(baseline: &SentBaseline, update: Arc<SharedTerminalUpdate>) -> Option<Self> {
-        match update.update() {
-            TerminalStreamUpdate::Snapshot(viewport)
-                if viewport.session_epoch == baseline.session_epoch
-                    && viewport.sequence < baseline.sequence =>
-            {
-                None
-            }
-            TerminalStreamUpdate::Snapshot(_) => Some(Self::Shared(update)),
-            TerminalStreamUpdate::Delta(delta)
-                if delta.session_epoch == baseline.session_epoch
-                    && delta.sequence <= baseline.sequence =>
-            {
-                None
-            }
-            TerminalStreamUpdate::Delta(delta)
-                if baseline.follows_live
-                    && delta.session_epoch == baseline.session_epoch
-                    && delta.base_sequence == baseline.sequence =>
-            {
-                Some(Self::Shared(update))
-            }
-            _ => Some(Self::SnapshotRequired),
-        }
-    }
-
-    fn enqueue(
-        self,
-        terminal: &HostedTerminal,
-        output: &TerminalDataWriter,
-        host_sequence: &AtomicU64,
-        baseline: &mut SentBaseline,
-        display_offset: u64,
-    ) -> Result<(), ()> {
-        match self {
-            Self::Shared(update) => {
-                output
-                    .enqueue_shared(host_sequence, update.as_ref())
-                    .map_err(|_| ())?;
-                baseline.advance(update.update());
-            }
-            Self::Update(update) => {
-                baseline.advance(&update);
-                output.enqueue(host_sequence, *update).map_err(|_| ())?;
-            }
-            Self::SnapshotRequired => {
-                *baseline = send_snapshot(terminal, output, host_sequence, display_offset)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn merge_terminal_updates(current: &mut TerminalStreamUpdate, next: &TerminalStreamUpdate) -> bool {
-    match current {
-        TerminalStreamUpdate::Snapshot(viewport) => !matches!(
-            viewport.apply_stream_update_ref(next),
-            TerminalStreamApply::SequenceGap
-        ),
-        TerminalStreamUpdate::Delta(current) => match next {
-            TerminalStreamUpdate::Delta(next) => current.merge_contiguous(next.clone()),
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-fn send_snapshot(
-    terminal: &HostedTerminal,
-    output: &TerminalDataWriter,
-    host_sequence: &AtomicU64,
-    display_offset: u64,
-) -> Result<SentBaseline, ()> {
-    let viewport = terminal.current_viewport(display_offset).ok_or(())?;
-    let baseline = SentBaseline::from_viewport(&viewport);
-    output
-        .enqueue(host_sequence, TerminalStreamUpdate::Snapshot(viewport))
-        .map_err(|_| ())?;
-    Ok(baseline)
-}
-
-/// Streams one terminal to one client. The lane opens with a Snapshot and then
-/// only sends frames that apply to what it already sent: contiguous deltas,
-/// Snapshots, or metadata deltas while the client does not render the rows.
-async fn serve_terminal_data_connection(
-    stream: TransportStream,
-    client_id: ClientInstanceId,
-    session_id: TerminalSessionId,
-    runtime: &Arc<HostRuntime>,
-    host_sequence: &Arc<AtomicU64>,
-    mut stop: watch::Receiver<bool>,
-) -> Result<(), ()> {
-    let terminal = runtime.terminal(&session_id).ok_or(())?;
-    let mut attachment = runtime
-        .attachment_receiver(&session_id, &client_id)
-        .ok_or(())?;
-    let mut view = *attachment.borrow();
-    if !view.attached {
-        return Err(());
-    }
-    let live = |view: &runtime::AttachmentStreamState| view.visible && view.display_offset == 0;
-    let mut terminal_events = terminal.subscribe();
-    let output = TerminalDataWriter::new(stream, runtime.new_attachment_queue_diagnostics());
-    let mut output_failure = output.subscribe_failure();
-    let mut baseline = send_snapshot(&terminal, &output, host_sequence, view.display_offset)?;
-    if terminal.is_exited() {
-        drain_terminal_data(&output).await?;
-        return Ok(());
-    }
-    let mut pending_frame = None::<PendingTerminalFrame>;
-    let mut metadata_dirty = false;
-    // Keep scheduler lateness from accumulating into a slower-than-display stream.
-    // Skip missed ticks after idle periods instead of bursting to catch up.
-    let mut frame_interval = tokio::time::interval(TERMINAL_FRAME_INTERVAL);
-    frame_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            event = terminal_events.recv() => {
-                match event {
-                    Ok(HostTerminalEvent::Update {
-                        session_id: update_session_id,
-                        update,
-                    }) if update_session_id == session_id => {
-                        if live(&view) {
-                            pending_frame =
-                                PendingTerminalFrame::push(pending_frame.take(), &baseline, update);
-                        } else if baseline.metadata_differs(update.update()) {
-                            metadata_dirty = true;
-                        }
-                    }
-                    Ok(HostTerminalEvent::Exited {
-                        session_id: exited_session_id,
-                        ..
-                    }) if exited_session_id == session_id => {
-                        // The final frame goes out even to hidden attachments, after
-                        // everything already queued.
-                        drain_terminal_data(&output).await?;
-                        send_snapshot(&terminal, &output, host_sequence, view.display_offset)?;
-                        drain_terminal_data(&output).await?;
-                        return Ok(());
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        runtime.note_attachment_lag(&session_id, &client_id, skipped, !live(&view));
-                        if live(&view) {
-                            pending_frame = Some(PendingTerminalFrame::SnapshotRequired);
-                        } else {
-                            metadata_dirty = true;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return Err(()),
-                }
-            }
-            changed = attachment.changed() => {
-                if changed.is_err() {
-                    return Ok(());
-                }
-                let previous = view;
-                view = *attachment.borrow();
-                if !view.attached {
-                    return Ok(());
-                }
-                if !view.visible {
-                    pending_frame = None;
-                } else if !previous.visible
-                    || previous.display_offset != view.display_offset
-                    || previous.view_revision != view.view_revision
-                {
-                    if previous.display_offset != 0 && view.display_offset == 0 {
-                        runtime.mark_attachment_resync(
-                            &session_id,
-                            &client_id,
-                            AttachmentResyncReason::ReturnToBottom,
-                        );
-                    }
-                    pending_frame = Some(PendingTerminalFrame::SnapshotRequired);
-                }
-            }
-            _ = frame_interval.tick(), if pending_frame.is_some() || metadata_dirty => {
-                // One frame in flight at a time: a busy writer leaves the frame
-                // merging in its slot instead of growing the queue.
-                if output.is_idle() {
-                    if let Some(pending) = pending_frame.take() {
-                        pending.enqueue(
-                            &terminal,
-                            &output,
-                            host_sequence,
-                            &mut baseline,
-                            view.display_offset,
-                        )?;
-                    } else if let Some(delta) = terminal
-                        .latest_viewport()
-                        .and_then(|current| baseline.metadata_delta(&current))
-                    {
-                        let update = TerminalStreamUpdate::Delta(delta);
-                        baseline.advance(&update);
-                        baseline.follows_live = false;
-                        output.enqueue(host_sequence, update).map_err(|_| ())?;
-                    }
-                    metadata_dirty = false;
-                }
-            }
-            _ = output_failure.changed() => return Err(()),
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    return Ok(());
-                }
-            }
-        }
-    }
-}
-
-async fn drain_terminal_data(output: &TerminalDataWriter) -> Result<(), ()> {
-    tokio::time::timeout(Duration::from_secs(1), output.drain())
-        .await
-        .map_err(|_| ())?
-}
 fn request_mutates(body: &Request) -> bool {
     matches!(
         body.required_capability(),
@@ -3578,8 +3285,9 @@ mod session_retention_tests {
                         credential_generation: 0,
                         nonce: yttt_transport::new_session_nonce(),
                     },
-                    control_connected: index == 0,
-                    connections: usize::from(index == 0),
+                    connection: (index == 0).then(|| watch::channel(false).0),
+                    generation: 1,
+                    slot: Arc::new(tokio::sync::Mutex::new(())),
                     last_disconnected: now - Duration::from_millis(1000 - index),
                 },
             );

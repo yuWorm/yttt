@@ -9,13 +9,13 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
 1. **枚举变体只追加，不重排、不复用名称。** 旧端收到不认识的变体时按外层信封降级,不断线:
    - 请求 → Host 回复该 `request_id` 的 `FailureCode::Unsupported`,连接继续服务后续请求。
    - 响应 → 接收端把它转成该 `request_id` 的 `Unsupported` 失败,等待者照常得到结果。
-   - 事件(control 通道与 state-event 通道)→ 跳过,下一事件照常交付。
+   - 事件 → 跳过,下一事件照常交付。
    - 外层信封本身不认识(不是 Request/Response/Event,或请求缺 `request_id`)→ 仍是解码错误并断线。
    新功能在旧端只失去这一个功能;调用方据 `Unsupported` 隐藏或降级该功能。
 2. **结构体字段只追加。** 新字段必须带 `#[serde(default)]` 或本身可缺省；旧对端忽略未知字段。
 3. **字段名即标签。** CBOR 按名称携带变体与字段;不得复用已废弃的名称。
-   `crates/yttt-protocol/tests/wire_shapes.rs` 从 serde derive 的静态名称表遍历握手、lifecycle、
-   control、terminal-interactive 与 state-event 的全部 wire 类型,与
+   `crates/yttt-protocol/tests/wire_shapes.rs` 从 serde derive 的静态名称表遍历握手、lifecycle
+   与 control 的全部 wire 类型,与
    `tests/fixtures/wire-shapes-v22.json` 比较:删除/改名直接失败并要求升版本;追加也会失败,
    确认新字段带缺省后以 `YTTT_BLESS_WIRE_SHAPES=1 cargo test -p yttt-protocol --test wire_shapes`
    重写样本。`serde_json::Value`、内部标签(`tag = ...`)、untagged 与 flatten 类型只经过
@@ -35,7 +35,14 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   v22 内追加(未升版本):`SetTerminalVisibility { revision, visible }` 请求,Host 以 `Applied` 回复;
   旧 Host 回复 `Unsupported`,Client 停止上报,所有 attachment 按可见处理。Host 不再保留原始 PTY 回放:
   `after_sequence` 字段保留但被忽略,`raw_replay_tail` 恒为空;Host 不再发送 `ResyncRequired`,
-  新 Client 收到旧 Host 发来的该事件时重建 terminal-data 连接。
+  Client 收到该事件时重建整条 session 连接。
+  v22 发布前一并收敛为每个 Client 一条连接(v22 尚未发布,直接改写样本,不另升版本):
+  `ConnectionChannel` 只剩 `Session`、`Lifecycle`、`DesktopOwner`;删除 `Control`、
+  `TerminalInteractive`、`StateEvents`、`TerminalData` 变体、`TerminalInteractiveMessage` 与
+  `ClientHello.terminal_session_id`。session 连接只走 control frame kind;新增
+  `ControlMessage::Chunk(MessageChunk { stream, last, bytes })`(超过 256 KiB 的消息分块),
+  `ControlMessage::TerminalInput` 改为 `{ input, control }`。`FrameKind` 中旧的 terminal-interactive(5)、
+  state-event(6)数值保留不复用,收到即为解码错误。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

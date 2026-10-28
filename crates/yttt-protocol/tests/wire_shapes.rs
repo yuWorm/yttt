@@ -26,9 +26,7 @@ use serde::{
         SeqAccess, VariantAccess, Visitor,
     },
 };
-use yttt_protocol::{
-    ControlMessage, HandshakeMessage, HostEvent, LifecycleMessage, TerminalInteractiveMessage,
-};
+use yttt_protocol::{ControlMessage, HandshakeMessage, LifecycleMessage};
 
 const FIXTURE: &str = "tests/fixtures/wire-shapes-v22.json";
 /// Containers deeper than this get empty sequences, maps, and `None`.
@@ -414,12 +412,10 @@ fn walk_root<T: DeserializeOwned>(walk: &RefCell<Walk>) {
 fn trace() -> Shapes {
     let walk = RefCell::new(Walk::default());
     for _ in 0..MAX_PASSES {
-        // Wire roots: handshake, lifecycle, control, terminal-interactive, and state-event frames.
+        // Wire roots: handshake, lifecycle, and session (control) frames.
         walk_root::<HandshakeMessage>(&walk);
         walk_root::<LifecycleMessage>(&walk);
         walk_root::<ControlMessage>(&walk);
-        walk_root::<TerminalInteractiveMessage>(&walk);
-        walk_root::<HostEvent>(&walk);
         let walk = walk.borrow();
         if walk.required.is_subset(&walk.entered) {
             return walk.shapes.clone();

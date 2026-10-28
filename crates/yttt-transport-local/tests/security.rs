@@ -36,8 +36,7 @@ fn identities() -> (ClientIdentity, HostIdentity) {
             client_instance_id: ClientInstanceId::new("client-1"),
             host_epoch_hint: None,
             can_force_stop: false,
-            channel: ConnectionChannel::Control,
-            terminal_session_id: None,
+            channel: ConnectionChannel::Session,
         },
         HostIdentity {
             resource_supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
@@ -257,45 +256,6 @@ async fn lifecycle_channel_authenticates_across_a_build_mismatch() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn channel_and_terminal_session_identity_must_match() {
-    let (control_identity, host_identity) = identities();
-    let mut control_with_session = control_identity.clone();
-    control_with_session.terminal_session_id =
-        Some(yttt_core::model::ids::TerminalSessionId::new("unexpected"));
-    let mut data_without_session = control_identity.clone();
-    data_without_session.channel = ConnectionChannel::TerminalData;
-    let mut lifecycle_with_session = control_identity.clone();
-    lifecycle_with_session.channel = ConnectionChannel::Lifecycle;
-    lifecycle_with_session.terminal_session_id =
-        Some(yttt_core::model::ids::TerminalSessionId::new("unexpected"));
-    for client_identity in [
-        control_with_session,
-        data_without_session,
-        lifecycle_with_session,
-    ] {
-        let token = AuthToken::from_bytes([29; 32]);
-        let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
-        let (client_result, server_result) = tokio::join!(
-            client_handshake(&mut client_stream, &client_identity, &token),
-            server_handshake(&mut server_stream, &host_identity, &token),
-        );
-        assert!(matches!(
-            client_result,
-            Err(HandshakeError::Rejected(
-                yttt_protocol::RejectReason::InvalidMessage
-            ))
-        ));
-        assert!(matches!(
-            server_result,
-            Err(HandshakeError::Rejected(
-                yttt_protocol::RejectReason::InvalidMessage
-            ))
-        ));
-    }
-}
-
-#[cfg(unix)]
-#[tokio::test]
 async fn invalid_client_proof_is_rejected_without_exposing_secret() {
     let (client_identity, host_identity) = identities();
     let host_token = AuthToken::from_bytes([2; 32]);
@@ -311,8 +271,7 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
             credential_generation: 0,
             can_force_stop: false,
             nonce: yttt_protocol::Nonce([8; 32]),
-            channel: ConnectionChannel::Control,
-            terminal_session_id: None,
+            channel: ConnectionChannel::Session,
         };
         yttt_transport_local::send_handshake(
             &mut client_stream,
@@ -490,7 +449,7 @@ async fn work_ingress_cannot_claim_device_administration() {
         for (channel, force) in [
             (ConnectionChannel::DesktopOwner, false),
             (ConnectionChannel::Lifecycle, false),
-            (ConnectionChannel::Control, true),
+            (ConnectionChannel::Session, true),
         ] {
             let (mut client, mut host) = identities();
             host.ingress = ingress;

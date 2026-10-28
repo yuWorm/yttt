@@ -6,8 +6,10 @@
 - Raise the resource protocol to the v22 stable baseline, the last change that requires the desktop, Host, remote Server, and CLI to update together. Later requests, responses, and events append without a version bump: an older peer answers an unknown request with `Unsupported`, resolves an unknown response as `Unsupported`, and skips an unknown event instead of dropping the connection.
 - 桌面升级后直接接入协议兼容的现有 Host，即使 build 不同也不再要求停止；忙碌的独立 Host 不再阻止新版本启动。只有协议不兼容时才在 Host 空闲后替换。
 - Attach to an existing protocol-compatible Host after a desktop upgrade even when its build differs, so a busy independent Host no longer blocks the new version from starting. Hosts are replaced only on protocol incompatibility, and only once idle.
-- 终端同步改为单写者：Host 的 terminal-data 连接是镜像唯一来源，序号中断时重建该连接并以当前画面重新开始，不再经控制通道补快照。慢客户端恢复读取后直接收到合并后的最新画面，不再触发整屏重同步。
-- Make terminal sync single-writer: the Host's terminal-data connection is the only source for a mirror, and a sequence gap rebuilds that connection from the current screen instead of patching it over the control channel. A slow client that resumes reading receives the coalesced latest frame instead of a full resync.
+- 终端同步改为单写者：Host 推送的终端流是镜像唯一来源，序号中断时重建连接并以当前画面重新开始，不再经控制请求补快照。慢客户端恢复读取后直接收到合并后的最新画面，不再触发整屏重同步。
+- Make terminal sync single-writer: the Host's terminal stream is the only source for a mirror, and a sequence gap reconnects and restarts from the current screen instead of patching it with control requests. A slow client that resumes reading receives the coalesced latest frame instead of a full resync.
+- 每个客户端与 Host 之间只保留一条连接，承载请求、状态事件、输入和所有终端画面，SSH 转发也只用一条通道。输入与心跳优先发送，大响应分块传输时不再阻塞键入；终端的最后一帧总在退出通知之前到达。
+- Use one connection per client for requests, state events, input, and every terminal's frames, so SSH forwarding also needs a single channel. Input and heartbeats go first and large responses travel in chunks without delaying typing; a terminal's last frame always arrives before its exit notice.
 - 窗口不可见的终端不再接收画面更新，只同步标题、目录与退出状态；再次显示时立即收到当前画面。所有窗口都隐藏的终端在 Host 侧也跳过输出捕获。CLI `panes read` 改为读取 Host 当前内容，隐藏的 pane 也返回最新输出。
 - Stop sending screen updates for terminals that no window shows, syncing only title, directory, and exit state; showing them again delivers the current screen at once. Terminals hidden in every window also skip output capture on the Host. CLI `panes read` now reads the Host's current content, so hidden panes return the latest output.
 - Host 不再保留每终端最多 8 MiB 的原始输出回放，降低内存占用。

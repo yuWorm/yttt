@@ -17,8 +17,7 @@ use yttt_protocol::{
 };
 use yttt_transport_local::{
     AuthToken, AuthenticatedHost, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener,
-    LocalStream, client_handshake, connect, receive_control, receive_lifecycle, send_control,
-    send_lifecycle,
+    LocalStream, client_handshake, connect, receive_lifecycle, send_control, send_lifecycle,
 };
 
 use crate::config::profile::{AppProfile, ProjectConfigPolicy};
@@ -404,8 +403,7 @@ impl HostLauncher {
                 client_instance_id,
                 host_epoch_hint: None,
                 can_force_stop: true,
-                channel: yttt_protocol::ConnectionChannel::Control,
-                terminal_session_id: None,
+                channel: yttt_protocol::ConnectionChannel::Session,
             },
             token,
         ))
@@ -436,7 +434,7 @@ impl HostLauncher {
         let (stream, authenticated) = self
             .connect_channel_with_token(
                 token,
-                ConnectionChannel::Control,
+                ConnectionChannel::Session,
                 ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
                 true,
             )
@@ -501,7 +499,6 @@ impl HostLauncher {
                 host_epoch_hint: None,
                 can_force_stop,
                 channel,
-                terminal_session_id: None,
             },
             token,
         )
@@ -805,8 +802,11 @@ impl HostControlClient {
             &ControlMessage::Request(ClientRequest::new(request_id, body)),
         )
         .await?;
+        // Session connections also carry state events, and large responses
+        // arrive in chunks.
+        let mut reader = yttt_transport::SessionReader::new(&mut self.stream);
         loop {
-            match receive_control(&mut self.stream).await? {
+            match reader.receive().await? {
                 ControlMessage::Response(HostResponse {
                     request_id: response_id,
                     result,

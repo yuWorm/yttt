@@ -18,28 +18,26 @@ pub use diagnostics::{ClientLatencyDiagnosticsSnapshot, ClientPipelineDiagnostic
 pub use mirror::{MirrorApply, TerminalMirror, TerminalMirrorMetadata};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
-    io::split,
-    sync::{Semaphore, broadcast, mpsc, oneshot, watch},
+    io::{ReadHalf, split},
+    sync::{broadcast, mpsc, oneshot, watch},
 };
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
     ClientRequest, ConnectionChannel, ControlMessage, HostEvent, HostResponse, ProtocolFailure,
-    Request, ResourceCatalog, Response, ServerEvent, TerminalInteractiveMessage,
+    Request, ResourceCatalog, Response, ServerEvent,
     agent::{AgentSnapshotCursor, AgentSnapshotUpdate, ProjectTokenUsage},
-    terminal::{TerminalInput, TerminalProcessState, TerminalStreamUpdate},
+    terminal::{TerminalInput, TerminalStreamUpdate},
 };
 use yttt_transport::{
-    AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, SharedConnector,
-    TransportConnector, TransportError, TransportStream, client_handshake, receive_control,
-    receive_control_observed, receive_state_event, receive_terminal_interactive, send_control,
-    send_terminal_interactive,
+    AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, SessionReader, SessionWriter,
+    SessionWriterTask, SharedConnector, TransportConnector, TransportError, TransportStream,
+    client_handshake,
 };
 
 const COMMAND_CAPACITY: usize = 256;
 const EVENT_CAPACITY: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const CONTROL_RESPONSE_GRACE: Duration = Duration::from_millis(100);
 const INITIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -62,7 +60,6 @@ impl Drop for ShutdownOnDrop {
 fn retry_delay(attempt: u32, identity: &ClientIdentity) -> Duration {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     identity.session_nonce.0.hash(&mut hash);
-    identity.terminal_session_id.hash(&mut hash);
     attempt.hash(&mut hash);
     let ceiling = (100_u64 << attempt.min(6)).min(5_000);
     Duration::from_millis(ceiling / 2 + hash.finish() % (ceiling / 2 + 1))
@@ -97,56 +94,14 @@ pub enum ClientEvent {
     ProjectTokenUsageUpdated(Box<ProjectTokenUsage>),
 }
 
-struct TerminalDataChannel {
-    generation: u64,
-    desired: watch::Sender<bool>,
-}
-
 #[derive(Default)]
 struct TerminalState {
     host_epoch: Option<u64>,
-    next_worker_generation: u64,
     mirrors: HashMap<TerminalSessionId, TerminalMirror>,
     known_sessions: HashSet<TerminalSessionId>,
-    data_channels: HashMap<TerminalSessionId, TerminalDataChannel>,
-    /// `TerminalExit` events held until the data lane delivers the final frame
-    /// or stops, so observers never see an exit before its last viewport.
-    deferred_exits: HashMap<TerminalSessionId, HostEvent>,
-}
-
-impl TerminalState {
-    /// Releases a deferred exit once nothing can still deliver its final frame.
-    fn take_ready_exit(&mut self, session_id: &TerminalSessionId) -> Option<HostEvent> {
-        let event = self.deferred_exits.get(session_id)?;
-        let ServerEvent::TerminalExit {
-            session_epoch,
-            final_sequence,
-            ..
-        } = &event.body
-        else {
-            return self.deferred_exits.remove(session_id);
-        };
-        if data_lane_open(self, session_id)
-            && !final_viewport_is_ready(self, session_id, *session_epoch, *final_sequence)
-        {
-            return None;
-        }
-        self.deferred_exits.remove(session_id)
-    }
-}
-
-fn final_viewport_is_ready(
-    state: &TerminalState,
-    session_id: &TerminalSessionId,
-    session_epoch: u64,
-    final_sequence: u64,
-) -> bool {
-    state.mirrors.get(session_id).is_some_and(|mirror| {
-        let viewport = mirror.viewport();
-        viewport.session_epoch == session_epoch
-            && viewport.sequence >= final_sequence
-            && matches!(viewport.process_state, TerminalProcessState::Exited { .. })
-    })
+    /// Terminals this client attached. The Host forgets attachments when the
+    /// connection drops, so each new connection subscribes to them again.
+    attached: HashSet<TerminalSessionId>,
 }
 
 /// The union of terminals the client's windows render, reported to the Host so
@@ -222,9 +177,6 @@ struct ClientCoreInner {
 impl Drop for ClientCoreInner {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
-        for channel in self.terminal_state.read().data_channels.values() {
-            let _ = channel.desired.send(false);
-        }
         if let Some(supervisor) = self.supervisor.lock().take() {
             supervisor.abort();
         }
@@ -239,118 +191,40 @@ struct ClientCommand {
     deadline: tokio::time::Instant,
 }
 
-struct TerminalWorkerFence {
-    session_id: TerminalSessionId,
-    host_epoch: u64,
-    generation: u64,
-}
-
-enum PendingTerminalStops {
-    None,
-    One(TerminalWorkerFence),
-    Many(Vec<TerminalWorkerFence>),
-}
-
-impl PendingTerminalStops {
-    fn stop_all(&self, terminal_state: &RwLock<TerminalState>) {
-        match self {
-            Self::None => {}
-            Self::One(fence) => stop_terminal_data_channel_if_current(
-                terminal_state,
-                &fence.session_id,
-                fence.host_epoch,
-                fence.generation,
-            ),
-            Self::Many(fences) => {
-                for fence in fences {
-                    stop_terminal_data_channel_if_current(
-                        terminal_state,
-                        &fence.session_id,
-                        fence.host_epoch,
-                        fence.generation,
-                    );
-                }
-            }
-        }
-    }
-
-    fn stop_for(&self, terminal_state: &RwLock<TerminalState>, session_id: &TerminalSessionId) {
-        match self {
-            Self::None => {}
-            Self::One(fence) if fence.session_id == *session_id => {
-                stop_terminal_data_channel_if_current(
-                    terminal_state,
-                    &fence.session_id,
-                    fence.host_epoch,
-                    fence.generation,
-                );
-            }
-            Self::One(_) => {}
-            Self::Many(fences) => {
-                for fence in fences
-                    .iter()
-                    .filter(|fence| fence.session_id == *session_id)
-                {
-                    stop_terminal_data_channel_if_current(
-                        terminal_state,
-                        &fence.session_id,
-                        fence.host_epoch,
-                        fence.generation,
-                    );
-                }
-            }
-        }
-    }
-}
-
 pub struct PendingClientRequest {
     response: oneshot::Receiver<Result<Response, ClientCoreError>>,
     deadline: tokio::time::Instant,
-    terminal_stops: PendingTerminalStops,
-    terminal_state: Arc<RwLock<TerminalState>>,
 }
 
 impl PendingClientRequest {
     pub async fn wait(self) -> Result<Response, ClientCoreError> {
-        let response = tokio::time::timeout_at(self.deadline, self.response)
+        tokio::time::timeout_at(self.deadline, self.response)
             .await
             .map_err(|_| ClientCoreError::RequestTimeout)?
-            .map_err(|_| ClientCoreError::SupervisorStopped)??;
-        if matches!(
-            &response,
-            Response::TerminalDetached
-                | Response::TerminalTerminated(_)
-                | Response::TerminalExitAcknowledged
-        ) {
-            self.terminal_stops.stop_all(&self.terminal_state);
-        }
-        if let Response::TerminalsTerminated { results } = &response {
-            for result in results.iter().filter(|result| result.result.is_ok()) {
-                self.terminal_stops
-                    .stop_for(&self.terminal_state, &result.session_id);
-            }
-        }
-        Ok(response)
+            .map_err(|_| ClientCoreError::SupervisorStopped)?
     }
 }
 
 enum PendingRequest {
-    User(oneshot::Sender<Result<Response, ClientCoreError>>),
+    User {
+        reply: oneshot::Sender<Result<Response, ClientCoreError>>,
+        /// Terminals the request detaches once it succeeds.
+        detaches: Vec<TerminalSessionId>,
+    },
     Catalog,
     AgentSnapshots,
     Visibility,
+    /// Resubscribes to an attached terminal on a new connection.
+    Resubscribe(TerminalSessionId),
 }
 
 struct ClientSessionContext {
-    data_connects: Arc<Semaphore>,
     catalog_requests: mpsc::Sender<()>,
     events: broadcast::Sender<ClientEvent>,
     terminal_state: Arc<RwLock<TerminalState>>,
-    connector: SharedConnector,
     identity: ClientIdentity,
     host_epoch: u64,
     current_host_epoch: Arc<RwLock<Option<u64>>>,
-    token: AuthToken,
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
@@ -603,19 +477,16 @@ impl ClientCore {
             return Err(ClientCoreError::NotConnected);
         }
         let timeout = Self::request_timeout(&body);
-        let terminal_stops = terminal_stops_for_request(&self.inner.terminal_state.read(), &body);
         let (reply, response) = oneshot::channel();
         self.enqueue_command(body, Some(reply))?;
         Ok(PendingClientRequest {
             response,
             deadline: tokio::time::Instant::now() + timeout,
-            terminal_stops,
-            terminal_state: self.inner.terminal_state.clone(),
         })
     }
 
-    /// Queue terminal input on the dedicated interactive stream without
-    /// allocating a per-input response waiter.
+    /// Queue terminal input ahead of other requests without allocating a
+    /// per-input response waiter.
     pub fn send_terminal_input(&self, input: TerminalInput) -> Result<(), ClientCoreError> {
         self.enqueue_command(Request::TerminalInput(input), None)
     }
@@ -666,9 +537,6 @@ impl ClientCore {
 
     pub async fn shutdown(&self) {
         let _ = self.inner.shutdown.send(true);
-        for channel in self.inner.terminal_state.read().data_channels.values() {
-            let _ = channel.desired.send(false);
-        }
         let supervisor = self.inner.supervisor.lock().take();
         if let Some(supervisor) = supervisor {
             let _ = supervisor.await;
@@ -708,15 +576,15 @@ async fn run_supervisor(
     let _shutdown_guard = ShutdownOnDrop(shutdown_tx.clone());
     let mut shutdown = shutdown_tx.subscribe();
     let mut initial_attempt = 0;
-    let mut lanes = loop {
+    let (mut connection, control_status) = loop {
         set_state(&state, &events, ConnectionState::Connecting);
         diagnostics.record_connection_attempt();
         let result = tokio::select! {
-            result = establish_session_lanes(&connector, &identity, &token) => result,
+            result = establish_session(&connector, &identity, &token) => result,
             _ = shutdown.wait_for(|stopped| *stopped) => return,
         };
         match result {
-            Ok(lanes) => break lanes,
+            Ok(established) => break established,
             Err(ConnectFailure::Retry(message)) => {
                 initial_attempt += 1;
                 set_state(
@@ -754,13 +622,13 @@ async fn run_supervisor(
         profile_control: &profile_control,
         events: &events,
     };
-    install_host_epoch(lanes.host.host_epoch, &epoch_state);
-    identity.host_epoch_hint = Some(lanes.host.host_epoch);
+    install_host_epoch(connection.host.host_epoch, &epoch_state);
+    identity.host_epoch_hint = Some(connection.host.host_epoch);
     update_profile_control(
         &profile_control,
-        &lanes.control_status,
+        &control_status,
         &host_epoch,
-        lanes.host.host_epoch,
+        connection.host.host_epoch,
         &identity.client_instance_id,
         &local_control_recovery,
     );
@@ -768,25 +636,21 @@ async fn run_supervisor(
         &state,
         &events,
         ConnectionState::Ready {
-            host_epoch: lanes.host.host_epoch,
-            connection_sequence: lanes.host.connection_sequence,
+            host_epoch: connection.host.host_epoch,
+            connection_sequence: connection.host.connection_sequence,
         },
     );
     let _ = initial.send(Ok(()));
     let (catalog_requests, mut catalog_rx) = mpsc::channel(1);
     let mut attempt = 0_u32;
-    let data_connects = Arc::new(Semaphore::new(4));
     loop {
         let session = ClientSessionContext {
-            data_connects: data_connects.clone(),
             catalog_requests: catalog_requests.clone(),
             events: events.clone(),
             terminal_state: terminal_state.clone(),
-            connector: connector.clone(),
             identity: identity.clone(),
-            host_epoch: lanes.host.host_epoch,
+            host_epoch: connection.host.host_epoch,
             current_host_epoch: host_epoch.clone(),
-            token: token.clone(),
             catalog: catalog.clone(),
             agent_snapshots: agent_snapshots.clone(),
             project_token_usage: project_token_usage.clone(),
@@ -797,37 +661,14 @@ async fn run_supervisor(
             control: profile_control.clone(),
             local_control_recovery: local_control_recovery.clone(),
         };
-        let disconnected = {
-            let control =
-                connected_control_session(lanes.control, &mut commands, &mut catalog_rx, &session);
-            let interactive = connected_interactive_session(
-                lanes.interactive,
-                &mut interactive_commands,
-                &session,
-            );
-            let state_events = connected_state_event_session(lanes.state_events, &session);
-            tokio::pin!(control, interactive, state_events);
-            let (control_exited, lane_result) = tokio::select! {
-                biased;
-                result = &mut control => (true, result.map(|message| format!("control: {message}"))),
-                result = &mut interactive => {
-                    (false, result.map(|message| format!("interactive: {message}")))
-                },
-                result = &mut state_events => {
-                    (false, result.map(|message| format!("state events: {message}")))
-                },
-                _ = shutdown.wait_for(|stopped| *stopped) => (true, None),
-            };
-            if control_exited {
-                lane_result
-            } else {
-                tokio::select! {
-                    biased;
-                    result = &mut control => result,
-                    _ = tokio::time::sleep(CONTROL_RESPONSE_GRACE) => lane_result,
-                }
-            }
-        };
+        let disconnected = connected_session(
+            connection,
+            &mut commands,
+            &mut interactive_commands,
+            &mut catalog_rx,
+            &session,
+        )
+        .await;
         let Some(message) = disconnected else {
             set_state(&state, &events, ConnectionState::Disconnected);
             return;
@@ -870,45 +711,38 @@ async fn run_supervisor(
             set_state(&state, &events, ConnectionState::Connecting);
             diagnostics.record_connection_attempt();
             let result = tokio::select! {
-                result = establish_session_lanes(&connector, &identity, &token) => result,
+                result = establish_session(&connector, &identity, &token) => result,
                 _ = shutdown.wait_for(|stopped| *stopped) => {
                     set_state(&state, &events, ConnectionState::Disconnected);
                     return;
                 }
             };
             let result = match result {
-                Ok(mut new_lanes) => {
-                    install_host_epoch(new_lanes.host.host_epoch, &epoch_state);
+                Ok((mut new_connection, status)) => {
+                    install_host_epoch(new_connection.host.host_epoch, &epoch_state);
                     if should_reacquire_local_control(
                         &local_control_recovery,
                         was_controller,
-                        &new_lanes.control_status,
+                        &status,
                     ) {
-                        reacquire_local_control(
-                            &mut new_lanes.control,
-                            &identity,
-                            new_lanes.control_status.context,
-                        )
-                        .await
-                        .map(|status| {
-                            new_lanes.control_status = status;
-                            new_lanes
-                        })
+                        reacquire_local_control(&mut new_connection, &identity, status.context)
+                            .await
+                            .map(|status| (new_connection, status))
                     } else {
-                        Ok(new_lanes)
+                        Ok((new_connection, status))
                     }
                 }
                 result => result,
             };
             match result {
-                Ok(new_lanes) => {
-                    lanes = new_lanes;
-                    identity.host_epoch_hint = Some(lanes.host.host_epoch);
+                Ok((new_connection, status)) => {
+                    connection = new_connection;
+                    identity.host_epoch_hint = Some(connection.host.host_epoch);
                     update_profile_control(
                         &profile_control,
-                        &lanes.control_status,
+                        &status,
                         &host_epoch,
-                        lanes.host.host_epoch,
+                        connection.host.host_epoch,
                         &identity.client_instance_id,
                         &local_control_recovery,
                     );
@@ -917,8 +751,8 @@ async fn run_supervisor(
                         &state,
                         &events,
                         ConnectionState::Ready {
-                            host_epoch: lanes.host.host_epoch,
-                            connection_sequence: lanes.host.connection_sequence,
+                            host_epoch: connection.host.host_epoch,
+                            connection_sequence: connection.host.connection_sequence,
                         },
                     );
                     break;
@@ -950,62 +784,84 @@ async fn run_supervisor(
     }
 }
 
-struct SessionLanes {
-    control: TransportStream,
-    interactive: TransportStream,
-    state_events: TransportStream,
+/// The authenticated Session connection that carries all of a Client's traffic.
+struct SessionConnection {
+    reader: SessionReader<ReadHalf<TransportStream>>,
+    writer: SessionWriter,
+    writer_task: SessionWriterTask,
     host: AuthenticatedHost,
-    control_status: yttt_protocol::session::ControlStatus,
+    /// Events that arrived while connecting, applied once the session starts.
+    buffered: Vec<HostEvent>,
 }
 
-async fn establish_session_lanes(
+impl SessionConnection {
+    /// Sends one request and waits for its response before the session loop runs.
+    async fn request(
+        &mut self,
+        request: ClientRequest,
+        timeout_message: &str,
+    ) -> Result<HostResponse, ConnectFailure> {
+        let request_id = request.request_id;
+        self.writer
+            .send_reliable(&ControlMessage::Request(request))
+            .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+        let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+        loop {
+            let message = tokio::time::timeout_at(deadline, self.reader.receive())
+                .await
+                .map_err(|_| ConnectFailure::Retry(timeout_message.to_string()))?
+                .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+            match message {
+                ControlMessage::Response(response) if response.request_id == request_id => {
+                    return Ok(response);
+                }
+                ControlMessage::Event(event) => self.buffered.push(event),
+                _ => {
+                    return Err(ConnectFailure::Fatal(
+                        "Host sent an unexpected message while connecting".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+async fn establish_session(
     connector: &SharedConnector,
     identity: &ClientIdentity,
     token: &AuthToken,
-) -> Result<SessionLanes, ConnectFailure> {
-    let (mut control, host) = establish(connector, identity, token).await?;
-    send_control(
-        &mut control,
-        &ControlMessage::Request(ClientRequest::new(
-            u64::MAX,
-            Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
-        )),
-    )
-    .await
-    .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-    let status = tokio::time::timeout(REQUEST_TIMEOUT, receive_control(&mut control))
-        .await
-        .map_err(|_| ConnectFailure::Retry("Host control status timed out".into()))?
-        .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-    let ControlMessage::Response(HostResponse {
+) -> Result<(SessionConnection, yttt_protocol::session::ControlStatus), ConnectFailure> {
+    let mut session_identity = identity.clone();
+    session_identity.channel = ConnectionChannel::Session;
+    let (stream, host) = establish(connector, &session_identity, token).await?;
+    let (reader, writer) = split(stream);
+    let (writer, writer_task) = SessionWriter::spawn(writer);
+    let mut connection = SessionConnection {
+        reader: SessionReader::new(reader),
+        writer,
+        writer_task,
+        host,
+        buffered: Vec::new(),
+    };
+    let status = connection
+        .request(
+            ClientRequest::new(
+                u64::MAX,
+                Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
+            ),
+            "Host control status timed out",
+        )
+        .await?;
+    let HostResponse {
         result: Ok(Response::ProfileControl(control_status)),
         ..
-    }) = status
+    } = status
     else {
         return Err(ConnectFailure::Fatal(
             "Host did not provide authenticated profile control state".to_string(),
         ));
     };
-    let mut lane_identity = identity.clone();
-    lane_identity.host_epoch_hint = Some(host.host_epoch);
-    lane_identity.can_force_stop = false;
-    lane_identity.terminal_session_id = None;
-    lane_identity.channel = ConnectionChannel::TerminalInteractive;
-    let (interactive, interactive_host) = establish(connector, &lane_identity, token).await?;
-    lane_identity.channel = ConnectionChannel::StateEvents;
-    let (state_events, state_host) = establish(connector, &lane_identity, token).await?;
-    if interactive_host.host_epoch != host.host_epoch || state_host.host_epoch != host.host_epoch {
-        return Err(ConnectFailure::Retry(
-            "Host epoch changed while establishing resource channels".to_string(),
-        ));
-    }
-    Ok(SessionLanes {
-        control,
-        interactive,
-        state_events,
-        host,
-        control_status,
-    })
+    Ok((connection, control_status))
 }
 
 async fn establish(
@@ -1027,33 +883,29 @@ async fn establish(
 }
 
 async fn reacquire_local_control(
-    control: &mut TransportStream,
+    connection: &mut SessionConnection,
     identity: &ClientIdentity,
     context: yttt_protocol::session::ControlContext,
 ) -> Result<yttt_protocol::session::ControlStatus, ConnectFailure> {
     const REACQUIRE_REQUEST_ID: u64 = u64::MAX - 1;
-    send_control(
-        control,
-        &ControlMessage::Request(ClientRequest {
-            request_id: REACQUIRE_REQUEST_ID,
-            actor_device_id: Some(identity.client_instance_id.to_string()),
-            lease_epoch: None,
-            control: Some(context),
-            body: Request::ProfileControl(
-                yttt_protocol::session::ProfileControlRequest::ReacquireIfUnowned { context },
-            ),
-        }),
-    )
-    .await
-    .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-    let response = tokio::time::timeout(REQUEST_TIMEOUT, receive_control(control))
-        .await
-        .map_err(|_| ConnectFailure::Retry("Host control reacquisition timed out".into()))?
-        .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-    let ControlMessage::Response(HostResponse {
-        request_id: REACQUIRE_REQUEST_ID,
+    let response = connection
+        .request(
+            ClientRequest {
+                request_id: REACQUIRE_REQUEST_ID,
+                actor_device_id: Some(identity.client_instance_id.to_string()),
+                lease_epoch: None,
+                control: Some(context),
+                body: Request::ProfileControl(
+                    yttt_protocol::session::ProfileControlRequest::ReacquireIfUnowned { context },
+                ),
+            },
+            "Host control reacquisition timed out",
+        )
+        .await?;
+    let HostResponse {
         result: Ok(Response::ProfileControl(status)),
-    }) = response
+        ..
+    } = response
     else {
         return Err(ConnectFailure::Fatal(
             "Host did not return profile control state after local recovery request".to_string(),
@@ -1062,76 +914,229 @@ async fn reacquire_local_control(
     Ok(status)
 }
 
-async fn connected_control_session(
-    stream: TransportStream,
+/// Serves one Session connection until it fails or the client shuts down.
+/// Returns why it disconnected, or `None` on shutdown.
+async fn connected_session(
+    connection: SessionConnection,
     commands: &mut mpsc::Receiver<ClientCommand>,
+    interactive_commands: &mut mpsc::Receiver<ClientCommand>,
     catalog_rx: &mut mpsc::Receiver<()>,
     context: &ClientSessionContext,
 ) -> Option<String> {
+    let SessionConnection {
+        mut reader,
+        writer,
+        writer_task: _writer_task,
+        buffered,
+        ..
+    } = connection;
     let mut shutdown = context.shutdown.clone();
-    let (mut reader, mut writer) = split(stream);
     let mut pending = HashMap::new();
+    let mut interactive_pending = HashMap::new();
     let mut visibility = context.visibility.clone();
     // The Host forgets a client's visibility when its connection drops, so every
-    // control session reports the current set until the Host declines the request.
+    // session reports the current set until the Host declines the request.
     let mut visibility_supported = true;
     visibility.mark_changed();
     let next_internal_request_id = || context.next_request_id.fetch_add(1, Ordering::Relaxed);
+    let actor = || Some(context.identity.client_instance_id.to_string());
     if send_internal_request(
-        &mut writer,
+        &writer,
         &mut pending,
         &next_internal_request_id,
-        Some(context.identity.client_instance_id.to_string()),
+        actor(),
         Request::ListResources,
         PendingRequest::Catalog,
     )
-    .await
     .is_err()
     {
         return Some("failed to request Host resource catalog".to_string());
     }
-    let acknowledged = context
-        .agent_snapshots
-        .read()
-        .values()
-        .map(|update| AgentSnapshotCursor {
-            scope: update.scope.clone(),
-            host_epoch: update.host_epoch,
-            sequence: update.sequence,
-        })
-        .collect();
     if send_internal_request(
-        &mut writer,
+        &writer,
         &mut pending,
         &next_internal_request_id,
-        Some(context.identity.client_instance_id.to_string()),
-        Request::ReadAgentSnapshots { acknowledged },
+        actor(),
+        Request::ReadAgentSnapshots {
+            acknowledged: agent_snapshot_cursors(context),
+        },
         PendingRequest::AgentSnapshots,
     )
-    .await
     .is_err()
     {
         return Some("failed to request Host Agent snapshots".to_string());
     }
-    let (control_messages_tx, mut control_messages_rx) = mpsc::channel(COMMAND_CAPACITY);
-    let _control_reader = AbortOnDrop(tokio::spawn(async move {
+    let attached = {
+        let terminal_state = context.terminal_state.read();
+        if terminal_state.host_epoch == Some(context.host_epoch) {
+            terminal_state.attached.iter().cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
+    };
+    for session_id in attached {
+        if send_internal_request(
+            &writer,
+            &mut pending,
+            &next_internal_request_id,
+            actor(),
+            Request::RequestCheckpoint {
+                session_id: session_id.clone(),
+                after_sequence: None,
+            },
+            PendingRequest::Resubscribe(session_id),
+        )
+        .is_err()
+        {
+            return Some("failed to resubscribe to attached terminals".to_string());
+        }
+    }
+    for event in buffered {
+        if handle_state_event(event, context).is_err() {
+            return None;
+        }
+    }
+    let (messages_tx, mut messages_rx) = mpsc::channel(COMMAND_CAPACITY);
+    let _reader = AbortOnDrop(tokio::spawn(async move {
         loop {
-            let message = receive_control(&mut reader)
+            let message = reader
+                .receive_observed()
                 .await
                 .map_err(|error| error.to_string());
             let failed = message.is_err();
-            if control_messages_tx.send(message).await.is_err() || failed {
+            if messages_tx.send(message).await.is_err() || failed {
                 break;
             }
         }
     }));
-
+    let mut heartbeat = None::<(u64, tokio::time::Instant)>;
+    let mut heartbeat_tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + HEARTBEAT_INTERVAL,
+        HEARTBEAT_INTERVAL,
+    );
+    heartbeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut cleanup = tokio::time::interval(Duration::from_secs(1));
     cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let disconnected = 'connected: loop {
         tokio::select! {
-            _ = cleanup.tick() => {
-                pending.retain(|_, request| !matches!(request, PendingRequest::User(reply) if reply.is_closed()));
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break None;
+                }
+            }
+            command = interactive_commands.recv(), if interactive_pending.len() < COMMAND_CAPACITY => {
+                let Some(ClientCommand {
+                    request_id,
+                    body,
+                    reply,
+                    control,
+                    deadline,
+                }) = command else {
+                    break None;
+                };
+                if deadline <= tokio::time::Instant::now() || reply.as_ref().is_some_and(|reply| reply.is_closed()) {
+                    if let Some(reply) = reply { let _ = reply.send(Err(ClientCoreError::RequestTimeout)); }
+                    continue;
+                }
+                let message = match (body, request_id) {
+                    (Request::TerminalInput(input), None) => {
+                        ControlMessage::TerminalInput { input, control }
+                    }
+                    (
+                        body @ (
+                            Request::TerminalInput(_)
+                            | Request::ResizeTerminal(_)
+                            | Request::ScrollTerminal(_)
+                        ),
+                        Some(request_id),
+                    ) => ControlMessage::Request(ClientRequest {
+                        request_id,
+                        actor_device_id: actor(),
+                        lease_epoch: None,
+                        control,
+                        body,
+                    }),
+                    (_, _) => {
+                        if let Some(reply) = reply {
+                            let _ = reply.send(Err(ClientCoreError::Connection(
+                                "non-interactive request was routed as interactive".to_string(),
+                            )));
+                        }
+                        continue;
+                    }
+                };
+                if let Err(error) = writer.send_interactive(&message) {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(ClientCoreError::Connection(error.to_string())));
+                    }
+                    break Some(error.to_string());
+                }
+                if let (Some(request_id), Some(reply)) = (request_id, reply) {
+                    interactive_pending.insert(request_id, reply);
+                }
+            }
+            message = messages_rx.recv() => {
+                let (message, observation) = match message {
+                    Some(Ok(message)) => message,
+                    Some(Err(error)) => break Some(error),
+                    None => break Some("Host session reader stopped".to_string()),
+                };
+                match message {
+                    ControlMessage::Response(response) => {
+                        if heartbeat.is_some_and(|(id, _)| id == response.request_id) {
+                            if !matches!(&response.result, Ok(Response::Pong { .. })) {
+                                break Some("Host rejected heartbeat".into());
+                            }
+                            if let Some((_, deadline)) = heartbeat.take() {
+                                context.diagnostics.record_heartbeat(tokio::time::Instant::now().saturating_duration_since(deadline - HEARTBEAT_TIMEOUT));
+                            }
+                            continue;
+                        }
+                        if let Some(reply) = interactive_pending.remove(&response.request_id) {
+                            handle_response(PendingRequest::User { reply, detaches: Vec::new() }, response.result, context);
+                            continue;
+                        }
+                        let Some(pending_request) = pending.remove(&response.request_id) else {
+                            continue;
+                        };
+                        if matches!(
+                            (&pending_request, &response.result),
+                            (PendingRequest::Visibility, Err(failure))
+                                if failure.code == yttt_protocol::FailureCode::Unsupported
+                        ) {
+                            visibility_supported = false;
+                        }
+                        let more_agents = matches!((&pending_request, &response.result),
+                            (PendingRequest::AgentSnapshots, Ok(Response::AgentSnapshots { has_more: true, .. })));
+                        handle_response(pending_request, response.result, context);
+                        if more_agents && send_internal_request(
+                            &writer, &mut pending, &next_internal_request_id, actor(),
+                            Request::ReadAgentSnapshots { acknowledged: agent_snapshot_cursors(context) },
+                            PendingRequest::AgentSnapshots,
+                        ).is_err() {
+                            break 'connected Some("failed to read next Agent snapshot page".to_string());
+                        }
+                    }
+                    ControlMessage::Event(HostEvent { body: ServerEvent::Terminal(update), .. }) => {
+                        context.diagnostics.record_ipc_read(observation);
+                        // A gap means the Host broke its stream contract; the
+                        // next connection starts every stream from a Snapshot.
+                        if handle_terminal_frame(update, context).is_err() {
+                            break Some("terminal stream sequence gap".to_string());
+                        }
+                    }
+                    ControlMessage::Event(event) => {
+                        if handle_state_event(event, context).is_err() {
+                            break None;
+                        }
+                    }
+                    ControlMessage::Request(_)
+                    | ControlMessage::TerminalInput { .. }
+                    | ControlMessage::Chunk(_) => {
+                        break Some("Host sent a client message on the session".to_string());
+                    }
+                }
             }
             command = commands.recv(), if pending.len() < COMMAND_CAPACITY => {
                 let Some(ClientCommand {
@@ -1150,67 +1155,27 @@ async fn connected_control_session(
                 let Some(request_id) = request_id else {
                     if let Some(reply) = reply {
                         let _ = reply.send(Err(ClientCoreError::Connection(
-                            "one-way command was routed to the control stream".to_string(),
+                            "one-way command was routed as a request".to_string(),
                         )));
                     }
                     continue;
                 };
+                let detaches = detached_terminals(&body);
                 let message = ControlMessage::Request(ClientRequest {
                     request_id,
-                    actor_device_id: Some(context.identity.client_instance_id.to_string()),
+                    actor_device_id: actor(),
                     lease_epoch: None,
                     control,
                     body,
                 });
-                if let Err(error) = send_control(&mut writer, &message).await {
+                if let Err(error) = writer.send_reliable(&message) {
                     if let Some(reply) = reply {
                         let _ = reply.send(Err(ClientCoreError::Connection(error.to_string())));
                     }
                     break Some(error.to_string());
                 }
                 if let Some(reply) = reply {
-                    pending.insert(request_id, PendingRequest::User(reply));
-                }
-            }
-            message = control_messages_rx.recv() => {
-                let message = match message {
-                    Some(Ok(message)) => message,
-                    Some(Err(error)) => break Some(error),
-                    None => break Some("Host control response reader stopped".to_string()),
-                };
-                match message {
-                    ControlMessage::Response(response) => {
-                        let Some(pending_request) = pending.remove(&response.request_id) else {
-                            continue;
-                        };
-                        if matches!(
-                            (&pending_request, &response.result),
-                            (PendingRequest::Visibility, Err(failure))
-                                if failure.code == yttt_protocol::FailureCode::Unsupported
-                        ) {
-                            visibility_supported = false;
-                        }
-                        let more_agents = matches!((&pending_request, &response.result),
-                            (PendingRequest::AgentSnapshots, Ok(Response::AgentSnapshots { has_more: true, .. })));
-                        handle_response(pending_request, response.result, context);
-                        if more_agents {
-                            let acknowledged = context.agent_snapshots.read().values().map(|update| AgentSnapshotCursor {
-                                scope: update.scope.clone(), host_epoch: update.host_epoch, sequence: update.sequence,
-                            }).collect();
-                            if send_internal_request(
-                                &mut writer, &mut pending, &next_internal_request_id,
-                                Some(context.identity.client_instance_id.to_string()),
-                                Request::ReadAgentSnapshots { acknowledged }, PendingRequest::AgentSnapshots,
-                            ).await.is_err() {
-                                break 'connected Some("failed to read next Agent snapshot page".to_string());
-                            }
-                        }
-                    }
-                    ControlMessage::Event(_)
-                    | ControlMessage::Request(_)
-                    | ControlMessage::TerminalInput(_) => {
-                        break Some("Host sent a non-response message on the control stream".to_string());
-                    }
+                    pending.insert(request_id, PendingRequest::User { reply, detaches });
                 }
             }
             refresh = catalog_rx.recv() => {
@@ -1221,14 +1186,13 @@ async fn connected_control_session(
                     continue;
                 }
                 if send_internal_request(
-                    &mut writer,
+                    &writer,
                     &mut pending,
                     &next_internal_request_id,
-                    Some(context.identity.client_instance_id.to_string()),
+                    actor(),
                     Request::ListResources,
                     PendingRequest::Catalog,
                 )
-                .await
                 .is_err()
                 {
                     break Some("failed to refresh Host resource catalog".to_string());
@@ -1243,64 +1207,22 @@ async fn connected_control_session(
                     continue;
                 };
                 if send_internal_request(
-                    &mut writer,
+                    &writer,
                     &mut pending,
                     &next_internal_request_id,
-                    Some(context.identity.client_instance_id.to_string()),
+                    actor(),
                     Request::SetTerminalVisibility {
                         revision: visible.revision,
                         visible: visible.sessions.clone(),
                     },
                     PendingRequest::Visibility,
                 )
-                .await
                 .is_err()
                 {
                     break Some("failed to report terminal visibility".to_string());
                 }
             }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    break None;
-                }
-            }
-        }
-    };
-    for (_, request) in pending {
-        if let PendingRequest::User(reply) = request {
-            let _ = reply.send(Err(ClientCoreError::NotConnected));
-        }
-    }
-    disconnected
-}
-
-async fn connected_interactive_session(
-    stream: TransportStream,
-    commands: &mut mpsc::Receiver<ClientCommand>,
-    context: &ClientSessionContext,
-) -> Option<String> {
-    let mut shutdown = context.shutdown.clone();
-    let (mut reader, mut writer) = split(stream);
-    let (interactive_messages_tx, mut interactive_messages_rx) = mpsc::channel(COMMAND_CAPACITY);
-    let _interactive_reader = AbortOnDrop(tokio::spawn(async move {
-        loop {
-            let message = receive_terminal_interactive(&mut reader)
-                .await
-                .map_err(|error| error.to_string());
-            let failed = message.is_err();
-            if interactive_messages_tx.send(message).await.is_err() || failed {
-                break;
-            }
-        }
-    }));
-    let mut pending = HashMap::new();
-    let mut heartbeat = None::<(u64, tokio::time::Instant)>;
-    let mut heartbeat_tick = tokio::time::interval(HEARTBEAT_INTERVAL);
-    heartbeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let disconnected = loop {
-        tokio::select! {
             _ = heartbeat_tick.tick() => {
-                pending.retain(|_, reply: &mut oneshot::Sender<Result<Response, ClientCoreError>>| !reply.is_closed());
                 if let Some((_, deadline)) = heartbeat {
                     if tokio::time::Instant::now() >= deadline {
                         break Some("Host heartbeat timed out".into());
@@ -1308,172 +1230,92 @@ async fn connected_interactive_session(
                     continue;
                 }
                 let request_id = context.next_request_id.fetch_add(1, Ordering::Relaxed);
-                let message = TerminalInteractiveMessage::Request(ClientRequest::new(request_id,
-                    Request::Ping { sent_millis: request_id }));
-                if let Err(error) = send_terminal_interactive(&mut writer, &message).await {
+                let ping = ControlMessage::Request(ClientRequest::new(
+                    request_id,
+                    Request::Ping { sent_millis: request_id },
+                ));
+                if let Err(error) = writer.send_interactive(&ping) {
                     break Some(error.to_string());
                 }
                 heartbeat = Some((request_id, tokio::time::Instant::now() + HEARTBEAT_TIMEOUT));
             }
-            command = commands.recv(), if pending.len() < COMMAND_CAPACITY => {
-                let Some(ClientCommand {
-                    request_id,
-                    body,
-                    reply,
-                    control,
-                    deadline,
-                }) = command else {
-                    break None;
-                };
-                if deadline <= tokio::time::Instant::now() || reply.as_ref().is_some_and(|reply| reply.is_closed()) {
-                    if let Some(reply) = reply { let _ = reply.send(Err(ClientCoreError::RequestTimeout)); }
-                    continue;
-                }
-                let message = match (body, request_id) {
-                    (Request::TerminalInput(input), None) => {
-                        TerminalInteractiveMessage::Input { input, control }
-                    }
-                    (
-                        body @ (
-                            Request::TerminalInput(_)
-                            | Request::ResizeTerminal(_)
-                            | Request::ScrollTerminal(_)
-                        ),
-                        Some(request_id),
-                    ) => TerminalInteractiveMessage::Request(ClientRequest {
-                        request_id,
-                        actor_device_id: Some(context.identity.client_instance_id.to_string()),
-                        lease_epoch: None,
-                        control,
-                        body,
-                    }),
-                    (_, _) => {
-                        if let Some(reply) = reply {
-                            let _ = reply.send(Err(ClientCoreError::Connection(
-                                "non-interactive request was routed to the interactive stream"
-                                    .to_string(),
-                            )));
-                        }
-                        continue;
-                    }
-                };
-                if let Err(error) = send_terminal_interactive(&mut writer, &message).await {
-                    if let Some(reply) = reply {
-                        let _ = reply.send(Err(ClientCoreError::Connection(error.to_string())));
-                    }
-                    break Some(error.to_string());
-                }
-                if let (Some(request_id), Some(reply)) = (request_id, reply) {
-                    pending.insert(request_id, reply);
-                }
+            _ = cleanup.tick() => {
+                pending.retain(|_, request| !matches!(request, PendingRequest::User { reply, .. } if reply.is_closed()));
+                interactive_pending.retain(|_, reply: &mut oneshot::Sender<Result<Response, ClientCoreError>>| !reply.is_closed());
             }
-            message = interactive_messages_rx.recv() => {
-                let message = match message {
-                    Some(Ok(message)) => message,
-                    Some(Err(error)) => break Some(error),
-                    None => break Some("Host interactive response reader stopped".to_string()),
-                };
-                let TerminalInteractiveMessage::Response(response) = message else {
-                    break Some(
-                        "Host sent a non-response message on the interactive stream".to_string(),
-                    );
-                };
-                if heartbeat.is_some_and(|(id, _)| id == response.request_id) {
-                    // Older Hosts reject Ping on this lane but still prove it is live.
-                    if !matches!(&response.result,
-                        Ok(Response::Pong { .. }) | Err(ProtocolFailure { code: yttt_protocol::FailureCode::InvalidRequest, .. })
-                    ) {
-                        break Some("Host rejected heartbeat".into());
-                    }
-                    if let Some((_, deadline)) = heartbeat.take() {
-                        context.diagnostics.record_heartbeat(tokio::time::Instant::now().saturating_duration_since(deadline - HEARTBEAT_TIMEOUT));
-                    }
-                    continue;
-                }
-                let Some(reply) = pending.remove(&response.request_id) else {
-                    continue;
-                };
-                handle_response(PendingRequest::User(reply), response.result, context);
-            }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    break None;
-                }
-            }
+            () = writer.closed() => break Some("Host session writer closed".to_string()),
         }
     };
-    for (_, reply) in pending {
+    for (_, request) in pending {
+        if let PendingRequest::User { reply, .. } = request {
+            let _ = reply.send(Err(ClientCoreError::NotConnected));
+        }
+    }
+    for (_, reply) in interactive_pending {
         let _ = reply.send(Err(ClientCoreError::NotConnected));
     }
     disconnected
 }
 
-async fn connected_state_event_session(
-    mut stream: TransportStream,
-    context: &ClientSessionContext,
-) -> Option<String> {
-    let mut shutdown = context.shutdown.clone();
-    loop {
-        tokio::select! {
-            event = receive_state_event(&mut stream) => {
-                let event = match event {
-                    Ok(event) => event,
-                    Err(error) => return Some(error.to_string()),
-                };
-                if *context.current_host_epoch.read() != Some(context.host_epoch) {
-                    continue;
-                }
-                if let ServerEvent::ProfileControl(status) = &event.body {
-                    update_profile_control(
-                        &context.control,
-                        status,
-                        &context.current_host_epoch,
-                        context.host_epoch,
-                        &context.identity.client_instance_id,
-                        &context.local_control_recovery,
-                    );
-                }
-                if let ServerEvent::ProjectTokenUsage(summary) = &event.body {
-                    apply_project_token_usage(
-                        summary.clone(),
-                        &context.project_token_usage,
-                        &context.current_host_epoch,
-                        context.host_epoch,
-                        &context.events,
-                    );
-                }
-                if matches!(
-                    &event.body,
-                    ServerEvent::ResourceCatalogChanged
-                        | ServerEvent::SshStateChanged(_)
-                        | ServerEvent::ProjectChanged(_)
-                ) {
-                    match context.catalog_requests.try_send(()) {
-                        Ok(()) | Err(mpsc::error::TrySendError::Full(())) => {}
-                        Err(mpsc::error::TrySendError::Closed(())) => return None,
-                    }
-                }
-                if let ServerEvent::AgentSnapshot(update) = &event.body {
-                    apply_agent_snapshots(
-                        vec![(**update).clone()],
-                        &context.agent_snapshots,
-                        &context.current_host_epoch,
-                        context.host_epoch,
-                        &context.events,
-                    );
-                }
-                if defer_exit_until_final_frame(&context.terminal_state, context.host_epoch, &event) {
-                    continue;
-                }
-                let _ = context.events.send(ClientEvent::Server(Box::new(event)));
-            }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return None;
-                }
-            }
+fn agent_snapshot_cursors(context: &ClientSessionContext) -> Vec<AgentSnapshotCursor> {
+    context
+        .agent_snapshots
+        .read()
+        .values()
+        .map(|update| AgentSnapshotCursor {
+            scope: update.scope.clone(),
+            host_epoch: update.host_epoch,
+            sequence: update.sequence,
+        })
+        .collect()
+}
+
+/// Applies a Host state event and publishes it. `Err` means the client is shutting down.
+fn handle_state_event(event: HostEvent, context: &ClientSessionContext) -> Result<(), ()> {
+    if *context.current_host_epoch.read() != Some(context.host_epoch) {
+        return Ok(());
+    }
+    if let ServerEvent::ProfileControl(status) = &event.body {
+        update_profile_control(
+            &context.control,
+            status,
+            &context.current_host_epoch,
+            context.host_epoch,
+            &context.identity.client_instance_id,
+            &context.local_control_recovery,
+        );
+    }
+    if let ServerEvent::ProjectTokenUsage(summary) = &event.body {
+        apply_project_token_usage(
+            summary.clone(),
+            &context.project_token_usage,
+            &context.current_host_epoch,
+            context.host_epoch,
+            &context.events,
+        );
+    }
+    if matches!(
+        &event.body,
+        ServerEvent::ResourceCatalogChanged
+            | ServerEvent::SshStateChanged(_)
+            | ServerEvent::ProjectChanged(_)
+    ) {
+        match context.catalog_requests.try_send(()) {
+            Ok(()) | Err(mpsc::error::TrySendError::Full(())) => {}
+            Err(mpsc::error::TrySendError::Closed(())) => return Err(()),
         }
     }
+    if let ServerEvent::AgentSnapshot(update) = &event.body {
+        apply_agent_snapshots(
+            vec![(**update).clone()],
+            &context.agent_snapshots,
+            &context.current_host_epoch,
+            context.host_epoch,
+            &context.events,
+        );
+    }
+    let _ = context.events.send(ClientEvent::Server(Box::new(event)));
+    Ok(())
 }
 
 fn handle_response(
@@ -1492,30 +1334,26 @@ fn handle_response(
         );
     }
     match pending {
-        PendingRequest::User(reply) => {
+        PendingRequest::User { reply, detaches } => {
             match &result {
                 Ok(Response::TerminalSpawned { lease, .. })
                 | Ok(Response::TerminalLease(lease)) => {
-                    register_terminal(
-                        &context.terminal_state,
-                        context.host_epoch,
-                        lease.session_id.clone(),
-                    );
-                    start_terminal_data_channel(lease.session_id.clone(), context);
+                    register_terminal(context, lease.session_id.clone());
                 }
                 Ok(Response::TerminalAttached { lease, checkpoint }) => {
-                    register_terminal(
-                        &context.terminal_state,
-                        context.host_epoch,
-                        lease.session_id.clone(),
-                    );
+                    register_terminal(context, lease.session_id.clone());
                     seed_terminal_mirror(
                         &checkpoint.viewport,
                         &context.terminal_state,
                         context.host_epoch,
                         &context.events,
                     );
-                    start_terminal_data_channel(lease.session_id.clone(), context);
+                }
+                Ok(Response::TerminalsTerminated { results }) => {
+                    let mut terminal_state = context.terminal_state.write();
+                    for result in results.iter().filter(|result| result.result.is_ok()) {
+                        terminal_state.attached.remove(&result.session_id);
+                    }
                 }
                 Ok(Response::Resources(resources)) => {
                     let current_host_epoch = context.current_host_epoch.read();
@@ -1547,9 +1385,22 @@ fn handle_response(
                 }
                 _ => {}
             }
+            if result.is_ok() && !detaches.is_empty() {
+                let mut terminal_state = context.terminal_state.write();
+                for session_id in &detaches {
+                    terminal_state.attached.remove(session_id);
+                }
+            }
             let _ = reply.send(result.map_err(ClientCoreError::Protocol));
         }
         PendingRequest::Visibility => {}
+        PendingRequest::Resubscribe(session_id) => {
+            // A terminal the Host no longer has stays unsubscribed; the catalog
+            // reports it unavailable.
+            if result.is_err() {
+                context.terminal_state.write().attached.remove(&session_id);
+            }
+        }
         PendingRequest::AgentSnapshots => {
             if let Ok(Response::AgentSnapshots {
                 snapshots,
@@ -1603,24 +1454,14 @@ fn handle_response(
                     .cloned()
                     .collect::<Vec<_>>();
                 terminal_state.known_sessions = active;
-                {
-                    let TerminalState {
-                        known_sessions,
-                        mirrors,
-                        data_channels,
-                        deferred_exits,
-                        ..
-                    } = &mut *terminal_state;
-                    mirrors.retain(|session_id, _| known_sessions.contains(session_id));
-                    deferred_exits.retain(|session_id, _| known_sessions.contains(session_id));
-                    data_channels.retain(|session_id, channel| {
-                        let keep = known_sessions.contains(session_id);
-                        if !keep {
-                            let _ = channel.desired.send(false);
-                        }
-                        keep
-                    });
-                }
+                let TerminalState {
+                    known_sessions,
+                    mirrors,
+                    attached,
+                    ..
+                } = &mut *terminal_state;
+                mirrors.retain(|session_id, _| known_sessions.contains(session_id));
+                attached.retain(|session_id| known_sessions.contains(session_id));
                 removed
             };
             for session_id in removed {
@@ -1635,237 +1476,21 @@ fn handle_response(
     }
 }
 
-fn register_terminal(
-    terminal_state: &RwLock<TerminalState>,
-    host_epoch: u64,
-    session_id: TerminalSessionId,
-) {
-    let mut terminal_state = terminal_state.write();
-    if terminal_state.host_epoch == Some(host_epoch) {
-        terminal_state.known_sessions.insert(session_id);
-    }
-}
-
-fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSessionContext) {
-    let connector = context.connector.clone();
-    let data_connects = context.data_connects.clone();
-    let mut identity = context.identity.clone();
-    let token = context.token.clone();
-    let terminal_state = context.terminal_state.clone();
-    let events = context.events.clone();
-    let diagnostics = context.diagnostics.clone();
-    let mut shutdown = context.shutdown.clone();
-    let host_epoch = context.host_epoch;
-    let (worker_generation, mut desired_rx) = {
-        let mut state = terminal_state.write();
-        if state.host_epoch != Some(host_epoch) || !state.known_sessions.contains(&session_id) {
-            return;
-        }
-        if state
-            .data_channels
-            .get(&session_id)
-            .is_some_and(|channel| !channel.desired.is_closed() && *channel.desired.borrow())
-        {
-            return;
-        }
-        if let Some(previous) = state.data_channels.remove(&session_id) {
-            let _ = previous.desired.send(false);
-        }
-        let worker_generation = state.next_worker_generation;
-        state.next_worker_generation = state.next_worker_generation.wrapping_add(1);
-        let (desired, desired_rx) = watch::channel(true);
-        state.data_channels.insert(
-            session_id.clone(),
-            TerminalDataChannel {
-                generation: worker_generation,
-                desired,
-            },
-        );
-        (worker_generation, desired_rx)
-    };
-    identity.channel = ConnectionChannel::TerminalData;
-    identity.can_force_stop = false;
-    identity.terminal_session_id = Some(session_id.clone());
-    tokio::spawn(async move {
-        let mut attempt = 0_u32;
-        'worker: loop {
-            if *shutdown.borrow() || !*desired_rx.borrow() {
-                break;
-            }
-            let result = tokio::select! {
-                result = async {
-                    let _permit = data_connects.acquire().await.expect("data connection semaphore remains open");
-                    establish(&connector, &identity, &token).await
-                } => result,
-                _ = desired_rx.wait_for(|desired| !*desired) => break,
-                _ = shutdown.wait_for(|stopped| *stopped) => break,
-            };
-            let (mut stream, _) = match result {
-                Ok(connection) => connection,
-                Err(ConnectFailure::Fatal(_)) => break,
-                Err(ConnectFailure::Retry(_)) => {
-                    attempt = attempt.saturating_add(1);
-                    let delay = retry_delay(attempt, &identity);
-                    tokio::select! {
-                        _ = tokio::time::sleep(delay) => {}
-                        changed = desired_rx.changed() => {
-                            if changed.is_err() {
-                                break 'worker;
-                            }
-                        }
-                        changed = shutdown.changed() => {
-                            if changed.is_err() || *shutdown.borrow() {
-                                break 'worker;
-                            }
-                        }
-                    }
-                    continue;
-                }
-            };
-            loop {
-                tokio::select! {
-                    message = receive_control_observed(&mut stream) => {
-                        let (message, observation) = match message {
-                            Ok(result) => result,
-                            Err(_) => break,
-                        };
-                        attempt = 0;
-                        diagnostics.record_ipc_read(observation);
-                        let ControlMessage::Event(event) = message else {
-                            break;
-                        };
-                        // A gap means the Host broke its stream contract; a fresh
-                        // lane starts from a Host snapshot.
-                        let Ok(terminal_exited) = handle_terminal_data_event(
-                            event,
-                            &terminal_state,
-                            host_epoch,
-                            worker_generation,
-                            &events,
-                            &diagnostics,
-                        ) else {
-                            break;
-                        };
-                        if terminal_exited {
-                            stop_terminal_data_channel_if_current(
-                                &terminal_state,
-                                &session_id,
-                                host_epoch,
-                                worker_generation,
-                            );
-                        }
-                    }
-                    changed = desired_rx.changed() => {
-                        if changed.is_err() {
-                            break 'worker;
-                        }
-                        if !*desired_rx.borrow() {
-                            break;
-                        }
-                    }
-                    changed = shutdown.changed() => {
-                        if changed.is_err() || *shutdown.borrow() {
-                            break 'worker;
-                        }
-                    }
-                }
-            }
-            if !*desired_rx.borrow() {
-                continue;
-            }
-            attempt = attempt.saturating_add(1);
-            let delay = retry_delay(attempt, &identity);
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                changed = desired_rx.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                }
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        break;
-                    }
-                }
-            }
-        }
-        let exit = {
-            let mut state = terminal_state.write();
-            if state
-                .data_channels
-                .get(&session_id)
-                .is_some_and(|channel| channel.generation == worker_generation)
-            {
-                state.data_channels.remove(&session_id);
-            }
-            if state.host_epoch == Some(host_epoch) {
-                state.take_ready_exit(&session_id)
-            } else {
-                None
-            }
-        };
-        if let Some(event) = exit {
-            let _ = events.send(ClientEvent::Server(Box::new(event)));
-        }
-    });
-}
-
-fn terminal_stops_for_request(
-    terminal_state: &TerminalState,
-    request: &Request,
-) -> PendingTerminalStops {
+/// Terminals whose Host attachment a successful `request` releases.
+fn detached_terminals(request: &Request) -> Vec<TerminalSessionId> {
     match request {
         Request::DetachTerminal { session_id }
         | Request::TerminateTerminal { session_id, .. }
-        | Request::AcknowledgeTerminalExit { session_id, .. } => {
-            terminal_worker_fence(terminal_state, session_id)
-                .map_or(PendingTerminalStops::None, PendingTerminalStops::One)
-        }
-        Request::TerminateMany { requests } => {
-            let mut fences = requests
-                .iter()
-                .filter_map(|request| terminal_worker_fence(terminal_state, &request.session_id))
-                .collect::<Vec<_>>();
-            match fences.len() {
-                0 => PendingTerminalStops::None,
-                1 => PendingTerminalStops::One(fences.pop().expect("one terminal worker fence")),
-                _ => PendingTerminalStops::Many(fences),
-            }
-        }
-        _ => PendingTerminalStops::None,
+        | Request::AcknowledgeTerminalExit { session_id, .. } => vec![session_id.clone()],
+        _ => Vec::new(),
     }
 }
 
-fn terminal_worker_fence(
-    terminal_state: &TerminalState,
-    session_id: &TerminalSessionId,
-) -> Option<TerminalWorkerFence> {
-    let host_epoch = terminal_state.host_epoch?;
-    let channel = terminal_state.data_channels.get(session_id)?;
-    Some(TerminalWorkerFence {
-        session_id: session_id.clone(),
-        host_epoch,
-        generation: channel.generation,
-    })
-}
-
-fn stop_terminal_data_channel_if_current(
-    terminal_state: &RwLock<TerminalState>,
-    session_id: &TerminalSessionId,
-    host_epoch: u64,
-    worker_generation: u64,
-) {
-    let mut terminal_state = terminal_state.write();
-    if terminal_state.host_epoch != Some(host_epoch) {
-        return;
-    }
-    if terminal_state
-        .data_channels
-        .get(session_id)
-        .is_some_and(|channel| channel.generation == worker_generation)
-        && let Some(channel) = terminal_state.data_channels.remove(session_id)
-    {
-        let _ = channel.desired.send(false);
+fn register_terminal(context: &ClientSessionContext, session_id: TerminalSessionId) {
+    let mut terminal_state = context.terminal_state.write();
+    if terminal_state.host_epoch == Some(context.host_epoch) {
+        terminal_state.known_sessions.insert(session_id.clone());
+        terminal_state.attached.insert(session_id);
     }
 }
 
@@ -1892,44 +1517,8 @@ fn update_profile_control(
     }
 }
 
-/// Returns `true` when `event` is a `TerminalExit` held back until its data lane
-/// delivers the final frame; the lane releases it.
-fn defer_exit_until_final_frame(
-    terminal_state: &RwLock<TerminalState>,
-    host_epoch: u64,
-    event: &HostEvent,
-) -> bool {
-    let ServerEvent::TerminalExit {
-        session_id,
-        session_epoch,
-        final_sequence,
-        ..
-    } = &event.body
-    else {
-        return false;
-    };
-    let mut state = terminal_state.write();
-    if state.host_epoch != Some(host_epoch)
-        || !data_lane_open(&state, session_id)
-        || final_viewport_is_ready(&state, session_id, *session_epoch, *final_sequence)
-    {
-        return false;
-    }
-    state
-        .deferred_exits
-        .insert(session_id.clone(), event.clone());
-    true
-}
-
-fn data_lane_open(state: &TerminalState, session_id: &TerminalSessionId) -> bool {
-    state
-        .data_channels
-        .get(session_id)
-        .is_some_and(|channel| !channel.desired.is_closed() && *channel.desired.borrow())
-}
-
 /// Installs an attach checkpoint as the initial mirror. Once a mirror exists only
-/// its data lane writes it, so frames are never interleaved from two sources.
+/// the terminal's stream writes it, so frames are never interleaved from two sources.
 fn seed_terminal_mirror(
     viewport: &yttt_protocol::terminal::SemanticViewport,
     terminal_state: &RwLock<TerminalState>,
@@ -1956,17 +1545,12 @@ fn apply_terminal_update(
     update: TerminalStreamUpdate,
     terminal_state: &RwLock<TerminalState>,
     host_epoch: u64,
-    worker_generation: u64,
     events: &broadcast::Sender<ClientEvent>,
 ) -> MirrorApply {
     let session_id = update.session_id().clone();
     let published_update = Arc::new(update);
     let mut state = terminal_state.write();
     if state.host_epoch != Some(host_epoch)
-        || state
-            .data_channels
-            .get(&session_id)
-            .is_none_or(|channel| channel.generation != worker_generation)
         || (!state.known_sessions.contains(&session_id) && !state.mirrors.contains_key(&session_id))
     {
         return MirrorApply::Ignored;
@@ -1983,13 +1567,9 @@ fn apply_terminal_update(
             _ => MirrorApply::SequenceGap,
         },
     };
-    let exit = state.take_ready_exit(&session_id);
     drop(state);
     if apply == MirrorApply::Updated {
         let _ = events.send(ClientEvent::TerminalUpdated(published_update));
-    }
-    if let Some(event) = exit {
-        let _ = events.send(ClientEvent::Server(Box::new(event)));
     }
     apply
 }
@@ -2077,49 +1657,30 @@ fn apply_project_token_usage(
     }
 }
 
-/// Applies one data-lane frame. `Ok` reports whether it carried the process
-/// exit; `Err` means the frame does not continue the mirror and the lane must reset.
-fn handle_terminal_data_event(
-    event: HostEvent,
-    terminal_state: &RwLock<TerminalState>,
-    host_epoch: u64,
-    worker_generation: u64,
-    events: &broadcast::Sender<ClientEvent>,
-    diagnostics: &ClientPipelineDiagnostics,
-) -> Result<bool, ()> {
-    let ServerEvent::Terminal(update) = event.body else {
-        return Ok(false);
-    };
-    let terminal_exited = match &update {
-        TerminalStreamUpdate::Snapshot(viewport) => {
-            matches!(viewport.process_state, TerminalProcessState::Exited { .. })
-        }
-        TerminalStreamUpdate::Delta(delta) => {
-            matches!(
-                delta.process_state,
-                Some(TerminalProcessState::Exited { .. })
-            )
-        }
-        TerminalStreamUpdate::RawTail { .. } | TerminalStreamUpdate::ResyncRequired { .. } => false,
-    };
+/// Merges one terminal frame into its mirror. `Err` means the frame does not
+/// continue the mirror.
+fn handle_terminal_frame(
+    update: TerminalStreamUpdate,
+    context: &ClientSessionContext,
+) -> Result<(), ()> {
     let merge_started_at = Instant::now();
     let apply = apply_terminal_update(
         update,
-        terminal_state,
-        host_epoch,
-        worker_generation,
-        events,
+        &context.terminal_state,
+        context.host_epoch,
+        &context.events,
     );
-    diagnostics.record_terminal_merge(merge_started_at.elapsed());
+    context
+        .diagnostics
+        .record_terminal_merge(merge_started_at.elapsed());
     if apply == MirrorApply::SequenceGap {
-        diagnostics.record_data_lane_reset();
         return Err(());
     }
-    Ok(terminal_exited)
+    Ok(())
 }
 
-async fn send_internal_request(
-    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+fn send_internal_request(
+    writer: &SessionWriter,
     pending: &mut HashMap<u64, PendingRequest>,
     next_request_id: &impl Fn() -> u64,
     actor_device_id: Option<String>,
@@ -2127,18 +1688,15 @@ async fn send_internal_request(
     request: PendingRequest,
 ) -> Result<(), ()> {
     let request_id = next_request_id();
-    send_control(
-        writer,
-        &ControlMessage::Request(ClientRequest {
+    writer
+        .send_reliable(&ControlMessage::Request(ClientRequest {
             request_id,
             actor_device_id,
             lease_epoch: None,
             control: None,
             body,
-        }),
-    )
-    .await
-    .map_err(|_| ())?;
+        }))
+        .map_err(|_| ())?;
     pending.insert(request_id, request);
     Ok(())
 }
@@ -2183,10 +1741,7 @@ fn install_host_epoch(next_host_epoch: u64, state: &HostEpochState<'_>) {
             let mut terminal_state = terminal_state.write();
             terminal_state.host_epoch = Some(next_host_epoch);
             terminal_state.mirrors.clear();
-            terminal_state.deferred_exits.clear();
-            for (_, channel) in terminal_state.data_channels.drain() {
-                let _ = channel.desired.send(false);
-            }
+            terminal_state.attached.clear();
             catalog.write().take();
             agent_snapshots.write().clear();
             project_token_usage.write().clear();

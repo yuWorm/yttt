@@ -90,8 +90,7 @@ impl RecoveryHost {
             client_instance_id: ClientInstanceId::new(id),
             host_epoch_hint: None,
             can_force_stop: false,
-            channel: ConnectionChannel::Control,
-            terminal_session_id: None,
+            channel: ConnectionChannel::Session,
         };
         let token = AuthToken::from_bytes([0x5a; 32]);
         let client = Arc::new(

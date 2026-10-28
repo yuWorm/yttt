@@ -11757,6 +11757,7 @@ name = "yttt-transport"
 version = "0.3.18"
 dependencies = [
  "hmac 0.12.1",
+ "parking_lot",
  "rand 0.8.6",
  "serde",
  "sha2 0.10.9",

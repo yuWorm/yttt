@@ -15,10 +15,10 @@ use yttt_client_core::{ClientCore, ClientCoreError, ClientEvent, ConnectionState
 use yttt_core::model::ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId};
 use yttt_host::{HostBootstrap, diagnostics::HostDiagnosticsSnapshot, run};
 use yttt_protocol::{
-    BuildIdentity, ClientRequest, ControlMessage, FailureCode, LIFECYCLE_PROTOCOL_VERSION,
-    LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope, LifecycleResponse,
-    LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
-    TerminalInteractiveMessage,
+    BuildIdentity, ClientRequest, ControlMessage, FailureCode, HostEvent,
+    LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope,
+    LifecycleResponse, LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION,
+    Request, Response, ServerEvent,
     agent::AgentSnapshotCursor,
     project::{
         ProjectFileState, ProjectGitOperation, ProjectRequest, ProjectResponse, ProjectSaveMode,
@@ -39,8 +39,7 @@ use yttt_protocol::{
 };
 use yttt_transport_local::{
     AuthToken, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener, client_handshake,
-    connect, receive_control, receive_lifecycle, receive_terminal_interactive, send_control,
-    send_lifecycle, send_terminal_interactive,
+    connect, receive_lifecycle, send_control, send_lifecycle,
 };
 
 fn host_path(path: &std::path::Path) -> yttt_protocol::HostPath {
@@ -139,8 +138,7 @@ impl RunningHost {
                 client_instance_id: ClientInstanceId::new(id),
                 host_epoch_hint: None,
                 can_force_stop: false,
-                channel: yttt_protocol::ConnectionChannel::Control,
-                terminal_session_id: None,
+                channel: yttt_protocol::ConnectionChannel::Session,
             },
             AuthToken::from_bytes(self.token),
         )
@@ -181,8 +179,7 @@ async fn raw_client(host: &RunningHost, id: &str) -> yttt_transport_local::Local
             client_instance_id: ClientInstanceId::new(id),
             host_epoch_hint: None,
             can_force_stop: false,
-            channel: yttt_protocol::ConnectionChannel::Control,
-            terminal_session_id: None,
+            channel: yttt_protocol::ConnectionChannel::Session,
         },
         &AuthToken::from_bytes(host.token),
     )
@@ -223,7 +220,6 @@ async fn raw_lifecycle_client_for(
             host_epoch_hint: None,
             can_force_stop,
             channel: yttt_protocol::ConnectionChannel::Lifecycle,
-            terminal_session_id: None,
         },
         &AuthToken::from_bytes(token),
     )
@@ -232,59 +228,31 @@ async fn raw_lifecycle_client_for(
     stream
 }
 
-async fn raw_terminal_data_client(
-    host: &RunningHost,
-    id: &str,
-    session_id: TerminalSessionId,
-) -> yttt_transport_local::LocalStream {
-    let mut stream = connect(&host_endpoint(&host.bootstrap)).await.unwrap();
-    client_handshake(
-        &mut stream,
-        &ClientIdentity {
-            expected_environment: None,
-            credential_generation: 0,
-            session_nonce: host.session_nonce(id),
-            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
-            build: host.bootstrap.build.clone(),
-            profile_id: host.bootstrap.profile_id.clone(),
-            client_instance_id: ClientInstanceId::new(id),
-            host_epoch_hint: None,
-            can_force_stop: false,
-            channel: yttt_protocol::ConnectionChannel::TerminalData,
-            terminal_session_id: Some(session_id),
-        },
-        &AuthToken::from_bytes(host.token),
-    )
-    .await
-    .unwrap();
-    stream
+/// Receives the next message on a raw `Session` connection, reassembling chunks.
+async fn raw_receive(stream: &mut yttt_transport_local::LocalStream) -> ControlMessage {
+    yttt_transport::SessionReader::new(stream)
+        .receive()
+        .await
+        .unwrap()
 }
 
-async fn raw_terminal_interactive_client(
-    host: &RunningHost,
-    id: &str,
-) -> yttt_transport_local::LocalStream {
-    let mut stream = connect(&host_endpoint(&host.bootstrap)).await.unwrap();
-    client_handshake(
-        &mut stream,
-        &ClientIdentity {
-            expected_environment: None,
-            credential_generation: 0,
-            session_nonce: host.session_nonce(id),
-            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
-            build: host.bootstrap.build.clone(),
-            profile_id: host.bootstrap.profile_id.clone(),
-            client_instance_id: ClientInstanceId::new(id),
-            host_epoch_hint: None,
-            can_force_stop: false,
-            channel: yttt_protocol::ConnectionChannel::TerminalInteractive,
-            terminal_session_id: None,
-        },
-        &AuthToken::from_bytes(host.token),
-    )
-    .await
-    .unwrap();
-    stream
+/// Returns the next terminal stream update, taking buffered events first.
+async fn next_terminal_update(
+    stream: &mut yttt_transport_local::LocalStream,
+    pending: &mut std::collections::VecDeque<HostEvent>,
+) -> yttt_protocol::terminal::TerminalStreamUpdate {
+    loop {
+        let event = match pending.pop_front() {
+            Some(event) => event,
+            None => match raw_receive(stream).await {
+                ControlMessage::Event(event) => event,
+                message => panic!("unexpected raw session message: {message:?}"),
+            },
+        };
+        if let ServerEvent::Terminal(update) = event.body {
+            return update;
+        }
+    }
 }
 
 async fn raw_interactive_request(
@@ -292,25 +260,27 @@ async fn raw_interactive_request(
     request_id: u64,
     body: Request,
     control: Option<yttt_protocol::session::ControlContext>,
+    events: &mut std::collections::VecDeque<HostEvent>,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
     let mut request = ClientRequest::new(request_id, body);
     request.control = control;
-    send_terminal_interactive(stream, &TerminalInteractiveMessage::Request(request))
-        .await
-        .unwrap();
-    let TerminalInteractiveMessage::Response(response) =
-        receive_terminal_interactive(stream).await.unwrap()
-    else {
-        panic!("unexpected interactive response");
-    };
-    assert_eq!(response.request_id, request_id);
-    response.result
+    raw_exchange(stream, request, events).await
 }
 
 async fn raw_request(
     stream: &mut yttt_transport_local::LocalStream,
     request_id: u64,
     body: Request,
+) -> Result<Response, yttt_protocol::ProtocolFailure> {
+    raw_request_keeping_events(stream, request_id, body, &mut Default::default()).await
+}
+
+/// Like `raw_request`, but keeps the events that arrive before the response.
+async fn raw_request_keeping_events(
+    stream: &mut yttt_transport_local::LocalStream,
+    request_id: u64,
+    body: Request,
+    events: &mut std::collections::VecDeque<HostEvent>,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
     let mut request = ClientRequest::new(request_id, body);
     if matches!(
@@ -319,19 +289,20 @@ async fn raw_request(
             | Request::TerminateTerminal { .. }
             | Request::AcknowledgeTerminalExit { .. }
     ) {
-        let Response::ProfileControl(mut status) = raw_send(
+        let Response::ProfileControl(mut status) = raw_exchange(
             stream,
             ClientRequest::new(
                 u64::MAX,
                 Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
             ),
+            events,
         )
         .await?
         else {
             panic!("profile status")
         };
         if status.owner.is_none() {
-            let Response::ProfileControl(acquired) = raw_send(
+            let Response::ProfileControl(acquired) = raw_exchange(
                 stream,
                 ClientRequest::new(
                     u64::MAX,
@@ -339,6 +310,7 @@ async fn raw_request(
                         yttt_protocol::session::ProfileControlRequest::RequestControl,
                     ),
                 ),
+                events,
             )
             .await?
             else {
@@ -348,23 +320,31 @@ async fn raw_request(
         }
         request.control = Some(status.context);
     }
-    raw_send(stream, request).await
+    raw_exchange(stream, request, events).await
 }
 
 async fn raw_send(
     stream: &mut yttt_transport_local::LocalStream,
     request: ClientRequest,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
+    raw_exchange(stream, request, &mut Default::default()).await
+}
+
+async fn raw_exchange(
+    stream: &mut yttt_transport_local::LocalStream,
+    request: ClientRequest,
+    events: &mut std::collections::VecDeque<HostEvent>,
+) -> Result<Response, yttt_protocol::ProtocolFailure> {
     let request_id = request.request_id;
     send_control(stream, &ControlMessage::Request(request))
         .await
         .unwrap();
     loop {
-        match receive_control(stream).await.unwrap() {
+        match raw_receive(stream).await {
             ControlMessage::Response(response) if response.request_id == request_id => {
                 return response.result;
             }
-            ControlMessage::Event(_) => {}
+            ControlMessage::Event(event) => events.push_back(event),
             message => panic!("unexpected raw client message: {message:?}"),
         }
     }
@@ -461,13 +441,12 @@ fn viewport_text(viewport: &yttt_protocol::terminal::SemanticViewport) -> String
 }
 
 #[tokio::test]
-async fn terminal_output_uses_a_dedicated_data_connection() {
+async fn one_session_connection_carries_requests_output_and_ordered_exit() {
     let host = RunningHost::start().await;
-    let client_id = "split-stream-client";
-    let mut control = raw_client(&host, client_id).await;
-    let mut interactive = raw_terminal_interactive_client(&host, client_id).await;
+    let mut session = raw_client(&host, "single-session-client").await;
+    let mut pending = std::collections::VecDeque::new();
     let mut spec = spawn_spec();
-    spec.session_id = TerminalSessionId::new("split-stream");
+    spec.session_id = TerminalSessionId::new("single-session");
     spec.execution = TerminalExecutionSpec::Command {
         shell: "/bin/sh".to_string(),
         program: "/bin/sh".to_string(),
@@ -475,8 +454,8 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
             "-lc".to_string(),
             concat!(
                 "IFS= read -r line; ",
-                "printf 'data-channel-first:%s\\n' \"$line\"; ",
-                "sleep 1; printf 'data-channel-final\\n'; sleep 30"
+                "printf 'session-first:%s\\n' \"$line\"; ",
+                "sleep 1; printf 'session-final\\n'; exit 7"
             )
             .to_string(),
         ],
@@ -486,39 +465,33 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
     let Response::TerminalSpawned {
         lease,
         session_epoch,
-    } = raw_request(&mut control, 1, spawn_request(spec, host.host_epoch()))
-        .await
-        .unwrap()
+    } = raw_request_keeping_events(
+        &mut session,
+        1,
+        spawn_request(spec, host.host_epoch()),
+        &mut pending,
+    )
+    .await
+    .unwrap()
     else {
         panic!("unexpected spawn response");
     };
-    let Response::Resources(resources) = raw_request(&mut control, 2, Request::ListResources)
-        .await
-        .unwrap()
-    else {
-        panic!("unexpected catalog response");
-    };
-    let mut data = raw_terminal_data_client(&host, client_id, session_id.clone()).await;
-    let initial = tokio::time::timeout(Duration::from_secs(5), receive_control(&mut data))
-        .await
-        .expect("terminal data snapshot timeout")
-        .unwrap();
-    let ControlMessage::Event(yttt_protocol::HostEvent {
-        body:
-            yttt_protocol::ServerEvent::Terminal(
-                yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(viewport),
-            ),
-        ..
-    }) = initial
-    else {
-        panic!("unexpected initial terminal data message: {initial:?}");
+    let initial = tokio::time::timeout(
+        Duration::from_secs(5),
+        next_terminal_update(&mut session, &mut pending),
+    )
+    .await
+    .expect("terminal snapshot timeout");
+    let yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(viewport) = initial else {
+        panic!("a spawned terminal must stream a snapshot first: {initial:?}");
     };
     let geometry_epoch = viewport.geometry_epoch;
     let mut mirror = TerminalMirror::new(viewport);
-    let Response::ProfileControl(control_status) = raw_request(
-        &mut control,
-        99,
+    let Response::ProfileControl(control_status) = raw_request_keeping_events(
+        &mut session,
+        2,
         Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
+        &mut pending,
     )
     .await
     .unwrap() else {
@@ -526,73 +499,75 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
     };
     assert_eq!(
         raw_interactive_request(
-            &mut interactive,
+            &mut session,
             3,
             Request::TerminalInput(TerminalInput {
                 session_id: session_id.clone(),
                 context: TerminalMutationContext {
-                    host_epoch: resources.host_epoch,
+                    host_epoch: host.host_epoch(),
                     session_epoch,
                     lease_epoch: lease.lease_epoch,
                     geometry_epoch,
                     client_sequence: 1,
                 },
-                bytes: b"separate\r".to_vec(),
+                bytes: b"shared\r".to_vec(),
             }),
             Some(control_status.context),
+            &mut pending,
         )
         .await
         .unwrap(),
         Response::TerminalInputAccepted { client_sequence: 1 }
     );
     tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let message = receive_control(&mut data).await.unwrap();
-            let ControlMessage::Event(yttt_protocol::HostEvent {
-                body: yttt_protocol::ServerEvent::Terminal(update),
-                ..
-            }) = message
-            else {
-                panic!("unexpected terminal data message: {message:?}");
-            };
+        while !viewport_text(mirror.viewport()).contains("session-final") {
+            let update = next_terminal_update(&mut session, &mut pending).await;
             mirror.apply(&update);
-            if viewport_text(mirror.viewport()).contains("data-channel-final") {
-                break;
+        }
+    })
+    .await
+    .expect("terminal output timeout");
+    assert!(viewport_text(mirror.viewport()).contains("session-first:shared"));
+
+    // The exit event never overtakes the frames it ends: when it arrives the
+    // mirror already holds the final sequence.
+    let final_sequence = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = match pending.pop_front() {
+                Some(event) => event,
+                None => match raw_receive(&mut session).await {
+                    ControlMessage::Event(event) => event,
+                    message => panic!("unexpected raw session message: {message:?}"),
+                },
+            };
+            match event.body {
+                ServerEvent::Terminal(update) => {
+                    mirror.apply(&update);
+                }
+                ServerEvent::TerminalExit {
+                    session_epoch: exited_epoch,
+                    code,
+                    final_sequence,
+                    ..
+                } => {
+                    assert_eq!((exited_epoch, code), (session_epoch, Some(7)));
+                    assert_eq!(mirror.viewport().sequence, final_sequence);
+                    break final_sequence;
+                }
+                _ => {}
             }
         }
     })
     .await
-    .expect("terminal data output timeout");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), receive_control(&mut control),)
-            .await
-            .is_err(),
-        "control connection received terminal output"
-    );
-    let terminated = raw_request(
-        &mut control,
-        4,
-        Request::TerminateTerminal {
-            session_id: session_id.clone(),
-            host_epoch: host.host_epoch(),
-            session_epoch,
-            mode: TerminationMode::Terminate,
-        },
-    )
-    .await
-    .unwrap();
-    let Response::TerminalTerminated(terminated) = terminated else {
-        panic!("unexpected terminate response");
-    };
-    assert_eq!(terminated.session_epoch, session_epoch);
+    .expect("terminal exit timeout");
     assert_eq!(
         raw_request(
-            &mut control,
+            &mut session,
             5,
             Request::AcknowledgeTerminalExit {
                 session_id,
                 session_epoch,
-                final_sequence: terminated.final_sequence,
+                final_sequence,
             },
         )
         .await
@@ -1128,10 +1103,10 @@ async fn host_terminal_sync_traffic_probe() {
     for ((name, client), before) in clients.iter().zip(before) {
         let after = client.diagnostics();
         eprintln!(
-            "SYNC_TRAFFIC client={name} terminals={TERMINALS} elapsed_ms={} payload_bytes={} data_lane_resets={} reconnects={}",
+            "SYNC_TRAFFIC client={name} terminals={TERMINALS} elapsed_ms={} payload_bytes={} frames={} reconnects={}",
             elapsed.as_millis(),
             after.ipc_payload_bytes - before.ipc_payload_bytes,
-            after.data_lane_resets - before.data_lane_resets,
+            after.terminal_merge.samples - before.terminal_merge.samples,
             after.reconnects - before.reconnects,
         );
     }
@@ -2779,27 +2754,16 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         checkpoint.viewport.display_offset,
         scrolled.viewport.display_offset
     );
-    let mut reconnected_data =
-        raw_terminal_data_client(&host, "viewport-owner", session_id.clone()).await;
-    let snapshot = tokio::time::timeout(
-        Duration::from_secs(5),
-        receive_control(&mut reconnected_data),
-    )
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while owner
+            .terminal_snapshot(&session_id)
+            .is_none_or(|viewport| viewport.display_offset != scrolled.viewport.display_offset)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
     .await
-    .expect("reconnected data snapshot timeout")
-    .unwrap();
-    let ControlMessage::Event(yttt_protocol::HostEvent {
-        body:
-            yttt_protocol::ServerEvent::Terminal(
-                yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(viewport),
-            ),
-        ..
-    }) = snapshot
-    else {
-        panic!("expected reconnected data snapshot");
-    };
-    assert_eq!(viewport.display_offset, scrolled.viewport.display_offset);
-    drop(reconnected_data);
+    .expect("owner mirror scroll timeout");
 
     assert_eq!(
         owner
@@ -3056,14 +3020,14 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
         panic!("unexpected spawn response: {spawned:?}");
     };
     let mut slow = raw_client(&host, "slow-raw-observer").await;
-    let mut slow_interactive = raw_terminal_interactive_client(&host, "slow-raw-observer").await;
+    let mut slow_pending = std::collections::VecDeque::new();
     let observer_geometry = TerminalGeometry {
         cols: 41,
         rows: 12,
         cell_width: 7,
         cell_height: 14,
     };
-    let attached = raw_request(
+    let attached = raw_request_keeping_events(
         &mut slow,
         1,
         Request::AttachTerminal(AttachTerminal {
@@ -3076,6 +3040,7 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
             geometry: observer_geometry,
             geometry_epoch: 99,
         }),
+        &mut slow_pending,
     )
     .await
     .unwrap();
@@ -3087,24 +3052,18 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
         panic!("unexpected observer attach response: {attached:?}");
     };
     assert_eq!(checkpoint.viewport.geometry, geometry());
-    let mut slow_data =
-        raw_terminal_data_client(&host, "slow-raw-observer", session_id.clone()).await;
-    let first_frame = tokio::time::timeout(Duration::from_secs(5), receive_control(&mut slow_data))
-        .await
-        .expect("slow observer snapshot timeout")
-        .unwrap();
-    let ControlMessage::Event(yttt_protocol::HostEvent {
-        body:
-            yttt_protocol::ServerEvent::Terminal(
-                yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(mut slow_mirror),
-            ),
-        ..
-    }) = first_frame
+    let first_frame = tokio::time::timeout(
+        Duration::from_secs(5),
+        next_terminal_update(&mut slow, &mut slow_pending),
+    )
+    .await
+    .expect("slow observer snapshot timeout");
+    let yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(mut slow_mirror) = first_frame
     else {
-        panic!("data lane must open with a snapshot: {first_frame:?}");
+        panic!("an attached terminal must stream a snapshot first: {first_frame:?}");
     };
     let observer_resize = raw_interactive_request(
-        &mut slow_interactive,
+        &mut slow,
         2,
         Request::ResizeTerminal(ResizeTerminal {
             session_id: session_id.clone(),
@@ -3112,6 +3071,7 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
             geometry: observer_geometry,
         }),
         None,
+        &mut slow_pending,
     )
     .await
     .unwrap_err();
@@ -3162,13 +3122,7 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
     // frames that continue its mirror: no gap and no resync request.
     tokio::time::timeout(Duration::from_secs(10), async {
         while !viewport_text(&slow_mirror).contains("burst-done") {
-            let ControlMessage::Event(event) = receive_control(&mut slow_data).await.unwrap()
-            else {
-                panic!("data lane carries only events");
-            };
-            let yttt_protocol::ServerEvent::Terminal(update) = event.body else {
-                continue;
-            };
+            let update = next_terminal_update(&mut slow, &mut slow_pending).await;
             assert!(
                 !matches!(
                     update,
@@ -3188,7 +3142,7 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
     })
     .await
     .expect("slow observer catch-up timeout");
-    drop(slow_data);
+    drop(slow);
 
     let terminated = owner
         .request(Request::TerminateTerminal {
@@ -3290,7 +3244,7 @@ async fn hidden_terminal_streams_metadata_only_until_revealed() {
     })
     .await
     .expect("revealed terminal snapshot timeout");
-    assert_eq!(client.diagnostics().data_lane_resets, 0);
+    assert_eq!(client.diagnostics().reconnects, 0);
 
     let terminated = client
         .request(Request::TerminateTerminal {

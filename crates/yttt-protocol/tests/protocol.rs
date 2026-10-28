@@ -29,8 +29,7 @@ fn client_hello() -> ClientHello {
         session_nonce: Nonce([8; 32]),
         credential_generation: 0,
         can_force_stop: false,
-        channel: ConnectionChannel::Control,
-        terminal_session_id: None,
+        channel: ConnectionChannel::Session,
         nonce: Nonce([7; 32]),
     }
 }
