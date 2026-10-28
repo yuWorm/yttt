@@ -1,23 +1,33 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{self, Read as _, Write as _},
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use yttt_core::model::ids::ClientInstanceId;
+use yttt_core::model::{
+    editor::DocumentId,
+    host_workspace::{
+        HostWorkspace, HostWorkspaceState, IntentError, LegacyWorkspaceSnapshot, PaneAddress,
+        WorkspaceIntent,
+    },
+    ids::{ClientInstanceId, ProjectId},
+    workspace::{Workspace, WorkspaceError, WorkspaceState},
+};
 use yttt_protocol::{
     FailureCode, HostPath, PathSegment, ProjectRelativePath, ProtocolFailure,
     workspace::{
         AgentSessionOperation, AgentStateRef, DraftRef, WorkspaceConfig, WorkspaceConfigRevision,
         WorkspaceDirectory, WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind, WorkspaceDraft,
-        WorkspaceEnvironment, WorkspaceId, WorkspaceOperationId, WorkspaceProjectConfig,
-        WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot,
-        WorkspaceSummary, agent_state_references, encode_project_path, validate_workspace_manifest,
+        WorkspaceEnvironment, WorkspaceId, WorkspaceLayoutUpdate, WorkspaceOperationId,
+        WorkspaceProjectConfig, WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse,
+        WorkspaceSnapshot, WorkspaceSummary, agent_state_references, encode_project_path,
+        validate_workspace_manifest,
     },
 };
 
@@ -40,6 +50,7 @@ pub struct WorkspaceService {
     environment_id: String,
     drafts: crate::workspace_objects::WorkspaceObjects<DraftRef>,
     agent_states: crate::workspace_objects::WorkspaceObjects<AgentStateRef>,
+    backups: crate::workspace_backups::WorkspaceBackups,
     state: Mutex<ServiceState>,
     pub(crate) control: crate::control::ProfileControl,
 }
@@ -48,12 +59,53 @@ struct ServiceState {
     workspaces: HashMap<WorkspaceId, WorkspaceRecord>,
     next_temporary_file: u64,
     history_initialized: bool,
+    subscribers: HashMap<ClientInstanceId, LayoutSubscriber>,
+    next_subscriber: u64,
+}
+
+/// Delivers a changed layout to one Client; returns `false` once the Client is gone.
+pub(crate) type LayoutSink = Box<dyn Fn(&WorkspaceLayoutUpdate) -> bool + Send>;
+
+struct LayoutSubscriber {
+    generation: u64,
+    sink: LayoutSink,
+    workspaces: HashSet<WorkspaceId>,
+}
+
+/// Keeps a Client's layout subscription; dropping it unsubscribes.
+pub(crate) struct LayoutSubscription {
+    service: Arc<WorkspaceService>,
+    client_id: ClientInstanceId,
+    generation: u64,
+}
+
+impl Drop for LayoutSubscription {
+    fn drop(&mut self) {
+        let mut state = self.service.state.lock();
+        if state
+            .subscribers
+            .get(&self.client_id)
+            .is_some_and(|subscriber| subscriber.generation == self.generation)
+        {
+            state.subscribers.remove(&self.client_id);
+        }
+    }
+}
+
+/// An accepted layout intent.
+pub(crate) struct AppliedIntent {
+    pub(crate) revision: u64,
+    /// Panes the intent removed; their terminals must be terminated.
+    pub(crate) removed_panes: Vec<PaneAddress>,
 }
 
 #[derive(Clone)]
 struct WorkspaceRecord {
     revision: u64,
     snapshot: WorkspaceSnapshot,
+    /// The layout parsed from `snapshot`, at `revision`. `None` when the
+    /// snapshot does not hold a valid layout; intents are then refused.
+    layout: Option<HostWorkspace>,
     drafts: Vec<DraftRef>,
     agent_states: Vec<AgentStateRef>,
     name: String,
@@ -94,9 +146,11 @@ fn legacy_restore_on_startup() -> bool {
 
 impl WorkspaceRecord {
     fn empty() -> Self {
+        let snapshot = empty_snapshot();
         Self {
             revision: 0,
-            snapshot: empty_snapshot(),
+            layout: derive_layout(&snapshot, 0),
+            snapshot,
             drafts: Vec::new(),
             agent_states: Vec::new(),
             name: String::new(),
@@ -135,6 +189,7 @@ impl WorkspaceRecord {
             revision: persisted.revision,
             agent_states: agent_state_references(persisted.snapshot.as_value())
                 .map_err(io::Error::other)?,
+            layout: derive_layout(&persisted.snapshot, persisted.revision),
             snapshot: persisted.snapshot,
             drafts: persisted.drafts,
             name: persisted.name,
@@ -179,6 +234,7 @@ impl WorkspaceService {
 
         let drafts = crate::workspace_objects::WorkspaceObjects::new(&state_root)?;
         let agent_states = crate::workspace_objects::WorkspaceObjects::new(&state_root)?;
+        let backups = crate::workspace_backups::WorkspaceBackups::new(&state_root);
         let mut workspaces = HashMap::new();
         let history_marker = state_root.join("workspace-history-initialized");
         let mut history_initialized = history_marker.try_exists()?;
@@ -204,26 +260,35 @@ impl WorkspaceService {
             };
             let workspace_id = WorkspaceId::new(identifier)
                 .map_err(|_| invalid_state("workspace state file has an invalid identifier"))?;
-            let metadata = entry.metadata()?;
-            if metadata.len() > MAX_WORKSPACE_STATE_BYTES as u64 {
-                return Err(invalid_state("workspace state file exceeds its size limit"));
-            }
-            let bytes = read_bounded_file(&path, MAX_WORKSPACE_STATE_BYTES)?;
-            let mut persisted: PersistedWorkspaceRecord = serde_json::from_slice(&bytes)
-                .map_err(|error| invalid_state(&format!("invalid workspace state: {error}")))?;
-            let needs_migration = matches!(persisted.schema_version, 1 | 2);
-            if persisted.schema_version == 1 {
-                migrate_inline_drafts(&drafts, &workspace_id, &mut persisted)?;
-            }
-            if persisted.schema_version == 2 {
-                migrate_inline_agent_states(&agent_states, &workspace_id, &mut persisted)?;
-            }
-            let record = WorkspaceRecord::from_persisted(persisted)?;
-            if needs_migration {
-                // All referenced objects are durable before replacing the legacy manifest.
-                let migrated = serialize_workspace_record(&record)
+            let load =
+                |bytes: &[u8]| load_workspace_record(bytes, &workspace_id, &drafts, &agent_states);
+            let loaded = read_bounded_file(&path, MAX_WORKSPACE_STATE_BYTES)
+                .map_err(RecordLoadError::Unreadable)
+                .and_then(|bytes| load(&bytes));
+            let (record, rewrite) = match loaded {
+                Ok((record, needs_migration)) => (record, needs_migration),
+                Err(RecordLoadError::Fatal(error)) => return Err(error),
+                Err(RecordLoadError::Unreadable(error)) => {
+                    eprintln!("workspace {identifier} state is unreadable: {error}");
+                    let recovered =
+                        backups.recover(identifier, &path, crate::now_millis(), |bytes| {
+                            load(bytes).map_err(|error| match error {
+                                RecordLoadError::Fatal(error)
+                                | RecordLoadError::Unreadable(error) => error,
+                            })
+                        })?;
+                    let Some((_, (record, _))) = recovered else {
+                        eprintln!("workspace {identifier} has no readable backup");
+                        continue;
+                    };
+                    (record, true)
+                }
+            };
+            if rewrite {
+                // All referenced objects are durable before replacing the manifest.
+                let bytes = serialize_workspace_record(&record)
                     .map_err(|error| invalid_state(&error.message))?;
-                atomic_write(&path, &migrated, random_temporary_file())?;
+                atomic_write(&path, &bytes, random_temporary_file())?;
             }
             if !history_initialized {
                 atomic_write(&history_marker, b"1", random_temporary_file())?;
@@ -255,11 +320,14 @@ impl WorkspaceService {
             environment_id,
             drafts,
             agent_states,
+            backups,
             control: crate::control::ProfileControl::new(),
             state: Mutex::new(ServiceState {
                 workspaces,
                 next_temporary_file: 0,
                 history_initialized,
+                subscribers: HashMap::new(),
+                next_subscriber: 0,
             }),
         })
     }
@@ -343,6 +411,13 @@ impl WorkspaceService {
             self.control.authorize_owner(client_id)?;
         }
         let request = match request {
+            WorkspaceRequest::Apply { .. } => {
+                return Err(failure(
+                    FailureCode::Internal,
+                    "layout intents are applied with WorkspaceService::apply",
+                    false,
+                ));
+            }
             WorkspaceRequest::AgentSessions {
                 providers,
                 project_root,
@@ -373,6 +448,7 @@ impl WorkspaceService {
         };
         let mut state = self.state.lock();
         match request {
+            WorkspaceRequest::Apply { .. } => unreachable!("handled before the state lock"),
             WorkspaceRequest::AgentSessions { .. }
             | WorkspaceRequest::MutateAgentSession { .. }
             | WorkspaceRequest::OmpSessionExists { .. } => {
@@ -504,7 +580,9 @@ impl WorkspaceService {
                 relative_path,
                 expected_revision,
             } => self.delete_config(&relative_path, expected_revision),
-            WorkspaceRequest::Open { workspace_id } => Ok(self.open(&state, workspace_id)),
+            WorkspaceRequest::Open { workspace_id } => {
+                Ok(self.open(&mut state, client_id, workspace_id))
+            }
             WorkspaceRequest::OpenExisting { workspace_id } => {
                 if !state.workspaces.contains_key(&workspace_id) {
                     return Err(failure(
@@ -513,7 +591,7 @@ impl WorkspaceService {
                         false,
                     ));
                 }
-                Ok(self.open(&state, workspace_id))
+                Ok(self.open(&mut state, client_id, workspace_id))
             }
             WorkspaceRequest::SetRestoreOnStartup {
                 workspace_id,
@@ -687,17 +765,118 @@ impl WorkspaceService {
         }
     }
 
-    fn open(&self, state: &ServiceState, workspace_id: WorkspaceId) -> WorkspaceResponse {
-        let record = state.workspaces.get(&workspace_id);
-        WorkspaceResponse::Opened {
-            snapshot: record
-                .map(|record| record.snapshot.clone())
-                .unwrap_or_else(empty_snapshot),
-            revision: record.map_or(0, |record| record.revision),
-            drafts: record
-                .map(|record| record.drafts.clone())
-                .unwrap_or_default(),
+    /// Returns a workspace and subscribes the Client to its layout changes.
+    fn open(
+        &self,
+        state: &mut ServiceState,
+        client_id: &ClientInstanceId,
+        workspace_id: WorkspaceId,
+    ) -> WorkspaceResponse {
+        let response = match state.workspaces.get(&workspace_id) {
+            Some(record) => WorkspaceResponse::Opened {
+                snapshot: record.snapshot.clone(),
+                revision: record.revision,
+                drafts: record.drafts.clone(),
+                layout: record.layout.as_ref().map(HostWorkspace::state),
+            },
+            None => WorkspaceResponse::Opened {
+                snapshot: empty_snapshot(),
+                revision: 0,
+                drafts: Vec::new(),
+                layout: derive_layout(&empty_snapshot(), 0).map(|layout| layout.state()),
+            },
+        };
+        if let Some(subscriber) = state.subscribers.get_mut(client_id) {
+            subscriber.workspaces.insert(workspace_id);
         }
+        response
+    }
+
+    /// Registers the sink that receives the layouts of the workspaces this
+    /// Client opens. A later registration for the same Client replaces it and
+    /// starts with no opened workspaces.
+    pub(crate) fn subscribe_layouts(
+        self: &Arc<Self>,
+        client_id: ClientInstanceId,
+        sink: LayoutSink,
+    ) -> LayoutSubscription {
+        let mut state = self.state.lock();
+        let generation = state.next_subscriber;
+        state.next_subscriber += 1;
+        state.subscribers.insert(
+            client_id.clone(),
+            LayoutSubscriber {
+                generation,
+                sink,
+                workspaces: HashSet::new(),
+            },
+        );
+        LayoutSubscription {
+            service: self.clone(),
+            client_id,
+            generation,
+        }
+    }
+
+    /// Sends a workspace's current layout to every Client that opened it.
+    /// Runs under the state lock, so each Client receives layouts in revision order.
+    fn notify_layout(state: &mut ServiceState, workspace_id: &WorkspaceId) {
+        let Some(layout) = state
+            .workspaces
+            .get(workspace_id)
+            .and_then(|record| record.layout.as_ref())
+        else {
+            return;
+        };
+        let update = WorkspaceLayoutUpdate {
+            workspace_id: workspace_id.clone(),
+            layout: layout.state(),
+        };
+        state.subscribers.retain(|_, subscriber| {
+            !subscriber.workspaces.contains(workspace_id) || (subscriber.sink)(&update)
+        });
+    }
+
+    /// Applies one layout intent in arrival order on behalf of any Client.
+    /// A workspace that does not exist yet starts empty, as `Open` shows it.
+    pub(crate) fn apply(
+        &self,
+        workspace_id: WorkspaceId,
+        intent: WorkspaceIntent,
+        expected_revision: Option<u64>,
+    ) -> Result<AppliedIntent, ProtocolFailure> {
+        let mut state = self.state.lock();
+        let current = self.workspace_for_mut(&state, &workspace_id)?;
+        let mut layout = current.layout.clone().ok_or_else(|| {
+            failure(
+                FailureCode::Conflict,
+                "workspace has no valid layout to change",
+                false,
+            )
+        })?;
+        let outcome = layout
+            .apply(intent, expected_revision)
+            .map_err(intent_failure)?;
+        let (snapshot, drafts, agent_states) =
+            snapshot_with_layout(&current.snapshot, &current.drafts, &layout)?;
+        let mut updated = current;
+        updated.revision = outcome.revision;
+        updated.snapshot = snapshot;
+        updated.layout = Some(layout);
+        let previous_drafts = std::mem::replace(&mut updated.drafts, drafts);
+        let previous_agents = std::mem::replace(&mut updated.agent_states, agent_states);
+        updated.saved_millis = crate::now_millis();
+        self.persist_workspace(&mut state, &workspace_id, &updated)?;
+        self.drafts
+            .collect_obsolete(&workspace_id, &previous_drafts, &updated.drafts);
+        self.agent_states
+            .collect_obsolete(&workspace_id, &previous_agents, &updated.agent_states);
+        state.workspaces.insert(workspace_id.clone(), updated);
+        Self::notify_layout(&mut state, &workspace_id);
+        Ok(AppliedIntent {
+            revision: outcome.revision,
+            removed_panes: outcome.removed_panes,
+        })
     }
 
     fn commit(
@@ -748,6 +927,7 @@ impl WorkspaceService {
         let mut updated = current;
         updated.revision = resulting_revision;
         updated.snapshot = snapshot.clone();
+        updated.layout = derive_layout(&updated.snapshot, resulting_revision);
         let previous_drafts = std::mem::replace(&mut updated.drafts, drafts);
         let previous_agents = std::mem::replace(&mut updated.agent_states, agent_states);
         updated.saved_millis = crate::now_millis();
@@ -765,6 +945,7 @@ impl WorkspaceService {
         self.agent_states
             .collect_obsolete(&workspace_id, &previous_agents, &updated.agent_states);
         state.workspaces.insert(workspace_id.clone(), updated);
+        Self::notify_layout(state, &workspace_id);
 
         Ok(WorkspaceResponse::Committed {
             workspace_id,
@@ -817,6 +998,7 @@ impl WorkspaceService {
         self.agent_states
             .remove_workspace(workspace_id)
             .map_err(|error| filesystem_failure("delete workspace Agent states", error))?;
+        self.backups.remove(workspace_id.as_str());
         Ok(())
     }
 
@@ -828,6 +1010,8 @@ impl WorkspaceService {
     ) -> Result<(), ProtocolFailure> {
         let bytes = serialize_workspace_record(record)?;
         let path = self.workspace_path(workspace_id);
+        self.backups
+            .preserve(workspace_id.as_str(), &path, crate::now_millis());
         let temporary_file = state.next_temporary_file;
         state.next_temporary_file = state.next_temporary_file.wrapping_add(1);
         atomic_write(&path, &bytes, temporary_file).map_err(|error| {
@@ -1409,6 +1593,177 @@ fn workspace_is_empty(record: &WorkspaceRecord) -> bool {
                 .get("documents")
                 .and_then(serde_json::Value::as_array)
                 .is_some_and(Vec::is_empty))
+}
+
+enum RecordLoadError {
+    /// The record is damaged; a backup may replace it.
+    Unreadable(io::Error),
+    /// The record is intact but cannot be loaded here, or a migration failed.
+    Fatal(io::Error),
+}
+
+/// Parses and migrates one persisted record; `true` when it must be rewritten.
+fn load_workspace_record(
+    bytes: &[u8],
+    workspace_id: &WorkspaceId,
+    drafts: &crate::workspace_objects::WorkspaceObjects<DraftRef>,
+    agent_states: &crate::workspace_objects::WorkspaceObjects<AgentStateRef>,
+) -> Result<(WorkspaceRecord, bool), RecordLoadError> {
+    let mut persisted: PersistedWorkspaceRecord =
+        serde_json::from_slice(bytes).map_err(|error| {
+            RecordLoadError::Unreadable(invalid_state(&format!("invalid workspace state: {error}")))
+        })?;
+    if persisted.schema_version > WORKSPACE_SCHEMA_VERSION {
+        return Err(RecordLoadError::Fatal(invalid_state(
+            "unsupported workspace state schema",
+        )));
+    }
+    let needs_migration = matches!(persisted.schema_version, 1 | 2);
+    if persisted.schema_version == 1 {
+        migrate_inline_drafts(drafts, workspace_id, &mut persisted)
+            .map_err(RecordLoadError::Fatal)?;
+    }
+    if persisted.schema_version == 2 {
+        migrate_inline_agent_states(agent_states, workspace_id, &mut persisted)
+            .map_err(RecordLoadError::Fatal)?;
+    }
+    let record = WorkspaceRecord::from_persisted(persisted).map_err(RecordLoadError::Unreadable)?;
+    Ok((record, needs_migration))
+}
+
+/// Parses the layout of a stored snapshot; an empty snapshot is an empty workspace.
+fn derive_layout(snapshot: &WorkspaceSnapshot, revision: u64) -> Option<HostWorkspace> {
+    let value = snapshot.as_value();
+    let layout = if value.as_object().is_some_and(|object| object.is_empty()) {
+        HostWorkspace::restore(HostWorkspaceState {
+            revision,
+            workspace: Workspace::new().persisted_state(),
+            editor: Default::default(),
+        })
+    } else {
+        let legacy = LegacyWorkspaceSnapshot::deserialize(value).ok()?;
+        HostWorkspace::from_legacy(legacy, revision)
+    };
+    layout.ok()
+}
+
+/// Replaces the layout in a stored snapshot, dropping documents that are no
+/// longer open and Agent states whose pane is gone, so that the snapshot
+/// stays valid for Clients that read it. Returns the snapshot and its
+/// remaining draft and Agent state references.
+fn snapshot_with_layout(
+    snapshot: &WorkspaceSnapshot,
+    drafts: &[DraftRef],
+    layout: &HostWorkspace,
+) -> Result<(WorkspaceSnapshot, Vec<DraftRef>, Vec<AgentStateRef>), ProtocolFailure> {
+    #[derive(Deserialize)]
+    struct StoredDocument {
+        project_id: ProjectId,
+        relative_path: PathBuf,
+        #[serde(default)]
+        draft_ref: Option<DraftRef>,
+    }
+
+    let encoding = |error: serde_json::Error| {
+        failure(
+            FailureCode::Internal,
+            format!("failed to encode workspace layout: {error}"),
+            false,
+        )
+    };
+    let state = layout.state();
+    let agent_states = agent_state_references(snapshot.as_value())
+        .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?
+        .into_iter()
+        .filter(|reference| pane_exists(&state.workspace, reference))
+        .collect::<Vec<_>>();
+    let mut value = snapshot.as_value().clone();
+    let object = value
+        .as_object_mut()
+        .expect("workspace snapshots are JSON objects");
+    let mut documents = Vec::new();
+    let mut referenced_drafts = Vec::new();
+    if let Some(serde_json::Value::Array(entries)) = object.remove("documents") {
+        for entry in entries {
+            let Ok(document) = StoredDocument::deserialize(&entry) else {
+                continue;
+            };
+            let open = state
+                .workspace
+                .opened_projects
+                .iter()
+                .find(|project| project.id == document.project_id)
+                .and_then(|project| project.location.local_path())
+                .is_some_and(|root| {
+                    state.editor.contains_document(&DocumentId {
+                        project_id: document.project_id.clone(),
+                        canonical_path: root.join(&document.relative_path),
+                    })
+                });
+            if open {
+                referenced_drafts.extend(document.draft_ref);
+                documents.push(entry);
+            }
+        }
+    }
+    object.insert("schema_version".into(), 2.into());
+    object.insert(
+        "workspace".into(),
+        serde_json::to_value(&state.workspace).map_err(encoding)?,
+    );
+    object.insert(
+        "editor".into(),
+        serde_json::to_value(&state.editor).map_err(encoding)?,
+    );
+    object.insert("documents".into(), serde_json::Value::Array(documents));
+    object.insert(
+        "agent_states".into(),
+        serde_json::to_value(&agent_states).map_err(encoding)?,
+    );
+    let snapshot = WorkspaceSnapshot::new(value)
+        .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?;
+    let drafts = drafts
+        .iter()
+        .filter(|draft| referenced_drafts.contains(draft))
+        .cloned()
+        .collect();
+    Ok((snapshot, drafts, agent_states))
+}
+
+fn pane_exists(workspace: &WorkspaceState, reference: &AgentStateRef) -> bool {
+    workspace
+        .opened_projects
+        .iter()
+        .find(|project| project.id == reference.project_id)
+        .and_then(|project| {
+            project
+                .tab_states
+                .iter()
+                .find(|tab| tab.tab_id == reference.tab_id)
+        })
+        .is_some_and(|tab| {
+            tab.pane_states
+                .iter()
+                .any(|pane| pane.pane_id == reference.pane_id)
+        })
+}
+
+fn intent_failure(error: IntentError) -> ProtocolFailure {
+    let code = match &error {
+        IntentError::RevisionConflict { .. } | IntentError::RunningProcesses => {
+            FailureCode::Conflict
+        }
+        IntentError::Workspace(
+            WorkspaceError::ProjectNotFound(_)
+            | WorkspaceError::TabNotFound(_)
+            | WorkspaceError::PaneNotFound(_),
+        )
+        | IntentError::WorkItemNotFound(_)
+        | IntentError::GroupNotFound(_)
+        | IntentError::SplitNotFound(_) => FailureCode::NotFound,
+        _ => FailureCode::InvalidRequest,
+    };
+    failure(code, error.to_string(), false)
 }
 
 fn migrate_inline_drafts(
@@ -2629,6 +2984,77 @@ mod tests {
             yttt_protocol::workspace::WorkspaceResponse::Committed { revision: 1, .. }
         ));
     }
+
+    #[test]
+    fn an_applied_layout_is_restored_after_a_host_restart() {
+        use yttt_core::model::{
+            host_workspace::{ProjectPanel, WorkspaceIntent},
+            ids::ProjectId,
+            layout::ProjectLayout,
+            project::{ProjectDescriptor, ProjectLocation},
+        };
+
+        let root = tempdir().unwrap();
+        let project_root = root.path().join("project");
+        fs::create_dir_all(&project_root).unwrap();
+        let project_id = ProjectId::new("project");
+        let layout: ProjectLayout = toml::from_str(
+            r#"
+            [project]
+            name = "Saved"
+
+            [[tabs]]
+            id = "first"
+            title = "First"
+            layout = { type = "pane", id = "shell", title = "Shell", command = "$SHELL" }
+            "#,
+        )
+        .unwrap();
+        {
+            let host = service(root.path());
+            for intent in [
+                WorkspaceIntent::OpenProject {
+                    descriptor: ProjectDescriptor::new(
+                        project_id.clone(),
+                        ProjectLocation::local(&project_root),
+                    ),
+                    layout,
+                    panel: ProjectPanel {
+                        visible: true,
+                        width: 240.0,
+                    },
+                },
+                WorkspaceIntent::RenameTab {
+                    project_id,
+                    tab_id: "first".to_string(),
+                    title: "Renamed".to_string(),
+                },
+            ] {
+                host.apply(workspace(), intent, None).unwrap();
+            }
+        }
+
+        let restarted = service(root.path());
+        let WorkspaceResponse::Opened {
+            revision, layout, ..
+        } = restarted
+            .handle(
+                &client("observer"),
+                WorkspaceRequest::Open {
+                    workspace_id: workspace(),
+                },
+            )
+            .unwrap()
+        else {
+            panic!("open response")
+        };
+        let layout = layout.expect("the restored workspace has a layout");
+        assert_eq!((revision, layout.revision), (2, 2));
+        assert_eq!(
+            layout.workspace.opened_projects[0].layout.tabs[0].title,
+            "Renamed"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2874,6 +3300,7 @@ mod publication_tests {
             snapshot,
             revision,
             drafts,
+            ..
         } = service
             .handle(
                 &client,

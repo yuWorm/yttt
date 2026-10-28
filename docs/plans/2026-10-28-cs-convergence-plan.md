@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划,不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试,再做最小实现;只有验收条件实际通过后才能勾选。
 
-**状态：** C1、C2、C3 完成；C4 按 [`2026-10-28-c4-host-owned-layout-design.md`](./2026-10-28-c4-host-owned-layout-design.md) 分步实施中（C4-1 完成）。v22 在 C4 完成前不发布。
+**状态：** C1、C2、C3 完成；C4 按 [`2026-10-28-c4-host-owned-layout-design.md`](./2026-10-28-c4-host-owned-layout-design.md) 分步实施中（C4-1、C4-2 完成）。v22 在 C4 完成前不发布。
 
 **依据:** [`2026-10-28-cs-convergence-analysis.md`](./2026-10-28-cs-convergence-analysis.md)(对照 herdr 的根因分析)、`docs/host-client-architecture.md`、`docs/wire-evolution.md`。
 
@@ -111,3 +111,4 @@
 | 2026-10-28 | C2 | 发送基线/渲染槽/可见性上报落地;workspace 测试除 `desktop_tray_lifecycle` 外全部通过(该套件在 `cargo test` 下 Host 8 s 未就绪,改造前 worktree 同样失败,直接执行测试二进制通过);流量探针:observer 全部隐藏时输出期间 0 字节,重新可见一次 50 KB;真实桌面冒烟:隐藏的高输出终端 PTY 吞吐约 2.3 倍,桌面 CPU 4–5% → 1–2% |
 | 2026-10-28 | C3 | 单 Session 连接 + 三级写端调度 + 大消息分块落地;workspace 测试除 `gpui-component` 的 `drag_inside_dialog_still_selects_its_text`(vendor,单独重跑通过)与 `desktop_tray_lifecycle`(同 C2,直接执行测试二进制通过)外全部通过;探针帧率、字节/帧、输入延迟与 C2 持平;真实桌面冒烟:每 Client 一条 Session 连接,退出桌面后 Host 约 300 ms 退出 |
 | 2026-10-28 | C4-1 | `DocumentId`/`WorkItemId`/work area/编辑会话移入 `yttt-core::model`（`editor`、`work_area`），项目文件树留在桌面 `ProjectEditorRuntime`；新增 `host_workspace`：`HostWorkspace`、`WorkspaceIntent` 执行器（按稳定 ID 定位，拒绝时状态与 revision 不变，返回新增/移除的 pane）与 schema 1/2 快照迁移（schema 3 Host 记录的拆包随 C4-2 的 `WorkspaceStore`）；`yttt-core` 21 个执行器/迁移测试（含 schema 2 样本往返）；`cargo test --workspace --no-fail-fast` 仅 `desktop_tray_lifecycle` 失败（同 C2，直接执行测试二进制通过） |
+| 2026-10-28 | C4-2 | Host `WorkspaceStore` 落地:从快照派生 `HostWorkspace` 布局,`WorkspaceRequest::Apply` 不要求控制权、按到达顺序执行(服务状态锁串行化,未另起 actor),`Opened.layout` 与 `WorkspaceChanged` 事件(v22 内追加);每个 Session 连接订阅其打开的 workspace,写端以同 key 替换未发送的布局(慢 Client 只收最新);关闭 pane 先终止终端;备份(3 份轮转 + 15 分钟历史 48 份)与损坏记录恢复。删除:无,按设计 §3 发布管线/`Commit` 随 C4-3、单写入者与控制交接随 C4-6 删除。测试:`host_roundtrip` 新增双 Client 收敛、慢 Client 只收最新(去掉替换后 40/40 全收,测试失败)、关闭 pane 的帧先于退出;Host 重启后布局恢复;`cargo test --workspace --no-fail-fast` 2310 通过,仅 `desktop_tray_lifecycle` 2 项失败(同 C2,直接执行测试二进制通过)。真实 Host 冒烟(`--start-host` + 临时 Client):3 次 Apply 得 revision 1→3;截断记录后重启,Host 正常启动,损坏文件移为 `corrupt-<millis>.json`,恢复到 revision 2;所有副本都不可读时 Host 仍启动,该 workspace 为空。附带发现:同一 `client_instance_id` 换 nonce 在 300 s 保留期内重连会在握手后被静默断开(Client 只见 `ConnectionTimeout`);桌面每进程使用新 UUID,不影响产品路径 |

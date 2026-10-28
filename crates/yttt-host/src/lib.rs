@@ -15,6 +15,7 @@ mod terminal_data;
 pub use terminal_data::SharedTerminalUpdate;
 mod token_usage;
 mod workspace;
+mod workspace_backups;
 mod workspace_objects;
 pub use workspace::WorkspaceService;
 
@@ -1094,6 +1095,20 @@ async fn serve_session_connection(
         },
         streams: HashMap::new(),
     };
+    // Each opened workspace keeps at most one unsent layout on this connection,
+    // so a slow Client skips straight to the latest one.
+    let _layouts = context.workspaces.subscribe_layouts(client_id.clone(), {
+        let writer = writer.clone();
+        let host_sequence = context.host_sequence.clone();
+        Box::new(move |update| {
+            let message = ControlMessage::Event(HostEvent {
+                host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
+                body: ServerEvent::WorkspaceChanged(Box::new(update.clone())),
+            });
+            let key = format!("workspace-layout:{}", update.workspace_id.as_str());
+            writer.send_reliable_latest(&key, &message).is_ok()
+        })
+    });
     let _state_events = AbortOnDrop(tokio::spawn({
         let events = forward_state_events(
             writer.clone(),
@@ -1979,17 +1994,23 @@ async fn admit_mutation(
         return Ok(MutationAdmission::default());
     }
     let guard = context.mutation_gate.clone().read_owned().await;
-    let control = request.control.ok_or_else(|| {
-        ProtocolFailure::new(
-            FailureCode::PermissionDenied,
-            "mutation has no authenticated profile control context",
-            false,
-        )
-    })?;
-    context
-        .workspaces
-        .control
-        .authorize(client_id, control, context.identity.host_epoch)?;
+    // Layout intents serialize in the workspace store; any Client may apply them.
+    if !matches!(
+        &request.body,
+        Request::Workspace(yttt_protocol::workspace::WorkspaceRequest::Apply { .. })
+    ) {
+        let control = request.control.ok_or_else(|| {
+            ProtocolFailure::new(
+                FailureCode::PermissionDenied,
+                "mutation has no authenticated profile control context",
+                false,
+            )
+        })?;
+        context
+            .workspaces
+            .control
+            .authorize(client_id, control, context.identity.host_epoch)?;
+    }
     // Blocking I/O retains a permit even if its awaiting connection disappears.
     // Interactive input uses the direct guard without a per-keystroke allocation.
     if matches!(
@@ -2483,16 +2504,43 @@ async fn handle_request(
             Ok(Response::Applied)
         }
         Request::Workspace(request) => {
+            use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
             let workspaces = context.workspaces.clone();
             let requesting_client = client_id.clone();
             let projects = context.projects.clone();
+            let runtime = context.runtime.clone();
             tokio::task::spawn_blocking(move || {
                 let _guard = mutation_guard;
-                let result = workspaces.handle(&requesting_client, request)?;
+                let result = match request {
+                    WorkspaceRequest::Apply {
+                        workspace_id,
+                        intent,
+                        expected_revision,
+                    } => {
+                        let applied = workspaces.apply(workspace_id.clone(), intent, expected_revision)?;
+                        // Subscribers already have the new layout queued, so a
+                        // terminal's exit reaches them after its pane is gone.
+                        for pane in &applied.removed_panes {
+                            let session_id = pane.terminal_session_id();
+                            match runtime.terminate(&session_id) {
+                                Ok(_) | Err(HostRuntimeError::NotFound(_)) => {}
+                                Err(error) => {
+                                    eprintln!("closed pane terminal {session_id} was not terminated: {error}");
+                                }
+                            }
+                        }
+                        WorkspaceResponse::Applied {
+                            workspace_id,
+                            revision: applied.revision,
+                        }
+                    }
+                    request => workspaces.handle(&requesting_client, request)?,
+                };
                 if matches!(
                     &result,
-                    yttt_protocol::workspace::WorkspaceResponse::Committed { .. }
-                        | yttt_protocol::workspace::WorkspaceResponse::Forgotten { .. }
+                    WorkspaceResponse::Committed { .. }
+                        | WorkspaceResponse::Applied { .. }
+                        | WorkspaceResponse::Forgotten { .. }
                 ) {
                     projects.sync_workspaces(workspaces.referenced_projects());
                 }

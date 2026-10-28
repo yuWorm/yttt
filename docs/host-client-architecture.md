@@ -321,6 +321,28 @@ Device recovery 使用独立版本文件，不覆盖未处理副本；Host 确�
 独立 `yttt-server` 的 descriptor 只导出 SSH `work.sock`/工作 token。status、stop-if-idle、
 ensure 的管理连接仍使用另一个本机 socket/token；关闭桌面 TLS 不关闭 SSH 工作会话。
 
+### 6.2 Host 布局与意图
+
+Host 从每个 workspace 的快照派生 `HostWorkspace` 布局（schema 1/2 快照迁移；无法解析时没有布局，
+意图被拒绝）。`WorkspaceRequest::Apply { workspace_id, intent, expected_revision }` 由任意已认证
+Client 发送，不要求 profile 控制权；Host 在 workspace 锁内按到达顺序执行，拒绝时状态与 revision
+不变。不存在的 workspace 按空布局开始，与 `Open` 所见一致，并受 workspace 数量上限约束。
+接受后布局写回快照：不再打开的文档及其草稿、pane 已不存在的 Agent 状态随之移除，
+记录先持久化再发布，然后终止被移除 pane 的终端（session ID 为 `{project}:{tab}:{pane}`）。
+`Commit` 仍可用，提交的快照同样重新派生布局。
+
+`Open`/`OpenExisting` 返回 `layout` 并把当前 Session 连接订阅到该 workspace；每次 `Apply` 或
+`Commit` 后 Host 向所有订阅连接发 `ServerEvent::WorkspaceChanged`（完整布局）。每条连接每个
+workspace 只保留一份未发出的布局：新布局占据旧布局在可靠队列中的位置，慢 Client 只收最新一份，
+且布局仍在其后入队的 `TerminalExit` 之前到达。Client 只接受 revision 更大的布局；重连后对已打开的
+workspace 重新 `OpenExisting`，Host epoch 变化时清空布局但保留已打开集合。
+
+每次替换记录前，当前文件先复制到 `workspace-backups/<id>/backup-1.json`（依次后移，保留 3 份）；
+至多每 15 分钟另存一份 `history-<millis>.json`（保留 48 份）。备份尽力而为，失败不阻止持久化。
+启动时无法解析的记录先移为同目录的 `corrupt-<millis>.json`，再由最新可解析的备份（先轮转备份，
+后历史副本）替换；没有可解析的副本时跳过该 workspace，Host 照常启动，损坏文件保留供人工恢复。
+可解析但版本不受支持或迁移失败的记录仍使 Host 启动失败，避免以旧备份覆盖较新的数据。
+
 ## 7. 终端资源模型
 
 ### 7.1 创建

@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 
 const SERVER_EVENT_CAPACITY: usize = 256;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SshRuntimeEvent {
     Broadcast(ServerEvent),
     Unicast {

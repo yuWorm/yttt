@@ -21,12 +21,13 @@ use tokio::{
     io::{ReadHalf, split},
     sync::{broadcast, mpsc, oneshot, watch},
 };
-use yttt_core::model::ids::TerminalSessionId;
+use yttt_core::model::{host_workspace::HostWorkspaceState, ids::TerminalSessionId};
 use yttt_protocol::{
     ClientRequest, ConnectionChannel, ControlMessage, HostEvent, HostResponse, ProtocolFailure,
     Request, ResourceCatalog, Response, ServerEvent,
     agent::{AgentSnapshotCursor, AgentSnapshotUpdate, ProjectTokenUsage},
     terminal::{TerminalInput, TerminalStreamUpdate},
+    workspace::{WorkspaceId, WorkspaceLayoutUpdate, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport::{
     AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, SessionReader, SessionWriter,
@@ -89,9 +90,13 @@ pub enum ClientEvent {
     TerminalUpdated(Arc<TerminalStreamUpdate>),
     TerminalUnavailable(TerminalSessionId),
     ResourceCatalogUpdated(Arc<ResourceCatalog>),
-    AgentSnapshotsReset { host_epoch: u64 },
+    AgentSnapshotsReset {
+        host_epoch: u64,
+    },
     AgentSnapshotUpdated(Box<AgentSnapshotUpdate>),
     ProjectTokenUsageUpdated(Box<ProjectTokenUsage>),
+    /// A workspace this Client opened has a newer Host layout.
+    WorkspaceLayoutChanged(Box<WorkspaceLayoutUpdate>),
 }
 
 #[derive(Default)]
@@ -164,6 +169,7 @@ struct ClientCoreInner {
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
+    workspace_layouts: WorkspaceLayouts,
     next_request_id: Arc<AtomicU64>,
     shutdown: watch::Sender<bool>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
@@ -205,17 +211,26 @@ impl PendingClientRequest {
     }
 }
 
+/// The workspaces this Client opened, with the newest layout received for each.
+/// A workspace without a valid Host layout is still kept, so it is reopened
+/// on a new connection.
+type WorkspaceLayouts = Arc<RwLock<HashMap<WorkspaceId, Option<HostWorkspaceState>>>>;
+
 enum PendingRequest {
     User {
         reply: oneshot::Sender<Result<Response, ClientCoreError>>,
         /// Terminals the request detaches once it succeeds.
         detaches: Vec<TerminalSessionId>,
+        /// The workspace the request opens, whose layout the Host then sends.
+        opens: Option<WorkspaceId>,
     },
     Catalog,
     AgentSnapshots,
     Visibility,
     /// Resubscribes to an attached terminal on a new connection.
     Resubscribe(TerminalSessionId),
+    /// Reopens a workspace on a new connection, which subscribes to its layout.
+    Reopen(WorkspaceId),
 }
 
 struct ClientSessionContext {
@@ -228,6 +243,7 @@ struct ClientSessionContext {
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
+    workspace_layouts: WorkspaceLayouts,
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
@@ -253,6 +269,7 @@ impl ClientCore {
         let catalog = Arc::new(RwLock::new(None));
         let agent_snapshots = Arc::new(RwLock::new(HashMap::new()));
         let project_token_usage = Arc::new(RwLock::new(HashMap::new()));
+        let workspace_layouts = WorkspaceLayouts::default();
         let next_request_id = Arc::new(AtomicU64::new(1));
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
         let control = Arc::new(RwLock::new(None));
@@ -273,6 +290,7 @@ impl ClientCore {
             catalog.clone(),
             agent_snapshots.clone(),
             project_token_usage.clone(),
+            workspace_layouts.clone(),
             next_request_id.clone(),
             diagnostics.clone(),
             shutdown.clone(),
@@ -290,6 +308,7 @@ impl ClientCore {
             next_request_id,
             agent_snapshots,
             project_token_usage,
+            workspace_layouts,
             shutdown,
             diagnostics,
             control,
@@ -472,6 +491,16 @@ impl ClientCore {
             .cloned()
     }
 
+    /// The newest layout received for a workspace this Client opened.
+    pub fn workspace_layout(&self, workspace_id: &WorkspaceId) -> Option<HostWorkspaceState> {
+        self.inner
+            .workspace_layouts
+            .read()
+            .get(workspace_id)
+            .cloned()
+            .flatten()
+    }
+
     pub fn enqueue_request(&self, body: Request) -> Result<PendingClientRequest, ClientCoreError> {
         if !matches!(self.state(), ConnectionState::Ready { .. }) {
             return Err(ClientCoreError::NotConnected);
@@ -566,6 +595,7 @@ async fn run_supervisor(
     catalog: Arc<RwLock<Option<Arc<ResourceCatalog>>>>,
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
+    workspace_layouts: WorkspaceLayouts,
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     shutdown_tx: watch::Sender<bool>,
@@ -619,6 +649,7 @@ async fn run_supervisor(
         catalog: &catalog,
         agent_snapshots: &agent_snapshots,
         project_token_usage: &project_token_usage,
+        workspace_layouts: &workspace_layouts,
         profile_control: &profile_control,
         events: &events,
     };
@@ -654,6 +685,7 @@ async fn run_supervisor(
             catalog: catalog.clone(),
             agent_snapshots: agent_snapshots.clone(),
             project_token_usage: project_token_usage.clone(),
+            workspace_layouts: workspace_layouts.clone(),
             next_request_id: next_request_id.clone(),
             diagnostics: diagnostics.clone(),
             visibility: visibility.clone(),
@@ -991,6 +1023,28 @@ async fn connected_session(
             return Some("failed to resubscribe to attached terminals".to_string());
         }
     }
+    let reopened = context
+        .workspace_layouts
+        .read()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    for workspace_id in reopened {
+        if send_internal_request(
+            &writer,
+            &mut pending,
+            &next_internal_request_id,
+            actor(),
+            Request::Workspace(WorkspaceRequest::OpenExisting {
+                workspace_id: workspace_id.clone(),
+            }),
+            PendingRequest::Reopen(workspace_id),
+        )
+        .is_err()
+        {
+            return Some("failed to reopen workspaces".to_string());
+        }
+    }
     for event in buffered {
         if handle_state_event(event, context).is_err() {
             return None;
@@ -1094,7 +1148,7 @@ async fn connected_session(
                             continue;
                         }
                         if let Some(reply) = interactive_pending.remove(&response.request_id) {
-                            handle_response(PendingRequest::User { reply, detaches: Vec::new() }, response.result, context);
+                            handle_response(PendingRequest::User { reply, detaches: Vec::new(), opens: None }, response.result, context);
                             continue;
                         }
                         let Some(pending_request) = pending.remove(&response.request_id) else {
@@ -1161,6 +1215,7 @@ async fn connected_session(
                     continue;
                 };
                 let detaches = detached_terminals(&body);
+                let opens = opened_workspace(&body);
                 let message = ControlMessage::Request(ClientRequest {
                     request_id,
                     actor_device_id: actor(),
@@ -1175,7 +1230,7 @@ async fn connected_session(
                     break Some(error.to_string());
                 }
                 if let Some(reply) = reply {
-                    pending.insert(request_id, PendingRequest::User { reply, detaches });
+                    pending.insert(request_id, PendingRequest::User { reply, detaches, opens });
                 }
             }
             refresh = catalog_rx.recv() => {
@@ -1275,6 +1330,21 @@ fn handle_state_event(event: HostEvent, context: &ClientSessionContext) -> Resul
     if *context.current_host_epoch.read() != Some(context.host_epoch) {
         return Ok(());
     }
+    // Layouts publish only through the mirror, which drops stale revisions.
+    let event = match event.body {
+        ServerEvent::WorkspaceChanged(update) => {
+            let WorkspaceLayoutUpdate {
+                workspace_id,
+                layout,
+            } = *update;
+            apply_workspace_layout(workspace_id, Some(layout), context);
+            return Ok(());
+        }
+        body => HostEvent {
+            host_sequence: event.host_sequence,
+            body,
+        },
+    };
     if let ServerEvent::ProfileControl(status) = &event.body {
         update_profile_control(
             &context.control,
@@ -1334,7 +1404,18 @@ fn handle_response(
         );
     }
     match pending {
-        PendingRequest::User { reply, detaches } => {
+        PendingRequest::User {
+            reply,
+            detaches,
+            opens,
+        } => {
+            if let (
+                Some(workspace_id),
+                Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })),
+            ) = (opens, &result)
+            {
+                apply_workspace_layout(workspace_id, layout.clone(), context);
+            }
             match &result {
                 Ok(Response::TerminalSpawned { lease, .. })
                 | Ok(Response::TerminalLease(lease)) => {
@@ -1394,6 +1475,16 @@ fn handle_response(
             let _ = reply.send(result.map_err(ClientCoreError::Protocol));
         }
         PendingRequest::Visibility => {}
+        PendingRequest::Reopen(workspace_id) => match result {
+            Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })) => {
+                apply_workspace_layout(workspace_id, layout, context);
+            }
+            // A workspace forgotten meanwhile is no longer opened.
+            Err(failure) if failure.code == yttt_protocol::FailureCode::NotFound => {
+                context.workspace_layouts.write().remove(&workspace_id);
+            }
+            _ => {}
+        },
         PendingRequest::Resubscribe(session_id) => {
             // A terminal the Host no longer has stays unsubscribed; the catalog
             // reports it unavailable.
@@ -1473,6 +1564,17 @@ fn handle_response(
                 .events
                 .send(ClientEvent::ResourceCatalogUpdated(resources));
         }
+    }
+}
+
+/// The workspace a `request` opens, which subscribes this Client to its layout.
+fn opened_workspace(request: &Request) -> Option<WorkspaceId> {
+    match request {
+        Request::Workspace(
+            WorkspaceRequest::Open { workspace_id }
+            | WorkspaceRequest::OpenExisting { workspace_id },
+        ) => Some(workspace_id.clone()),
+        _ => None,
     }
 }
 
@@ -1657,6 +1759,40 @@ fn apply_project_token_usage(
     }
 }
 
+/// Records a layout of an opened workspace, keeping only newer revisions, and
+/// publishes it when it replaces what this Client held.
+fn apply_workspace_layout(
+    workspace_id: WorkspaceId,
+    layout: Option<HostWorkspaceState>,
+    context: &ClientSessionContext,
+) {
+    let current_host_epoch = context.current_host_epoch.read();
+    if *current_host_epoch != Some(context.host_epoch) {
+        return;
+    }
+    let mut layouts = context.workspace_layouts.write();
+    let held = layouts.entry(workspace_id.clone()).or_default();
+    let Some(layout) = layout else {
+        return;
+    };
+    if held
+        .as_ref()
+        .is_some_and(|held| held.revision >= layout.revision)
+    {
+        return;
+    }
+    *held = Some(layout.clone());
+    drop(layouts);
+    let _ = context
+        .events
+        .send(ClientEvent::WorkspaceLayoutChanged(Box::new(
+            WorkspaceLayoutUpdate {
+                workspace_id,
+                layout,
+            },
+        )));
+}
+
 /// Merges one terminal frame into its mirror. `Err` means the frame does not
 /// continue the mirror.
 fn handle_terminal_frame(
@@ -1716,6 +1852,7 @@ struct HostEpochState<'a> {
     catalog: &'a RwLock<Option<Arc<ResourceCatalog>>>,
     agent_snapshots: &'a RwLock<HashMap<String, AgentSnapshotUpdate>>,
     project_token_usage: &'a RwLock<HashMap<String, ProjectTokenUsage>>,
+    workspace_layouts: &'a RwLock<HashMap<WorkspaceId, Option<HostWorkspaceState>>>,
     profile_control: &'a RwLock<Option<yttt_protocol::session::ControlStatus>>,
     events: &'a broadcast::Sender<ClientEvent>,
 }
@@ -1727,6 +1864,7 @@ fn install_host_epoch(next_host_epoch: u64, state: &HostEpochState<'_>) {
         catalog,
         agent_snapshots,
         project_token_usage,
+        workspace_layouts,
         profile_control,
         events,
     } = state;
@@ -1745,6 +1883,10 @@ fn install_host_epoch(next_host_epoch: u64, state: &HostEpochState<'_>) {
             catalog.write().take();
             agent_snapshots.write().clear();
             project_token_usage.write().clear();
+            // A new Host has new revisions; keep the opened set, forget the layouts.
+            for layout in workspace_layouts.write().values_mut() {
+                layout.take();
+            }
             profile_control.write().take();
             *current_host_epoch = Some(next_host_epoch);
             let _ = events.send(ClientEvent::AgentSnapshotsReset {

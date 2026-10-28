@@ -36,6 +36,12 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   旧 Host 回复 `Unsupported`,Client 停止上报,所有 attachment 按可见处理。Host 不再保留原始 PTY 回放:
   `after_sequence` 字段保留但被忽略,`raw_replay_tail` 恒为空;Host 不再发送 `ResyncRequired`,
   Client 收到该事件时重建整条 session 连接。
+  v22 内追加(未升版本):`WorkspaceRequest::Apply { workspace_id, intent, expected_revision }`
+  以 `WorkspaceResponse::Applied { workspace_id, revision }` 回复,不要求 profile 控制权;
+  `WorkspaceResponse::Opened` 追加 `layout`(`#[serde(default)]`,旧 Host 解码为 `None`);
+  新增事件 `ServerEvent::WorkspaceChanged(WorkspaceLayoutUpdate { workspace_id, layout })`。
+  旧 Host 对 `Apply` 回复 `Unsupported`,旧 Client 丢弃不认识的事件。`ServerEvent`、`Response`
+  因携带 `f32` 布局宽度不再实现 `Eq`(仅 Rust 类型变化,wire 不变)。
   v22 发布前一并收敛为每个 Client 一条连接(v22 尚未发布,直接改写样本,不另升版本):
   `ConnectionChannel` 只剩 `Session`、`Lifecycle`、`DesktopOwner`;删除 `Control`、
   `TerminalInteractive`、`StateEvents`、`TerminalData` 变体、`TerminalInteractiveMessage` 与

@@ -4807,3 +4807,348 @@ async fn catalog_refresh_and_status_poll_preserve_history_and_live_input() {
         .unwrap()
         .unwrap();
 }
+
+fn layout_workspace() -> yttt_protocol::workspace::WorkspaceId {
+    yttt_protocol::workspace::WorkspaceId::new("shared-layout").unwrap()
+}
+
+/// A project whose tabs each hold one shell pane named `shell`.
+fn open_project_intent(
+    host: &RunningHost,
+    tabs: &[&str],
+) -> yttt_core::model::host_workspace::WorkspaceIntent {
+    let root = host._temp.path().join("layout-project");
+    fs::create_dir_all(&root).unwrap();
+    let layout = serde_json::from_value(serde_json::json!({
+        "project": { "name": "Layout" },
+        "tabs": tabs
+            .iter()
+            .map(|tab| serde_json::json!({
+                "id": tab,
+                "title": tab,
+                "layout": { "type": "pane", "id": "shell", "title": "Shell", "command": "$SHELL" },
+            }))
+            .collect::<Vec<_>>(),
+    }))
+    .unwrap();
+    yttt_core::model::host_workspace::WorkspaceIntent::OpenProject {
+        descriptor: yttt_core::model::project::ProjectDescriptor::new(
+            ProjectId::new("layout-project"),
+            yttt_core::model::project::ProjectLocation::local(&root),
+        ),
+        layout,
+        panel: yttt_core::model::host_workspace::ProjectPanel {
+            visible: true,
+            width: 240.0,
+        },
+    }
+}
+
+fn rename_tab_intent(
+    tab: &str,
+    title: String,
+) -> yttt_core::model::host_workspace::WorkspaceIntent {
+    yttt_core::model::host_workspace::WorkspaceIntent::RenameTab {
+        project_id: ProjectId::new("layout-project"),
+        tab_id: tab.to_string(),
+        title,
+    }
+}
+
+/// Applies an intent without profile control and returns the resulting revision.
+async fn raw_apply(
+    stream: &mut yttt_transport_local::LocalStream,
+    request_id: u64,
+    intent: yttt_core::model::host_workspace::WorkspaceIntent,
+    events: &mut std::collections::VecDeque<HostEvent>,
+) -> u64 {
+    use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
+    let response = raw_exchange(
+        stream,
+        ClientRequest::new(
+            request_id,
+            Request::Workspace(WorkspaceRequest::Apply {
+                workspace_id: layout_workspace(),
+                intent,
+                expected_revision: None,
+            }),
+        ),
+        events,
+    )
+    .await;
+    let Ok(Response::Workspace(WorkspaceResponse::Applied { revision, .. })) = response else {
+        panic!("intent was not applied: {response:?}");
+    };
+    revision
+}
+
+async fn raw_open_layout(
+    stream: &mut yttt_transport_local::LocalStream,
+    request_id: u64,
+    events: &mut std::collections::VecDeque<HostEvent>,
+) -> yttt_core::model::host_workspace::HostWorkspaceState {
+    use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
+    let response = raw_exchange(
+        stream,
+        ClientRequest::new(
+            request_id,
+            Request::Workspace(WorkspaceRequest::Open {
+                workspace_id: layout_workspace(),
+            }),
+        ),
+        events,
+    )
+    .await;
+    let Ok(Response::Workspace(WorkspaceResponse::Opened {
+        layout: Some(layout),
+        ..
+    })) = response
+    else {
+        panic!("workspace did not open with a layout: {response:?}");
+    };
+    layout
+}
+
+/// Reads layout events, buffered ones first, until one reaches `revision`.
+/// Returns every layout seen, in arrival order.
+async fn raw_layouts_until(
+    stream: &mut yttt_transport_local::LocalStream,
+    events: &mut std::collections::VecDeque<HostEvent>,
+    revision: u64,
+) -> Vec<yttt_core::model::host_workspace::HostWorkspaceState> {
+    let mut layouts = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while layouts.last().is_none_or(
+            |layout: &yttt_core::model::host_workspace::HostWorkspaceState| {
+                layout.revision < revision
+            },
+        ) {
+            let event = match events.pop_front() {
+                Some(event) => event,
+                None => match raw_receive(stream).await {
+                    ControlMessage::Event(event) => event,
+                    message => panic!("unexpected raw session message: {message:?}"),
+                },
+            };
+            if let ServerEvent::WorkspaceChanged(update) = event.body {
+                assert_eq!(update.workspace_id, layout_workspace());
+                layouts.push(update.layout);
+            }
+        }
+    })
+    .await
+    .expect("layout revision timeout");
+    layouts
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_intents_from_two_clients_converge_on_one_layout() {
+    const ROUNDS: u64 = 8;
+    let host = RunningHost::start().await;
+    let mut alice = raw_client(&host, "layout-alice").await;
+    let mut bob = raw_client(&host, "layout-bob").await;
+    let (mut alice_events, mut bob_events) = Default::default();
+    let opened = raw_apply(
+        &mut alice,
+        1,
+        open_project_intent(&host, &["alice", "bob"]),
+        &mut alice_events,
+    )
+    .await;
+    raw_open_layout(&mut alice, 2, &mut alice_events).await;
+    raw_open_layout(&mut bob, 1, &mut bob_events).await;
+
+    // Neither Client holds profile control; both intents are accepted in
+    // arrival order.
+    let alice_task = async {
+        for round in 0..ROUNDS {
+            raw_apply(
+                &mut alice,
+                10 + round,
+                rename_tab_intent("alice", format!("alice-{round}")),
+                &mut alice_events,
+            )
+            .await;
+        }
+    };
+    let bob_task = async {
+        for round in 0..ROUNDS {
+            raw_apply(
+                &mut bob,
+                10 + round,
+                rename_tab_intent("bob", format!("bob-{round}")),
+                &mut bob_events,
+            )
+            .await;
+        }
+    };
+    tokio::join!(alice_task, bob_task);
+
+    let last = opened + 2 * ROUNDS;
+    let alice_seen = raw_layouts_until(&mut alice, &mut alice_events, last).await;
+    let bob_seen = raw_layouts_until(&mut bob, &mut bob_events, last).await;
+    for seen in [&alice_seen, &bob_seen] {
+        assert!(
+            seen.windows(2)
+                .all(|pair| pair[0].revision < pair[1].revision),
+            "layouts arrive in revision order"
+        );
+    }
+    let (alice_final, bob_final) = (alice_seen.last().unwrap(), bob_seen.last().unwrap());
+    assert_eq!(alice_final, bob_final);
+    let titles = alice_final.workspace.opened_projects[0]
+        .layout
+        .tabs
+        .iter()
+        .map(|tab| tab.title.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(titles, ["alice-7", "bob-7"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_stops_reading_receives_only_the_latest_layout() {
+    const INTENTS: u64 = 40;
+    let host = RunningHost::start().await;
+    let mut writer = raw_client(&host, "layout-writer").await;
+    let mut stalled = raw_client(&host, "layout-stalled").await;
+    let (mut writer_events, mut stalled_events) = Default::default();
+    raw_apply(
+        &mut writer,
+        1,
+        open_project_intent(&host, &["tab"]),
+        &mut writer_events,
+    )
+    .await;
+    raw_open_layout(&mut stalled, 1, &mut stalled_events).await;
+
+    // Large layouts fill the stalled connection's socket after a few changes;
+    // the writer's intents must keep completing meanwhile.
+    let padding = "x".repeat(32 * 1024);
+    let mut last = 0;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for round in 0..INTENTS {
+            last = raw_apply(
+                &mut writer,
+                10 + round,
+                rename_tab_intent("tab", format!("{round}-{padding}")),
+                &mut writer_events,
+            )
+            .await;
+            writer_events.clear();
+        }
+    })
+    .await
+    .expect("a stalled Client blocked another Client's intents");
+
+    let seen = raw_layouts_until(&mut stalled, &mut stalled_events, last).await;
+    assert!(
+        seen.windows(2)
+            .all(|pair| pair[0].revision < pair[1].revision),
+        "layouts arrive in revision order"
+    );
+    assert!(
+        (seen.len() as u64) < INTENTS,
+        "unsent layouts are replaced, not queued: received {} of {INTENTS}",
+        seen.len()
+    );
+    let final_title = &seen.last().unwrap().workspace.opened_projects[0]
+        .layout
+        .tabs[0]
+        .title;
+    assert!(final_title.starts_with(&format!("{}-", INTENTS - 1)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_a_pane_delivers_its_layout_before_its_terminal_exit() {
+    let host = RunningHost::start().await;
+    let mut client = raw_client(&host, "layout-close").await;
+    let mut pending = std::collections::VecDeque::new();
+    raw_apply(
+        &mut client,
+        1,
+        open_project_intent(&host, &["kept", "closed"]),
+        &mut pending,
+    )
+    .await;
+    raw_open_layout(&mut client, 2, &mut pending).await;
+
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("layout-project:closed:shell");
+    spec.project_id = ProjectId::new("layout-project");
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec!["-lc".to_string(), "printf pane-ready; sleep 30".to_string()],
+        return_to_shell: false,
+    };
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned { session_epoch, .. } = raw_request_keeping_events(
+        &mut client,
+        3,
+        spawn_request(spec, host.host_epoch()),
+        &mut pending,
+    )
+    .await
+    .unwrap() else {
+        panic!("unexpected spawn response");
+    };
+
+    let closed = raw_apply(
+        &mut client,
+        4,
+        yttt_core::model::host_workspace::WorkspaceIntent::CloseTabs {
+            project_id: ProjectId::new("layout-project"),
+            tab_ids: vec!["closed".to_string()],
+        },
+        &mut pending,
+    )
+    .await;
+
+    let mut layout_revision = 0;
+    let final_sequence = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = match pending.pop_front() {
+                Some(event) => event,
+                None => match raw_receive(&mut client).await {
+                    ControlMessage::Event(event) => event,
+                    message => panic!("unexpected raw session message: {message:?}"),
+                },
+            };
+            match event.body {
+                ServerEvent::WorkspaceChanged(update) => {
+                    layout_revision = update.layout.revision;
+                }
+                ServerEvent::TerminalExit {
+                    session_id: exited,
+                    session_epoch: exited_epoch,
+                    final_sequence,
+                    ..
+                } if exited == session_id => {
+                    assert_eq!(exited_epoch, session_epoch);
+                    assert_eq!(
+                        layout_revision, closed,
+                        "the layout without the pane arrives before its terminal exit"
+                    );
+                    break final_sequence;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("closing the pane did not end its terminal");
+    assert_eq!(
+        raw_request(
+            &mut client,
+            5,
+            Request::AcknowledgeTerminalExit {
+                session_id,
+                session_epoch,
+                final_sequence,
+            },
+        )
+        .await
+        .unwrap(),
+        Response::TerminalExitAcknowledged
+    );
+}

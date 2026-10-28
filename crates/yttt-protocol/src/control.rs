@@ -33,7 +33,7 @@ pub enum Capability {
     WorkspaceMutate,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClientRequest {
     pub request_id: u64,
     #[serde(default)]
@@ -56,7 +56,7 @@ impl ClientRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HostResponse {
     pub request_id: u64,
     pub result: Result<Response, ProtocolFailure>,
@@ -101,7 +101,7 @@ pub enum HostBlocker {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HostEvent {
     pub host_sequence: u64,
     pub body: ServerEvent,
@@ -109,7 +109,7 @@ pub struct HostEvent {
 
 /// Every message on a `Session` connection. Requests, responses, and events
 /// keep their own routing keys; `Chunk` carries one piece of a large message.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ControlMessage {
     Request(ClientRequest),
     Response(HostResponse),
@@ -133,7 +133,7 @@ pub struct MessageChunk {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Request {
     Ping {
         sent_millis: u64,
@@ -370,7 +370,7 @@ fn project_resource(request: &ProjectRequest) -> String {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Response {
     Pong {
         sent_millis: u64,
@@ -431,7 +431,7 @@ pub enum Response {
     DeviceSettings(crate::remote_access::RemoteAccessSettings),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerEvent {
     Terminal(TerminalStreamUpdate),
     ProfileControl(crate::session::ControlStatus),
@@ -478,6 +478,9 @@ pub enum ServerEvent {
         reason: TerminalControlDeniedReason,
     },
     ProjectTokenUsage(ProjectTokenUsage),
+    /// A workspace this Client opened changed; carries its complete layout.
+    /// On one connection a newer layout replaces an older one not yet sent.
+    WorkspaceChanged(Box<crate::workspace::WorkspaceLayoutUpdate>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

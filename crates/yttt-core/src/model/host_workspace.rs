@@ -184,6 +184,13 @@ pub struct PaneAddress {
 }
 
 impl PaneAddress {
+    pub fn terminal_session_id(&self) -> crate::model::ids::TerminalSessionId {
+        crate::model::ids::TerminalSessionId::new(format!(
+            "{}:{}:{}",
+            self.project_id, self.tab_id, self.pane_id
+        ))
+    }
+
     fn cmp_key(left: &Self, right: &Self) -> std::cmp::Ordering {
         (left.project_id.as_str(), &left.tab_id, &left.pane_id).cmp(&(
             right.project_id.as_str(),

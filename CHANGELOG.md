@@ -14,6 +14,8 @@
 - Stop sending screen updates for terminals that no window shows, syncing only title, directory, and exit state; showing them again delivers the current screen at once. Terminals hidden in every window also skip output capture on the Host. CLI `panes read` now reads the Host's current content, so hidden panes return the latest output.
 - Host 不再保留每终端最多 8 MiB 的原始输出回放，降低内存占用。
 - Drop the Host's per-terminal raw output replay of up to 8 MiB, reducing memory use.
+- Host 在每次保存工作区前保留最近 3 份备份，并至多每 15 分钟留存一份历史副本（最多 48 份）。工作区文件损坏时，启动时自动从最新可读的副本恢复，损坏文件另存备查，不再导致 Host 无法启动。
+- Keep the last 3 workspace backups before each save on the Host, plus a history copy at most every 15 minutes (up to 48). A damaged workspace file is restored at startup from the newest readable copy and kept aside for inspection, instead of stopping the Host from starting.
 
 ## 0.3.18 - 2026-10-25
 

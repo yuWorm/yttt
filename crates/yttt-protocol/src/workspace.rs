@@ -379,7 +379,7 @@ pub struct WorkspaceEnvironment {
 }
 
 /// A remote workspace request served by the Host's single workspace writer.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum WorkspaceRequest {
     /// Returns the Host home directory, operating-system platform, and preferred shell.
     Environment,
@@ -455,9 +455,18 @@ pub enum WorkspaceRequest {
         expected_revision: WorkspaceConfigRevision,
     },
 
-    /// Opens the current snapshot, revision, and transient control owner for one workspace.
+    /// Opens the current snapshot, layout, and revision of one workspace and
+    /// subscribes this Client's Session connection to its layout changes.
     Open {
         workspace_id: WorkspaceId,
+    },
+    /// Applies one layout intent in arrival order. Any Client may apply intents;
+    /// an intent that carries `expected_revision` is rejected when it is stale.
+    Apply {
+        workspace_id: WorkspaceId,
+        intent: yttt_core::model::host_workspace::WorkspaceIntent,
+        #[serde(default)]
+        expected_revision: Option<u64>,
     },
     /// Commits a snapshot with compare-and-swap revision checking and bounded idempotency replay.
     Commit {
@@ -533,7 +542,7 @@ impl WorkspaceRequest {
 }
 
 /// A remote workspace response produced by the Host's workspace service.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum WorkspaceResponse {
     /// Returns the Host environment for project selection and terminal defaults.
     Environment(WorkspaceEnvironment),
@@ -559,11 +568,22 @@ pub enum WorkspaceResponse {
         relative_path: ProjectRelativePath,
         revision: WorkspaceConfigRevision,
     },
-    /// Returns a durable workspace snapshot and its monotonic revision.
+    /// Returns a durable workspace snapshot, its layout, and its monotonic revision.
+    ///
+    /// `layout` is `None` when the stored snapshot has no valid layout. A
+    /// `WorkspaceChanged` event for this workspace may arrive before this
+    /// response; a Client keeps whichever layout has the higher revision.
     Opened {
         snapshot: WorkspaceSnapshot,
         revision: u64,
         drafts: Vec<DraftRef>,
+        #[serde(default)]
+        layout: Option<yttt_core::model::host_workspace::HostWorkspaceState>,
+    },
+    /// Confirms an applied layout intent and the revision it produced.
+    Applied {
+        workspace_id: WorkspaceId,
+        revision: u64,
     },
     /// Confirms a persisted snapshot commit and its resulting revision.
     Committed {
@@ -591,6 +611,13 @@ pub enum WorkspaceResponse {
         #[serde(with = "serde_bytes")]
         content: Vec<u8>,
     },
+}
+
+/// The complete layout of one workspace after an accepted change.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceLayoutUpdate {
+    pub workspace_id: WorkspaceId,
+    pub layout: yttt_core::model::host_workspace::HostWorkspaceState,
 }
 
 /// Validation failures raised while constructing strongly validated workspace wire values.

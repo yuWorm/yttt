@@ -72,6 +72,8 @@ struct Item {
     bytes: usize,
     /// A reliable item waits until this render lane has no queued frame.
     after_lane: Option<u64>,
+    /// A later reliable item with the same key replaces this one while it waits.
+    latest: Option<Arc<str>>,
 }
 
 struct RenderQueue {
@@ -255,6 +257,7 @@ impl Shared {
                 frames: VecDeque::from([frame]),
                 bytes,
                 after_lane: None,
+                latest: None,
             });
         }
         let stream = self.next_chunk_stream.fetch_add(1, Ordering::Relaxed);
@@ -278,6 +281,7 @@ impl Shared {
             frames,
             bytes,
             after_lane: None,
+            latest: None,
         })
     }
 
@@ -369,6 +373,38 @@ impl SessionWriter {
         self.push(Priority::Reliable, item)
     }
 
+    /// Queues a reliable message that supersedes a queued message with the
+    /// same `key` whose writing has not started. The newer message takes the
+    /// older one's place, so it stays ahead of everything queued after that.
+    pub fn send_reliable_latest(
+        &self,
+        key: &str,
+        message: &ControlMessage,
+    ) -> Result<(), SessionSendError> {
+        let mut item = self.encode(message)?;
+        item.latest = Some(Arc::from(key));
+        let mut state = self.shared.state.lock();
+        if state.closed {
+            return Err(SessionSendError::Closed);
+        }
+        let Some(position) = state
+            .reliable
+            .iter()
+            .position(|queued| queued.latest.as_deref() == Some(key))
+        else {
+            return self.push_locked(state, Priority::Reliable, item);
+        };
+        let others = state.reliable_bytes - state.reliable[position].bytes;
+        if others != 0 && item.bytes > RELIABLE_BYTES.saturating_sub(others) {
+            drop(state);
+            self.shared.close();
+            return Err(SessionSendError::Overflow);
+        }
+        state.reliable_bytes = others + item.bytes;
+        state.reliable[position] = item;
+        Ok(())
+    }
+
     /// Opens a render lane whose frames are written only when no reliable message waits.
     pub fn open_render_lane(&self, observer: Option<Arc<dyn RenderObserver>>) -> RenderLane {
         let id = self.shared.next_lane.fetch_add(1, Ordering::Relaxed);
@@ -408,10 +444,19 @@ impl SessionWriter {
     }
 
     fn push(&self, priority: Priority, item: Item) -> Result<(), SessionSendError> {
-        let mut state = self.shared.state.lock();
+        let state = self.shared.state.lock();
         if state.closed {
             return Err(SessionSendError::Closed);
         }
+        self.push_locked(state, priority, item)
+    }
+
+    fn push_locked(
+        &self,
+        mut state: parking_lot::MutexGuard<'_, State>,
+        priority: Priority,
+        item: Item,
+    ) -> Result<(), SessionSendError> {
         let admitted = match priority {
             Priority::Interactive => state.interactive.len() < INTERACTIVE_ITEMS,
             Priority::Reliable => {

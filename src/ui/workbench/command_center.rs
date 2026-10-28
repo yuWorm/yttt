@@ -4548,7 +4548,7 @@ fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
                 | yttt_protocol::ServerEvent::HostDraining
                 | yttt_protocol::ServerEvent::HostStopping
         ),
-        ClientEvent::TerminalUpdated(_) => false,
+        ClientEvent::TerminalUpdated(_) | ClientEvent::WorkspaceLayoutChanged(_) => false,
     }
 }
 

@@ -190,6 +190,53 @@ async fn reliable_overflow_closes_the_connection() {
     ));
 }
 
+#[tokio::test]
+async fn a_newer_keyed_message_takes_the_place_of_one_still_waiting() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    occupy_writer(&writer, &event(1)).await;
+    writer.send_reliable_latest("a", &event(2)).unwrap();
+    writer.send_reliable(&event(3)).unwrap();
+    writer.send_reliable_latest("a", &event(4)).unwrap();
+    writer.send_reliable_latest("b", &event(5)).unwrap();
+    writer.send_reliable_latest("a", &event(6)).unwrap();
+
+    let order = [
+        sequence(&next(&mut reader).await),
+        sequence(&next(&mut reader).await),
+        sequence(&next(&mut reader).await),
+        sequence(&next(&mut reader).await),
+    ];
+    assert_eq!(order, [1, 6, 3, 5]);
+}
+
+#[tokio::test]
+async fn a_keyed_message_already_being_written_is_not_replaced() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    writer.send_reliable_latest("a", &event(1)).unwrap();
+    tokio::task::yield_now().await;
+    writer.send_reliable_latest("a", &event(2)).unwrap();
+
+    assert_eq!(sequence(&next(&mut reader).await), 1);
+    assert_eq!(sequence(&next(&mut reader).await), 2);
+}
+
+#[tokio::test]
+async fn repeated_keyed_messages_to_a_stalled_peer_do_not_overflow() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    occupy_writer(&writer, &event(0)).await;
+    for sequence in 1..=4 * RELIABLE_ITEMS as u64 {
+        writer.send_reliable_latest("a", &event(sequence)).unwrap();
+    }
+    writer.send_reliable(&event(u64::MAX)).unwrap();
+
+    assert_eq!(sequence(&next(&mut reader).await), 0);
+    assert_eq!(
+        sequence(&next(&mut reader).await),
+        4 * RELIABLE_ITEMS as u64
+    );
+    assert_eq!(sequence(&next(&mut reader).await), u64::MAX);
+}
+
 async fn write_chunk(peer: &mut WriteHalf<DuplexStream>, stream: u64, last: bool, bytes: &[u8]) {
     let frame = encode_message(
         FrameKind::Control,

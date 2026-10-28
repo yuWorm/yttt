@@ -382,6 +382,12 @@
     "HollowBlock": [],
     "Underline": []
   },
+  "DocumentId": {
+    "": [
+      "canonical_path",
+      "project_id"
+    ]
+  },
   "DraftBase": {
     "File": [
       "base_fingerprint",
@@ -515,6 +521,13 @@
       "result"
     ]
   },
+  "HostWorkspaceState": {
+    "": [
+      "editor",
+      "revision",
+      "workspace"
+    ]
+  },
   "LifecycleMessage": {
     "Request": [],
     "Response": []
@@ -555,6 +568,29 @@
       "stream"
     ]
   },
+  "OpenedProject": {
+    "": [
+      "id",
+      "instance_id",
+      "layout",
+      "location",
+      "selected_tab_id",
+      "tab_states"
+    ]
+  },
+  "PaneProcessState": {
+    "Exited": [],
+    "Idle": [],
+    "Restoring": [],
+    "Running": []
+  },
+  "PaneState": {
+    "": [
+      "agent_snapshot",
+      "pane_id",
+      "process_state"
+    ]
+  },
   "PathSegmentWire": {
     "Bytes": [],
     "Utf8": []
@@ -587,10 +623,21 @@
       "relative_paths"
     ]
   },
+  "ProjectConfig": {
+    "": [
+      "default_tab",
+      "name"
+    ]
+  },
   "ProjectDirectory": {
     "": [
       "entries",
       "relative_directory"
+    ]
+  },
+  "ProjectEditorWorkspaceSnapshot": {
+    "": [
+      "sessions"
     ]
   },
   "ProjectEntry": {
@@ -674,6 +721,12 @@
       "stderr",
       "stdout",
       "success"
+    ]
+  },
+  "ProjectLayout": {
+    "": [
+      "project",
+      "tabs"
     ]
   },
   "ProjectPasteMode": {
@@ -783,6 +836,17 @@
       "reported_sources",
       "tokens",
       "updated_at"
+    ]
+  },
+  "ProjectWorkItemSessionSnapshot": {
+    "": [
+      "activation_history",
+      "file_ids",
+      "project_id",
+      "project_panel_visible",
+      "project_panel_width",
+      "root",
+      "work_area"
     ]
   },
   "ProtocolFailure": {
@@ -1349,7 +1413,8 @@
     "TerminalLeaseRevoked": [
       "previous_owner",
       "session_id"
-    ]
+    ],
+    "WorkspaceChanged": []
   },
   "SetTerminalQueryPalette": {
     "": [
@@ -1413,6 +1478,31 @@
       "effective_user",
       "id",
       "private_key_identity"
+    ]
+  },
+  "TabConfig": {
+    "": [
+      "cwd",
+      "id",
+      "layout",
+      "startup",
+      "title"
+    ]
+  },
+  "TabStartState": {
+    "Lazy": [],
+    "Started": []
+  },
+  "TabStartup": {
+    "eager": [],
+    "lazy": []
+  },
+  "TabState": {
+    "": [
+      "focused_pane_id",
+      "pane_states",
+      "start_state",
+      "tab_id"
     ]
   },
   "TerminalCheckpoint": {
@@ -1615,6 +1705,19 @@
     "external": [],
     "user_input": []
   },
+  "WorkAreaSnapshot": {
+    "": [
+      "active_group_id",
+      "next_group_id",
+      "next_split_id",
+      "order_customized",
+      "root"
+    ]
+  },
+  "WorkItemId": {
+    "File": [],
+    "Terminal": []
+  },
   "WorkspaceConfig": {
     "": [
       "bytes",
@@ -1659,6 +1762,12 @@
       "workspace_history_initialized"
     ]
   },
+  "WorkspaceLayoutUpdate": {
+    "": [
+      "layout",
+      "workspace_id"
+    ]
+  },
   "WorkspaceProjectConfigFile": {
     "layout": [],
     "settings": []
@@ -1667,6 +1776,11 @@
     "AgentSessions": [
       "project_root",
       "providers"
+    ],
+    "Apply": [
+      "expected_revision",
+      "intent",
+      "workspace_id"
     ],
     "Browse": [
       "include_hidden",
@@ -1783,6 +1897,10 @@
     "AgentStateStored": [
       "reference"
     ],
+    "Applied": [
+      "revision",
+      "workspace_id"
+    ],
     "Committed": [
       "revision",
       "snapshot",
@@ -1812,6 +1930,7 @@
     "OmpSessionExists": [],
     "Opened": [
       "drafts",
+      "layout",
       "revision",
       "snapshot"
     ],
@@ -1822,6 +1941,12 @@
     "": [
       "revision",
       "workspace_id"
+    ]
+  },
+  "WorkspaceState": {
+    "": [
+      "opened_projects",
+      "selected_project_id"
     ]
   },
   "WorkspaceSummary": {

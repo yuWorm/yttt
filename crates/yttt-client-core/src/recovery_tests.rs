@@ -59,6 +59,7 @@ fn context() -> TestContext {
             catalog: Arc::default(),
             agent_snapshots: Arc::default(),
             project_token_usage: Arc::default(),
+            workspace_layouts: Arc::default(),
             next_request_id: Arc::new(AtomicU64::new(1)),
             diagnostics: Arc::default(),
             visibility: watch::channel(None).1,
@@ -373,6 +374,7 @@ fn successful_detach_ends_the_resubscription() {
         PendingRequest::User {
             reply,
             detaches: vec![id.clone()],
+            opens: None,
         },
         Err(ProtocolFailure::new(
             yttt_protocol::FailureCode::InvalidRequest,
@@ -390,6 +392,7 @@ fn successful_detach_ends_the_resubscription() {
         PendingRequest::User {
             reply,
             detaches: vec![id.clone()],
+            opens: None,
         },
         Ok(Response::TerminalDetached),
         &context,
@@ -470,6 +473,7 @@ fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
             catalog: &context.catalog,
             agent_snapshots: &context.agent_snapshots,
             project_token_usage: &context.project_token_usage,
+            workspace_layouts: &context.workspace_layouts,
             profile_control: &context.control,
             events: &context.events,
         },
@@ -784,6 +788,77 @@ async fn expired_queued_request_is_rejected_before_transmission() {
     );
     shutdown.send(true).unwrap();
     assert!(task.await.unwrap().is_none());
+}
+
+fn layout(revision: u64) -> HostWorkspaceState {
+    HostWorkspaceState {
+        revision,
+        workspace: yttt_core::model::workspace::WorkspaceState {
+            opened_projects: Vec::new(),
+            selected_project_id: None,
+        },
+        editor: Default::default(),
+    }
+}
+
+fn layout_changed(revision: u64) -> HostEvent {
+    HostEvent {
+        host_sequence: revision,
+        body: ServerEvent::WorkspaceChanged(Box::new(WorkspaceLayoutUpdate {
+            workspace_id: WorkspaceId::new("default").unwrap(),
+            layout: layout(revision),
+        })),
+    }
+}
+
+#[test]
+fn the_layout_mirror_keeps_the_newest_revision_until_the_host_changes() {
+    let context = context();
+    let id = WorkspaceId::new("default").unwrap();
+    let mut events = context.events.subscribe();
+    let (reply, _response) = oneshot::channel();
+    handle_response(
+        PendingRequest::User {
+            reply,
+            detaches: Vec::new(),
+            opens: Some(id.clone()),
+        },
+        Ok(Response::Workspace(WorkspaceResponse::Opened {
+            snapshot: serde_json::from_value(serde_json::json!({})).unwrap(),
+            revision: 2,
+            drafts: Vec::new(),
+            layout: Some(layout(2)),
+        })),
+        &context,
+    );
+    // A change queued before the Open response arrived is older; it is dropped.
+    handle_state_event(layout_changed(1), &context).unwrap();
+    handle_state_event(layout_changed(3), &context).unwrap();
+    handle_state_event(layout_changed(3), &context).unwrap();
+    let mut published = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            ClientEvent::WorkspaceLayoutChanged(update) => published.push(update.layout.revision),
+            other => panic!("layouts publish only as layout changes: {other:?}"),
+        }
+    }
+    assert_eq!(published, [2, 3]);
+
+    install_host_epoch(
+        2,
+        &HostEpochState {
+            current_host_epoch: &context.current_host_epoch,
+            terminal_state: &context.terminal_state,
+            catalog: &context.catalog,
+            agent_snapshots: &context.agent_snapshots,
+            project_token_usage: &context.project_token_usage,
+            workspace_layouts: &context.workspace_layouts,
+            profile_control: &context.control,
+            events: &context.events,
+        },
+    );
+    // The new Host's revisions restart; the workspace stays opened for reopening.
+    assert_eq!(context.workspace_layouts.read().get(&id), Some(&None),);
 }
 
 #[test]

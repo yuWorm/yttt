@@ -610,7 +610,10 @@ fn relocating_a_file_must_stay_inside_the_target_project() {
             None,
         )
         .unwrap();
-    assert_eq!(session(&workspace).file_ids(), [renamed.clone()]);
+    assert_eq!(
+        session(&workspace).file_ids(),
+        std::slice::from_ref(&renamed)
+    );
     assert_eq!(
         session(&workspace).active_work_item(),
         Some(&WorkItemId::File(renamed))
