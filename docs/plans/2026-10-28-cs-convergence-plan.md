@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划,不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试,再做最小实现;只有验收条件实际通过后才能勾选。
 
-**状态:** C1、C2、C3 完成;C4 未开始。
+**状态：** C1、C2、C3 完成；C4 设计已落盘（[`2026-10-28-c4-host-owned-layout-design.md`](./2026-10-28-c4-host-owned-layout-design.md)），待评审后实施。v22 在 C4 完成前不发布。
 
 **依据:** [`2026-10-28-cs-convergence-analysis.md`](./2026-10-28-cs-convergence-analysis.md)(对照 herdr 的根因分析)、`docs/host-client-architecture.md`、`docs/wire-evolution.md`。
 
