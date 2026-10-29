@@ -2661,6 +2661,50 @@ impl WorkbenchView {
         true
     }
 
+    /// Sends a layout intent to the Host for the published workspace and
+    /// returns whether the Host applied it, terminating the terminals of the
+    /// panes it removed. Until every layout change is an intent, the Host
+    /// layout can lag this Client's unpublished changes and reject an intent;
+    /// the Client then applies it alone and the next commit publishes it.
+    pub(super) fn publish_workspace_intent(&mut self, intent: WorkspaceIntent) -> bool {
+        if self.workspace_persistence.mode != WorkspacePersistenceMode::Active {
+            return false;
+        }
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return false;
+        };
+        let Some(workspace_id) = self
+            .workspace_persistence
+            .view
+            .as_ref()
+            .map(|view| view.id().clone())
+        else {
+            return false;
+        };
+        if self.workspace_persistence.host_epoch.is_none()
+            || self.workspace_persistence.host_epoch != remote_host_epoch(&runtime)
+        {
+            return false;
+        }
+        match runtime.workspace_request(WorkspaceRequest::Apply {
+            workspace_id: workspace_id.clone(),
+            intent,
+            expected_revision: None,
+        }) {
+            Ok(WorkspaceResponse::Applied {
+                workspace_id: applied_workspace_id,
+                revision,
+            }) if applied_workspace_id == workspace_id => {
+                // The Client now holds the Host layout at `revision`, so its
+                // next commit publishes changes that are not intents yet.
+                self.workspace_persistence.revision =
+                    self.workspace_persistence.revision.max(Some(revision));
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn commit_remote_workspace_if_changed(
         &mut self,
         runtime: Arc<crate::host_runtime::DesktopHostRuntime>,
@@ -2857,7 +2901,10 @@ impl WorkbenchView {
                             revision,
                             snapshot,
                         }) if committed_workspace_id == workspace_id => {
-                            root.workspace_persistence.revision = Some(revision);
+                            // An intent applied while the commit was in flight
+                            // may already have moved past its revision.
+                            root.workspace_persistence.revision =
+                                root.workspace_persistence.revision.max(Some(revision));
                             root.workspace_persistence.confirmed_drafts = pending
                                 .uploads
                                 .drafts

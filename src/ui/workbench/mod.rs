@@ -125,8 +125,8 @@ enum SettingsNumberField {
 
 use crate::{
     commands::{
-        ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandOutcome,
-        CommandRegistry, dispatch_workspace_command,
+        ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandRegistry,
+        workspace_command_intent,
     },
     config::{
         bars::{BarsSaveError, save_bars},
@@ -158,6 +158,7 @@ use crate::{
     login_startup::{LoginStartupManager, LoginStartupState, LoginStartupStatus},
     model::{
         editor::WorkItemId,
+        host_workspace::{IntentError, PaneAddress, PaneChanges, WorkspaceIntent, apply_intent},
         ids::ProjectId,
         layout::{LayoutNode, PaneConfig, ProcessExitBehavior, ProjectLayout, SplitDirection},
         project::{ProjectDescriptor, ProjectLocation},
@@ -715,6 +716,74 @@ impl WorkbenchView {
             })
         {
             self.terminal.pending_terminal_focus = None;
+        }
+    }
+
+    /// Applies a layout intent: on the Host first, so the Host layout and the
+    /// terminals of removed panes follow it, then to this Client's workspace
+    /// and editor work areas with the executor the Host runs. A rejected
+    /// intent changes neither.
+    fn apply_workspace_intent(
+        &mut self,
+        intent: WorkspaceIntent,
+    ) -> Result<PaneChanges, WorkbenchError> {
+        let mut workspace = self.workspace.clone();
+        let mut editor = self.project.project_editor_runtime.workspace().clone();
+        let panes = apply_intent(&mut workspace, &mut editor, intent.clone())?;
+        if !self.publish_workspace_intent(intent) && !panes.removed.is_empty() {
+            let removed = panes
+                .removed
+                .iter()
+                .map(|pane| {
+                    terminal_pane_key(pane.project_id.as_str(), &pane.tab_id, &pane.pane_id)
+                })
+                .collect::<HashSet<_>>();
+            self.terminate_host_sessions_matching(|key| removed.contains(key))?;
+        }
+        self.workspace = workspace;
+        *self.project.project_editor_runtime.workspace_mut() = editor;
+        self.project.project_editor_runtime.sync_file_trees();
+        self.forget_removed_panes(&panes.removed);
+        Ok(panes)
+    }
+
+    /// Drops the terminal views of panes an intent removed; a tab that is
+    /// gone entirely is forgotten with its Agent sessions.
+    fn forget_removed_panes(&mut self, removed: &[PaneAddress]) {
+        let mut closed_tabs = HashMap::<ProjectId, Vec<String>>::new();
+        for pane in removed {
+            let tab_exists = self
+                .workspace
+                .project(&pane.project_id)
+                .is_some_and(|project| project.layout.tab(&pane.tab_id).is_some());
+            if !tab_exists {
+                let tabs = closed_tabs.entry(pane.project_id.clone()).or_default();
+                if !tabs.contains(&pane.tab_id) {
+                    tabs.push(pane.tab_id.clone());
+                }
+                continue;
+            }
+            let key = terminal_pane_key(pane.project_id.as_str(), &pane.tab_id, &pane.pane_id);
+            self.terminal.terminal_panes.remove(&key);
+            self.terminal.terminal_pane_subscriptions.remove(&key);
+            self.terminal
+                .pending_host_agent_snapshots
+                .retain(|session_id, _| session_id.as_str() != key);
+            if self
+                .terminal
+                .pending_terminal_focus
+                .as_ref()
+                .is_some_and(|target| {
+                    target.project_id == pane.project_id
+                        && target.tab_id == pane.tab_id
+                        && target.pane_id == pane.pane_id
+                })
+            {
+                self.terminal.pending_terminal_focus = None;
+            }
+        }
+        for (project_id, tab_ids) in closed_tabs {
+            self.forget_closed_terminal_tabs(project_id.as_str(), &tab_ids);
         }
     }
 
@@ -2630,29 +2699,14 @@ impl WorkbenchView {
             | CommandId::PaneFocusUp
             | CommandId::PaneFocusDown => self.focus_pane_or_work_area(command_id),
             CommandId::PaneClose => {
-                let context = self.workspace.selected_project_id().and_then(|project_id| {
-                    let project = self.workspace.project(project_id)?;
-                    let tab_id = project.selected_tab_id.clone();
-                    project
-                        .tab_state(&tab_id)
-                        .and_then(|tab| tab.focused_pane_id.clone())
-                        .map(|pane_id| (project.id.as_str().to_string(), tab_id, pane_id))
-                });
-                if let Some((project_id, tab_id, pane_id)) = &context {
-                    self.terminate_host_pane(project_id, tab_id, pane_id)?;
-                }
-                let outcome =
-                    dispatch_workspace_command(&mut self.workspace, CommandId::PaneClose)?;
-                if let Some((_project_id, _tab_id, pane_id)) = context
-                    && let CommandOutcome::PaneClosed(closed_pane_id) = outcome
-                {
-                    debug_assert_eq!(closed_pane_id, pane_id);
-                }
+                let intent = workspace_command_intent(&self.workspace, command_id)?;
+                self.apply_workspace_intent(intent)?;
                 self.reconcile_active_terminal_with_workspace()?;
                 Ok(())
             }
             _ => {
-                dispatch_workspace_command(&mut self.workspace, command_id)?;
+                let intent = workspace_command_intent(&self.workspace, command_id)?;
+                self.apply_workspace_intent(intent)?;
                 self.reconcile_active_terminal_with_workspace()?;
                 if should_focus_terminal_after_command(command_id) {
                     self.queue_selected_terminal_focus();
@@ -2701,7 +2755,10 @@ impl WorkbenchView {
         }
 
         let focused_pane_before = self.selected_focused_pane_id().map(str::to_owned);
-        match dispatch_workspace_command(&mut self.workspace, command_id) {
+        let result = workspace_command_intent(&self.workspace, command_id)
+            .map_err(WorkbenchError::from)
+            .and_then(|intent| self.apply_workspace_intent(intent));
+        match result {
             Ok(_) => {
                 self.reconcile_active_terminal_with_workspace()?;
                 let focused_pane_after = self.selected_focused_pane_id().map(str::to_owned);
@@ -2719,7 +2776,12 @@ impl WorkbenchView {
                 self.queue_selected_terminal_focus();
                 Ok(())
             }
-            Err(CommandDispatchError::Workspace(WorkspaceError::PaneNotFound(_))) => {
+            Err(
+                WorkbenchError::Workspace(WorkspaceError::PaneNotFound(_))
+                | WorkbenchError::Command(CommandDispatchError::Workspace(
+                    WorkspaceError::PaneNotFound(_),
+                )),
+            ) => {
                 if !self.focus_adjacent_work_area_group(edge)? {
                     if edge == WorkAreaDropEdge::Right {
                         self.queue_project_tree_focus();
@@ -2729,7 +2791,7 @@ impl WorkbenchView {
                 }
                 Ok(())
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error),
         }
     }
 
@@ -3391,18 +3453,22 @@ impl WorkbenchView {
                         self.ui_text.get(UiTextKey::SharedEditingRequired).into(),
                     ));
                 }
-                self.workspace.select_tab(&tab_id)?;
-                let project_id = self.workspace.selected_project_id().cloned();
-                if let Some(project_id) = &project_id {
-                    self.terminate_host_tab(project_id.as_str(), &tab_id)?;
+                let project_id = self
+                    .workspace
+                    .selected_project_id()
+                    .cloned()
+                    .ok_or(WorkspaceError::NoSelectedProject)?;
+                if self
+                    .workspace
+                    .project(&project_id)
+                    .is_some_and(|project| project.layout.tabs.len() <= 1)
+                {
+                    return Err(WorkspaceError::CannotCloseLastTab.into());
                 }
-                dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
-                if let Some(project_id) = project_id {
-                    self.forget_closed_terminal_tabs(
-                        project_id.as_str(),
-                        std::slice::from_ref(&tab_id),
-                    );
-                }
+                self.apply_workspace_intent(WorkspaceIntent::CloseTabs {
+                    project_id,
+                    tab_ids: vec![tab_id],
+                })?;
                 let next = if let Some((project_id, terminal_ids)) =
                     self.selected_project_work_item_ids()
                 {
@@ -4141,6 +4207,19 @@ pub enum WorkbenchError {
     HostTerminal(String),
     #[error("remote projects are not available in this operation")]
     UnsupportedRemoteProject,
+    #[error("{0}")]
+    Intent(IntentError),
+}
+
+impl From<IntentError> for WorkbenchError {
+    /// Workspace errors stay `Workspace`, so callers match them the same way
+    /// whether a direct mutation or an intent raised them.
+    fn from(error: IntentError) -> Self {
+        match error {
+            IntentError::Workspace(error) => Self::Workspace(error),
+            error => Self::Intent(error),
+        }
+    }
 }
 
 impl From<ProjectOpenError> for WorkbenchError {

@@ -844,6 +844,33 @@ fn the_layout_mirror_keeps_the_newest_revision_until_the_host_changes() {
     }
     assert_eq!(published, [2, 3]);
 
+    // The Host no longer holds a valid layout at a newer revision: the stale
+    // layout is dropped rather than kept as if it were current.
+    let (reply, _response) = oneshot::channel();
+    handle_response(
+        PendingRequest::User {
+            reply,
+            detaches: Vec::new(),
+            opens: Some(id.clone()),
+        },
+        Ok(Response::Workspace(WorkspaceResponse::Opened {
+            snapshot: serde_json::from_value(serde_json::json!({})).unwrap(),
+            revision: 4,
+            drafts: Vec::new(),
+            layout: None,
+        })),
+        &context,
+    );
+    handle_state_event(layout_changed(3), &context).unwrap();
+    assert_eq!(
+        context.workspace_layouts.read().get(&id),
+        Some(&HeldLayout {
+            revision: 4,
+            layout: None
+        })
+    );
+    assert!(events.try_recv().is_err());
+
     install_host_epoch(
         2,
         &HostEpochState {
@@ -858,7 +885,10 @@ fn the_layout_mirror_keeps_the_newest_revision_until_the_host_changes() {
         },
     );
     // The new Host's revisions restart; the workspace stays opened for reopening.
-    assert_eq!(context.workspace_layouts.read().get(&id), Some(&None),);
+    assert_eq!(
+        context.workspace_layouts.read().get(&id),
+        Some(&HeldLayout::default())
+    );
 }
 
 #[test]

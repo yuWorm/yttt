@@ -204,11 +204,17 @@ impl PaneAddress {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IntentOutcome {
     pub revision: u64,
+    pub panes: PaneChanges,
+}
+
+/// The panes an accepted intent added and removed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PaneChanges {
     /// Panes that exist after the intent but did not before, sorted.
-    pub added_panes: Vec<PaneAddress>,
+    pub added: Vec<PaneAddress>,
     /// Panes that existed before the intent but no longer do, sorted. Their
     /// terminals must be terminated.
-    pub removed_panes: Vec<PaneAddress>,
+    pub removed: Vec<PaneAddress>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -330,6 +336,13 @@ impl HostWorkspace {
         &self.editor
     }
 
+    /// Records the pane runtime a Client observed — process state and Agent
+    /// snapshots — as `revision`, without changing the layout.
+    pub fn record_pane_runtime(&mut self, observed: &Workspace, revision: u64) {
+        self.workspace.keep_pane_runtime_from(observed);
+        self.revision = revision;
+    }
+
     /// Applies one intent. Only `ReplaceProjectLayout` requires
     /// `expected_revision`; any intent that carries one is rejected when it is
     /// stale. A rejected intent leaves the workspace and revision unchanged.
@@ -352,21 +365,46 @@ impl HostWorkspace {
             return Err(IntentError::RevisionRequired);
         }
 
-        let before = self.pane_addresses();
-        self.apply_intent(intent)?;
+        let panes = apply_intent(&mut self.workspace, &mut self.editor, intent)?;
         self.revision += 1;
-        let after = self.pane_addresses();
-        let mut added_panes = after.difference(&before).cloned().collect::<Vec<_>>();
-        let mut removed_panes = before.difference(&after).cloned().collect::<Vec<_>>();
-        added_panes.sort_by(PaneAddress::cmp_key);
-        removed_panes.sort_by(PaneAddress::cmp_key);
         Ok(IntentOutcome {
             revision: self.revision,
-            added_panes,
-            removed_panes,
+            panes,
         })
     }
+}
 
+/// Applies one intent to a workspace and the editor work areas of its
+/// projects. The Host and every Client run this same executor, so a Client
+/// that applies its own intent locally reaches the state the Host broadcasts.
+/// A rejected intent changes neither. Revision checks belong to the caller.
+pub fn apply_intent(
+    workspace: &mut Workspace,
+    editor: &mut ProjectEditorWorkspaceState,
+    intent: WorkspaceIntent,
+) -> Result<PaneChanges, IntentError> {
+    let mut executor = IntentExecutor {
+        workspace: workspace.clone(),
+        editor: editor.clone(),
+    };
+    executor.apply_intent(intent)?;
+    let before = pane_addresses(workspace);
+    let after = pane_addresses(&executor.workspace);
+    let mut added = after.difference(&before).cloned().collect::<Vec<_>>();
+    let mut removed = before.difference(&after).cloned().collect::<Vec<_>>();
+    added.sort_by(PaneAddress::cmp_key);
+    removed.sort_by(PaneAddress::cmp_key);
+    *workspace = executor.workspace;
+    *editor = executor.editor;
+    Ok(PaneChanges { added, removed })
+}
+
+struct IntentExecutor {
+    workspace: Workspace,
+    editor: ProjectEditorWorkspaceState,
+}
+
+impl IntentExecutor {
     fn apply_intent(&mut self, intent: WorkspaceIntent) -> Result<(), IntentError> {
         match intent {
             WorkspaceIntent::OpenProject {
@@ -642,22 +680,22 @@ impl HostWorkspace {
             .session_mut(project_id)
             .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.to_string()).into())
     }
+}
 
-    fn pane_addresses(&self) -> HashSet<PaneAddress> {
-        self.workspace
-            .opened_projects()
-            .iter()
-            .flat_map(|project| {
-                project
-                    .pane_addresses()
-                    .map(move |(tab_id, pane_id)| PaneAddress {
-                        project_id: project.id.clone(),
-                        tab_id: tab_id.to_string(),
-                        pane_id: pane_id.to_string(),
-                    })
-            })
-            .collect()
-    }
+fn pane_addresses(workspace: &Workspace) -> HashSet<PaneAddress> {
+    workspace
+        .opened_projects()
+        .iter()
+        .flat_map(|project| {
+            project
+                .pane_addresses()
+                .map(move |(tab_id, pane_id)| PaneAddress {
+                    project_id: project.id.clone(),
+                    tab_id: tab_id.to_string(),
+                    pane_id: pane_id.to_string(),
+                })
+        })
+        .collect()
 }
 
 /// Snapshots written before tab removal repaired the default tab may name a

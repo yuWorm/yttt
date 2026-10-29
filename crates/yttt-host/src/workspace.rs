@@ -875,7 +875,7 @@ impl WorkspaceService {
         Self::notify_layout(&mut state, &workspace_id);
         Ok(AppliedIntent {
             revision: outcome.revision,
-            removed_panes: outcome.removed_panes,
+            removed_panes: outcome.panes.removed,
         })
     }
 
@@ -911,7 +911,9 @@ impl WorkspaceService {
                     snapshot,
                 });
             }
-            require_revision(&record, expected_revision)?;
+            if record.layout.is_none() {
+                require_revision(&record, expected_revision)?;
+            }
             record
         };
 
@@ -924,10 +926,28 @@ impl WorkspaceService {
             .validate_references(&workspace_id, &agent_states)
             .map_err(|error| filesystem_failure("verify Agent state references", error))?;
         let resulting_revision = next_revision(current.revision)?;
+        let replaces_layout = current.revision == expected_revision;
         let mut updated = current;
         updated.revision = resulting_revision;
-        updated.snapshot = snapshot.clone();
-        updated.layout = derive_layout(&updated.snapshot, resulting_revision);
+        // A commit at the current revision publishes the Client's layout. Once
+        // intents or other Clients have moved the Host layout past the commit's
+        // revision, the commit contributes only the pane runtime the Client
+        // observed, its documents, and Agent states; the Client adopts the
+        // Host layout returned in the response.
+        let stored = match updated.layout.take() {
+            Some(mut layout) if !replaces_layout => {
+                let observed = committed_workspace(&snapshot)?;
+                layout.record_pane_runtime(&observed, resulting_revision);
+                let stored = snapshot_with_host_layout(&snapshot, &layout)?;
+                updated.layout = Some(layout);
+                stored
+            }
+            _ => {
+                updated.layout = derive_layout(&snapshot, resulting_revision);
+                snapshot
+            }
+        };
+        updated.snapshot = stored.clone();
         let previous_drafts = std::mem::replace(&mut updated.drafts, drafts);
         let previous_agents = std::mem::replace(&mut updated.agent_states, agent_states);
         updated.saved_millis = crate::now_millis();
@@ -950,7 +970,7 @@ impl WorkspaceService {
         Ok(WorkspaceResponse::Committed {
             workspace_id,
             revision: resulting_revision,
-            snapshot,
+            snapshot: stored,
         })
     }
 
@@ -1647,6 +1667,19 @@ fn derive_layout(snapshot: &WorkspaceSnapshot, revision: u64) -> Option<HostWork
     layout.ok()
 }
 
+/// Reads the workspace a Client committed, for the pane runtime it observed.
+fn committed_workspace(snapshot: &WorkspaceSnapshot) -> Result<Workspace, ProtocolFailure> {
+    let invalid = |error: String| failure(FailureCode::InvalidRequest, error, false);
+    let state = snapshot
+        .as_value()
+        .get("workspace")
+        .ok_or_else(|| invalid("workspace snapshot has no workspace".to_string()))
+        .and_then(|value| {
+            WorkspaceState::deserialize(value).map_err(|error| invalid(error.to_string()))
+        })?;
+    Workspace::restore_persisted_state(state).map_err(|error| invalid(error.to_string()))
+}
+
 /// Replaces the layout in a stored snapshot, dropping documents that are no
 /// longer open and Agent states whose pane is gone, so that the snapshot
 /// stays valid for Clients that read it. Returns the snapshot and its
@@ -1664,13 +1697,6 @@ fn snapshot_with_layout(
         draft_ref: Option<DraftRef>,
     }
 
-    let encoding = |error: serde_json::Error| {
-        failure(
-            FailureCode::Internal,
-            format!("failed to encode workspace layout: {error}"),
-            false,
-        )
-    };
     let state = layout.state();
     let agent_states = agent_state_references(snapshot.as_value())
         .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?
@@ -1706,19 +1732,11 @@ fn snapshot_with_layout(
             }
         }
     }
-    object.insert("schema_version".into(), 2.into());
-    object.insert(
-        "workspace".into(),
-        serde_json::to_value(&state.workspace).map_err(encoding)?,
-    );
-    object.insert(
-        "editor".into(),
-        serde_json::to_value(&state.editor).map_err(encoding)?,
-    );
+    insert_layout(object, &state)?;
     object.insert("documents".into(), serde_json::Value::Array(documents));
     object.insert(
         "agent_states".into(),
-        serde_json::to_value(&agent_states).map_err(encoding)?,
+        serde_json::to_value(&agent_states).map_err(layout_encoding_failure)?,
     );
     let snapshot = WorkspaceSnapshot::new(value)
         .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?;
@@ -1728,6 +1746,45 @@ fn snapshot_with_layout(
         .cloned()
         .collect();
     Ok((snapshot, drafts, agent_states))
+}
+
+/// Replaces only the layout in a committed snapshot; its documents and Agent
+/// states stay as the Client committed them.
+fn snapshot_with_host_layout(
+    snapshot: &WorkspaceSnapshot,
+    layout: &HostWorkspace,
+) -> Result<WorkspaceSnapshot, ProtocolFailure> {
+    let mut value = snapshot.as_value().clone();
+    let object = value
+        .as_object_mut()
+        .expect("workspace snapshots are JSON objects");
+    insert_layout(object, &layout.state())?;
+    WorkspaceSnapshot::new(value)
+        .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))
+}
+
+fn insert_layout(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    state: &HostWorkspaceState,
+) -> Result<(), ProtocolFailure> {
+    object.insert("schema_version".into(), 2.into());
+    object.insert(
+        "workspace".into(),
+        serde_json::to_value(&state.workspace).map_err(layout_encoding_failure)?,
+    );
+    object.insert(
+        "editor".into(),
+        serde_json::to_value(&state.editor).map_err(layout_encoding_failure)?,
+    );
+    Ok(())
+}
+
+fn layout_encoding_failure(error: serde_json::Error) -> ProtocolFailure {
+    failure(
+        FailureCode::Internal,
+        format!("failed to encode workspace layout: {error}"),
+        false,
+    )
 }
 
 fn pane_exists(workspace: &WorkspaceState, reference: &AgentStateRef) -> bool {
@@ -2220,7 +2277,7 @@ mod tests {
     }
 
     fn snapshot(name: &str) -> WorkspaceSnapshot {
-        WorkspaceSnapshot::new(json!({ "layout": name })).unwrap()
+        WorkspaceSnapshot::new(json!({ "layout": name, "schema_version": 2, "editor": { "sessions": [] }, "workspace": { "opened_projects": [], "selected_project_id": null } })).unwrap()
     }
     fn service(root: &std::path::Path) -> WorkspaceService {
         WorkspaceService::new(root, root.join("config"), WorkspaceProjectConfig::Project).unwrap()
@@ -2939,7 +2996,7 @@ mod tests {
             panic!("workspace open must return its snapshot");
         };
         assert_eq!(revision, 1);
-        assert_eq!(snapshot.as_value(), &json!({ "layout": "persisted" }));
+        assert_eq!(snapshot.as_value()["layout"], "persisted");
         assert_eq!(reloaded.control.status(1).owner, None);
     }
 
@@ -3055,6 +3112,150 @@ mod tests {
             "Renamed"
         );
     }
+
+    #[test]
+    fn a_stale_commit_keeps_the_host_layout_and_a_current_commit_replaces_it() {
+        use yttt_core::model::{
+            host_workspace::{ProjectPanel, WorkspaceIntent},
+            ids::ProjectId,
+            layout::ProjectLayout,
+            project::{ProjectDescriptor, ProjectLocation},
+            workspace::{PaneProcessState, Workspace},
+        };
+
+        let root = tempdir().unwrap();
+        let project_root = root.path().join("project");
+        fs::create_dir_all(&project_root).unwrap();
+        let project_id = ProjectId::new("project");
+        let layout: ProjectLayout = toml::from_str(
+            r#"
+            [project]
+            name = "Saved"
+
+            [[tabs]]
+            id = "first"
+            title = "First"
+            layout = { type = "pane", id = "shell", title = "Shell", command = "$SHELL" }
+            "#,
+        )
+        .unwrap();
+        let owner = client("owner");
+        {
+            let host = service(root.path());
+            acquire(&host, &owner);
+            host.apply(
+                workspace(),
+                WorkspaceIntent::OpenProject {
+                    descriptor: ProjectDescriptor::new(
+                        project_id.clone(),
+                        ProjectLocation::local(&project_root),
+                    ),
+                    layout,
+                    panel: ProjectPanel {
+                        visible: true,
+                        width: 240.0,
+                    },
+                },
+                None,
+            )
+            .unwrap();
+            // The Client built its snapshot at revision 1 and saw the shell
+            // start; another intent then renamed the tab at revision 2.
+            let observed_state = host.state.lock().workspaces[&workspace()]
+                .layout
+                .as_ref()
+                .unwrap()
+                .state();
+            let editor = observed_state.editor;
+            let mut observed =
+                Workspace::restore_persisted_state(observed_state.workspace).unwrap();
+            host.apply(
+                workspace(),
+                WorkspaceIntent::RenameTab {
+                    project_id: project_id.clone(),
+                    tab_id: "first".into(),
+                    title: "Host".into(),
+                },
+                None,
+            )
+            .unwrap();
+            observed
+                .mark_pane_running(&project_id, "first", "shell")
+                .unwrap();
+            let commit = |observed: &Workspace, expected_revision, operation: &str| {
+                let snapshot = WorkspaceSnapshot::new(json!({
+                    "schema_version": 2,
+                    "workspace": observed.persisted_layout_state(),
+                    "editor": editor,
+                }))
+                .unwrap();
+                host.handle(
+                    &owner,
+                    WorkspaceRequest::Commit {
+                        workspace_id: workspace(),
+                        expected_revision,
+                        operation_id: WorkspaceOperationId::new(operation).unwrap(),
+                        snapshot,
+                        drafts: Vec::new(),
+                    },
+                )
+                .unwrap()
+            };
+            let WorkspaceResponse::Committed { snapshot, .. } = commit(&observed, 1, "stale")
+            else {
+                panic!("commit response")
+            };
+            assert_eq!(
+                snapshot.as_value()["workspace"]["opened_projects"][0]["layout"]["tabs"][0]["title"],
+                "Host",
+                "a stale commit returns the Host layout for the Client to adopt"
+            );
+            let host_layout = host.state.lock().workspaces[&workspace()]
+                .layout
+                .clone()
+                .unwrap();
+            assert_eq!(host_layout.revision(), 3);
+            assert_eq!(
+                host_layout.workspace().opened_projects()[0].layout.tabs[0].title,
+                "Host"
+            );
+            assert_eq!(
+                host_layout.workspace().opened_projects()[0].tab_states[0].pane_states[0]
+                    .process_state,
+                PaneProcessState::Running,
+                "a stale commit still records the pane runtime the Client observed"
+            );
+
+            observed.rename_selected_tab("Client").unwrap();
+            commit(&observed, 3, "current");
+        }
+
+        let restarted = service(root.path());
+        let WorkspaceResponse::Opened {
+            revision, layout, ..
+        } = restarted
+            .handle(
+                &client("observer"),
+                WorkspaceRequest::Open {
+                    workspace_id: workspace(),
+                },
+            )
+            .unwrap()
+        else {
+            panic!("open response")
+        };
+        let layout = layout.expect("the restored workspace has a layout");
+        assert_eq!((revision, layout.revision), (4, 4));
+        let project = &layout.workspace.opened_projects[0];
+        assert_eq!(
+            project.layout.tabs[0].title, "Client",
+            "a commit at the current revision publishes the Client layout"
+        );
+        assert_eq!(
+            project.tab_states[0].pane_states[0].process_state,
+            PaneProcessState::Running
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3126,7 +3327,7 @@ mod publication_tests {
                 workspace_id: id.clone(),
                 expected_revision: 0,
                 operation_id: WorkspaceOperationId::new("publication").unwrap(),
-                snapshot: WorkspaceSnapshot::new(serde_json::json!({ "layout": "split" })).unwrap(),
+                snapshot: WorkspaceSnapshot::new(serde_json::json!({ "layout": "split", "schema_version": 2, "editor": { "sessions": [] }, "workspace": { "opened_projects": [], "selected_project_id": null } })).unwrap(),
                 drafts: vec![reference.clone()],
             },
         )
@@ -3213,7 +3414,7 @@ mod publication_tests {
                         expected_revision: 1,
                         operation_id: WorkspaceOperationId::new("over-quota").unwrap(),
                         snapshot: WorkspaceSnapshot::new(
-                            serde_json::json!({ "layout": "rejected" })
+                            serde_json::json!({ "layout": "rejected", "schema_version": 2, "editor": { "sessions": [] }, "workspace": { "opened_projects": [], "selected_project_id": null } })
                         )
                         .unwrap(),
                         drafts: oversized,

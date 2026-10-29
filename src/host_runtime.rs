@@ -340,6 +340,23 @@ impl DesktopHostRuntime {
         }
     }
 
+    /// The newest Host layout received for a workspace this Client opened.
+    pub fn workspace_layout(
+        &self,
+        workspace_id: &yttt_protocol::workspace::WorkspaceId,
+    ) -> Option<crate::model::host_workspace::HostWorkspaceState> {
+        self.client.workspace_layout(workspace_id)
+    }
+
+    /// The revision of that layout; `None` while the Host holds no valid
+    /// layout for the workspace.
+    pub fn workspace_layout_revision(
+        &self,
+        workspace_id: &yttt_protocol::workspace::WorkspaceId,
+    ) -> Option<u64> {
+        self.client.workspace_layout_revision(workspace_id)
+    }
+
     pub fn shutdown_client(&self) {
         self.runtime.block_on(self.client.shutdown());
         if let DesktopHostLifecycle::Local {

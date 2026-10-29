@@ -11,7 +11,7 @@ use yttt_core::model::{
     layout::{ProjectLayout, SplitDirection},
     project::{ProjectDescriptor, ProjectLocation},
     work_area::{TabGroupId, WorkAreaDropPlacement},
-    workspace::{OpenedProject, WorkspaceError},
+    workspace::{OpenedProject, PaneProcessState, WorkspaceError},
 };
 
 const ROOT: &str = "/host/projects/fixture";
@@ -166,9 +166,9 @@ fn split_pane_reports_the_new_pane_and_focuses_it() {
 
     assert_eq!(outcome.revision, 8);
     assert_eq!(workspace.revision(), 8);
-    assert!(outcome.removed_panes.is_empty());
-    let [added] = outcome.added_panes.as_slice() else {
-        panic!("expected one added pane: {:?}", outcome.added_panes);
+    assert!(outcome.panes.removed.is_empty());
+    let [added] = outcome.panes.added.as_slice() else {
+        panic!("expected one added pane: {:?}", outcome.panes.added);
     };
     assert_eq!(added.tab_id, "dev");
     let dev = project(&workspace).layout.tab("dev").unwrap();
@@ -198,8 +198,8 @@ fn close_pane_reports_the_removed_pane() {
         )
         .unwrap();
 
-    assert_eq!(outcome.removed_panes, [pane("dev", "server")]);
-    assert!(outcome.added_panes.is_empty());
+    assert_eq!(outcome.panes.removed, [pane("dev", "server")]);
+    assert!(outcome.panes.added.is_empty());
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn closing_the_selected_tab_removes_it_from_the_work_area_and_reselects() {
         )
         .unwrap();
 
-    assert_eq!(outcome.removed_panes, [pane("agent", "codex")]);
+    assert_eq!(outcome.panes.removed, [pane("agent", "codex")]);
     assert_eq!(project(&workspace).selected_tab_id, "dev");
     assert_eq!(
         session(&workspace).group_items_containing(&WorkItemId::Terminal("agent".into())),
@@ -386,9 +386,9 @@ fn replace_project_layout_requires_the_current_revision() {
 
     let outcome = workspace.apply(replace(), Some(7)).unwrap();
 
-    assert_eq!(outcome.added_panes, [pane("solo", "main")]);
+    assert_eq!(outcome.panes.added, [pane("solo", "main")]);
     assert_eq!(
-        outcome.removed_panes,
+        outcome.panes.removed,
         [
             pane("agent", "codex"),
             pane("dev", "pane-1"),
@@ -435,8 +435,8 @@ fn create_tab_assigns_a_fresh_id_and_selects_it() {
         )
         .unwrap();
 
-    let [added] = outcome.added_panes.as_slice() else {
-        panic!("expected one added pane: {:?}", outcome.added_panes);
+    let [added] = outcome.panes.added.as_slice() else {
+        panic!("expected one added pane: {:?}", outcome.panes.added);
     };
     assert!(!["dev", "agent"].contains(&added.tab_id.as_str()));
     assert_eq!(project(&workspace).selected_tab_id, added.tab_id);
@@ -476,7 +476,7 @@ fn closing_a_project_with_running_panes_requires_confirmation() {
         )
         .unwrap();
 
-    assert_eq!(outcome.removed_panes.len(), 4);
+    assert_eq!(outcome.panes.removed.len(), 4);
     assert!(workspace.workspace().opened_projects().is_empty());
     assert!(workspace.editor().session(&project_id()).is_none());
 }
@@ -505,7 +505,7 @@ fn open_project_creates_its_work_area_and_reports_its_panes() {
 
     assert_eq!(outcome.revision, 1);
     assert_eq!(
-        outcome.added_panes,
+        outcome.panes.added,
         [PaneAddress {
             project_id: other.clone(),
             tab_id: "main".into(),
@@ -635,4 +635,30 @@ fn resizing_an_unknown_work_area_split_is_rejected() {
     );
     workspace.apply(resize(1), None).unwrap();
     assert_eq!(workspace.revision(), 8);
+}
+
+#[test]
+fn recorded_pane_runtime_never_changes_the_host_layout() {
+    let mut host = migrated();
+    let mut observed = host.workspace().clone();
+    observed
+        .mark_pane_running(&project_id(), "dev", "server")
+        .unwrap();
+    observed.select_project(&project_id()).unwrap();
+    observed.close_tabs(&["agent".to_string()]).unwrap();
+    let layout_before = project(&host).layout.clone();
+
+    host.record_pane_runtime(&observed, 8);
+
+    assert_eq!(host.revision(), 8);
+    assert_eq!(project(&host).layout, layout_before);
+    let process_state = |tab_id: &str, pane_id: &str| {
+        project(&host)
+            .tab_state(tab_id)
+            .and_then(|tab| tab.pane_states.iter().find(|pane| pane.pane_id == pane_id))
+            .map(|pane| pane.process_state)
+            .unwrap()
+    };
+    assert_eq!(process_state("dev", "server"), PaneProcessState::Running);
+    assert_eq!(process_state("agent", "codex"), PaneProcessState::Idle);
 }

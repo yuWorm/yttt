@@ -4,10 +4,10 @@ use std::{fs, os::unix::fs::PermissionsExt as _, path::Path, time::Duration};
 
 use tempfile::TempDir;
 use yttt_core::model::{
+    host_workspace::{ProjectPanel, WorkspaceIntent},
     ids::{ClientInstanceId, ProfileId, ProjectId},
     layout::ProjectLayout,
     project::{ProjectDescriptor, ProjectLocation},
-    workspace::Workspace,
 };
 use yttt_host::{HostBootstrap, HostLifetime, run};
 use yttt_protocol::{
@@ -16,10 +16,7 @@ use yttt_protocol::{
     LifecycleRequestEnvelope, LifecycleResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request,
     Response, ServerEvent, encode_message,
     session::{ControlContext, ControlStatus, ProfileControlRequest, TransferPhase},
-    workspace::{
-        WorkspaceOperationId, WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse,
-        WorkspaceSnapshot,
-    },
+    workspace::{WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport::{
     AuthToken, ClientIdentity, MemoryConnector, TransportConnector as _, TransportStream,
@@ -259,7 +256,7 @@ async fn lifecycle_request(
     response.result
 }
 
-fn workspace_snapshot_with_project(project_id: ProjectId, root: &Path) -> WorkspaceSnapshot {
+fn open_project_intent(project_id: ProjectId, root: &Path) -> WorkspaceIntent {
     let layout: ProjectLayout = toml::from_str(
         r#"
         [project]
@@ -272,14 +269,14 @@ fn workspace_snapshot_with_project(project_id: ProjectId, root: &Path) -> Worksp
         "#,
     )
     .unwrap();
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(
-            ProjectDescriptor::new(project_id, ProjectLocation::local(root)),
-            layout,
-        )
-        .unwrap();
-    WorkspaceSnapshot::new(serde_json::json!({ "workspace": workspace.persisted_state() })).unwrap()
+    WorkspaceIntent::OpenProject {
+        descriptor: ProjectDescriptor::new(project_id, ProjectLocation::local(root)),
+        layout,
+        panel: ProjectPanel {
+            visible: true,
+            width: 240.0,
+        },
+    }
 }
 
 #[tokio::test]
@@ -491,22 +488,19 @@ async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
         },
     )
     .await;
-    let snapshot = workspace_snapshot_with_project(project_id.clone(), &project_root);
-    let Response::Workspace(WorkspaceResponse::Committed { revision, .. }) = control_request(
+    let Response::Workspace(WorkspaceResponse::Applied { revision, .. }) = control_request(
         &mut owner,
         3,
-        Request::Workspace(WorkspaceRequest::Commit {
+        Request::Workspace(WorkspaceRequest::Apply {
             workspace_id: workspace_id.clone(),
-            expected_revision: 0,
-            operation_id: WorkspaceOperationId::new("saved-project").unwrap(),
-            snapshot,
-            drafts: Vec::new(),
+            intent: open_project_intent(project_id.clone(), &project_root),
+            expected_revision: None,
         }),
         Some(owner_status.context),
     )
     .await
     .unwrap() else {
-        panic!("workspace commit")
+        panic!("workspace apply")
     };
 
     let mut lifecycle = host.lifecycle_client("lifecycle").await;

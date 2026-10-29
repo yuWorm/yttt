@@ -64,7 +64,7 @@ fn commit_agents(
             expected_revision: revision,
             operation_id: WorkspaceOperationId::new(format!("agents-{revision}")).unwrap(),
             snapshot: WorkspaceSnapshot::new(serde_json::json!({
-                "layout": "split", "agent_states": references,
+                "layout": "split", "agent_states": references, "schema_version": 2, "editor": { "sessions": [] }, "workspace": { "opened_projects": [], "selected_project_id": null },
             }))
             .unwrap(),
             drafts: Vec::new(),

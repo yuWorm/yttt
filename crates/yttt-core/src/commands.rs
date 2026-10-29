@@ -1,4 +1,6 @@
 use crate::model::{
+    editor::WorkItemId,
+    host_workspace::{NewTab, WorkspaceIntent},
     layout::SplitDirection,
     split_tree::{FocusDirection, ResizeDirection},
     workspace::{Workspace, WorkspaceError},
@@ -588,19 +590,6 @@ pub fn default_registry() -> CommandRegistry {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CommandOutcome {
-    None,
-    TabCreated(String),
-    TabClosed(String),
-    TabRenamed,
-    PaneSplit(String),
-    PaneClosed(String),
-    PaneRenamed,
-    PaneFocused(String),
-    PaneResized,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CommandDispatchError {
     #[error("{0}")]
@@ -609,83 +598,115 @@ pub enum CommandDispatchError {
     Unsupported(CommandId),
 }
 
-pub fn dispatch_workspace_command(
-    workspace: &mut Workspace,
+/// Translates a workspace command, which acts on the current selection, into
+/// the intent that names its targets by stable ID.
+pub fn workspace_command_intent(
+    workspace: &Workspace,
     command_id: CommandId,
-) -> Result<CommandOutcome, CommandDispatchError> {
+) -> Result<WorkspaceIntent, CommandDispatchError> {
+    let project_id = workspace
+        .selected_project_id()
+        .cloned()
+        .ok_or(WorkspaceError::NoSelectedProject)?;
+    let project = workspace
+        .project(&project_id)
+        .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.to_string()))?;
+    let tab_id = project.selected_tab_id.clone();
+    let focused_pane = || project.focused_or_first_pane_id(&tab_id);
+    let relative_tab = |offset: isize| -> Result<WorkspaceIntent, CommandDispatchError> {
+        let tabs = &project.layout.tabs;
+        if tabs.is_empty() {
+            return Err(WorkspaceError::NoTabs.into());
+        }
+        let current = tabs.iter().position(|tab| tab.id == tab_id).unwrap_or(0);
+        let next = (current as isize + offset).rem_euclid(tabs.len() as isize) as usize;
+        Ok(WorkspaceIntent::ActivateItem {
+            project_id: project_id.clone(),
+            item: WorkItemId::Terminal(tabs[next].id.clone()),
+        })
+    };
+    let close_selected_tab = || -> Result<WorkspaceIntent, CommandDispatchError> {
+        if project.layout.tabs.len() <= 1 {
+            return Err(WorkspaceError::CannotCloseLastTab.into());
+        }
+        if project.layout.tab(&tab_id).is_none() {
+            return Err(WorkspaceError::TabNotFound(tab_id.clone()).into());
+        }
+        Ok(WorkspaceIntent::CloseTabs {
+            project_id: project_id.clone(),
+            tab_ids: vec![tab_id.clone()],
+        })
+    };
+    let split = |direction| -> Result<WorkspaceIntent, CommandDispatchError> {
+        Ok(WorkspaceIntent::SplitPane {
+            project_id: project_id.clone(),
+            tab_id: tab_id.clone(),
+            pane_id: focused_pane()?,
+            direction,
+            command: String::new(),
+        })
+    };
+    let focus = |direction| WorkspaceIntent::FocusAdjacentPane {
+        project_id: project_id.clone(),
+        tab_id: tab_id.clone(),
+        direction,
+    };
+    let resize = |direction| -> Result<WorkspaceIntent, CommandDispatchError> {
+        Ok(WorkspaceIntent::ResizePaneSplit {
+            project_id: project_id.clone(),
+            tab_id: tab_id.clone(),
+            pane_id: focused_pane()?,
+            direction,
+            delta: PANE_RESIZE_DELTA,
+        })
+    };
     match command_id {
-        CommandId::TabNext => {
-            workspace.select_next_tab()?;
-            Ok(CommandOutcome::None)
+        CommandId::TabNext => relative_tab(1),
+        CommandId::TabPrev => relative_tab(-1),
+        CommandId::TabNew => Ok(WorkspaceIntent::CreateTab {
+            project_id: project_id.clone(),
+            tab: NewTab::Shell {
+                command: String::new(),
+            },
+        }),
+        CommandId::TabClose => close_selected_tab(),
+        CommandId::TabRename => Ok(WorkspaceIntent::RenameTab {
+            project_id: project_id.clone(),
+            tab_id: tab_id.clone(),
+            title: DEFAULT_RENAMED_TAB_TITLE.to_string(),
+        }),
+        CommandId::PaneSplitHorizontal => split(SplitDirection::Horizontal),
+        CommandId::PaneSplitVertical => split(SplitDirection::Vertical),
+        CommandId::PaneClose => {
+            let tab = project
+                .layout
+                .tab(&tab_id)
+                .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.clone()))?;
+            // The last pane closes its tab.
+            if tab.layout.pane_id().is_some() {
+                close_selected_tab()
+            } else {
+                Ok(WorkspaceIntent::ClosePane {
+                    project_id: project_id.clone(),
+                    tab_id: tab_id.clone(),
+                    pane_id: focused_pane()?,
+                })
+            }
         }
-        CommandId::TabPrev => {
-            workspace.select_prev_tab()?;
-            Ok(CommandOutcome::None)
-        }
-        CommandId::TabNew => workspace
-            .create_shell_tab()
-            .map(CommandOutcome::TabCreated)
-            .map_err(CommandDispatchError::from),
-        CommandId::TabClose => workspace
-            .close_selected_tab()
-            .map(CommandOutcome::TabClosed)
-            .map_err(CommandDispatchError::from),
-        CommandId::TabRename => workspace
-            .rename_selected_tab(DEFAULT_RENAMED_TAB_TITLE)
-            .map(|_| CommandOutcome::TabRenamed)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneSplitHorizontal => workspace
-            .split_focused_pane(SplitDirection::Horizontal)
-            .map(CommandOutcome::PaneSplit)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneSplitVertical => workspace
-            .split_focused_pane(SplitDirection::Vertical)
-            .map(CommandOutcome::PaneSplit)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneClose => match workspace.close_focused_pane() {
-            Ok(pane_id) => Ok(CommandOutcome::PaneClosed(pane_id)),
-            Err(WorkspaceError::CannotCloseLastPane) => workspace
-                .close_selected_tab()
-                .map(CommandOutcome::TabClosed)
-                .map_err(CommandDispatchError::from),
-            Err(error) => Err(CommandDispatchError::from(error)),
-        },
-        CommandId::PaneRename => workspace
-            .rename_focused_pane(DEFAULT_RENAMED_PANE_TITLE)
-            .map(|_| CommandOutcome::PaneRenamed)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneFocusLeft => workspace
-            .focus_pane_direction(FocusDirection::Left)
-            .map(CommandOutcome::PaneFocused)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneFocusRight => workspace
-            .focus_pane_direction(FocusDirection::Right)
-            .map(CommandOutcome::PaneFocused)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneFocusUp => workspace
-            .focus_pane_direction(FocusDirection::Up)
-            .map(CommandOutcome::PaneFocused)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneFocusDown => workspace
-            .focus_pane_direction(FocusDirection::Down)
-            .map(CommandOutcome::PaneFocused)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneResizeLeft => workspace
-            .resize_focused_split(ResizeDirection::Left, PANE_RESIZE_DELTA)
-            .map(|_| CommandOutcome::PaneResized)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneResizeRight => workspace
-            .resize_focused_split(ResizeDirection::Right, PANE_RESIZE_DELTA)
-            .map(|_| CommandOutcome::PaneResized)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneResizeUp => workspace
-            .resize_focused_split(ResizeDirection::Up, PANE_RESIZE_DELTA)
-            .map(|_| CommandOutcome::PaneResized)
-            .map_err(CommandDispatchError::from),
-        CommandId::PaneResizeDown => workspace
-            .resize_focused_split(ResizeDirection::Down, PANE_RESIZE_DELTA)
-            .map(|_| CommandOutcome::PaneResized)
-            .map_err(CommandDispatchError::from),
+        CommandId::PaneRename => Ok(WorkspaceIntent::RenamePane {
+            project_id: project_id.clone(),
+            tab_id: tab_id.clone(),
+            pane_id: focused_pane()?,
+            title: DEFAULT_RENAMED_PANE_TITLE.to_string(),
+        }),
+        CommandId::PaneFocusLeft => Ok(focus(FocusDirection::Left)),
+        CommandId::PaneFocusRight => Ok(focus(FocusDirection::Right)),
+        CommandId::PaneFocusUp => Ok(focus(FocusDirection::Up)),
+        CommandId::PaneFocusDown => Ok(focus(FocusDirection::Down)),
+        CommandId::PaneResizeLeft => resize(ResizeDirection::Left),
+        CommandId::PaneResizeRight => resize(ResizeDirection::Right),
+        CommandId::PaneResizeUp => resize(ResizeDirection::Up),
+        CommandId::PaneResizeDown => resize(ResizeDirection::Down),
         _ => Err(CommandDispatchError::Unsupported(command_id)),
     }
 }

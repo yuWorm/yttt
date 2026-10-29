@@ -56,6 +56,14 @@ impl ProjectEditorRuntime {
         terminal_ids: &HashMap<ProjectId, Vec<String>>,
     ) -> Result<(), String> {
         self.workspace.restore_snapshot(snapshot, terminal_ids)?;
+        self.sync_file_trees();
+        Ok(())
+    }
+
+    /// Gives every editor session a file tree for its root; a tree whose
+    /// project closed or changed root is dropped. Runs after the editor
+    /// sessions change outside [`Self::open_project`]/[`Self::close_project`].
+    pub fn sync_file_trees(&mut self) {
         let workspace = &self.workspace;
         self.file_trees.retain(|project_id, tree| {
             workspace
@@ -67,7 +75,6 @@ impl ProjectEditorRuntime {
                 .entry(project_id.clone())
                 .or_insert_with(|| ProjectFileTree::new(session.root()));
         }
-        Ok(())
     }
 
     pub fn open_project(

@@ -211,10 +211,18 @@ impl PendingClientRequest {
     }
 }
 
-/// The workspaces this Client opened, with the newest layout received for each.
-/// A workspace without a valid Host layout is still kept, so it is reopened
-/// on a new connection.
-type WorkspaceLayouts = Arc<RwLock<HashMap<WorkspaceId, Option<HostWorkspaceState>>>>;
+/// The workspaces this Client opened, with what it last learned about each
+/// one's Host layout. A workspace without a valid Host layout is still kept,
+/// so it is reopened on a new connection.
+type WorkspaceLayouts = Arc<RwLock<HashMap<WorkspaceId, HeldLayout>>>;
+
+/// The newest workspace revision this Client learned of and the Host layout at
+/// that revision; `layout` is `None` while the Host holds no valid layout.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct HeldLayout {
+    revision: u64,
+    layout: Option<HostWorkspaceState>,
+}
 
 enum PendingRequest {
     User {
@@ -497,8 +505,17 @@ impl ClientCore {
             .workspace_layouts
             .read()
             .get(workspace_id)
-            .cloned()
-            .flatten()
+            .and_then(|held| held.layout.clone())
+    }
+
+    /// The revision of the newest layout received for a workspace this Client
+    /// opened; `None` while the Host holds no valid layout for it.
+    pub fn workspace_layout_revision(&self, workspace_id: &WorkspaceId) -> Option<u64> {
+        self.inner
+            .workspace_layouts
+            .read()
+            .get(workspace_id)
+            .and_then(|held| held.layout.as_ref().map(|layout| layout.revision))
     }
 
     pub fn enqueue_request(&self, body: Request) -> Result<PendingClientRequest, ClientCoreError> {
@@ -1337,7 +1354,8 @@ fn handle_state_event(event: HostEvent, context: &ClientSessionContext) -> Resul
                 workspace_id,
                 layout,
             } = *update;
-            apply_workspace_layout(workspace_id, Some(layout), context);
+            let revision = layout.revision;
+            apply_workspace_layout(workspace_id, revision, Some(layout), context);
             return Ok(());
         }
         body => HostEvent {
@@ -1411,10 +1429,12 @@ fn handle_response(
         } => {
             if let (
                 Some(workspace_id),
-                Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })),
+                Ok(Response::Workspace(WorkspaceResponse::Opened {
+                    layout, revision, ..
+                })),
             ) = (opens, &result)
             {
-                apply_workspace_layout(workspace_id, layout.clone(), context);
+                apply_workspace_layout(workspace_id, *revision, layout.clone(), context);
             }
             match &result {
                 Ok(Response::TerminalSpawned { lease, .. })
@@ -1476,8 +1496,10 @@ fn handle_response(
         }
         PendingRequest::Visibility => {}
         PendingRequest::Reopen(workspace_id) => match result {
-            Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })) => {
-                apply_workspace_layout(workspace_id, layout, context);
+            Ok(Response::Workspace(WorkspaceResponse::Opened {
+                layout, revision, ..
+            })) => {
+                apply_workspace_layout(workspace_id, revision, layout, context);
             }
             // A workspace forgotten meanwhile is no longer opened.
             Err(failure) if failure.code == yttt_protocol::FailureCode::NotFound => {
@@ -1759,10 +1781,12 @@ fn apply_project_token_usage(
     }
 }
 
-/// Records a layout of an opened workspace, keeping only newer revisions, and
-/// publishes it when it replaces what this Client held.
+/// Records what an opened workspace's Host layout is at `revision`, keeping
+/// only newer revisions, and publishes a layout that replaces what this Client
+/// held.
 fn apply_workspace_layout(
     workspace_id: WorkspaceId,
+    revision: u64,
     layout: Option<HostWorkspaceState>,
     context: &ClientSessionContext,
 ) {
@@ -1772,17 +1796,17 @@ fn apply_workspace_layout(
     }
     let mut layouts = context.workspace_layouts.write();
     let held = layouts.entry(workspace_id.clone()).or_default();
+    if held.revision > revision || (held.revision == revision && held.layout.is_some()) {
+        return;
+    }
+    *held = HeldLayout {
+        revision,
+        layout: layout.clone(),
+    };
+    drop(layouts);
     let Some(layout) = layout else {
         return;
     };
-    if held
-        .as_ref()
-        .is_some_and(|held| held.revision >= layout.revision)
-    {
-        return;
-    }
-    *held = Some(layout.clone());
-    drop(layouts);
     let _ = context
         .events
         .send(ClientEvent::WorkspaceLayoutChanged(Box::new(
@@ -1852,7 +1876,7 @@ struct HostEpochState<'a> {
     catalog: &'a RwLock<Option<Arc<ResourceCatalog>>>,
     agent_snapshots: &'a RwLock<HashMap<String, AgentSnapshotUpdate>>,
     project_token_usage: &'a RwLock<HashMap<String, ProjectTokenUsage>>,
-    workspace_layouts: &'a RwLock<HashMap<WorkspaceId, Option<HostWorkspaceState>>>,
+    workspace_layouts: &'a RwLock<HashMap<WorkspaceId, HeldLayout>>,
     profile_control: &'a RwLock<Option<yttt_protocol::session::ControlStatus>>,
     events: &'a broadcast::Sender<ClientEvent>,
 }
@@ -1884,8 +1908,8 @@ fn install_host_epoch(next_host_epoch: u64, state: &HostEpochState<'_>) {
             agent_snapshots.write().clear();
             project_token_usage.write().clear();
             // A new Host has new revisions; keep the opened set, forget the layouts.
-            for layout in workspace_layouts.write().values_mut() {
-                layout.take();
+            for held in workspace_layouts.write().values_mut() {
+                *held = HeldLayout::default();
             }
             profile_control.write().take();
             *current_host_epoch = Some(next_host_epoch);

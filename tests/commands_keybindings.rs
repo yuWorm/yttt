@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use gpui::Keystroke;
 use tempfile::tempdir;
 use yttt::commands::{
-    ActiveSurface, CommandContext, CommandId, default_registry, dispatch_workspace_command,
+    ActiveSurface, CommandContext, CommandId, default_registry, workspace_command_intent,
 };
 use yttt::config::{
     keybindings::{
@@ -13,6 +13,8 @@ use yttt::config::{
     paths::AppConfigPaths,
 };
 use yttt::model::{
+    editor::WorkItemId,
+    host_workspace::{HostWorkspace, ProjectPanel, WorkspaceIntent},
     ids::ProjectId,
     layout::LayoutNode,
     project::{ProjectDescriptor, ProjectLocation},
@@ -1625,9 +1627,10 @@ fn invalid_command_id_is_reported() {
 
 #[test]
 fn tab_next_command_selects_next_tab_and_marks_it_started() {
-    let mut workspace = workspace_with_sample_project();
+    let mut layout = workspace_with_sample_project();
 
-    dispatch_workspace_command(&mut workspace, CommandId::TabNext).unwrap();
+    dispatch(&mut layout, CommandId::TabNext);
+    let workspace = layout.workspace();
     let project_id = workspace.selected_project_id().unwrap().clone();
     let project = workspace.project(&project_id).unwrap();
 
@@ -1640,9 +1643,10 @@ fn tab_next_command_selects_next_tab_and_marks_it_started() {
 
 #[test]
 fn tab_new_command_adds_shell_tab_and_selects_it() {
-    let mut workspace = workspace_with_sample_project();
+    let mut layout = workspace_with_sample_project();
 
-    dispatch_workspace_command(&mut workspace, CommandId::TabNew).unwrap();
+    dispatch(&mut layout, CommandId::TabNew);
+    let workspace = layout.workspace();
     let project_id = workspace.selected_project_id().unwrap().clone();
     let project = workspace.project(&project_id).unwrap();
     let tab = project
@@ -1660,16 +1664,17 @@ fn tab_new_command_adds_shell_tab_and_selects_it() {
         project.tab_state("tab-1").unwrap().start_state,
         TabStartState::Started
     );
-    assert_focused_pane(&workspace, "shell");
+    assert_focused_pane(workspace, "shell");
 }
 
 #[test]
 fn tab_close_command_removes_selected_tab() {
-    let mut workspace = workspace_with_sample_project();
-    workspace.select_tab("agent").unwrap();
+    let mut layout = workspace_with_sample_project();
+    select_tab(&mut layout, "agent");
 
-    dispatch_workspace_command(&mut workspace, CommandId::TabClose).unwrap();
+    dispatch(&mut layout, CommandId::TabClose);
 
+    let workspace = layout.workspace();
     let project_id = workspace.selected_project_id().unwrap().clone();
     let project = workspace.project(&project_id).unwrap();
     assert_eq!(project.selected_tab_id, "dev");
@@ -1678,10 +1683,11 @@ fn tab_close_command_removes_selected_tab() {
 
 #[test]
 fn tab_rename_command_changes_selected_tab_title() {
-    let mut workspace = workspace_with_sample_project();
+    let mut layout = workspace_with_sample_project();
 
-    dispatch_workspace_command(&mut workspace, CommandId::TabRename).unwrap();
+    dispatch(&mut layout, CommandId::TabRename);
 
+    let workspace = layout.workspace();
     let project_id = workspace.selected_project_id().unwrap().clone();
     let project = workspace.project(&project_id).unwrap();
     assert_eq!(project.layout.tab("dev").unwrap().title, "Renamed Tab");
@@ -1690,30 +1696,31 @@ fn tab_rename_command_changes_selected_tab_title() {
 
 #[test]
 fn pane_split_vertical_command_adds_pane_to_current_tab() {
-    let mut workspace = workspace_with_sample_project();
+    let mut layout = workspace_with_sample_project();
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneSplitVertical).unwrap();
+    dispatch(&mut layout, CommandId::PaneSplitVertical);
 
-    assert_eq!(visible_pane_titles(&workspace).len(), 3);
+    assert_eq!(visible_pane_titles(layout.workspace()).len(), 3);
 }
 
 #[test]
 fn pane_close_command_removes_focused_pane() {
-    let mut workspace = workspace_with_sample_project();
-    dispatch_workspace_command(&mut workspace, CommandId::PaneSplitVertical).unwrap();
+    let mut layout = workspace_with_sample_project();
+    dispatch(&mut layout, CommandId::PaneSplitVertical);
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneClose).unwrap();
+    dispatch(&mut layout, CommandId::PaneClose);
 
-    assert_eq!(visible_pane_titles(&workspace).len(), 2);
+    assert_eq!(visible_pane_titles(layout.workspace()).len(), 2);
 }
 
 #[test]
 fn pane_close_command_closes_single_pane_tab_by_context() {
-    let mut workspace = workspace_with_sample_project();
-    workspace.select_tab("agent").unwrap();
+    let mut layout = workspace_with_sample_project();
+    select_tab(&mut layout, "agent");
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneClose).unwrap();
+    dispatch(&mut layout, CommandId::PaneClose);
 
+    let workspace = layout.workspace();
     let project_id = workspace.selected_project_id().unwrap().clone();
     let project = workspace.project(&project_id).unwrap();
     assert_eq!(project.selected_tab_id, "dev");
@@ -1722,10 +1729,11 @@ fn pane_close_command_closes_single_pane_tab_by_context() {
 
 #[test]
 fn pane_rename_command_changes_focused_pane_title() {
-    let mut workspace = workspace_with_sample_project();
+    let mut layout = workspace_with_sample_project();
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneRename).unwrap();
+    dispatch(&mut layout, CommandId::PaneRename);
 
+    let workspace = layout.workspace();
     let project_id = workspace.selected_project_id().unwrap().clone();
     let project = workspace.project(&project_id).unwrap();
     let pane = project
@@ -1741,32 +1749,60 @@ fn pane_rename_command_changes_focused_pane_title() {
 
 #[test]
 fn pane_focus_commands_move_between_adjacent_panes() {
-    let mut workspace = workspace_with_sample_project();
+    let mut layout = workspace_with_sample_project();
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneFocusRight).unwrap();
-    assert_focused_pane(&workspace, "shell");
+    dispatch(&mut layout, CommandId::PaneFocusRight);
+    assert_focused_pane(layout.workspace(), "shell");
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneFocusLeft).unwrap();
-    assert_focused_pane(&workspace, "server");
+    dispatch(&mut layout, CommandId::PaneFocusLeft);
+    assert_focused_pane(layout.workspace(), "server");
 }
 
 #[test]
 fn pane_resize_commands_adjust_current_split_ratio() {
-    let mut workspace = workspace_with_sample_project();
+    let mut layout = workspace_with_sample_project();
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneResizeRight).unwrap();
-    assert_ratio(root_split_ratio(&workspace), 0.7);
+    dispatch(&mut layout, CommandId::PaneResizeRight);
+    assert_ratio(root_split_ratio(layout.workspace()), 0.7);
 
-    dispatch_workspace_command(&mut workspace, CommandId::PaneResizeLeft).unwrap();
-    assert_ratio(root_split_ratio(&workspace), 0.65);
+    dispatch(&mut layout, CommandId::PaneResizeLeft);
+    assert_ratio(root_split_ratio(layout.workspace()), 0.65);
 }
 
-fn workspace_with_sample_project() -> Workspace {
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+fn workspace_with_sample_project() -> HostWorkspace {
+    let mut layout = HostWorkspace::new();
+    layout
+        .apply(
+            WorkspaceIntent::OpenProject {
+                descriptor: local_project(PathBuf::from("/tmp/yttt")),
+                layout: sample_layout(),
+                panel: ProjectPanel {
+                    visible: false,
+                    width: 240.0,
+                },
+            },
+            None,
+        )
         .unwrap();
-    workspace
+    layout
+}
+
+fn dispatch(layout: &mut HostWorkspace, command: CommandId) {
+    let intent = workspace_command_intent(layout.workspace(), command).unwrap();
+    layout.apply(intent, None).unwrap();
+}
+
+fn select_tab(layout: &mut HostWorkspace, tab_id: &str) {
+    let project_id = layout.workspace().selected_project_id().unwrap().clone();
+    layout
+        .apply(
+            WorkspaceIntent::ActivateItem {
+                project_id,
+                item: WorkItemId::Terminal(tab_id.to_string()),
+            },
+            None,
+        )
+        .unwrap();
 }
 
 fn root_split_ratio(workspace: &Workspace) -> f32 {
