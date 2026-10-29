@@ -741,6 +741,21 @@ impl WorkbenchView {
             .collect::<Vec<_>>();
 
         for (old_document_id, new_document_id, breadcrumb_header) in migrations {
+            if old_document_id != new_document_id
+                && (self
+                    .project
+                    .project_editor_runtime
+                    .document(&new_document_id)
+                    .is_some()
+                    || self
+                        .apply_workspace_intent(WorkspaceIntent::RelocateFile {
+                            from: old_document_id.clone(),
+                            to: new_document_id.clone(),
+                        })
+                        .is_err())
+            {
+                continue;
+            }
             let Some(document) = self
                 .project
                 .project_editor_runtime
@@ -759,6 +774,13 @@ impl WorkbenchView {
             self.relocate_pending_document_id(&old_document_id, &new_document_id);
         }
         for (old, new, relative_path, preview) in preview_migrations {
+            if self.project.project_editor_runtime.preview(&new).is_some() {
+                continue;
+            }
+            let _ = self.apply_workspace_intent(WorkspaceIntent::RelocateFile {
+                from: old.clone(),
+                to: new.clone(),
+            });
             if self
                 .project
                 .project_editor_runtime
@@ -1430,6 +1452,7 @@ impl WorkbenchView {
             document_id,
             relative_path: relative_path.to_path_buf(),
             generation,
+            activate: true,
         })
     }
 
@@ -1496,13 +1519,25 @@ impl WorkbenchView {
         let Some(request) = self.begin_project_file_open(&project_id, &relative_path) else {
             return;
         };
-        let Some(services) = self.project.services.get(&project_id).cloned() else {
+        self.spawn_project_file_load(request, window, cx);
+    }
+
+    /// Reads a file whose load `request` began and shows it, or shows why it
+    /// is unavailable.
+    pub(super) fn spawn_project_file_load(
+        &mut self,
+        request: ProjectFileLoadRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project_id = &request.document_id.project_id;
+        let Some(services) = self.project.services.get(project_id).cloned() else {
             self.cancel_project_file_open(&request);
             return;
         };
         let project_path = self
             .workspace
-            .project(&project_id)
+            .project(project_id)
             .and_then(|project| project.location.local_path())
             .cloned();
         let config_paths = self.config_paths.clone();
@@ -1563,6 +1598,10 @@ impl WorkbenchView {
             project_id: request.document_id.project_id.clone(),
             canonical_path: loaded.canonical_path.clone(),
         };
+        // A mirrored file is already in the layout under its requested ID.
+        if !request.activate && document_id != request.document_id {
+            return false;
+        }
         if self
             .project
             .project_editor_runtime
@@ -1611,19 +1650,12 @@ impl WorkbenchView {
                 subscription,
             );
         }
-        let opened_id = self
-            .project
-            .project_editor_runtime
-            .workspace_mut()
-            .session_mut(&document_id.project_id)
-            .map(|session| session.open_file(document_id.canonical_path.clone()));
-        let Some(opened_id) = opened_id else {
+        if request.activate && self.open_file_work_item(&document_id).is_err() {
             self.project
                 .project_editor_runtime
                 .remove_document(&document_id);
             return false;
-        };
-        let _ = self.select_work_item(WorkItemId::File(opened_id));
+        }
         self.load_error = None;
         true
     }

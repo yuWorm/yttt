@@ -282,6 +282,10 @@ impl ProjectWorkItemSession {
         self.work_area.resize_split(split_id, delta)
     }
 
+    pub fn work_area_split_ratio(&self, split_id: WorkAreaSplitId) -> Option<f32> {
+        self.work_area.split_ratio(split_id)
+    }
+
     pub fn reconcile_work_item_order(&mut self, terminal_ids: &[String]) {
         self.reconcile_work_area(terminal_ids);
     }

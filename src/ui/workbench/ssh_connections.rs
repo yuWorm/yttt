@@ -1240,16 +1240,18 @@ impl WorkbenchView {
         )
         .map_err(WorkbenchError::RemoteProject)?;
         let already_open = self.workspace.project(&opened.descriptor.id).is_some();
-        let project_id = match self
-            .workspace
-            .open_project(opened.descriptor, opened.layout)
-        {
-            Ok(project_id) => project_id,
-            Err(error) => {
-                let _ = services.close_host_registration();
-                return Err(error.into());
-            }
-        };
+        let project_id = opened.descriptor.id.clone();
+        if let Err(error) = self.apply_workspace_intent(WorkspaceIntent::OpenProject {
+            descriptor: opened.descriptor,
+            layout: opened.layout,
+            panel: ProjectPanel {
+                visible: self.app_settings.project_panel.default_open,
+                width: self.app_settings.project_panel.width,
+            },
+        }) {
+            let _ = services.close_host_registration();
+            return Err(error);
+        }
         if !already_open {
             match mode {
                 ProjectOpenMode::Fresh => self
@@ -1260,20 +1262,7 @@ impl WorkbenchView {
                 }
             }
         }
-        let selected_terminal_id = self.workspace.project(&project_id).and_then(|project| {
-            project
-                .layout
-                .tab(&project.selected_tab_id)
-                .map(|_| project.selected_tab_id.clone())
-        });
         self.project.services.insert(project_id.clone(), services);
-        self.project.project_editor_runtime.open_project(
-            project_id.clone(),
-            PathBuf::from(root.as_str()),
-            selected_terminal_id,
-            self.app_settings.project_panel.default_open,
-            self.app_settings.project_panel.width,
-        );
         self.queue_selected_terminal_focus();
         self.project
             .layout_source_messages

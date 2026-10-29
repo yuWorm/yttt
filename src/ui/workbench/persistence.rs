@@ -1,6 +1,9 @@
 mod agent_state;
 #[cfg(all(test, unix))]
 mod agent_state_tests;
+mod host_mirror;
+#[cfg(all(test, unix))]
+mod host_mirror_tests;
 
 use agent_state::{AgentStateCache, AgentStateUpload};
 use sha2::{Digest as _, Sha256};
@@ -108,6 +111,7 @@ pub(super) struct WorkspacePersistenceState {
     control_request_in_flight: bool,
     commit_in_flight: bool,
     tick_task: Option<Task<()>>,
+    host_layout_listener: Option<host_mirror::HostLayoutListener>,
     pending_document_restores: usize,
     pending_editor_snapshot: Option<ProjectEditorWorkspaceSnapshot>,
     close_flush_requested: bool,
@@ -158,6 +162,7 @@ impl Default for WorkspacePersistenceState {
             close_prompt_open: false,
             closing: false,
             host_close_confirmed: false,
+            host_layout_listener: None,
         }
     }
 }
@@ -1216,6 +1221,8 @@ impl WorkbenchView {
             self.workspace_persistence.pending_commit = None;
             return;
         };
+        self.ensure_host_layout_listener(&runtime, &workspace_id, window, cx);
+        self.adopt_host_workspace_layout(window, cx);
         if !runtime.is_controller() {
             let preserves_local_drafts = self.workspace_persistence.mode
                 == WorkspacePersistenceMode::Active
@@ -2212,6 +2219,20 @@ impl WorkbenchView {
         reason: &str,
         cx: &Context<Self>,
     ) -> bool {
+        self.preserve_workspace_drafts(runtime, workspace_id, reason, false, cx)
+    }
+
+    /// Writes the local workspace and its drafts to a device recovery copy.
+    /// `include_published` also writes drafts the Host already holds, for
+    /// when the Host is about to drop them.
+    fn preserve_workspace_drafts(
+        &mut self,
+        runtime: &crate::host_runtime::DesktopHostRuntime,
+        workspace_id: &WorkspaceId,
+        reason: &str,
+        include_published: bool,
+        cx: &Context<Self>,
+    ) -> bool {
         let (snapshot, drafts) = match self.build_workspace_snapshot(cx, None) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -2224,10 +2245,11 @@ impl WorkbenchView {
                 return false;
             }
         };
-        if self
-            .workspace_persistence
-            .pending_settings_recovery
-            .is_none()
+        if !include_published
+            && self
+                .workspace_persistence
+                .pending_settings_recovery
+                .is_none()
             && self.workspace_snapshot_is_published(&snapshot)
         {
             return true;
@@ -2695,10 +2717,12 @@ impl WorkbenchView {
                 workspace_id: applied_workspace_id,
                 revision,
             }) if applied_workspace_id == workspace_id => {
-                // The Client now holds the Host layout at `revision`, so its
-                // next commit publishes changes that are not intents yet.
-                self.workspace_persistence.revision =
-                    self.workspace_persistence.revision.max(Some(revision));
+                // Contiguous: the Host applied the intent to the layout this
+                // Client holds. Otherwise another Client's change came first,
+                // and its broadcast replaces the local layout.
+                if self.workspace_persistence.revision.map(|held| held + 1) == Some(revision) {
+                    self.workspace_persistence.revision = Some(revision);
+                }
                 true
             }
             _ => false,
@@ -2901,10 +2925,15 @@ impl WorkbenchView {
                             revision,
                             snapshot,
                         }) if committed_workspace_id == workspace_id => {
-                            // An intent applied while the commit was in flight
-                            // may already have moved past its revision.
-                            root.workspace_persistence.revision =
-                                root.workspace_persistence.revision.max(Some(revision));
+                            // A commit at the Host's revision replaced its
+                            // layout. A stale one kept the Host layout, whose
+                            // broadcast replaces the local layout; an intent
+                            // applied while the commit was in flight may
+                            // already have moved past its revision.
+                            if revision == expected_revision + 1 {
+                                root.workspace_persistence.revision =
+                                    root.workspace_persistence.revision.max(Some(revision));
+                            }
                             root.workspace_persistence.confirmed_drafts = pending
                                 .uploads
                                 .drafts

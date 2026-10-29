@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use gpui::{Entity, Subscription, Task};
 
@@ -20,6 +23,9 @@ pub struct ProjectFileLoadRequest {
     pub document_id: DocumentId,
     pub relative_path: PathBuf,
     pub generation: u64,
+    /// Whether the loaded file becomes the active work item. Files another
+    /// Client opened load without changing the shared active item.
+    pub activate: bool,
 }
 
 #[derive(Default)]
@@ -180,11 +186,12 @@ impl ProjectEditorRuntime {
         generation
     }
 
+    /// Moves a preview entity to a new document ID; the layout moves through
+    /// a `RelocateFile` intent.
     pub(crate) fn relocate_preview(&mut self, old: &DocumentId, new: DocumentId) -> bool {
         if self.previews.contains_key(&new) || !self.previews.contains_key(old) {
             return false;
         }
-        self.workspace.relocate_file(old, new.clone());
         let Some(preview) = self.previews.remove(old) else {
             return false;
         };
@@ -219,6 +226,48 @@ impl ProjectEditorRuntime {
         self.documents.remove(document_id)
     }
 
+    /// Drops the documents and previews of files no editor session has open,
+    /// returning their IDs.
+    pub(crate) fn forget_closed_files(&mut self) -> Vec<DocumentId> {
+        let open = self.open_file_ids();
+        let closed = self
+            .documents
+            .keys()
+            .chain(self.previews.keys())
+            .filter(|id| !open.contains(*id))
+            .cloned()
+            .collect::<HashSet<_>>();
+        for id in &closed {
+            self.remove_document(id);
+        }
+        closed.into_iter().collect()
+    }
+
+    /// Files an editor session has open that have no document or preview and
+    /// are not loading.
+    pub(crate) fn unloaded_files(&self) -> Vec<DocumentId> {
+        self.workspace
+            .sessions()
+            .flat_map(|(_, session)| session.file_ids())
+            .filter(|id| {
+                !self.documents.contains_key(*id)
+                    && !self.previews.contains_key(*id)
+                    && !self.pending_file_generations.contains_key(*id)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn open_file_ids(&self) -> HashSet<DocumentId> {
+        self.workspace
+            .sessions()
+            .flat_map(|(_, session)| session.file_ids())
+            .cloned()
+            .collect()
+    }
+
+    /// Moves a document entity to a new document ID; the layout moves through
+    /// a `RelocateFile` intent.
     pub fn relocate_document(
         &mut self,
         old: &DocumentId,
@@ -227,7 +276,7 @@ impl ProjectEditorRuntime {
         if old == &new {
             return self.documents.get(old).cloned();
         }
-        if self.documents.contains_key(&new) || !self.workspace.relocate_file(old, new.clone()) {
+        if self.documents.contains_key(&new) {
             return None;
         }
         let document = self.documents.remove(old)?;

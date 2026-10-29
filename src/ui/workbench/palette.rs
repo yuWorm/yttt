@@ -151,8 +151,7 @@ impl WorkbenchView {
                 if !self.require_shared_mutation_control() {
                     return Ok(());
                 }
-                let tab_id = self.workspace.create_shell_tab_with_command(item.id)?;
-                self.select_work_item(WorkItemId::Terminal(tab_id))?;
+                self.create_terminal_tab(NewTab::Shell { command: item.id }, None)?;
             }
             PaletteKind::File => {
                 let Some(window) = window else {

@@ -16,6 +16,8 @@
 - Drop the Host's per-terminal raw output replay of up to 8 MiB, reducing memory use.
 - Host 在每次保存工作区前保留最近 3 份备份，并至多每 15 分钟留存一份历史副本（最多 48 份）。工作区文件损坏时，启动时自动从最新可读的副本恢复，损坏文件另存备查，不再导致 Host 无法启动。
 - Keep the last 3 workspace backups before each save on the Host, plus a history copy at most every 15 minutes (up to 48). A damaged workspace file is restored at startup from the newest readable copy and kept aside for inspection, instead of stopping the Host from starting.
+- 布局操作（标签页、分屏、文件、项目的打开与关闭等）改为发到 Host 执行；查看同一工作区的客户端随 Host 布局同步，被其他客户端关闭的文件若有未保存编辑，会先保存到本机恢复副本。
+- Send layout changes (tabs, splits, files, opening and closing projects) to the Host, and have every Client viewing the same workspace follow the Host layout. Unsaved edits in a file another Client closes are kept in a local recovery copy first.
 
 ## 0.3.18 - 2026-10-25
 

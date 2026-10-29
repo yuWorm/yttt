@@ -19,7 +19,10 @@ impl WorkbenchView {
         if let Some(WorkItemId::File(document_id)) = self.active_work_item() {
             self.queue_focus_change_autosave(document_id);
         }
-        self.workspace.select_command_center();
+        if let Err(error) = self.apply_workspace_intent(WorkspaceIntent::SelectCommandCenter) {
+            self.load_error = Some(error.to_string());
+            return;
+        }
         self.command_center.pending_terminal_termination = None;
         self.active_sidebar_resize_drag = None;
         self.active_split_resize_drag = None;

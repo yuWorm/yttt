@@ -693,6 +693,32 @@ impl DesktopHostRuntime {
         receiver
     }
 
+    /// Signals Host layout changes of `workspace_id`. A change that arrives
+    /// while a signal is pending coalesces into it; read the layout itself
+    /// from [`Self::workspace_layout`].
+    pub fn workspace_layout_changes(
+        &self,
+        workspace_id: yttt_protocol::workspace::WorkspaceId,
+    ) -> flume::Receiver<()> {
+        let (sender, receiver) = flume::bounded(1);
+        let mut events = self.client.subscribe_events();
+        self.runtime.spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(ClientEvent::WorkspaceLayoutChanged(update))
+                        if update.workspace_id == workspace_id => {}
+                    Ok(_) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+                if let Err(flume::TrySendError::Disconnected(())) = sender.try_send(()) {
+                    break;
+                }
+            }
+        });
+        receiver
+    }
+
     pub fn events(&self) -> flume::Receiver<ClientEvent> {
         let (sender, receiver) = flume::bounded(256);
         let events = self.client.subscribe_events();

@@ -1378,6 +1378,7 @@ pub enum UiTextKey {
     PersistenceDraftNoMatchingProjects,
     PersistenceDraftScopeMismatch,
     PersistencePublishWorkspaceChanged,
+    PersistenceHostClosedEditedFiles,
     PersistencePublishInterrupted,
     PersistencePublishStaleResponse,
     PersistenceDraftDocumentLimit,

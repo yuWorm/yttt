@@ -458,27 +458,40 @@ impl WorkbenchView {
                     ));
                 }
             }
-            self.select_project(&ProjectId::new(&target.project))
-                .map_err(failed)?;
+            let project_id = ProjectId::new(&target.project);
+            self.select_project(&project_id).map_err(failed)?;
             if !target.tab.is_empty() {
                 self.select_work_item(WorkItemId::Terminal(target.tab.clone()))
                     .map_err(failed)?;
             }
             if let Some(pane) = &target.pane {
-                self.workspace.focus_pane(pane).map_err(failed)?;
+                self.apply_workspace_intent(WorkspaceIntent::FocusPane {
+                    project_id: project_id.clone(),
+                    tab_id: target.tab.clone(),
+                    pane_id: pane.clone(),
+                })
+                .map_err(failed)?;
             }
             let response = match &request.command {
                 DesktopControlCommand::CreateShell { command, title } => {
-                    target.tab = self
-                        .workspace
-                        .create_shell_tab_with_id(uuid::Uuid::new_v4().to_string(), command.clone())
+                    let pane = self
+                        .create_terminal_tab(
+                            NewTab::Shell {
+                                command: command.clone(),
+                            },
+                            Some(uuid::Uuid::new_v4().to_string()),
+                        )
                         .map_err(failed)?;
-                    target.pane = Some("shell".into());
                     if let Some(title) = title {
-                        self.workspace.rename_selected_tab(title).map_err(failed)?;
-                    }
-                    self.select_work_item(WorkItemId::Terminal(target.tab.clone()))
+                        self.apply_workspace_intent(WorkspaceIntent::RenameTab {
+                            project_id,
+                            tab_id: pane.tab_id.clone(),
+                            title: title.clone(),
+                        })
                         .map_err(failed)?;
+                    }
+                    target.tab = pane.tab_id;
+                    target.pane = Some(pane.pane_id);
                     DesktopControlResponse::Created {
                         state: self.control_start_pane(&target, window, cx),
                         target,
@@ -496,38 +509,54 @@ impl WorkbenchView {
                     } else {
                         agent.command()
                     };
-                    target.tab = self
-                        .workspace
-                        .create_agent_tab_with_id(
-                            uuid::Uuid::new_v4().to_string(),
-                            title.as_deref().unwrap_or(agent.display_name()),
-                            program,
-                            args.clone(),
+                    let pane = self
+                        .create_terminal_tab(
+                            NewTab::Agent {
+                                title: title
+                                    .clone()
+                                    .unwrap_or_else(|| agent.display_name().to_string()),
+                                command: program.to_string(),
+                                args: args.clone(),
+                            },
+                            Some(uuid::Uuid::new_v4().to_string()),
                         )
                         .map_err(failed)?;
-                    target.pane = Some("agent".into());
-                    self.select_work_item(WorkItemId::Terminal(target.tab.clone()))
-                        .map_err(failed)?;
+                    target.tab = pane.tab_id;
+                    target.pane = Some(pane.pane_id);
                     DesktopControlResponse::Created {
                         state: self.control_start_pane(&target, window, cx),
                         target,
                     }
                 }
                 DesktopControlCommand::Split { direction, command } => {
-                    target.pane = Some(
-                        self.workspace
-                            .split_focused_pane_with_id(
-                                match direction {
-                                    ControlSplitDirection::Horizontal => SplitDirection::Horizontal,
-                                    ControlSplitDirection::Vertical => SplitDirection::Vertical,
-                                },
-                                uuid::Uuid::new_v4().to_string(),
-                                command.clone(),
-                            )
-                            .map_err(failed)?,
-                    );
+                    let pane_id = match &target.pane {
+                        Some(pane) => pane.clone(),
+                        None => self
+                            .workspace
+                            .project(&project_id)
+                            .and_then(|project| project.tab_state(&target.tab))
+                            .and_then(|tab| tab.focused_pane_id.clone())
+                            .ok_or_else(|| {
+                                failed(WorkspaceError::PaneNotFound(target.tab.clone()))
+                            })?,
+                    };
+                    let panes = self
+                        .apply_workspace_intent(WorkspaceIntent::SplitPane {
+                            project_id: project_id.clone(),
+                            tab_id: target.tab.clone(),
+                            pane_id,
+                            direction: match direction {
+                                ControlSplitDirection::Horizontal => SplitDirection::Horizontal,
+                                ControlSplitDirection::Vertical => SplitDirection::Vertical,
+                            },
+                            command: command.clone(),
+                            new_pane_id: Some(uuid::Uuid::new_v4().to_string()),
+                        })
+                        .map_err(failed)?;
+                    let added = panes.added.into_iter().next().expect("a split adds a pane");
                     self.reconcile_active_terminal_with_workspace()
                         .map_err(failed)?;
+                    target.pane = Some(added.pane_id);
                     DesktopControlResponse::Created {
                         state: self.control_start_pane(&target, window, cx),
                         target,
@@ -538,54 +567,47 @@ impl WorkbenchView {
                     DesktopControlResponse::Updated { target }
                 }
                 DesktopControlCommand::Rename { title } => {
-                    if target.pane.is_some() {
-                        self.workspace.rename_focused_pane(title).map_err(failed)?;
-                    } else {
-                        self.workspace.rename_selected_tab(title).map_err(failed)?;
-                    }
+                    let intent = match &target.pane {
+                        Some(pane) => WorkspaceIntent::RenamePane {
+                            project_id,
+                            tab_id: target.tab.clone(),
+                            pane_id: pane.clone(),
+                            title: title.clone(),
+                        },
+                        None => WorkspaceIntent::RenameTab {
+                            project_id,
+                            tab_id: target.tab.clone(),
+                            title: title.clone(),
+                        },
+                    };
+                    self.apply_workspace_intent(intent).map_err(failed)?;
                     DesktopControlResponse::Updated { target }
                 }
                 DesktopControlCommand::Resize { direction, percent } => {
-                    self.workspace
-                        .resize_focused_split(
-                            match direction {
-                                ControlResizeDirection::Left => {
-                                    crate::model::split_tree::ResizeDirection::Left
-                                }
-                                ControlResizeDirection::Right => {
-                                    crate::model::split_tree::ResizeDirection::Right
-                                }
-                                ControlResizeDirection::Up => {
-                                    crate::model::split_tree::ResizeDirection::Up
-                                }
-                                ControlResizeDirection::Down => {
-                                    crate::model::split_tree::ResizeDirection::Down
-                                }
-                            },
-                            f32::from(*percent) / 100.0,
-                        )
-                        .map_err(failed)?;
+                    let intent = focused_split_resize_intent(
+                        &self.workspace,
+                        match direction {
+                            ControlResizeDirection::Left => ResizeDirection::Left,
+                            ControlResizeDirection::Right => ResizeDirection::Right,
+                            ControlResizeDirection::Up => ResizeDirection::Up,
+                            ControlResizeDirection::Down => ResizeDirection::Down,
+                        },
+                        f32::from(*percent) / 100.0,
+                    )
+                    .map_err(failed)?;
+                    self.apply_workspace_intent(intent).map_err(failed)?;
                     DesktopControlResponse::Updated { target }
                 }
                 DesktopControlCommand::Close => {
                     let only_pane = self
                         .workspace
-                        .project(&ProjectId::new(&target.project))
+                        .project(&project_id)
                         .and_then(|project| project.tab_state(&target.tab))
                         .is_some_and(|tab| tab.pane_states.len() == 1);
                     if target.pane.is_none() || only_pane {
                         self.close_active_work_item().map_err(failed)?;
                     } else {
                         self.run_command(CommandId::PaneClose).map_err(failed)?;
-                        let pane = target.pane.as_deref().expect("validated pane");
-                        let key = terminal_pane_key(&target.project, &target.tab, pane);
-                        self.terminal.terminal_panes.remove(&key);
-                        self.terminal.terminal_pane_subscriptions.remove(&key);
-                        self.agent_manager.forget_pane(&AgentPaneAddress::new(
-                            &target.project,
-                            &target.tab,
-                            pane,
-                        ));
                     }
                     DesktopControlResponse::Closed { target }
                 }

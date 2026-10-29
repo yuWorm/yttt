@@ -527,25 +527,22 @@ impl WorkbenchView {
                     .get(UiTextKey::WorkbenchI18nAgentSessionProviderNoResumeCommand)
                     .replace("{provider}", session.provider.display_name())
             })?;
-        let tab_id = self
-            .workspace
-            .create_agent_tab(title, resume.program, resume.arguments)
-            .map_err(|error| {
-                format!(
-                    "{}: {error}",
-                    self.ui_text
-                        .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailed)
-                )
-            })?;
-        self.select_work_item(WorkItemId::Terminal(tab_id))
-            .map(|_| ())
-            .map_err(|error| {
-                format!(
-                    "{}: {error}",
-                    self.ui_text
-                        .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailed)
-                )
-            })
+        self.create_terminal_tab(
+            NewTab::Agent {
+                title,
+                command: resume.program.into(),
+                args: resume.arguments,
+            },
+            None,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            format!(
+                "{}: {error}",
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailed)
+            )
+        })
     }
 
     pub(super) fn agent_session_age_label(&self, updated_at_ms: u64) -> String {

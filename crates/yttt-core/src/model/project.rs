@@ -147,6 +147,15 @@ impl ProjectLocation {
         }
     }
 
+    /// The project root: a local path, or the remote root of an SSH project.
+    /// Editor sessions and terminal working directories start here.
+    pub fn root_path(&self) -> PathBuf {
+        match self {
+            Self::Local { path } => path.clone(),
+            Self::Ssh { root, .. } => PathBuf::from(root.as_str()),
+        }
+    }
+
     pub fn display_path(&self) -> String {
         match self {
             Self::Local { path } => path.display().to_string(),

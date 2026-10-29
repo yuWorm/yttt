@@ -8,7 +8,7 @@ use yttt_core::model::{
         ProjectPanel, WorkspaceIntent,
     },
     ids::ProjectId,
-    layout::{ProjectLayout, SplitDirection},
+    layout::{PaneKind, ProjectLayout, SplitDirection, TerminalExecutionMode},
     project::{ProjectDescriptor, ProjectLocation},
     work_area::{TabGroupId, WorkAreaDropPlacement},
     workspace::{OpenedProject, PaneProcessState, WorkspaceError},
@@ -159,6 +159,7 @@ fn split_pane_reports_the_new_pane_and_focuses_it() {
                 pane_id: "shell".into(),
                 direction: SplitDirection::Vertical,
                 command: "$SHELL".into(),
+                new_pane_id: None,
             },
             None,
         )
@@ -430,6 +431,7 @@ fn create_tab_assigns_a_fresh_id_and_selects_it() {
                 tab: NewTab::Shell {
                     command: "$SHELL".into(),
                 },
+                tab_id: None,
             },
             None,
         )
@@ -443,6 +445,72 @@ fn create_tab_assigns_a_fresh_id_and_selects_it() {
     assert_eq!(
         session(&workspace).active_work_item(),
         Some(&WorkItemId::Terminal(added.tab_id.clone()))
+    );
+}
+
+#[test]
+fn creating_an_agent_tab_keeps_its_resume_arguments_and_agent_semantics() {
+    let mut workspace = migrated();
+
+    let outcome = workspace
+        .apply(
+            WorkspaceIntent::CreateTab {
+                project_id: project_id(),
+                tab: NewTab::Agent {
+                    title: "Restore auth session".into(),
+                    command: "codex".into(),
+                    args: vec!["resume".into(), "session-1".into()],
+                },
+                tab_id: None,
+            },
+            None,
+        )
+        .unwrap();
+
+    let [added] = outcome.panes.added.as_slice() else {
+        panic!("expected one added pane: {:?}", outcome.panes.added);
+    };
+    let tab = project(&workspace).layout.tab(&added.tab_id).unwrap();
+    let pane = tab.layout.find_pane(&added.pane_id).unwrap();
+    assert_eq!(tab.title, "Restore auth session");
+    assert_eq!(pane.command, "codex");
+    assert_eq!(pane.args, ["resume", "session-1"]);
+    assert_eq!(pane.kind, PaneKind::Agent);
+    assert_eq!(pane.execution_mode, TerminalExecutionMode::Command);
+    assert!(pane.notify_on_exit);
+}
+
+#[test]
+fn caller_chosen_ids_are_used_and_duplicates_change_nothing() {
+    let mut workspace = migrated();
+    let create = |tab_id: &str| WorkspaceIntent::CreateTab {
+        project_id: project_id(),
+        tab: NewTab::Shell {
+            command: String::new(),
+        },
+        tab_id: Some(tab_id.into()),
+    };
+    let split = |new_pane_id: &str| WorkspaceIntent::SplitPane {
+        project_id: project_id(),
+        tab_id: "cli-tab".into(),
+        pane_id: "shell".into(),
+        direction: SplitDirection::Vertical,
+        command: String::new(),
+        new_pane_id: Some(new_pane_id.into()),
+    };
+
+    let created = workspace.apply(create("cli-tab"), None).unwrap();
+    assert_eq!(created.panes.added, [pane("cli-tab", "shell")]);
+    let split_outcome = workspace.apply(split("cli-pane"), None).unwrap();
+    assert_eq!(split_outcome.panes.added, [pane("cli-tab", "cli-pane")]);
+
+    let before = workspace.clone();
+    assert!(workspace.apply(create("cli-tab"), None).is_err());
+    assert!(workspace.apply(split("cli-pane"), None).is_err());
+    assert_eq!(workspace.revision(), before.revision());
+    assert_eq!(
+        workspace.workspace().persisted_state(),
+        before.workspace().persisted_state()
     );
 }
 

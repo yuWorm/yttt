@@ -1926,6 +1926,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PersistencePublishWorkspaceChanged => {
             "Workspace control changed before local edits were published"
         }
+        UiTextKey::PersistenceHostClosedEditedFiles => {
+            "Another Client closed files with unsaved edits in this window"
+        }
         UiTextKey::PersistencePublishInterrupted => {
             "Connection interrupted while publishing; waiting to reconcile"
         }

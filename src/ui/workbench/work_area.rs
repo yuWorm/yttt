@@ -9,20 +9,23 @@ impl WorkbenchView {
             return Ok(false);
         };
         let previous = self.active_work_item();
-        let next = {
-            let Some(session) = self
-                .project
-                .project_editor_runtime
-                .workspace_mut()
-                .session_mut(&project_id)
-            else {
-                return Ok(false);
-            };
-            if session.active_group_id() == group_id {
-                return Ok(false);
-            }
-            session.activate_group(group_id)
+        let Some(active_group) = self
+            .project
+            .project_editor_runtime
+            .workspace()
+            .session(&project_id)
+            .map(|session| session.active_group_id())
+        else {
+            return Ok(false);
         };
+        if active_group == group_id {
+            return Ok(false);
+        }
+        self.apply_workspace_intent(WorkspaceIntent::ActivateGroup {
+            project_id,
+            group_id,
+        })?;
+        let next = self.active_work_item();
         self.apply_work_area_active_change(previous, next)
     }
 
@@ -52,32 +55,11 @@ impl WorkbenchView {
         target_index: usize,
     ) -> Result<bool, WorkbenchError> {
         self.work_area_drop_target = None;
-        let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
-            return Ok(false);
-        };
-        if project_id != dragged.project_id {
-            return Ok(false);
-        }
-        let previous = self.active_work_item();
-        let changed = self
-            .project
-            .project_editor_runtime
-            .workspace_mut()
-            .session_mut(&project_id)
-            .is_some_and(|session| {
-                session.move_work_item_to_group(
-                    &dragged.id,
-                    dragged.source_group_id,
-                    target_group,
-                    target_index,
-                    &terminal_ids,
-                )
-            });
-        if !changed {
-            return Ok(false);
-        }
-        let next = self.active_work_item();
-        self.apply_work_area_active_change(previous, next)
+        self.move_work_item_between_groups(
+            dragged,
+            target_group,
+            WorkAreaDropPlacement::TabIndex(target_index),
+        )
     }
 
     pub(super) fn drop_work_item_on_group(
@@ -94,28 +76,32 @@ impl WorkbenchView {
             .and_then(|target| target.edge)
             .map(WorkAreaDropPlacement::Edge)
             .unwrap_or(WorkAreaDropPlacement::Center);
-        let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
-            return Ok(false);
-        };
-        if project_id != dragged.project_id {
+        self.move_work_item_between_groups(dragged, target_group, placement)
+    }
+
+    fn move_work_item_between_groups(
+        &mut self,
+        dragged: &DraggedWorkbenchTab,
+        target_group: TabGroupId,
+        placement: WorkAreaDropPlacement,
+    ) -> Result<bool, WorkbenchError> {
+        if self.workspace.selected_project_id() != Some(&dragged.project_id) {
             return Ok(false);
         }
         let previous = self.active_work_item();
-        let changed = self
-            .project
-            .project_editor_runtime
-            .workspace_mut()
-            .session_mut(&project_id)
-            .is_some_and(|session| {
-                session.drop_work_item(
-                    &dragged.id,
-                    dragged.source_group_id,
-                    target_group,
-                    placement,
-                    &terminal_ids,
-                )
-            });
-        if !changed {
+        let before = self.project.project_editor_runtime.workspace().snapshot();
+        match self.apply_workspace_intent(WorkspaceIntent::MoveItem {
+            project_id: dragged.project_id.clone(),
+            item: dragged.id.clone(),
+            source_group: dragged.source_group_id,
+            target_group,
+            placement,
+        }) {
+            Ok(_) => {}
+            Err(WorkbenchError::Intent(IntentError::WorkItemNotFound(_))) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        if self.project.project_editor_runtime.workspace().snapshot() == before {
             return Ok(false);
         }
         let next = self.active_work_item();
@@ -133,8 +119,15 @@ impl WorkbenchView {
             return Ok(());
         }
         self.activate_work_area_group(group_id)?;
-        self.workspace.select_tab(tab_id)?;
-        self.workspace.focus_pane(pane_id)?;
+        self.apply_workspace_intent(WorkspaceIntent::ActivateItem {
+            project_id: project_id.clone(),
+            item: WorkItemId::Terminal(tab_id.to_string()),
+        })?;
+        self.apply_workspace_intent(WorkspaceIntent::FocusPane {
+            project_id: project_id.clone(),
+            tab_id: tab_id.to_string(),
+            pane_id: pane_id.to_string(),
+        })?;
         self.queue_terminal_focus_target(
             project_id.clone(),
             tab_id.to_string(),
@@ -211,6 +204,8 @@ impl WorkbenchView {
         }
     }
 
+    /// Repairs the work area after a test edits the layout model directly.
+    #[cfg(test)]
     pub(super) fn reconcile_project_work_area(&mut self, project_id: &ProjectId) {
         let Some(terminal_ids) = self.workspace.project(project_id).map(|project| {
             project

@@ -1502,10 +1502,7 @@ impl WorkbenchView {
             .iter()
             .find(|tab| tab.id == project.selected_tab_id)?;
 
-        let project_path = match &project.location {
-            ProjectLocation::Local { path } => path.clone(),
-            ProjectLocation::Ssh { root, .. } => PathBuf::from(root.as_str()),
-        };
+        let project_path = project.location.root_path();
         Some((
             selected_project_id.as_str().to_string(),
             tab.cwd.clone().unwrap_or(project_path),
@@ -1523,10 +1520,7 @@ impl WorkbenchView {
         let selected_project_id = self.workspace.selected_project_id()?;
         let project = self.workspace.project(selected_project_id)?;
         let tab = project.layout.tabs.iter().find(|tab| tab.id == tab_id)?;
-        let project_path = match &project.location {
-            ProjectLocation::Local { path } => path.clone(),
-            ProjectLocation::Ssh { root, .. } => PathBuf::from(root.as_str()),
-        };
+        let project_path = project.location.root_path();
         let focused_pane_id = project
             .tab_state(tab_id)
             .and_then(|state| state.focused_pane_id.clone());
@@ -1544,10 +1538,7 @@ impl WorkbenchView {
         let mut contexts = Vec::new();
         let mut shell = None;
         for project in self.workspace.opened_projects() {
-            let project_path = match &project.location {
-                ProjectLocation::Local { path } => path.clone(),
-                ProjectLocation::Ssh { root, .. } => PathBuf::from(root.as_str()),
-            };
+            let project_path = project.location.root_path();
             for tab in &project.layout.tabs {
                 let started = project.tab_state(&tab.id).is_some_and(|state| {
                     state.start_state == crate::model::workspace::TabStartState::Started

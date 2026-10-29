@@ -148,7 +148,25 @@ impl WorkbenchView {
         self.active_split_resize_drag = Some(ActiveSplitResizeDrag {
             direction,
             last_position: position,
+            start_ratio: self.workspace.focused_split_ratio(direction),
         });
+    }
+
+    fn advance_split_resize_drag(&mut self, position: Point<Pixels>) {
+        if let Some(drag) = &mut self.active_split_resize_drag {
+            drag.last_position = position;
+        }
+    }
+
+    fn finish_split_resize_drag(&mut self) {
+        let Some(drag) = self.active_split_resize_drag.take() else {
+            return;
+        };
+        if let Some(start_ratio) = drag.start_ratio
+            && let Err(error) = self.finish_split_resize(drag.direction, start_ratio)
+        {
+            self.load_error = Some(error.to_string());
+        }
     }
 
     pub(super) fn begin_sidebar_resize_drag(&mut self, side: SidebarSide, position: Point<Pixels>) {
@@ -183,11 +201,56 @@ impl WorkbenchView {
     ) {
         self.active_sidebar_resize_drag = None;
         self.active_split_resize_drag = None;
+        let start_ratio = self.selected_work_area_split_ratio(split_id);
         self.active_work_area_resize_drag = Some(ActiveWorkAreaResizeDrag {
             split_id,
             axis,
             last_position: position,
+            start_ratio,
         });
+    }
+
+    fn selected_work_area_split_ratio(&self, split_id: WorkAreaSplitId) -> Option<f32> {
+        let project_id = self.workspace.selected_project_id()?;
+        self.project
+            .project_editor_runtime
+            .workspace()
+            .session(project_id)?
+            .work_area_split_ratio(split_id)
+    }
+
+    /// Publishes a finished work-area drag: the local preview is reverted
+    /// and the net change applied as one intent.
+    fn finish_work_area_resize_drag(&mut self) {
+        let Some(drag) = self.active_work_area_resize_drag.take() else {
+            return;
+        };
+        let (Some(start_ratio), Some(ratio), Some(project_id)) = (
+            drag.start_ratio,
+            self.selected_work_area_split_ratio(drag.split_id),
+            self.workspace.selected_project_id().cloned(),
+        ) else {
+            return;
+        };
+        let net = ratio - start_ratio;
+        if net == 0.0 {
+            return;
+        }
+        if let Some(session) = self
+            .project
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&project_id)
+        {
+            session.resize_work_area_split(drag.split_id, -net);
+        }
+        if let Err(error) = self.apply_workspace_intent(WorkspaceIntent::ResizeWorkAreaSplit {
+            project_id,
+            split_id: drag.split_id,
+            delta: net,
+        }) {
+            self.load_error = Some(error.to_string());
+        }
     }
 
     pub(super) fn resize_from_work_area_drag(
@@ -227,8 +290,9 @@ impl WorkbenchView {
                 session.resize_work_area_split(split_id, delta / WORK_AREA_RESIZE_SENSITIVITY_PX)
             })
             .is_some()
+            && let Some(drag) = &mut self.active_work_area_resize_drag
         {
-            self.begin_work_area_resize_drag(split_id, axis, position);
+            drag.last_position = position;
         }
     }
 
@@ -253,11 +317,11 @@ impl WorkbenchView {
         let delta_x = f32::from(position.x - active_drag.last_position.x);
         let delta_y = f32::from(position.y - active_drag.last_position.y);
         match self.resize_focused_split_from_pointer_delta(direction, delta_x, delta_y) {
-            Ok(Some(_)) => self.begin_split_resize_drag(direction, position),
+            Ok(Some(_)) => self.advance_split_resize_drag(position),
             Ok(None) => {}
             Err(error) => {
                 self.load_error = Some(error.to_string());
-                self.begin_split_resize_drag(direction, position);
+                self.advance_split_resize_drag(position);
             }
         }
     }
@@ -283,7 +347,7 @@ impl WorkbenchView {
 
         if let Some(active_drag) = self.active_work_area_resize_drag {
             if !event.dragging() {
-                self.active_work_area_resize_drag = None;
+                self.finish_work_area_resize_drag();
                 cx.notify();
                 return;
             }
@@ -299,7 +363,7 @@ impl WorkbenchView {
         };
 
         if !event.dragging() {
-            self.active_split_resize_drag = None;
+            self.finish_split_resize_drag();
             cx.notify();
             return;
         }
@@ -333,12 +397,14 @@ impl WorkbenchView {
             cx.notify();
             return;
         }
-        if self.active_work_area_resize_drag.take().is_some() {
+        if self.active_work_area_resize_drag.is_some() {
+            self.finish_work_area_resize_drag();
             cx.stop_propagation();
             cx.notify();
             return;
         }
-        if self.active_split_resize_drag.take().is_some() {
+        if self.active_split_resize_drag.is_some() {
+            self.finish_split_resize_drag();
             cx.stop_propagation();
             cx.notify();
         }

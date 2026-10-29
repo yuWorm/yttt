@@ -34,6 +34,7 @@ impl WorkbenchView {
         &mut self,
         id: &DocumentId,
         relative_path: PathBuf,
+        activate: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<FilePreview>> {
@@ -50,13 +51,9 @@ impl WorkbenchView {
             preview.clone(),
             subscription,
         );
-        let session = self
-            .project
-            .project_editor_runtime
-            .workspace_mut()
-            .session_mut(&id.project_id)?;
-        session.open_file(id.canonical_path.clone());
-        let _ = self.select_work_item(WorkItemId::File(id.clone()));
+        if activate {
+            self.open_file_work_item(id).ok()?;
+        }
         cx.notify();
         Some(preview)
     }
@@ -71,6 +68,7 @@ impl WorkbenchView {
         if let Some(preview) = self.ensure_file_preview(
             &request.document_id,
             request.relative_path.clone(),
+            request.activate,
             window,
             cx,
         ) {
@@ -85,17 +83,37 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(services) = self.project.services.get(&project_id).cloned() else {
-            return;
-        };
-        let Some(canonical_path) = services.document_path(&relative_path) else {
+        let Some(canonical_path) = self
+            .project
+            .services
+            .get(&project_id)
+            .and_then(|services| services.document_path(&relative_path))
+        else {
             return;
         };
         let id = DocumentId {
             project_id,
             canonical_path,
         };
-        let Some(preview) = self.ensure_file_preview(&id, relative_path.clone(), window, cx) else {
+        self.load_file_preview(id, relative_path, true, window, cx);
+    }
+
+    /// Shows a file as a preview and loads it; `activate` makes it the
+    /// active work item.
+    pub(super) fn load_file_preview(
+        &mut self,
+        id: DocumentId,
+        relative_path: PathBuf,
+        activate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(services) = self.project.services.get(&id.project_id).cloned() else {
+            return;
+        };
+        let Some(preview) =
+            self.ensure_file_preview(&id, relative_path.clone(), activate, window, cx)
+        else {
             return;
         };
         let generation = self

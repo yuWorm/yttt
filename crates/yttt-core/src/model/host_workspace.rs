@@ -86,6 +86,10 @@ pub enum WorkspaceIntent {
     CreateTab {
         project_id: ProjectId,
         tab: NewTab,
+        /// An ID chosen by the caller, e.g. a UUID that stays unique across
+        /// windows; the next free `tab-N` when absent.
+        #[serde(default)]
+        tab_id: Option<String>,
     },
     CloseTabs {
         project_id: ProjectId,
@@ -102,8 +106,20 @@ pub enum WorkspaceIntent {
         pane_id: String,
         direction: SplitDirection,
         command: String,
+        /// An ID chosen by the caller for the new pane; the next free
+        /// `pane-N` when absent.
+        #[serde(default)]
+        new_pane_id: Option<String>,
     },
     ClosePane {
+        project_id: ProjectId,
+        tab_id: String,
+        pane_id: String,
+    },
+    /// Removes a pane whose process exited with the close behavior. Unlike
+    /// `ClosePane`, the last pane takes its tab with it and may leave the
+    /// project without tabs.
+    ClosePaneForExit {
         project_id: ProjectId,
         tab_id: String,
         pane_id: String,
@@ -223,8 +239,6 @@ pub enum HostWorkspaceError {
     UnsupportedLegacySchema(u16),
     #[error(transparent)]
     InvalidWorkspace(#[from] WorkspaceRestoreError),
-    #[error("project {0} does not have a Host filesystem root")]
-    MissingProjectRoot(String),
     #[error("editor state is invalid: {0}")]
     InvalidEditor(String),
 }
@@ -239,8 +253,6 @@ pub enum IntentError {
     Workspace(#[from] WorkspaceError),
     #[error("project has running processes")]
     RunningProcesses,
-    #[error("project {0} does not have a Host filesystem root")]
-    MissingProjectRoot(String),
     #[error("file {0} is outside its project root")]
     FileOutsideProject(String),
     #[error("work item is not open in project {0}")]
@@ -279,13 +291,11 @@ impl HostWorkspace {
         let mut workspace_state = state.workspace;
         repair_stale_default_tabs(&mut workspace_state);
         let workspace = Workspace::restore_persisted_state(workspace_state)?;
-        let mut project_roots = HashMap::new();
-        for project in workspace.opened_projects() {
-            let root = project.location.local_path().ok_or_else(|| {
-                HostWorkspaceError::MissingProjectRoot(project.id.as_str().to_string())
-            })?;
-            project_roots.insert(project.id.clone(), root.clone());
-        }
+        let project_roots = workspace
+            .opened_projects()
+            .iter()
+            .map(|project| (project.id.clone(), project.location.root_path()))
+            .collect::<HashMap<_, _>>();
         let editor = ProjectEditorWorkspaceState::from_snapshot(
             state.editor,
             &project_roots,
@@ -388,15 +398,21 @@ pub fn apply_intent(
         editor: editor.clone(),
     };
     executor.apply_intent(intent)?;
-    let before = pane_addresses(workspace);
-    let after = pane_addresses(&executor.workspace);
+    let panes = pane_changes(workspace, &executor.workspace);
+    *workspace = executor.workspace;
+    *editor = executor.editor;
+    Ok(panes)
+}
+
+/// The panes `after` adds to and removes from `before`, each sorted.
+pub fn pane_changes(before: &Workspace, after: &Workspace) -> PaneChanges {
+    let before = pane_addresses(before);
+    let after = pane_addresses(after);
     let mut added = after.difference(&before).cloned().collect::<Vec<_>>();
     let mut removed = before.difference(&after).cloned().collect::<Vec<_>>();
     added.sort_by(PaneAddress::cmp_key);
     removed.sort_by(PaneAddress::cmp_key);
-    *workspace = executor.workspace;
-    *editor = executor.editor;
-    Ok(PaneChanges { added, removed })
+    PaneChanges { added, removed }
 }
 
 struct IntentExecutor {
@@ -412,10 +428,7 @@ impl IntentExecutor {
                 layout,
                 panel,
             } => {
-                let root =
-                    descriptor.location.local_path().cloned().ok_or_else(|| {
-                        IntentError::MissingProjectRoot(descriptor.id.to_string())
-                    })?;
+                let root = descriptor.location.root_path();
                 let project_id = self.workspace.open_project(descriptor, layout)?;
                 let selected_tab = self
                     .workspace
@@ -448,9 +461,14 @@ impl IntentExecutor {
                 self.workspace.select_project(&project_id)?;
             }
             WorkspaceIntent::SelectCommandCenter => self.workspace.select_command_center(),
-            WorkspaceIntent::CreateTab { project_id, tab } => {
+            WorkspaceIntent::CreateTab {
+                project_id,
+                tab,
+                tab_id,
+            } => {
                 let project = self.workspace.project_mut(&project_id)?;
-                let (tab_id, default_title) = project.next_tab_identity();
+                let (next_tab_id, default_title) = project.next_tab_identity();
+                let tab_id = tab_id.unwrap_or(next_tab_id);
                 let config = match tab {
                     NewTab::Shell { command } => shell_tab_config(tab_id, default_title, command),
                     NewTab::Agent {
@@ -487,9 +505,13 @@ impl IntentExecutor {
                 pane_id,
                 direction,
                 command,
+                new_pane_id,
             } => {
                 let project = self.workspace.project_mut(&project_id)?;
-                let new_pane_id = project.next_pane_id(&tab_id)?;
+                let new_pane_id = match new_pane_id {
+                    Some(id) => id,
+                    None => project.next_pane_id(&tab_id)?,
+                };
                 project.split_pane(&tab_id, &pane_id, direction, new_pane_id, command)?;
             }
             WorkspaceIntent::ClosePane {
@@ -500,6 +522,15 @@ impl IntentExecutor {
                 .workspace
                 .project_mut(&project_id)?
                 .close_pane(&tab_id, &pane_id)?,
+            WorkspaceIntent::ClosePaneForExit {
+                project_id,
+                tab_id,
+                pane_id,
+            } => {
+                self.workspace
+                    .close_pane_for_exit(&project_id, &tab_id, &pane_id)?;
+                self.sync_project(&project_id)?;
+            }
             WorkspaceIntent::FocusPane {
                 project_id,
                 tab_id,

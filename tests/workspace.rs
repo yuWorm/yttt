@@ -6,7 +6,7 @@ use yttt_agent_core::{
 
 use yttt::model::{
     ids::ProjectId,
-    layout::{PaneKind, TabStartup, TerminalExecutionMode},
+    layout::TabStartup,
     project::{ProjectDescriptor, ProjectLocation},
     workspace::{
         CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
@@ -467,33 +467,6 @@ fn bulk_tab_close_can_leave_a_project_without_terminal_tabs() {
 }
 
 #[test]
-fn creating_agent_tab_preserves_resume_arguments_and_agent_semantics() {
-    let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
-        .unwrap();
-
-    let tab_id = workspace
-        .create_agent_tab(
-            "Restore auth session",
-            "codex",
-            vec!["resume".to_string(), "session-1".to_string()],
-        )
-        .unwrap();
-
-    let project = workspace.project(&project_id).unwrap();
-    let tab = project.layout.tab(&tab_id).unwrap();
-    let pane = tab.layout.find_pane("agent").unwrap();
-    assert_eq!(project.selected_tab_id, tab_id);
-    assert_eq!(tab.title, "Restore auth session");
-    assert_eq!(pane.command, "codex");
-    assert_eq!(pane.args, ["resume", "session-1"]);
-    assert_eq!(pane.kind, PaneKind::Agent);
-    assert_eq!(pane.execution_mode, TerminalExecutionMode::Command);
-    assert!(pane.notify_on_exit);
-}
-
-#[test]
 fn process_exit_closes_exact_pane_without_changing_project_selection() {
     let mut workspace = Workspace::new();
     let project_id = workspace
@@ -591,27 +564,6 @@ fn rename_selected_tab_changes_title_without_changing_id() {
     let tab = project.layout.tab("dev").unwrap();
     assert_eq!(tab.id, "dev");
     assert_eq!(tab.title, "Main Dev");
-}
-
-#[test]
-fn rename_focused_pane_changes_title_without_changing_id() {
-    let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
-        .unwrap();
-
-    workspace.rename_focused_pane("Server").unwrap();
-
-    let project = workspace.project(&project_id).unwrap();
-    let pane = project
-        .layout
-        .tab("dev")
-        .unwrap()
-        .layout
-        .find_pane("server")
-        .unwrap();
-    assert_eq!(pane.id, "server");
-    assert_eq!(pane.title, "Server");
 }
 
 #[test]
@@ -819,46 +771,4 @@ fn single_tab_layout() -> yttt::model::layout::ProjectLayout {
     "#,
     )
     .unwrap()
-}
-
-#[test]
-fn explicit_tab_and_pane_ids_reject_duplicates_without_changing_workspace() {
-    use yttt::model::layout::SplitDirection;
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(
-            local_project(PathBuf::from("/tmp/cli-id-test")),
-            sample_layout(),
-        )
-        .unwrap();
-    workspace
-        .create_shell_tab_with_id("cli-shell".into(), "printf shell")
-        .unwrap();
-    let before = workspace.persisted_state();
-    assert!(
-        workspace
-            .create_agent_tab_with_id("cli-shell".into(), "Agent", "codex", vec![])
-            .is_err()
-    );
-    assert_eq!(workspace.persisted_state(), before);
-    workspace
-        .split_focused_pane_with_id(
-            SplitDirection::Horizontal,
-            "cli-pane".into(),
-            "printf pane".into(),
-        )
-        .unwrap();
-    let before = workspace.persisted_state();
-    assert!(
-        workspace
-            .split_focused_pane_with_id(
-                SplitDirection::Vertical,
-                "cli-pane".into(),
-                "must not run".into()
-            )
-            .is_err()
-    );
-    assert_eq!(workspace.persisted_state(), before);
-    let restored = Workspace::restore_persisted_state(before.clone()).unwrap();
-    assert_eq!(restored.persisted_state(), before);
 }

@@ -133,8 +133,10 @@ impl LoginStartupBackend for FakeLoginStartupBackend {
     }
 }
 
+/// Opens projects at their canonical root, as `open_project_config` does; an
+/// existing path behind a symlink (macOS temp dirs) is resolved.
 fn local_project(path: PathBuf) -> ProjectDescriptor {
-    let location = ProjectLocation::local(path);
+    let location = ProjectLocation::local(fs::canonicalize(&path).unwrap_or(path));
     ProjectDescriptor::new(
         ProjectId::from_legacy_location(&location.display_path()),
         location,
@@ -7514,6 +7516,28 @@ fn root_view_pointer_drag_resize_changes_split_ratio_visibly() {
     assert_ratio(resized_ratio, 0.45);
     assert_ratio(after.left, 0.45);
     assert_ratio(after.right, 0.55);
+}
+
+#[test]
+fn root_view_split_drag_release_keeps_the_previewed_ratio() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let start = root
+        .workspace()
+        .focused_split_ratio(SplitDirection::Horizontal)
+        .unwrap();
+
+    for _ in 0..3 {
+        root.resize_focused_split_from_pointer_delta(SplitDirection::Horizontal, -60.0, 0.0)
+            .unwrap();
+    }
+    let previewed = root_split_child_basis(root.workspace()).unwrap();
+    root.finish_split_resize(SplitDirection::Horizontal, start)
+        .unwrap();
+    let released = root_split_child_basis(root.workspace()).unwrap();
+
+    assert_ratio(previewed.left, 0.35);
+    assert_ratio(released.left, previewed.left);
+    assert_ratio(released.right, previewed.right);
 }
 
 #[test]

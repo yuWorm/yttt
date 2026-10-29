@@ -1566,6 +1566,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::PersistenceDraftScopeMismatch => "本地草稿恢复范围与此 Host 工作区不匹配",
         UiTextKey::PersistencePublishWorkspaceChanged => "本地编辑发布前，工作区控制权已变化",
+        UiTextKey::PersistenceHostClosedEditedFiles => "另一客户端关闭了本窗口中有未保存编辑的文件",
         UiTextKey::PersistencePublishInterrupted => "发布时连接中断；正在等待协调状态",
         UiTextKey::PersistencePublishStaleResponse => "已忽略过期的工作区发布响应；未重放本地编辑",
         UiTextKey::PersistenceDraftDocumentLimit => "文档草稿超过 6 MiB 的恢复限制",

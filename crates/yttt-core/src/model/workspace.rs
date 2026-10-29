@@ -271,15 +271,6 @@ impl Workspace {
         project.focus_pane(&selected_tab_id, pane_id)
     }
 
-    pub fn focus_pane_direction(
-        &mut self,
-        direction: FocusDirection,
-    ) -> Result<String, WorkspaceError> {
-        let project = self.selected_project_mut()?;
-        let selected_tab_id = project.selected_tab_id.clone();
-        project.focus_adjacent_pane(&selected_tab_id, direction)
-    }
-
     pub fn resize_focused_split(
         &mut self,
         direction: ResizeDirection,
@@ -291,59 +282,19 @@ impl Workspace {
         project.resize_pane_split(&selected_tab_id, &focused_pane_id, direction, delta)
     }
 
-    pub fn select_next_tab(&mut self) -> Result<(), WorkspaceError> {
-        self.select_relative_tab(1)
-    }
-
-    pub fn select_prev_tab(&mut self) -> Result<(), WorkspaceError> {
-        self.select_relative_tab(-1)
+    /// Ratio of the split that [`Self::resize_focused_split`] adjusts for
+    /// `direction`: the innermost such split around the focused pane.
+    pub fn focused_split_ratio(&self, direction: SplitDirection) -> Option<f32> {
+        let project = self.project(self.selected_project_id()?)?;
+        let tab_id = &project.selected_tab_id;
+        let pane_id = project.focused_or_first_pane_id(tab_id).ok()?;
+        split_ratio_around_pane(&project.layout.tab(tab_id)?.layout, &pane_id, direction)
     }
 
     pub fn create_shell_tab(&mut self) -> Result<String, WorkspaceError> {
-        self.create_shell_tab_with_command("")
-    }
-
-    pub fn create_shell_tab_with_command(
-        &mut self,
-        command: impl Into<String>,
-    ) -> Result<String, WorkspaceError> {
-        let (tab_id, _) = next_tab_identity(&self.selected_project_mut()?.layout);
-        self.create_shell_tab_with_id(tab_id, command)
-    }
-
-    pub fn create_shell_tab_with_id(
-        &mut self,
-        tab_id: String,
-        command: impl Into<String>,
-    ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
-        let (_, title) = next_tab_identity(&project.layout);
-        project.add_tab(shell_tab_config(tab_id, title, command.into()))
-    }
-
-    pub fn create_agent_tab(
-        &mut self,
-        title: impl Into<String>,
-        command: impl Into<String>,
-        args: Vec<String>,
-    ) -> Result<String, WorkspaceError> {
-        let (tab_id, _) = next_tab_identity(&self.selected_project_mut()?.layout);
-        self.create_agent_tab_with_id(tab_id, title, command, args)
-    }
-
-    pub fn create_agent_tab_with_id(
-        &mut self,
-        tab_id: String,
-        title: impl Into<String>,
-        command: impl Into<String>,
-        args: Vec<String>,
-    ) -> Result<String, WorkspaceError> {
-        self.selected_project_mut()?.add_tab(agent_tab_config(
-            tab_id,
-            title.into(),
-            command.into(),
-            args,
-        ))
+        let (tab_id, title) = next_tab_identity(&project.layout);
+        project.add_tab(shell_tab_config(tab_id, title, String::new()))
     }
 
     pub fn close_selected_tab(&mut self) -> Result<String, WorkspaceError> {
@@ -370,37 +321,6 @@ impl Workspace {
         let project = self.selected_project_mut()?;
         let selected_tab_id = project.selected_tab_id.clone();
         project.rename_tab(&selected_tab_id, title)
-    }
-
-    pub fn split_focused_pane(
-        &mut self,
-        direction: SplitDirection,
-    ) -> Result<String, WorkspaceError> {
-        let project = self.selected_project_mut()?;
-        let tab = project
-            .layout
-            .tab(&project.selected_tab_id)
-            .ok_or_else(|| WorkspaceError::TabNotFound(project.selected_tab_id.clone()))?;
-        let pane_id = next_pane_id(&tab.layout);
-        self.split_focused_pane_with_id(direction, pane_id, String::new())
-    }
-
-    pub fn split_focused_pane_with_id(
-        &mut self,
-        direction: SplitDirection,
-        new_pane_id: String,
-        command: String,
-    ) -> Result<String, WorkspaceError> {
-        let project = self.selected_project_mut()?;
-        let selected_tab_id = project.selected_tab_id.clone();
-        let focused_pane_id = project.focused_or_first_pane_id(&selected_tab_id)?;
-        project.split_pane(
-            &selected_tab_id,
-            &focused_pane_id,
-            direction,
-            new_pane_id,
-            command,
-        )
     }
 
     pub fn close_focused_pane(&mut self) -> Result<String, WorkspaceError> {
@@ -473,13 +393,6 @@ impl Workspace {
         }
 
         Ok(PaneExitCloseOutcome::TabClosed)
-    }
-
-    pub fn rename_focused_pane(&mut self, title: &str) -> Result<(), WorkspaceError> {
-        let project = self.selected_project_mut()?;
-        let selected_tab_id = project.selected_tab_id.clone();
-        let focused_pane_id = project.focused_or_first_pane_id(&selected_tab_id)?;
-        project.rename_pane(&selected_tab_id, &focused_pane_id, title)
     }
 
     pub fn mark_pane_running(
@@ -625,25 +538,6 @@ impl Workspace {
         let index = self.project_index(project_id)?;
 
         Ok(self.remove_project_at(index))
-    }
-
-    fn select_relative_tab(&mut self, offset: isize) -> Result<(), WorkspaceError> {
-        let project = self.selected_project_mut()?;
-        let tab_count = project.layout.tabs.len();
-        if tab_count == 0 {
-            return Err(WorkspaceError::NoTabs);
-        }
-
-        let current_index = project
-            .layout
-            .tabs
-            .iter()
-            .position(|tab| tab.id == project.selected_tab_id)
-            .unwrap_or(0);
-        let next_index = (current_index as isize + offset).rem_euclid(tab_count as isize) as usize;
-        let next_tab_id = project.layout.tabs[next_index].id.clone();
-
-        project.select_tab(&next_tab_id)
     }
 
     fn selected_project_mut(&mut self) -> Result<&mut OpenedProject, WorkspaceError> {
@@ -1487,4 +1381,20 @@ fn resize_pane_split(
             Some(split.ratio)
         }
     }
+}
+
+fn split_ratio_around_pane(
+    layout: &LayoutNode,
+    target_pane_id: &str,
+    direction: SplitDirection,
+) -> Option<f32> {
+    let LayoutNode::Split(split) = layout else {
+        return None;
+    };
+    split_ratio_around_pane(&split.left, target_pane_id, direction)
+        .or_else(|| split_ratio_around_pane(&split.right, target_pane_id, direction))
+        .or_else(|| {
+            (split.direction == direction && layout_contains_pane(layout, target_pane_id))
+                .then_some(split.ratio)
+        })
 }

@@ -457,6 +457,27 @@ impl WorkAreaNode {
         }
     }
 
+    fn split_ratio(&self, target: WorkAreaSplitId) -> Option<f32> {
+        match self {
+            Self::Group(_) => None,
+            Self::Split {
+                id,
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                if *id == target {
+                    Some(*ratio)
+                } else {
+                    first
+                        .split_ratio(target)
+                        .or_else(|| second.split_ratio(target))
+                }
+            }
+        }
+    }
+
     fn replace_item(&mut self, old: &WorkItemId, new: &WorkItemId) -> bool {
         match self {
             Self::Group(group) => {
@@ -730,6 +751,10 @@ impl WorkAreaState {
 
     pub(crate) fn resize_split(&mut self, split_id: WorkAreaSplitId, delta: f32) -> Option<f32> {
         self.root.resize_split(split_id, delta)
+    }
+
+    pub(crate) fn split_ratio(&self, split_id: WorkAreaSplitId) -> Option<f32> {
+        self.root.split_ratio(split_id)
     }
 
     fn move_item_to_tab_index(

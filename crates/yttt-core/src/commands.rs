@@ -598,6 +598,30 @@ pub enum CommandDispatchError {
     Unsupported(CommandId),
 }
 
+/// The intent that resizes the split around the selected tab's focused pane.
+pub fn focused_split_resize_intent(
+    workspace: &Workspace,
+    direction: ResizeDirection,
+    delta: f32,
+) -> Result<WorkspaceIntent, WorkspaceError> {
+    let project_id = workspace
+        .selected_project_id()
+        .cloned()
+        .ok_or(WorkspaceError::NoSelectedProject)?;
+    let project = workspace
+        .project(&project_id)
+        .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.to_string()))?;
+    let tab_id = project.selected_tab_id.clone();
+    let pane_id = project.focused_or_first_pane_id(&tab_id)?;
+    Ok(WorkspaceIntent::ResizePaneSplit {
+        project_id,
+        tab_id,
+        pane_id,
+        direction,
+        delta,
+    })
+}
+
 /// Translates a workspace command, which acts on the current selection, into
 /// the intent that names its targets by stable ID.
 pub fn workspace_command_intent(
@@ -644,6 +668,7 @@ pub fn workspace_command_intent(
             pane_id: focused_pane()?,
             direction,
             command: String::new(),
+            new_pane_id: None,
         })
     };
     let focus = |direction| WorkspaceIntent::FocusAdjacentPane {
@@ -652,13 +677,11 @@ pub fn workspace_command_intent(
         direction,
     };
     let resize = |direction| -> Result<WorkspaceIntent, CommandDispatchError> {
-        Ok(WorkspaceIntent::ResizePaneSplit {
-            project_id: project_id.clone(),
-            tab_id: tab_id.clone(),
-            pane_id: focused_pane()?,
+        Ok(focused_split_resize_intent(
+            workspace,
             direction,
-            delta: PANE_RESIZE_DELTA,
-        })
+            PANE_RESIZE_DELTA,
+        )?)
     };
     match command_id {
         CommandId::TabNext => relative_tab(1),
@@ -668,6 +691,7 @@ pub fn workspace_command_intent(
             tab: NewTab::Shell {
                 command: String::new(),
             },
+            tab_id: None,
         }),
         CommandId::TabClose => close_selected_tab(),
         CommandId::TabRename => Ok(WorkspaceIntent::RenameTab {
