@@ -2,19 +2,17 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use yttt_core::model::{editor::DocumentId, ids::ClientInstanceId};
 
 use crate::{HostPath, PathSegment, ProjectRelativePath, project::ProjectFileFingerprint};
 
-/// The largest stable identifier accepted for a workspace or an idempotent operation.
+/// The largest stable identifier accepted for a workspace.
 pub const MAX_WORKSPACE_ID_BYTES: usize = 64;
-pub const MAX_OPERATION_ID_BYTES: usize = 128;
 
 pub const MAX_DRAFT_CONTENT_BYTES: usize = 6 * 1024 * 1024;
 pub const MAX_WORKSPACE_DRAFT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_AGENT_STATE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_WORKSPACE_AGENT_STATE_BYTES: usize = 256 * 1024 * 1024;
-/// Layout and immutable object references, not draft or Agent state bodies.
-pub const MAX_WORKSPACE_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 /// A short, path-safe identifier for one persisted workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -47,78 +45,6 @@ impl From<WorkspaceId> for String {
     }
 }
 
-/// A short, path-safe key for a bounded idempotent commit record.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct WorkspaceOperationId(String);
-
-impl WorkspaceOperationId {
-    /// Creates an operation identifier containing only ASCII letters, digits, `_`, and `-`.
-    pub fn new(value: impl Into<String>) -> Result<Self, WorkspaceValidationError> {
-        let value = value.into();
-        validate_identifier(&value, MAX_OPERATION_ID_BYTES, "workspace operation ID")?;
-        Ok(Self(value))
-    }
-
-    /// Returns the validated identifier text.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for WorkspaceOperationId {
-    type Error = WorkspaceValidationError;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<WorkspaceOperationId> for String {
-    fn from(value: WorkspaceOperationId) -> Self {
-        value.0
-    }
-}
-
-/// A serialized UI snapshot with a reserved `agent_states` object-reference list.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct WorkspaceSnapshot(#[serde(deserialize_with = "deserialize_snapshot")] Value);
-
-impl WorkspaceSnapshot {
-    /// Creates a snapshot only when its top-level JSON value is an object.
-    pub fn new(value: Value) -> Result<Self, WorkspaceValidationError> {
-        if value.is_object() {
-            Ok(Self(value))
-        } else {
-            Err(WorkspaceValidationError::SnapshotMustBeObject)
-        }
-    }
-
-    /// Returns the opaque JSON object supplied by the UI.
-    pub fn as_value(&self) -> &Value {
-        &self.0
-    }
-
-    /// Consumes this wrapper and returns the opaque JSON object.
-    pub fn into_value(self) -> Value {
-        self.0
-    }
-}
-
-fn deserialize_snapshot<'de, D>(deserializer: D) -> Result<Value, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-    if value.is_object() {
-        Ok(value)
-    } else {
-        Err(serde::de::Error::custom(
-            "workspace snapshot must be a JSON object",
-        ))
-    }
-}
-
 /// A content revision for one recoverable draft item.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DraftContentRevision {
@@ -142,10 +68,28 @@ pub enum DraftBase {
     Json { metadata: Value },
 }
 
-/// All recoverable draft items for one workspace.
+/// The Client allowed to edit one open document, and the grant it holds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceDraft {
-    pub contents: Vec<DraftContentRevision>,
+pub struct DocumentLease {
+    pub holder: ClientInstanceId,
+    /// Advances with every grant of the document; a draft upload must name
+    /// the epoch of the lease it was edited under.
+    pub epoch: u64,
+}
+
+/// The edit lease and the latest uploaded draft of one document open in a workspace.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentState {
+    pub document: DocumentId,
+    pub lease: Option<DocumentLease>,
+    pub draft: Option<DraftRef>,
+}
+
+/// A document of a workspace this Client opened changed its lease or draft.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentUpdate {
+    pub workspace_id: WorkspaceId,
+    pub state: DocumentState,
 }
 
 /// Immutable body identity and source metadata; content is transferred separately.
@@ -184,43 +128,6 @@ impl AgentStateRef {
             bytes: content.len() as u64,
         }
     }
-}
-
-pub fn agent_state_references(
-    snapshot: &Value,
-) -> Result<Vec<AgentStateRef>, WorkspaceValidationError> {
-    match snapshot.get("agent_states") {
-        None => Ok(Vec::new()),
-        Some(value) => serde_json::from_value(value.clone())
-            .map_err(|error| WorkspaceValidationError::InvalidAgentStates(error.to_string())),
-    }
-}
-
-/// Uses the same serialized envelope on Client and Host without allocating another payload.
-pub fn validate_workspace_manifest(
-    snapshot: &Value,
-    drafts: &[DraftRef],
-) -> Result<(), WorkspaceValidationError> {
-    struct ByteCount(usize);
-    impl std::io::Write for ByteCount {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 += bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut count = ByteCount(0);
-    serde_json::to_writer(&mut count, &(snapshot, drafts))
-        .map_err(|error| WorkspaceValidationError::Encoding(error.to_string()))?;
-    if count.0 > MAX_WORKSPACE_MANIFEST_BYTES {
-        return Err(WorkspaceValidationError::ManifestTooLarge {
-            actual: count.0,
-            maximum: MAX_WORKSPACE_MANIFEST_BYTES,
-        });
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,8 +362,9 @@ pub enum WorkspaceRequest {
         expected_revision: WorkspaceConfigRevision,
     },
 
-    /// Opens the current snapshot, layout, and revision of one workspace and
-    /// subscribes this Client's Session connection to its layout changes.
+    /// Returns the current layout, documents, and Agent states of one
+    /// workspace and subscribes this Client's Session connection to its
+    /// layout and document changes.
     Open {
         workspace_id: WorkspaceId,
     },
@@ -468,25 +376,35 @@ pub enum WorkspaceRequest {
         #[serde(default)]
         expected_revision: Option<u64>,
     },
-    /// Commits a snapshot with compare-and-swap revision checking and bounded idempotency replay.
-    Commit {
+    /// Grants this Client the edit lease of an open document. A lease held by
+    /// another Client is granted only with `takeover`; the previous holder
+    /// is told through `DocumentChanged`.
+    AcquireDocument {
         workspace_id: WorkspaceId,
-        expected_revision: u64,
-        operation_id: WorkspaceOperationId,
-        snapshot: WorkspaceSnapshot,
-        drafts: Vec<DraftRef>,
+        document: DocumentId,
+        takeover: bool,
     },
-    /// Persist an immutable body before publishing a manifest that references it.
-    PutDraft {
+    /// Replaces the document's draft. Only the holder of lease `epoch` may upload.
+    PutDocumentDraft {
         workspace_id: WorkspaceId,
-        reference: DraftRef,
+        document: DocumentId,
+        epoch: u64,
+        revision: u64,
+        base: DraftBase,
         #[serde(with = "serde_bytes")]
         content: Vec<u8>,
     },
-    /// Read one published body, bounded independently of the manifest.
-    GetDraft {
+    /// Reads the document's current draft body.
+    GetDocumentDraft {
         workspace_id: WorkspaceId,
-        reference: DraftRef,
+        document: DocumentId,
+    },
+    /// Releases the lease of a document that has no unsaved changes and
+    /// discards its draft. A stale `epoch` changes nothing.
+    ReleaseDocument {
+        workspace_id: WorkspaceId,
+        document: DocumentId,
+        epoch: u64,
     },
     /// Checks a saved OMP ID on the Host independently of project-scoped history.
     OmpSessionExists {
@@ -507,14 +425,7 @@ pub enum WorkspaceRequest {
     OpenExisting {
         workspace_id: WorkspaceId,
     },
-    /// Stores an immutable Agent state before a workspace manifest references it.
-    PutAgentState {
-        workspace_id: WorkspaceId,
-        reference: AgentStateRef,
-        #[serde(with = "serde_bytes")]
-        content: Vec<u8>,
-    },
-    /// Reads one Agent state currently published by this workspace.
+    /// Reads one Agent state the Host stored for a pane of this workspace.
     GetAgentState {
         workspace_id: WorkspaceId,
         reference: AgentStateRef,
@@ -535,7 +446,7 @@ impl WorkspaceRequest {
                 | Self::ListConfig { .. }
                 | Self::Open { .. }
                 | Self::OpenExisting { .. }
-                | Self::GetDraft { .. }
+                | Self::GetDocumentDraft { .. }
                 | Self::GetAgentState { .. }
         )
     }
@@ -568,33 +479,25 @@ pub enum WorkspaceResponse {
         relative_path: ProjectRelativePath,
         revision: WorkspaceConfigRevision,
     },
-    /// Returns a durable workspace snapshot, its layout, and its monotonic revision.
+    /// Returns a workspace's layout, its documents, and the Agent states of
+    /// its panes.
     ///
-    /// `layout` is `None` when the stored snapshot has no valid layout. A
-    /// `WorkspaceChanged` event for this workspace may arrive before this
-    /// response; a Client keeps whichever layout has the higher revision.
+    /// A `WorkspaceChanged` or `DocumentChanged` event for this workspace may
+    /// arrive before this response; a Client keeps whichever layout has the
+    /// higher revision.
     Opened {
-        snapshot: WorkspaceSnapshot,
-        revision: u64,
-        drafts: Vec<DraftRef>,
-        #[serde(default)]
-        layout: Option<yttt_core::model::host_workspace::HostWorkspaceState>,
+        layout: yttt_core::model::host_workspace::HostWorkspaceState,
+        documents: Vec<DocumentState>,
+        agent_states: Vec<AgentStateRef>,
     },
     /// Confirms an applied layout intent and the revision it produced.
     Applied {
         workspace_id: WorkspaceId,
         revision: u64,
     },
-    /// Confirms a persisted snapshot commit and its resulting revision.
-    Committed {
-        workspace_id: WorkspaceId,
-        revision: u64,
-        snapshot: WorkspaceSnapshot,
-    },
-    DraftStored {
-        reference: DraftRef,
-    },
-    Draft {
+    /// The document's lease and draft after a document request.
+    Document(DocumentState),
+    DocumentDraft {
         reference: DraftRef,
         #[serde(with = "serde_bytes")]
         content: Vec<u8>,
@@ -602,9 +505,6 @@ pub enum WorkspaceResponse {
     OmpSessionExists(bool),
     Forgotten {
         workspace_id: WorkspaceId,
-    },
-    AgentStateStored {
-        reference: AgentStateRef,
     },
     AgentState {
         reference: AgentStateRef,
@@ -623,18 +523,9 @@ pub struct WorkspaceLayoutUpdate {
 /// Validation failures raised while constructing strongly validated workspace wire values.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum WorkspaceValidationError {
-    /// The supplied workspace or operation identifier is not a bounded safe identifier.
+    /// The supplied workspace identifier is not a bounded safe identifier.
     #[error("{kind} must be 1 to {maximum} ASCII letters, digits, `_`, or `-`")]
     InvalidIdentifier { kind: &'static str, maximum: usize },
-    /// The supplied UI snapshot is not a JSON object.
-    #[error("workspace snapshot must be a JSON object")]
-    SnapshotMustBeObject,
-    #[error("workspace manifest is {actual} bytes and exceeds the {maximum} byte limit")]
-    ManifestTooLarge { actual: usize, maximum: usize },
-    #[error("workspace manifest cannot be encoded: {0}")]
-    Encoding(String),
-    #[error("workspace Agent state references are invalid: {0}")]
-    InvalidAgentStates(String),
 }
 
 fn validate_identifier(
@@ -656,35 +547,6 @@ fn validate_identifier(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn manifest_limit_counts_the_complete_envelope_and_draft_references() {
-        let mut snapshot = serde_json::json!({
-            "layout": "x".repeat(MAX_WORKSPACE_MANIFEST_BYTES - br#"[{"layout":""},[]]"#.len()),
-        });
-        validate_workspace_manifest(&snapshot, &[]).unwrap();
-        let draft = DraftRef::for_document(
-            b"document",
-            &DraftContentRevision {
-                revision: 1,
-                base: DraftBase::Json {
-                    metadata: serde_json::json!({}),
-                },
-                content: "body".into(),
-            },
-        );
-        assert!(matches!(
-            validate_workspace_manifest(&snapshot, &[draft]),
-            Err(WorkspaceValidationError::ManifestTooLarge { .. })
-        ));
-        snapshot["layout"] = serde_json::Value::String(
-            "x".repeat(MAX_WORKSPACE_MANIFEST_BYTES - br#"[{"layout":""},[]]"#.len() + 1),
-        );
-        assert!(matches!(
-            validate_workspace_manifest(&snapshot, &[]),
-            Err(WorkspaceValidationError::ManifestTooLarge { .. })
-        ));
-    }
 
     #[test]
     fn agent_session_mutation_serializes_and_requires_mutation_permission() {

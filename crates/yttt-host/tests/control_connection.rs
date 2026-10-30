@@ -15,7 +15,6 @@ use yttt_protocol::{
     HostBlocker, HostResponse, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest,
     LifecycleRequestEnvelope, LifecycleResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request,
     Response, ServerEvent, encode_message,
-    session::{ControlContext, ControlStatus, ProfileControlRequest, TransferPhase},
     workspace::{WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport::{
@@ -195,13 +194,13 @@ async fn control_request(
     stream: &mut TransportStream,
     request_id: u64,
     body: Request,
-    context: Option<ControlContext>,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
-    let mut request = ClientRequest::new(request_id, body);
-    request.control = context;
-    send_control(stream, &ControlMessage::Request(request))
-        .await
-        .unwrap();
+    send_control(
+        stream,
+        &ControlMessage::Request(ClientRequest::new(request_id, body)),
+    )
+    .await
+    .unwrap();
     loop {
         match receive_control(stream).await.unwrap() {
             ControlMessage::Response(response) if response.request_id == request_id => {
@@ -209,31 +208,6 @@ async fn control_request(
             }
             ControlMessage::Event(_) => {}
             message => panic!("unexpected control message: {message:?}"),
-        }
-    }
-}
-
-async fn profile_request(
-    stream: &mut TransportStream,
-    request_id: u64,
-    request: ProfileControlRequest,
-) -> ControlStatus {
-    let Response::ProfileControl(status) =
-        control_request(stream, request_id, Request::ProfileControl(request), None)
-            .await
-            .unwrap()
-    else {
-        panic!("profile control response")
-    };
-    status
-}
-
-async fn next_profile_event(stream: &mut TransportStream) -> ControlStatus {
-    loop {
-        if let ControlMessage::Event(event) = receive_control(stream).await.unwrap()
-            && let ServerEvent::ProfileControl(status) = event.body
-        {
-            return status;
         }
     }
 }
@@ -280,197 +254,6 @@ fn open_project_intent(project_id: ProjectId, root: &Path) -> WorkspaceIntent {
 }
 
 #[tokio::test]
-async fn reacquire_if_unowned_is_atomic_and_refuses_competing_control() {
-    let host = RunningHost::start().await;
-    let mut alice = host.control_client("alice").await;
-    let initial = profile_request(&mut alice, 1, ProfileControlRequest::Status).await;
-    assert!(initial.owner.is_none());
-    assert!(initial.transfer.is_none());
-
-    let acquired = profile_request(
-        &mut alice,
-        2,
-        ProfileControlRequest::ReacquireIfUnowned {
-            context: initial.context,
-        },
-    )
-    .await;
-    assert_eq!(acquired.owner, Some(ClientInstanceId::new("alice")));
-    assert!(acquired.transfer.is_none());
-    assert_ne!(
-        acquired.context.control_epoch,
-        initial.context.control_epoch
-    );
-
-    let mut bob = host.control_client("bob").await;
-    let stale = profile_request(
-        &mut bob,
-        3,
-        ProfileControlRequest::ReacquireIfUnowned {
-            context: initial.context,
-        },
-    )
-    .await;
-    assert_eq!(stale, acquired);
-
-    let occupied = profile_request(
-        &mut bob,
-        4,
-        ProfileControlRequest::ReacquireIfUnowned {
-            context: acquired.context,
-        },
-    )
-    .await;
-    assert_eq!(occupied, acquired);
-
-    let pending = profile_request(&mut bob, 5, ProfileControlRequest::RequestControl).await;
-    assert_eq!(
-        pending.transfer.as_ref().map(|transfer| transfer.phase),
-        Some(TransferPhase::Preparing)
-    );
-    drop(alice);
-
-    let unowned_pending = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut request_id = 6;
-        loop {
-            let status = profile_request(&mut bob, request_id, ProfileControlRequest::Status).await;
-            request_id += 1;
-            if status.owner.is_none() {
-                return status;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("owner disconnect");
-    assert_eq!(
-        unowned_pending
-            .transfer
-            .as_ref()
-            .map(|transfer| transfer.phase),
-        Some(TransferPhase::ForceConfirmationRequired)
-    );
-
-    let mut carol = host.control_client("carol").await;
-    let while_transferring = profile_request(
-        &mut carol,
-        20,
-        ProfileControlRequest::ReacquireIfUnowned {
-            context: unowned_pending.context,
-        },
-    )
-    .await;
-    assert_eq!(while_transferring, unowned_pending);
-}
-
-#[tokio::test]
-async fn preparation_deadline_emits_force_confirmation_without_status_polling() {
-    let host = RunningHost::start().await;
-    let mut owner = host.control_client("owner").await;
-    let initial = profile_request(&mut owner, 1, ProfileControlRequest::Status).await;
-    let owner_status = profile_request(
-        &mut owner,
-        2,
-        ProfileControlRequest::ReacquireIfUnowned {
-            context: initial.context,
-        },
-    )
-    .await;
-
-    let mut events = host.control_client("observer").await;
-    assert_eq!(
-        next_profile_event(&mut events).await.owner,
-        Some(ClientInstanceId::new("owner"))
-    );
-
-    let mut requester = host.control_client("requester").await;
-    let preparing = profile_request(&mut requester, 3, ProfileControlRequest::RequestControl).await;
-    assert_eq!(preparing.owner, owner_status.owner);
-    assert_eq!(
-        preparing.transfer.as_ref().map(|transfer| transfer.phase),
-        Some(TransferPhase::Preparing)
-    );
-    let transfer_id = preparing
-        .transfer
-        .as_ref()
-        .expect("preparing transfer")
-        .id
-        .clone();
-
-    let expired = tokio::time::timeout(Duration::from_secs(7), async {
-        loop {
-            let status = next_profile_event(&mut events).await;
-            if status.transfer.as_ref().map(|transfer| transfer.phase)
-                == Some(TransferPhase::ForceConfirmationRequired)
-            {
-                return status;
-            }
-        }
-    })
-    .await
-    .expect("preparation deadline event");
-    assert_eq!(expired.owner, owner_status.owner);
-    let automatic = control_request(
-        &mut owner,
-        4,
-        Request::ProfileControl(ProfileControlRequest::Ready {
-            transfer_id,
-            revisions: Vec::new(),
-        }),
-        None,
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(automatic.code, FailureCode::Conflict);
-}
-
-#[tokio::test]
-async fn canceled_transfer_deadline_does_not_mutate_its_replacement() {
-    let host = RunningHost::start().await;
-    let mut owner = host.control_client("owner").await;
-    let initial = profile_request(&mut owner, 1, ProfileControlRequest::Status).await;
-    let owner_status = profile_request(
-        &mut owner,
-        2,
-        ProfileControlRequest::ReacquireIfUnowned {
-            context: initial.context,
-        },
-    )
-    .await;
-
-    let mut first = host.control_client("first").await;
-    let preparing = profile_request(&mut first, 3, ProfileControlRequest::RequestControl).await;
-    let first_transfer = preparing.transfer.expect("first transfer");
-    tokio::time::sleep(Duration::from_millis(4_500)).await;
-    let canceled = profile_request(
-        &mut first,
-        4,
-        ProfileControlRequest::Cancel {
-            transfer_id: first_transfer.id,
-        },
-    )
-    .await;
-    assert!(canceled.transfer.is_none());
-
-    let mut replacement = host.control_client("replacement").await;
-    let replacement_status =
-        profile_request(&mut replacement, 5, ProfileControlRequest::RequestControl).await;
-    let replacement_transfer = replacement_status.transfer.expect("replacement transfer");
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    let status = profile_request(&mut replacement, 6, ProfileControlRequest::Status).await;
-    assert_eq!(status.owner, owner_status.owner);
-    assert_eq!(
-        status.transfer.as_ref().map(|transfer| &transfer.id),
-        Some(&replacement_transfer.id)
-    );
-    assert_eq!(
-        status.transfer.as_ref().map(|transfer| transfer.phase),
-        Some(TransferPhase::Preparing)
-    );
-}
-
-#[tokio::test]
 async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
     let mut host = RunningHost::start().await;
     let project_root = host._temp.path().join("saved-project");
@@ -479,16 +262,7 @@ async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
     let workspace_id = yttt_protocol::workspace::WorkspaceId::new("saved-workspace").unwrap();
 
     let mut owner = host.control_client("workspace-owner").await;
-    let initial = profile_request(&mut owner, 1, ProfileControlRequest::Status).await;
-    let owner_status = profile_request(
-        &mut owner,
-        2,
-        ProfileControlRequest::ReacquireIfUnowned {
-            context: initial.context,
-        },
-    )
-    .await;
-    let Response::Workspace(WorkspaceResponse::Applied { revision, .. }) = control_request(
+    let Response::Workspace(WorkspaceResponse::Applied { .. }) = control_request(
         &mut owner,
         3,
         Request::Workspace(WorkspaceRequest::Apply {
@@ -496,7 +270,6 @@ async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
             intent: open_project_intent(project_id.clone(), &project_root),
             expected_revision: None,
         }),
-        Some(owner_status.context),
     )
     .await
     .unwrap() else {
@@ -504,22 +277,37 @@ async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
     };
 
     let mut lifecycle = host.lifecycle_client("lifecycle").await;
+    // The Host runs the opened project's pane; forgetting the workspace
+    // removes both blockers.
     assert_eq!(
         lifecycle_request(&mut lifecycle, 1, LifecycleRequest::StopIfIdle).await,
         LifecycleResponse::Busy {
-            blockers: vec![HostBlocker::Project(project_id.clone())],
+            blockers: vec![
+                HostBlocker::Project(project_id.clone()),
+                HostBlocker::RunningTerminal(yttt_core::model::ids::TerminalSessionId::new(
+                    "saved-project:saved:shell"
+                )),
+            ],
         }
     );
 
+    // Starting the pane moved the revision past the intent's.
+    let Response::Workspace(WorkspaceResponse::Workspaces(index)) =
+        control_request(&mut owner, 4, Request::Workspace(WorkspaceRequest::List))
+            .await
+            .unwrap()
+    else {
+        panic!("workspace list")
+    };
+    let revision = index[0].revision;
     let Response::Workspace(WorkspaceResponse::Registered(_)) = control_request(
         &mut owner,
-        4,
+        5,
         Request::Workspace(WorkspaceRequest::SetRestoreOnStartup {
             workspace_id: workspace_id.clone(),
             expected_revision: revision,
             restore: false,
         }),
-        Some(owner_status.context),
     )
     .await
     .unwrap() else {
@@ -529,12 +317,11 @@ async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
         workspace_id: forgotten,
     }) = control_request(
         &mut owner,
-        5,
+        6,
         Request::Workspace(WorkspaceRequest::Forget {
             workspace_id: workspace_id.clone(),
             expected_revision: revision,
         }),
-        Some(owner_status.context),
     )
     .await
     .unwrap()
@@ -543,15 +330,85 @@ async fn forgetting_last_archived_workspace_releases_project_idle_blocker() {
     };
     assert_eq!(forgotten, workspace_id);
 
-    assert_eq!(
-        lifecycle_request(&mut lifecycle, 2, LifecycleRequest::StopIfIdle).await,
-        LifecycleResponse::Stopping
-    );
+    // The forgotten pane's terminal ends asynchronously.
+    let mut request_id = 1;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            request_id += 1;
+            match lifecycle_request(&mut lifecycle, request_id, LifecycleRequest::StopIfIdle).await
+            {
+                LifecycleResponse::Stopping => break,
+                LifecycleResponse::Busy { blockers } => {
+                    assert!(
+                        !blockers.contains(&HostBlocker::Project(project_id.clone())),
+                        "the forgotten project still blocks: {blockers:?}"
+                    );
+                }
+                response => panic!("unexpected lifecycle response: {response:?}"),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the forgotten workspace's pane kept the Host busy");
     tokio::time::timeout(Duration::from_secs(5), &mut host.task)
         .await
         .expect("Host shutdown timeout")
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_pane_the_host_starts_is_announced_to_watching_clients() {
+    let host = RunningHost::start().await;
+    let project_root = host._temp.path().join("announced-project");
+    fs::create_dir_all(&project_root).unwrap();
+    let workspace_id = yttt_protocol::workspace::WorkspaceId::new("announced").unwrap();
+
+    let mut owner = host.control_client("pane-owner").await;
+    let mut watcher = host.control_client("pane-watcher").await;
+    assert!(ping(&mut watcher, 1).await);
+
+    // The opened project's pane is started by the Host, not by a terminal
+    // request, so only the catalog event tells the watcher to attach.
+    let Response::Workspace(WorkspaceResponse::Applied { .. }) = control_request(
+        &mut owner,
+        3,
+        Request::Workspace(WorkspaceRequest::Apply {
+            workspace_id,
+            intent: open_project_intent(ProjectId::new("announced-project"), &project_root),
+            expected_revision: None,
+        }),
+    )
+    .await
+    .unwrap() else {
+        panic!("workspace apply")
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ControlMessage::Event(event) = receive_control(&mut watcher).await.unwrap()
+                && matches!(event.body, ServerEvent::ResourceCatalogChanged)
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the started pane was not announced");
+    let Response::Resources(catalog) = control_request(&mut watcher, 2, Request::ListResources)
+        .await
+        .unwrap()
+    else {
+        panic!("resource catalog")
+    };
+    assert_eq!(
+        catalog
+            .terminals
+            .iter()
+            .map(|terminal| terminal.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["announced-project:saved:shell"]
+    );
 }
 
 #[derive(serde::Serialize)]
@@ -562,7 +419,6 @@ enum FutureBody {
 #[derive(serde::Serialize)]
 struct FutureRequest {
     request_id: u64,
-    control: Option<()>,
     body: FutureBody,
 }
 
@@ -574,7 +430,6 @@ enum FutureEnvelope {
 async fn send_future_request(stream: &mut TransportStream, kind: FrameKind, request_id: u64) {
     let message = FutureEnvelope::Request(FutureRequest {
         request_id,
-        control: None,
         body: FutureBody::SummonDragon { size: 3 },
     });
     send_frame(stream, &encode_message(kind, &message).unwrap())
@@ -605,7 +460,7 @@ async fn requests_from_a_newer_client_are_unsupported_without_dropping_the_conne
     };
     assert_unsupported(response, 41);
     assert!(matches!(
-        control_request(&mut control, 42, Request::Ping { sent_millis: 1 }, None).await,
+        control_request(&mut control, 42, Request::Ping { sent_millis: 1 }).await,
         Ok(Response::Pong { .. })
     ));
 }

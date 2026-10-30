@@ -2,48 +2,19 @@ use parking_lot::Mutex;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Weak},
-    time::Duration,
 };
-use yttt_client_core::ClientCore;
-use yttt_protocol::{
-    Request, Response,
-    session::{ProfileControlRequest, TransferPhase, WorkspaceRevision},
-    workspace::{WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary},
-};
+use yttt_protocol::workspace::{WorkspaceId, WorkspaceSummary};
 
+/// Whether a window still has document edits the Host has not stored.
 #[derive(Default)]
-struct Publication {
-    transfer_id: Option<String>,
-    revision: Option<u64>,
+struct DocumentSync {
+    unsynced: bool,
     error: Option<String>,
-}
-
-fn transfer_readiness(
-    views: &HashMap<WorkspaceId, Publication>,
-    transfer_id: &str,
-) -> Option<Result<Vec<WorkspaceRevision>, String>> {
-    let mut revisions = Vec::with_capacity(views.len());
-    for (id, publication) in views {
-        if publication.transfer_id.as_deref() != Some(transfer_id) {
-            return None;
-        }
-        if let Some(error) = &publication.error {
-            return Some(Err(error.clone()));
-        }
-        let revision = publication.revision?;
-        revisions.push(WorkspaceRevision {
-            workspace_id: id.clone(),
-            revision,
-        });
-    }
-    Some(Ok(revisions))
 }
 
 struct State {
     available: VecDeque<WorkspaceId>,
-    views: HashMap<WorkspaceId, Publication>,
-    submitted_transfer: Option<String>,
-    local_flush: Option<String>,
+    views: HashMap<WorkspaceId, DocumentSync>,
     history_initialized: bool,
 }
 
@@ -61,39 +32,29 @@ impl WorkspaceViewLease {
     pub fn id(&self) -> &WorkspaceId {
         &self.id
     }
-    pub fn published(
-        &self,
-        transfer_id: Option<String>,
-        revision: Option<u64>,
-        error: Option<String>,
-    ) {
+
+    /// Records whether this window has edits the Host has not stored yet,
+    /// and the last upload failure.
+    pub fn report_documents(&self, unsynced: bool, error: Option<String>) {
         if let Some(coordinator) = self.coordinator.upgrade()
-            && let Some(publication) = coordinator.state.lock().views.get_mut(&self.id)
+            && let Some(sync) = coordinator.state.lock().views.get_mut(&self.id)
         {
-            *publication = Publication {
-                transfer_id,
-                revision,
-                error,
-            };
+            *sync = DocumentSync { unsynced, error };
         }
     }
 }
+
 impl Drop for WorkspaceViewLease {
     fn drop(&mut self) {
         if let Some(coordinator) = self.coordinator.upgrade() {
-            let mut state = coordinator.state.lock();
-            state.views.remove(&self.id);
+            coordinator.state.lock().views.remove(&self.id);
         }
     }
 }
 
 impl SessionCoordinator {
-    pub fn start(
-        client: Arc<ClientCore>,
-        runtime: &tokio::runtime::Handle,
-        workspaces: Vec<WorkspaceSummary>,
-    ) -> Arc<Self> {
-        let coordinator = Arc::new(Self {
+    pub fn new(workspaces: Vec<WorkspaceSummary>) -> Arc<Self> {
+        Arc::new(Self {
             state: Mutex::new(State {
                 history_initialized: !workspaces.is_empty(),
                 available: workspaces
@@ -102,91 +63,8 @@ impl SessionCoordinator {
                     .map(|entry| entry.workspace_id)
                     .collect(),
                 views: HashMap::new(),
-                submitted_transfer: None,
-                local_flush: None,
             }),
-        });
-        let weak = Arc::downgrade(&coordinator);
-        runtime.spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
-            loop {
-                interval.tick().await;
-                let Some(coordinator) = weak.upgrade() else {
-                    return;
-                };
-                let Some(status) = client.control_status() else {
-                    continue;
-                };
-                let Some(transfer) = status.transfer.filter(|transfer| {
-                    transfer.previous_owner.as_ref() == Some(client.client_id())
-                        && transfer.phase == TransferPhase::Preparing
-                }) else {
-                    coordinator.state.lock().submitted_transfer = None;
-                    continue;
-                };
-                let readiness = {
-                    let mut state = coordinator.state.lock();
-                    if state.submitted_transfer.as_deref() == Some(&transfer.id) {
-                        continue;
-                    }
-                    let Some(readiness) = transfer_readiness(&state.views, &transfer.id) else {
-                        continue;
-                    };
-                    state.submitted_transfer = Some(transfer.id.clone());
-                    readiness
-                };
-                let result = async {
-                    let revisions = readiness?;
-                    let Response::Workspace(WorkspaceResponse::Workspaces(index)) = client
-                        .request(Request::Workspace(WorkspaceRequest::List))
-                        .await
-                        .map_err(|error| error.to_string())?
-                    else {
-                        return Err("Host returned an unexpected workspace index".to_string());
-                    };
-                    let mut confirmed = index
-                        .into_iter()
-                        .map(|entry| WorkspaceRevision {
-                            workspace_id: entry.workspace_id,
-                            revision: entry.revision,
-                        })
-                        .collect::<Vec<_>>();
-                    for revision in revisions {
-                        let Some(entry) = confirmed
-                            .iter_mut()
-                            .find(|entry| entry.workspace_id == revision.workspace_id)
-                        else {
-                            return Err(
-                                "published workspace disappeared from Host index".to_string()
-                            );
-                        };
-                        if entry.revision != revision.revision {
-                            return Err(
-                                "workspace changed while preparing control transfer".to_string()
-                            );
-                        }
-                    }
-                    client
-                        .request(Request::ProfileControl(ProfileControlRequest::Ready {
-                            transfer_id: transfer.id.clone(),
-                            revisions: confirmed,
-                        }))
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    Ok::<_, String>(())
-                }
-                .await;
-                if let Err(error) = result {
-                    eprintln!("control transfer publication failed: {error}");
-                    let _ = client
-                        .request(Request::ProfileControl(ProfileControlRequest::Cancel {
-                            transfer_id: transfer.id,
-                        }))
-                        .await;
-                }
-            }
-        });
-        coordinator
+        })
     }
 
     pub fn claim(
@@ -208,7 +86,7 @@ impl SessionCoordinator {
         } else {
             WorkspaceId::new(uuid::Uuid::new_v4().to_string()).expect("UUID is a workspace ID")
         };
-        state.views.insert(id.clone(), Publication::default());
+        state.views.insert(id.clone(), DocumentSync::default());
         state.history_initialized = true;
         Ok(WorkspaceViewLease {
             id,
@@ -232,39 +110,14 @@ impl SessionCoordinator {
         self.state.lock().available.retain(|entry| entry != id);
     }
 
-    pub fn local_flush(&self) -> Option<String> {
-        self.state.lock().local_flush.clone()
-    }
-    pub fn begin_local_flush(&self) -> String {
-        let id = format!("exit-{}", uuid::Uuid::new_v4());
-        self.state.lock().local_flush = Some(id.clone());
-        id
-    }
-    pub fn end_local_flush(&self) {
-        self.state.lock().local_flush = None;
-    }
-    pub fn local_flush_ready(&self, id: &str) -> Result<bool, String> {
+    /// `Ok(true)` once every window's document edits are stored on the Host;
+    /// `Err` with the first upload failure.
+    pub fn documents_synced(&self) -> Result<bool, String> {
         let state = self.state.lock();
-        for publication in state.views.values() {
-            if publication.transfer_id.as_deref() != Some(id) {
-                return Ok(false);
-            }
-            if let Some(error) = &publication.error {
-                return Err(error.clone());
-            }
-            if publication.revision.is_none() {
-                return Ok(false);
-            }
+        if let Some(error) = state.views.values().find_map(|sync| sync.error.clone()) {
+            return Err(error);
         }
-        Ok(true)
-    }
-
-    pub fn sharing_ready(&self) -> bool {
-        self.state
-            .lock()
-            .views
-            .values()
-            .all(|publication| publication.revision.is_some() && publication.error.is_none())
+        Ok(state.views.values().all(|sync| !sync.unsynced))
     }
 }
 
@@ -279,8 +132,6 @@ mod tests {
             state: Mutex::new(State {
                 available: VecDeque::from([saved.clone()]),
                 views: HashMap::new(),
-                submitted_transfer: None,
-                local_flush: None,
                 history_initialized: true,
             }),
         });
@@ -292,43 +143,5 @@ mod tests {
         assert_eq!(restored.id(), &saved);
         assert_ne!(restored.id(), other.id());
         assert!(coordinator.claim(Some(saved), false).is_err());
-    }
-
-    #[test]
-    fn normal_transfer_waits_for_every_workspace_publication() {
-        let workspace = WorkspaceId::new("workspace").unwrap();
-        let mut views = HashMap::from([(workspace.clone(), Publication::default())]);
-
-        assert!(transfer_readiness(&views, "transfer").is_none());
-
-        views.get_mut(&workspace).unwrap().transfer_id = Some("transfer".to_string());
-        assert!(transfer_readiness(&views, "transfer").is_none());
-
-        views.get_mut(&workspace).unwrap().revision = Some(12);
-        assert_eq!(
-            transfer_readiness(&views, "transfer").unwrap().unwrap(),
-            vec![WorkspaceRevision {
-                workspace_id: workspace,
-                revision: 12,
-            }]
-        );
-    }
-
-    #[test]
-    fn failed_publication_prevents_transfer_readiness() {
-        let workspace = WorkspaceId::new("workspace").unwrap();
-        let views = HashMap::from([(
-            workspace,
-            Publication {
-                transfer_id: Some("transfer".to_string()),
-                revision: None,
-                error: Some("draft upload failed".to_string()),
-            },
-        )]);
-
-        assert_eq!(
-            transfer_readiness(&views, "transfer"),
-            Some(Err("draft upload failed".to_string()))
-        );
     }
 }

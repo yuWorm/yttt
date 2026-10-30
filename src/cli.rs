@@ -365,15 +365,12 @@ fn control_state_label(state: &str, text: UiText) -> &str {
     text.get(match state {
         "idle" => UiTextKey::TerminalI18nLifecycleIdle,
         "starting" => UiTextKey::TerminalI18nLifecycleStarting,
-        "reconciling" => UiTextKey::TerminalI18nLifecycleReconciling,
         "running" => UiTextKey::TerminalI18nLifecycleRunning,
         "stopping" => UiTextKey::TerminalI18nLifecycleStopping,
         "exited" => UiTextKey::TerminalI18nLifecycleExited,
         "failed" => UiTextKey::TerminalI18nLifecycleSpawnFailed,
         "lost" => UiTextKey::TerminalI18nLifecycleLost,
-        "restoring" => UiTextKey::CliLocalizationStateRestoring,
         "pending" => UiTextKey::CliLocalizationStatePending,
-        "initializing" => UiTextKey::CliLocalizationStateInitializing,
         state => return state,
     })
 }

@@ -1,5 +1,4 @@
 use super::*;
-use parking_lot::RwLock;
 
 pub(super) fn terminal_pane_key(project_id: &str, tab_id: &str, pane_id: &str) -> String {
     format!("{project_id}:{tab_id}:{pane_id}")
@@ -42,8 +41,6 @@ pub(super) fn collect_terminal_pane_contexts(
     project_title: &str,
     tab_id: &str,
     tab_title: &str,
-    shell: &str,
-    environment: &Arc<RwLock<BTreeMap<String, String>>>,
     layout: &LayoutNode,
     focused_pane_id: Option<&str>,
     terminal_input_gate: &TerminalInputGate,
@@ -57,12 +54,8 @@ pub(super) fn collect_terminal_pane_contexts(
             tab_id: tab_id.to_string(),
             tab_title: tab_title.to_string(),
             pane: pane.clone(),
-            shell: shell.to_string(),
-            environment: environment.clone(),
             is_focused: focused_pane_id == Some(pane.id.as_str()),
             terminal_input_gate: terminal_input_gate.clone(),
-            ssh: None,
-            agent_launch: None,
         }),
         LayoutNode::Split(split) => {
             collect_terminal_pane_contexts(
@@ -71,8 +64,6 @@ pub(super) fn collect_terminal_pane_contexts(
                 project_title,
                 tab_id,
                 tab_title,
-                shell,
-                environment,
                 &split.left,
                 focused_pane_id,
                 terminal_input_gate,
@@ -84,8 +75,6 @@ pub(super) fn collect_terminal_pane_contexts(
                 project_title,
                 tab_id,
                 tab_title,
-                shell,
-                environment,
                 &split.right,
                 focused_pane_id,
                 terminal_input_gate,

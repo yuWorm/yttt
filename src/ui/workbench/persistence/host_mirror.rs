@@ -1,8 +1,9 @@
-//! Mirrors the Host layout of the open workspace: layout changes other
-//! Clients make replace this Client's workspace and editor work areas.
+//! Mirrors the Host layout of the open workspace: every accepted intent, from
+//! this Client or another, replaces this Client's workspace and editor work
+//! areas.
 
 use super::*;
-use crate::model::host_workspace::{HostWorkspace, HostWorkspaceState, pane_changes};
+use crate::model::host_workspace::{HostWorkspace, pane_changes};
 use crate::ui::editor::ProjectFileLoadRequest;
 
 /// Wakes the workbench when the Host layout of `workspace_id` changes.
@@ -53,22 +54,16 @@ impl WorkbenchView {
         });
     }
 
-    /// Replaces the local layout with a newer Host layout. Waits while the
-    /// workspace is restoring, frozen for recovery, or committing: the commit
-    /// response settles which layout the Host holds.
+    /// Replaces the local layout with a newer Host layout of the same Host.
+    /// A Host that restarted is opened again instead, which also reads the
+    /// Agent states and documents.
     pub(super) fn adopt_host_workspace_layout(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let persistence = &self.workspace_persistence;
-        if persistence.closing
-            || persistence.commit_in_flight
-            || !matches!(
-                persistence.mode,
-                WorkspacePersistenceMode::Active | WorkspacePersistenceMode::Observer
-            )
-        {
+        if persistence.closing || persistence.mode != WorkspacePersistenceMode::Active {
             return;
         }
         let Some(held_revision) = persistence.revision else {
@@ -90,47 +85,54 @@ impl WorkbenchView {
         else {
             return;
         };
-        let host = match HostWorkspace::restore(layout) {
-            Ok(host) => host,
-            Err(error) => {
-                self.set_workspace_persistence_error(
-                    self.ui_text
-                        .get(UiTextKey::PersistenceStateRestoreFailed)
-                        .replace("{error}", &error.to_string()),
-                );
-                return;
-            }
-        };
+        match HostWorkspace::restore(layout) {
+            Ok(host) => self.replace_with_host_layout(host, &runtime, window, cx),
+            Err(error) => self.set_workspace_persistence_error(
+                self.ui_text
+                    .get(UiTextKey::PersistenceStateRestoreFailed)
+                    .replace("{error}", &error.to_string()),
+            ),
+        }
+    }
 
+    /// Makes `host` the local workspace and editor work areas: drops the
+    /// terminal views of removed panes and the closed projects, registers
+    /// the projects another Client opened, and loads the files it opened
+    /// without changing the active item. Unsaved edits of files the layout
+    /// closed are kept as Device copies.
+    pub(super) fn replace_with_host_layout(
+        &mut self,
+        host: HostWorkspace,
+        runtime: &Arc<crate::host_runtime::DesktopHostRuntime>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let open_files = host
             .editor()
             .sessions()
             .flat_map(|(_, session)| session.file_ids())
             .cloned()
             .collect::<HashSet<_>>();
-        let closes_edited_files = self.workspace.opened_projects().iter().any(|project| {
-            self.project
-                .project_editor_runtime
-                .documents_for_project(&project.id)
-                .any(|(id, document)| {
-                    !open_files.contains(id) && document.read(cx).model().is_dirty()
-                })
-        });
-        if closes_edited_files {
-            self.preserve_workspace_drafts(
-                &runtime,
-                &workspace_id,
-                self.ui_text
-                    .get(UiTextKey::PersistenceHostClosedEditedFiles),
-                true,
-                cx,
-            );
-        }
+        let closed_edits = self
+            .workspace
+            .opened_projects()
+            .iter()
+            .flat_map(|project| {
+                self.project
+                    .project_editor_runtime
+                    .documents_for_project(&project.id)
+            })
+            .filter(|(id, document)| {
+                !open_files.contains(*id) && document.read(cx).model().is_dirty()
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        self.preserve_document_copies(&closed_edits, window, cx);
 
         let state = host.state();
         let mut workspace = host.workspace().clone();
-        // This Client observes its own terminals; the next commit reports
-        // what differs from the Host.
+        // The Host layout carries no Agent boards; this Client keeps the ones
+        // it holds for the panes both layouts contain.
         workspace.keep_pane_runtime_from(&self.workspace);
         let panes = pane_changes(&self.workspace, &workspace);
         let previous_projects = self
@@ -145,7 +147,6 @@ impl WorkbenchView {
         *self.project.project_editor_runtime.workspace_mut() = host.editor().clone();
         self.project.project_editor_runtime.sync_file_trees();
         self.workspace_persistence.revision = Some(state.revision);
-        self.adopt_host_layout_baseline(&state);
 
         self.forget_removed_panes(&panes.removed);
         for project_id in &previous_projects {
@@ -153,7 +154,7 @@ impl WorkbenchView {
                 self.cleanup_closed_project(project_id);
             }
         }
-        self.register_mirrored_projects(&runtime, &previous_projects);
+        self.register_mirrored_projects(runtime, &previous_projects);
         self.load_mirrored_files(window, cx);
 
         let next_item = self.selected_active_work_item();
@@ -166,30 +167,6 @@ impl WorkbenchView {
             }
         }
         cx.notify();
-    }
-
-    /// The Host stores its layout with the documents and Agent states of the
-    /// last commit, so only those and the pane runtime this Client observes
-    /// remain to publish.
-    fn adopt_host_layout_baseline(&mut self, state: &HostWorkspaceState) {
-        let Some(serde_json::Value::Object(baseline)) =
-            self.workspace_persistence.last_committed_snapshot.as_mut()
-        else {
-            return;
-        };
-        let (Ok(workspace), Ok(editor)) = (
-            serde_json::to_value(&state.workspace),
-            serde_json::to_value(&state.editor),
-        ) else {
-            self.workspace_persistence.last_committed_snapshot = None;
-            return;
-        };
-        baseline.insert(
-            "schema_version".into(),
-            REMOTE_WORKSPACE_SCHEMA_VERSION.into(),
-        );
-        baseline.insert("workspace".into(), workspace);
-        baseline.insert("editor".into(), editor);
     }
 
     /// Registers the projects another Client opened with the Host.

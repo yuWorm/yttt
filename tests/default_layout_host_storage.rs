@@ -20,7 +20,6 @@ use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_protocol::{
     BuildIdentity, ConnectionChannel, HostPath, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request,
     Response,
-    session::ProfileControlRequest,
     workspace::{WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
@@ -107,12 +106,6 @@ fn missing_default_layout_loads_without_writing_and_updates_through_host_storage
             .await
             .unwrap(),
         );
-        client
-            .request(Request::ProfileControl(
-                ProfileControlRequest::RequestControl,
-            ))
-            .await
-            .unwrap();
         let mut observer_identity = identity;
         observer_identity.client_instance_id = ClientInstanceId::new("layout-observer");
         observer_identity.session_nonce = yttt_transport::new_session_nonce();
@@ -223,10 +216,11 @@ fn missing_default_layout_loads_without_writing_and_updates_through_host_storage
         .unwrap();
     assert_eq!(setting.value, ProjectEditorSettingValue::TabSize(5));
     assert_eq!(setting.source, ProjectSettingSource::Project);
-    assert!(storage::write(&project_file, b"[editor]\ntab_size = 9\n").is_err());
+    // Any Client writes shared configuration; the content revision orders writers.
+    storage::write(&project_file, b"[editor]\ntab_size = 9\n").unwrap();
     assert_eq!(
         fs::read_to_string(&project_file).unwrap(),
-        "[editor]\ntab_size = 5\n"
+        "[editor]\ntab_size = 9\n"
     );
     assert!(!project.join(".yttt").exists());
     let absent_project = temporary.path().join("absent-project");

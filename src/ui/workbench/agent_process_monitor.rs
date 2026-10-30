@@ -1,14 +1,11 @@
 use gpui::{Context, Window};
-use yttt_agent_core::AgentProcessState;
+use yttt_agent_core::{AgentProcessState, AgentSnapshot, AgentViewState};
 use yttt_protocol::agent::AgentSnapshotUpdate;
 
 use super::{UiTextKey, WorkbenchView, helpers::terminal_pane_key};
 use crate::{
     model::ids::ProjectId,
-    runtime::{
-        agent_hooks::AgentSnapshotEvent,
-        agent_manager::{AgentPaneAddress, AgentPaneExitOutcome},
-    },
+    runtime::{agent_hooks::AgentSnapshotEvent, agent_manager::AgentPaneAddress},
 };
 
 impl WorkbenchView {
@@ -65,10 +62,6 @@ impl WorkbenchView {
     }
 
     fn reset_host_agent_epoch(&mut self, host_epoch: u64) -> bool {
-        if self.terminal.host_agent_epoch.is_none() {
-            self.terminal.host_agent_epoch = Some(host_epoch);
-            return false;
-        }
         if self
             .terminal
             .host_agent_epoch
@@ -76,19 +69,16 @@ impl WorkbenchView {
         {
             return false;
         }
+        let first = self.terminal.host_agent_epoch.is_none();
         self.terminal.host_agent_epoch = Some(host_epoch);
-        self.terminal.pending_host_agent_snapshots.clear();
-        // Preserve resume metadata, but never present the previous Host's processes as live.
-        let snapshots = self.agent_manager.retained_snapshots();
-        for (address, snapshot) in &snapshots {
-            if let Err(error) =
-                self.record_agent_runtime_snapshot(address.clone(), snapshot.clone())
-            {
-                self.load_error = Some(error.to_string());
-            }
+        if first {
+            return false;
         }
-        self.agent_manager.reset_for_host_restore(snapshots);
-        true
+        // The new Host run restarts the Agents and reports their snapshots
+        // from the start; its layout carries the saved sessions.
+        self.terminal.pending_host_agent_snapshots.clear();
+        self.agent_manager.reset_host_sequences();
+        false
     }
 
     fn expects_host_agent_snapshot(&self, terminal_session_id: &str) -> bool {
@@ -143,135 +133,51 @@ impl WorkbenchView {
             );
             return true;
         }
-        match self.agent_manager.apply_host_snapshot(address, update) {
-            Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) => {
-                let result = if snapshot.process_state == AgentProcessState::Exited {
-                    self.workspace.clear_agent_snapshot(
-                        &ProjectId::new(&address.project_id),
-                        &address.tab_id,
-                        &address.pane_id,
-                    )
-                } else {
-                    self.record_agent_event_snapshot(address, snapshot, window, cx)
-                };
-                if let Err(error) = result {
-                    self.load_error = Some(format!(
-                        "{}: {error}",
-                        self.ui_text
-                            .get(UiTextKey::WorkbenchI18nAgentSnapshotApplyFailed)
-                    ));
-                }
-                true
-            }
-            Some(AgentPaneExitOutcome::ResumeFailed { address, snapshot }) => {
-                if let Err(error) = self.record_agent_runtime_snapshot(address, snapshot) {
-                    self.load_error = Some(format!(
-                        "{}: {error}",
-                        self.ui_text
-                            .get(UiTextKey::WorkbenchI18nAgentSnapshotApplyFailed)
-                    ));
-                } else {
-                    self.load_error = Some(
-                        self.ui_text
-                            .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailedRetained)
-                            .to_string(),
-                    );
-                }
-                true
-            }
-            None => false,
+        if !self.agent_manager.accept_host_snapshot(&address, &update) {
+            return false;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::*;
-    use super::*;
-    use yttt_agent_core::{AgentReducer, AgentSessionMetadata};
-    use yttt_protocol::agent::AgentHookScope;
-
-    #[gpui::test]
-    fn new_host_epoch_marks_retained_agents_stale_without_losing_resume_state(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        cx.update(gpui_component::init);
-        cx.skip_drawing();
-        let root_dir = tempfile::tempdir().unwrap();
-        let mut workspace = Workspace::new();
-        let project = workspace
-            .open_project(
-                ProjectDescriptor::new(
-                    ProjectId::new("epoch-project"),
-                    ProjectLocation::local(root_dir.path().to_path_buf()),
-                ),
-                dev_fixture_layout(),
-            )
-            .unwrap();
-        let mut snapshot =
-            AgentReducer::new(AgentInstanceId::random(), ProviderId::from_static("omp"), 1)
-                .snapshot()
-                .clone();
-        snapshot.process_state = AgentProcessState::Running;
-        snapshot.turn_state = AgentTurnState::Working;
-        snapshot.session = Some(AgentSessionMetadata {
-            session_id: Some("retained-session".into()),
-            ..Default::default()
-        });
-        workspace
-            .record_agent_snapshot(&project, "dev", "shell", snapshot.clone())
-            .unwrap();
-        let update = AgentSnapshotUpdate {
-            scope: AgentHookScope {
-                project_id: project.as_str().into(),
-                tab_id: "dev".into(),
-                pane_id: "shell".into(),
-                generation: 1,
-            },
-            terminal_session_id: TerminalSessionId::new(terminal_pane_key(
-                project.as_str(),
-                "dev",
-                "shell",
-            )),
-            host_epoch: 1,
-            sequence: 20,
-            snapshot,
+        // The Host merges the same way into the layout it broadcasts next.
+        let mut snapshot = update.snapshot;
+        let previous = self.pane_agent_snapshot(&address);
+        if let Some(previous) = previous {
+            snapshot.board.merge_retained(&previous.board);
+        }
+        let resume_failed = snapshot.session.is_none()
+            && snapshot.view_state() == AgentViewState::Failed
+            && previous.is_some_and(|previous| previous.session.is_some());
+        if snapshot.session.is_none() {
+            snapshot.session = previous.and_then(|previous| previous.session.clone());
+        }
+        // An ended Agent stays on its pane as history; ending is not announced.
+        let result = if snapshot.process_state == AgentProcessState::Exited {
+            self.record_agent_runtime_snapshot(address, snapshot)
+        } else {
+            self.record_agent_event_snapshot(address, snapshot, window, cx)
         };
-        let paths = AppConfigPaths::from_config_dir(root_dir.path().join("config"));
-        let (view, cx) = cx.add_window_view(|_, _| {
-            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths)
-        });
-        view.update_in(cx, |view, window, cx| {
-            let address = AgentPaneAddress::new(project.as_str(), "dev", "shell");
-            view.agent_manager
-                .apply_host_snapshot(address, update.clone())
-                .unwrap();
-            view.terminal.host_agent_epoch = Some(1);
-            view.terminal
-                .pending_host_agent_snapshots
-                .insert(update.terminal_session_id.clone(), update.clone());
-            assert!(view.reset_host_agent_epoch(2));
-            assert!(view.terminal.pending_host_agent_snapshots.is_empty());
-            let saved = view.workspace.opened_projects()[0]
-                .tab_states
-                .iter()
-                .find(|tab| tab.tab_id == "dev")
-                .unwrap()
-                .pane_states
-                .iter()
-                .find(|pane| pane.pane_id == "shell")
-                .unwrap()
-                .agent_snapshot
-                .as_ref()
-                .unwrap();
-            assert_eq!(saved.view_state(), AgentViewState::Stale);
-            assert_eq!(
-                saved.session.as_ref().unwrap().session_id.as_deref(),
-                Some("retained-session")
+        if let Err(error) = result {
+            self.load_error = Some(format!(
+                "{}: {error}",
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nAgentSnapshotApplyFailed)
+            ));
+        } else if resume_failed {
+            self.load_error = Some(
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nAgentSessionResumeFailedRetained)
+                    .to_string(),
             );
-            assert!(!view.apply_host_agent_snapshot(update, window, cx));
-            assert!(view.terminal.pending_host_agent_snapshots.is_empty());
-            assert!(!view.reset_host_agent_epoch(2));
-        });
+        }
+        true
+    }
+
+    fn pane_agent_snapshot(&self, address: &AgentPaneAddress) -> Option<&AgentSnapshot> {
+        self.workspace
+            .project(&ProjectId::new(&address.project_id))?
+            .tab_state(&address.tab_id)?
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == address.pane_id)?
+            .agent_snapshot
+            .as_ref()
     }
 }

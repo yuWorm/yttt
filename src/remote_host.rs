@@ -33,11 +33,6 @@ use zeroize::{Zeroize, Zeroizing};
 pub enum RemoteConnectEvent {
     Status(RemoteConnectStatus),
     HostKey(yttt_ssh::HostKeyChallenge),
-    Takeover {
-        owner: RemoteControlOwner,
-        force: bool,
-        answer: flume::Sender<bool>,
-    },
 }
 
 pub enum RemoteConnectStatus {
@@ -104,13 +99,6 @@ impl RemoteConnectCancellation {
     }
 }
 
-#[derive(Clone)]
-pub struct RemoteControlOwner {
-    pub environment_id: String,
-    pub profile_id: String,
-    pub workspace_count: usize,
-    pub client_id: Option<String>,
-}
 pub struct RemoteEnvironment {
     pub runtime: Arc<DesktopHostRuntime>,
     pub config_paths: AppConfigPaths,
@@ -575,102 +563,6 @@ fn initialize_environment(
         Response::Workspace(WorkspaceResponse::Environment(environment)) => environment,
         _ => return Err("unexpected Host environment response".into()),
     };
-    let index = match runtime.block_on(async {
-        cancellation.check(&events)?;
-        tokio::select! {
-            result = client.request(Request::Workspace(WorkspaceRequest::List)) => {
-                result.map_err(|error| error.to_string())
-            }
-            _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
-        }
-    })? {
-        Response::Workspace(WorkspaceResponse::Workspaces(index)) => index,
-        _ => return Err("unexpected Host workspace index".into()),
-    };
-    let mut control = client
-        .control_status()
-        .ok_or_else(|| "Host control state is unavailable".to_string())?;
-    let takeover_owner = RemoteControlOwner {
-        environment_id: environment.environment_id.clone(),
-        profile_id: identity.profile_id.to_string(),
-        workspace_count: index.len(),
-        client_id: control.owner.as_ref().map(ToString::to_string),
-    };
-    let take_control = confirm_transfer(&events, &cancellation, takeover_owner.clone(), false)?;
-    let request_control = |request| -> Result<yttt_protocol::session::ControlStatus, String> {
-        cancellation.check(&events)?;
-        let response = runtime.block_on(async {
-            tokio::select! {
-                result = client.request(Request::ProfileControl(request)) => {
-                    result.map_err(|error| error.to_string())
-                }
-                _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
-            }
-        })?;
-        match response {
-            Response::ProfileControl(status) => Ok(status),
-            _ => Err("unexpected profile control response".to_string()),
-        }
-    };
-    let cancel_transfer = |transfer_id| {
-        let _ = client.enqueue_request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::Cancel { transfer_id },
-        ));
-    };
-    if take_control {
-        control = request_control(yttt_protocol::session::ProfileControlRequest::RequestControl)?;
-        loop {
-            if control.owner.as_ref() == Some(client.client_id()) {
-                break;
-            }
-            let transfer = control.transfer.as_ref().ok_or_else(|| {
-                "profile transfer was cancelled; the previous Client retains its work".to_string()
-            })?;
-            if let Err(error) = cancellation.check(&events) {
-                cancel_transfer(transfer.id.clone());
-                return Err(error);
-            }
-            if transfer.phase == yttt_protocol::session::TransferPhase::ForceConfirmationRequired {
-                match confirm_transfer(
-                    &events,
-                    &cancellation,
-                    RemoteControlOwner {
-                        client_id: transfer.previous_owner.as_ref().map(ToString::to_string),
-                        ..takeover_owner.clone()
-                    },
-                    true,
-                ) {
-                    Ok(true) => {
-                        control = request_control(
-                            yttt_protocol::session::ProfileControlRequest::ConfirmForce {
-                                transfer_id: transfer.id.clone(),
-                            },
-                        )?;
-                    }
-                    Ok(false) => {
-                        cancel_transfer(transfer.id.clone());
-                        break;
-                    }
-                    Err(error) => {
-                        cancel_transfer(transfer.id.clone());
-                        return Err(error);
-                    }
-                }
-            } else {
-                let wait = runtime.block_on(async {
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_millis(100)) => Ok(()),
-                        _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
-                    }
-                });
-                if let Err(error) = wait {
-                    cancel_transfer(transfer.id.clone());
-                    return Err(error);
-                }
-                control = request_control(yttt_protocol::session::ProfileControlRequest::Status)?;
-            }
-        }
-    }
     cancellation.check(&events)?;
     let config_root = environment
         .config_root
@@ -983,52 +875,10 @@ fn read_server_bytes(
     Ok(bytes)
 }
 
-fn confirm_transfer(
-    events: &flume::Sender<RemoteConnectEvent>,
-    cancellation: &RemoteConnectCancellation,
-    owner: RemoteControlOwner,
-    force: bool,
-) -> Result<bool, String> {
-    cancellation.check(events)?;
-    let (answer, receiver) = flume::bounded(1);
-    events
-        .send(RemoteConnectEvent::Takeover {
-            owner,
-            force,
-            answer,
-        })
-        .map_err(|_| {
-            cancellation.cancel();
-            CONNECT_CANCELLED.to_string()
-        })?;
-    let answer = loop {
-        cancellation.check(events)?;
-        match receiver.recv_timeout(Duration::from_millis(25)) {
-            Ok(answer) => break answer,
-            Err(flume::RecvTimeoutError::Timeout) => continue,
-            Err(flume::RecvTimeoutError::Disconnected) => {
-                cancellation.cancel();
-                return Err(CONNECT_CANCELLED.to_string());
-            }
-        }
-    };
-    cancellation.check(events)?;
-    Ok(answer)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-
-    fn owner() -> RemoteControlOwner {
-        RemoteControlOwner {
-            environment_id: "environment".to_string(),
-            profile_id: "profile".to_string(),
-            workspace_count: 0,
-            client_id: None,
-        }
-    }
 
     #[test]
     fn cancelled_phase_does_not_start_a_remote_side_effect() {
@@ -1079,60 +929,5 @@ mod tests {
         release.send(()).unwrap();
         worker.join().unwrap();
         assert_eq!(outcome.unwrap(), Err(CONNECT_CANCELLED.to_string()));
-    }
-
-    #[test]
-    fn cancellation_interrupts_an_unanswered_transfer_prompt() {
-        let cancellation = RemoteConnectCancellation::new();
-        let worker_cancellation = cancellation.clone();
-        let (events, receiver) = flume::unbounded();
-        let (finished, result) = flume::bounded(1);
-        let worker = std::thread::spawn(move || {
-            let outcome = confirm_transfer(&events, &worker_cancellation, owner(), false);
-            finished.send(outcome).unwrap();
-        });
-        // Keep the prompt (and answer sender) alive: cancellation must not need a UI reply.
-        let prompt = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-        cancellation.cancel();
-        let outcome = result.recv_timeout(Duration::from_secs(2));
-        drop(prompt);
-        worker.join().unwrap();
-        assert_eq!(outcome.unwrap(), Err(CONNECT_CANCELLED.to_string()));
-    }
-
-    #[test]
-    fn explicit_observe_is_distinct_from_connection_cancellation() {
-        let cancellation = RemoteConnectCancellation::new();
-        let (events, receiver) = flume::unbounded();
-        let answer = std::thread::spawn(move || {
-            let RemoteConnectEvent::Takeover { answer, .. } = receiver.recv().unwrap() else {
-                panic!("expected takeover prompt")
-            };
-            answer.send(false).unwrap();
-            receiver
-        });
-
-        assert_eq!(
-            confirm_transfer(&events, &cancellation, owner(), false),
-            Ok(false)
-        );
-        answer.join().unwrap();
-
-        let cancellation = RemoteConnectCancellation::new();
-        let (events, receiver) = flume::unbounded();
-        let cancelled = cancellation.clone();
-        let answer = std::thread::spawn(move || {
-            let RemoteConnectEvent::Takeover { answer, .. } = receiver.recv().unwrap() else {
-                panic!("expected takeover prompt")
-            };
-            cancelled.cancel();
-            answer.send(false).unwrap();
-        });
-
-        assert_eq!(
-            confirm_transfer(&events, &cancellation, owner(), false),
-            Err(CONNECT_CANCELLED.to_string())
-        );
-        answer.join().unwrap();
     }
 }

@@ -962,9 +962,32 @@ impl HostRuntime {
             });
         }
         terminals.remove(session_id);
+        self.forget_terminal(session_id);
+        Ok(())
+    }
+
+    /// Drops an exited terminal so its session can start again. Returns
+    /// `false` when no exited terminal holds the session.
+    pub fn discard_exited(&self, session_id: &TerminalSessionId) -> bool {
+        let mut terminals = self.terminals.lock();
+        if !terminals
+            .get(session_id)
+            .is_some_and(|terminal| terminal.is_exited())
+        {
+            return false;
+        }
+        terminals.remove(session_id);
+        self.forget_terminal(session_id);
+        true
+    }
+
+    /// Drops the leases and attachments of a removed terminal. Callers hold
+    /// the terminals lock, so a new terminal for the session cannot interleave.
+    fn forget_terminal(&self, session_id: &TerminalSessionId) {
         let mut control = self.control.lock();
         control.leases.remove(session_id);
         control.pending.remove(session_id);
+        drop(control);
         self.attachments
             .lock()
             .retain(|(_, attached_session_id), attached| {
@@ -975,7 +998,6 @@ impl HostRuntime {
                     true
                 }
             });
-        Ok(())
     }
 
     pub fn reap_expired_exits(&self, now_millis: u64) -> usize {

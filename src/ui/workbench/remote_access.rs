@@ -1,9 +1,5 @@
 use super::*;
-use yttt_protocol::{
-    Request, Response,
-    remote_access::*,
-    session::{ProfileControlRequest, TransferPhase},
-};
+use yttt_protocol::{Request, Response, remote_access::*};
 
 impl WorkbenchView {
     pub(super) fn remote_access_settings(
@@ -79,16 +75,6 @@ impl WorkbenchView {
                 })),
             );
         }
-        let reclaim = runtime
-            .as_ref()
-            .and_then(|runtime| runtime.control_status())
-            .and_then(|status| status.transfer)
-            .filter(|transfer| transfer.phase == TransferPhase::ForceConfirmationRequired)
-            .map(|transfer| ProfileControlRequest::ConfirmForce {
-                transfer_id: transfer.id,
-            })
-            .unwrap_or(ProfileControlRequest::RequestControl);
-        let force = matches!(reclaim, ProfileControlRequest::ConfirmForce { .. });
         let clients = status
             .map(|status| status.clients.as_slice())
             .unwrap_or_default();
@@ -283,68 +269,28 @@ impl WorkbenchView {
                                 text.get(UiTextKey::RemoteAccessStreams)
                             )))
                     }))
-                    .when_some(
-                        status.and_then(|status| status.control.owner.as_ref()),
-                        |this, owner| {
-                            this.child(div().text_xs().text_color(theme.text_muted).child(format!(
-                                "{}: {owner}",
-                                text.get(UiTextKey::RemoteAccessControlOwner)
-                            )))
-                        },
-                    )
                     .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap(style.spacing.sm)
-                            .child(
-                                yttt_button(
-                                    "remote-access-disconnect",
-                                    text.get(UiTextKey::RemoteAccessDisconnect),
-                                    YtttButtonVariant::Secondary,
-                                    theme,
-                                    style,
-                                    cx,
-                                )
-                                .disabled(busy || clients.is_empty())
-                                .on_click(cx.listener(
-                                    |root, _, window, cx| {
-                                        root.remote_access_action(
-                                            Request::RemoteAccess(
-                                                RemoteAccessRequest::DisconnectAll,
-                                            ),
-                                            true,
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                )),
+                        div().flex().flex_wrap().gap(style.spacing.sm).child(
+                            yttt_button(
+                                "remote-access-disconnect",
+                                text.get(UiTextKey::RemoteAccessDisconnect),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                style,
+                                cx,
                             )
-                            .child(
-                                yttt_button(
-                                    "remote-access-reclaim",
-                                    text.get(UiTextKey::RemoteAccessReclaim),
-                                    YtttButtonVariant::Secondary,
-                                    theme,
-                                    style,
-                                    cx,
-                                )
-                                .disabled(
-                                    busy || runtime
-                                        .as_ref()
-                                        .is_some_and(|runtime| runtime.is_controller()),
-                                )
-                                .on_click(cx.listener(
-                                    move |root, _, window, cx| {
-                                        root.remote_access_action(
-                                            Request::ProfileControl(reclaim.clone()),
-                                            force,
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                )),
-                            ),
+                            .disabled(busy || clients.is_empty())
+                            .on_click(cx.listener(
+                                |root, _, window, cx| {
+                                    root.remote_access_action(
+                                        Request::RemoteAccess(RemoteAccessRequest::DisconnectAll),
+                                        true,
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        ),
                     ),
             )
             .when_some(
@@ -369,16 +315,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(runtime) = &self.terminal.host_runtime else {
-            return;
-        };
-        if enabled && !runtime.sharing_ready() {
-            self.ssh.remote_access_error = Some(
-                self.ui_text
-                    .get(UiTextKey::RemoteAccessNotReady)
-                    .to_string(),
-            );
-            cx.notify();
+        if self.terminal.host_runtime.is_none() {
             return;
         }
         let address = self

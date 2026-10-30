@@ -4542,8 +4542,7 @@ fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
         | ClientEvent::TerminalUnavailable(_) => true,
         ClientEvent::Server(event) => matches!(
             event.body,
-            yttt_protocol::ServerEvent::ProfileControl(_)
-                | yttt_protocol::ServerEvent::TerminalExit { .. }
+            yttt_protocol::ServerEvent::TerminalExit { .. }
                 | yttt_protocol::ServerEvent::TerminalLeaseRevoked { .. }
                 | yttt_protocol::ServerEvent::HostDraining
                 | yttt_protocol::ServerEvent::HostStopping

@@ -1,16 +1,27 @@
 use super::*;
 use gpui::{EntityInputHandler, TestAppContext, VisualTestContext};
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Instant};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    time::{Duration, Instant},
+};
 use yttt_client_core::ClientCore;
-use yttt_core::model::ids::{ClientInstanceId, ProfileId};
+use yttt_core::model::{
+    host_workspace::{ProjectPanel, WorkspaceIntent},
+    ids::{ClientInstanceId, ProfileId, ProjectId},
+    layout::{
+        LayoutNode, ProcessExitBehavior, ProjectConfig, ProjectLayout, TabConfig, TabStartup,
+        TerminalExecutionMode,
+    },
+    project::{ProjectDescriptor, ProjectLocation},
+};
 use yttt_host::{HostBootstrap, HostLifetime};
 use yttt_protocol::{
     BuildIdentity, ConnectionChannel, HostPath, ProtocolRange, RESOURCE_PROTOCOL_VERSION,
     ResourceCatalog,
     project::ProjectRequest,
-    session::ProfileControlRequest,
-    terminal::{AttachTerminal, TerminalLeaseMode},
-    workspace::{WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
+    workspace::{WorkspaceId, WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport_local::{
     AuthToken, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener,
@@ -102,13 +113,6 @@ impl RecoveryHost {
                 ))
                 .unwrap(),
         );
-        if client.control_status().unwrap().owner.is_none() {
-            runtime
-                .block_on(client.request(Request::ProfileControl(
-                    ProfileControlRequest::RequestControl,
-                )))
-                .unwrap();
-        }
         let Response::Workspace(WorkspaceResponse::Environment(environment)) = runtime
             .block_on(client.request(Request::Workspace(WorkspaceRequest::Environment)))
             .unwrap()
@@ -170,19 +174,66 @@ fn open_pane<'a>(
     open_pane_with_command(cx, runtime, root, COMMAND)
 }
 
+/// Opens a workspace whose only pane runs `command`; the Host starts it and
+/// the pane view attaches.
 fn open_pane_with_command<'a>(
     cx: &'a mut TestAppContext,
     runtime: Arc<DesktopHostRuntime>,
     root: &Path,
     command: &str,
 ) -> (Entity<TerminalPaneView>, &'a mut VisualTestContext) {
+    let project_id = ProjectId::new("recovery-project");
     runtime
         .request_blocking_typed(Request::Project(ProjectRequest::Register {
-            project_id: ProjectId::new("recovery-project"),
+            project_id: project_id.clone(),
             view_id: "recovery-view".into(),
             root: HostPath::from_path(root).unwrap(),
         }))
         .unwrap();
+    let pane = PaneConfig {
+        id: "shell".into(),
+        title: "Shell".into(),
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), command.into()],
+        execution_mode: TerminalExecutionMode::Command,
+        exit_behavior: ProcessExitBehavior::ManualRestart,
+        kind: PaneKind::Shell,
+        notify_on_exit: false,
+        detector: None,
+    };
+    let layout = ProjectLayout {
+        project: ProjectConfig {
+            name: "Recovery".into(),
+            default_tab: Some("tab".into()),
+        },
+        tabs: vec![TabConfig {
+            id: "tab".into(),
+            title: "Tab".into(),
+            cwd: None,
+            startup: TabStartup::Eager,
+            layout: LayoutNode::Pane(pane.clone()),
+        }],
+    };
+    let view = runtime.claim_workspace_view(false).unwrap();
+    let workspace_id = view.id().clone();
+    // The lease only names the workspace; the Host keeps it open.
+    drop(view);
+    let response = runtime.workspace_request(WorkspaceRequest::Apply {
+        workspace_id,
+        intent: WorkspaceIntent::OpenProject {
+            descriptor: ProjectDescriptor::new(project_id, ProjectLocation::local(root)),
+            layout,
+            panel: ProjectPanel {
+                visible: true,
+                width: 240.0,
+            },
+        },
+        expected_revision: None,
+    });
+    assert!(
+        matches!(response, Ok(WorkspaceResponse::Applied { .. })),
+        "{response:?}"
+    );
     // The Host and PTY use real IO threads rather than the simulated clock.
     cx.background_executor.allow_parking();
     cx.skip_drawing();
@@ -197,23 +248,9 @@ fn open_pane_with_command<'a>(
         project_title: "Recovery".into(),
         tab_id: "tab".into(),
         tab_title: "Tab".into(),
-        pane: PaneConfig {
-            id: "shell".into(),
-            title: "Shell".into(),
-            command: "/bin/sh".into(),
-            args: vec!["-c".into(), command.into()],
-            execution_mode: TerminalExecutionMode::Command,
-            exit_behavior: ProcessExitBehavior::ManualRestart,
-            kind: PaneKind::Shell,
-            notify_on_exit: false,
-            detector: None,
-        },
-        shell: "/bin/sh".into(),
-        environment: Arc::new(RwLock::new(BTreeMap::new())),
+        pane,
         is_focused: true,
         terminal_input_gate: TerminalInputGate::default(),
-        ssh: None,
-        agent_launch: None,
     };
     cx.add_window_view(|window, cx| {
         TerminalPaneView::new(
@@ -224,6 +261,34 @@ fn open_pane_with_command<'a>(
             cx,
         )
     })
+}
+
+/// Asks the Host to start the pane again, as its restart button does.
+fn restart_pane(runtime: &DesktopHostRuntime) {
+    let workspace_id = runtime_workspace(runtime);
+    let response = runtime.workspace_request(WorkspaceRequest::Apply {
+        workspace_id,
+        intent: WorkspaceIntent::RestartPane {
+            project_id: ProjectId::new("recovery-project"),
+            tab_id: "tab".into(),
+            pane_id: "shell".into(),
+            resume: false,
+        },
+        expected_revision: None,
+    });
+    assert!(
+        matches!(response, Ok(WorkspaceResponse::Applied { .. })),
+        "{response:?}"
+    );
+}
+
+fn runtime_workspace(runtime: &DesktopHostRuntime) -> WorkspaceId {
+    let Ok(WorkspaceResponse::Workspaces(index)) =
+        runtime.workspace_request(WorkspaceRequest::List)
+    else {
+        panic!("workspace list")
+    };
+    index[0].workspace_id.clone()
 }
 
 fn send_input(pane: &Entity<TerminalPaneView>, cx: &mut VisualTestContext) {
@@ -241,6 +306,15 @@ fn received_input_count(root: &Path, input: &str) -> usize {
     fs::read_to_string(root.join("inputs")).map_or(0, |recorded| {
         recorded.lines().filter(|line| *line == input).count()
     })
+}
+
+/// The terminal is gone and nothing replays it: shown as lost until the Host
+/// records the process exit, then as exited.
+fn stopped(lifecycle: &PaneLifecycle) -> bool {
+    matches!(
+        lifecycle,
+        PaneLifecycle::Lost { .. } | PaneLifecycle::Exited { .. }
+    )
 }
 
 #[gpui::test]
@@ -263,154 +337,7 @@ fn immediate_process_exit_is_finalized_after_spawn(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn reclaiming_profile_restores_existing_pane_input_and_close(cx: &mut TestAppContext) {
-    let host = RecoveryHost::start();
-    let first = host.client("first");
-    let second = host.client("second");
-    let (pane, cx) = open_pane(cx, first.clone(), host.root.path());
-    pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running())
-            && fs::read_to_string(host.root.path().join("starts"))
-                .ok()
-                .as_deref()
-                == Some("start\n")
-    });
-    let original = catalog(&first).terminals.remove(0);
-    second
-        .request_blocking_typed(Request::ProfileControl(
-            ProfileControlRequest::RequestControl,
-        ))
-        .unwrap();
-    pump_until(cx, "second controller", |_| second.shared_editing_enabled());
-    second
-        .request_blocking_typed(Request::AttachTerminal(AttachTerminal {
-            session_id: original.session_id.clone(),
-            known_session_epoch: Some(original.session_epoch),
-            after_sequence: None,
-            mode: TerminalLeaseMode::Interactive,
-            geometry: original.geometry,
-            geometry_epoch: original.geometry_epoch + 1,
-            query_palette: vec![],
-            palette_revision: 1,
-        }))
-        .unwrap();
-    first
-        .request_blocking_typed(Request::ProfileControl(
-            ProfileControlRequest::RequestControl,
-        ))
-        .unwrap();
-    pump_until(cx, "first controller", |_| first.shared_editing_enabled());
-    pump_until(cx, "reclaimed terminal ownership", |cx| {
-        cx.read(|app| pane.read(app).is_running())
-            && catalog(&first).terminals.iter().any(|placement| {
-                placement.session_id == original.session_id
-                    && placement.owner == first.control_status().unwrap().owner
-            })
-    });
-    send_input(&pane, cx);
-    pump_until(cx, "input reaches original process", |_| {
-        received_input_count(host.root.path(), "x") == 1
-    });
-    let restored = catalog(&first);
-    assert_eq!(restored.terminals.len(), 1);
-    assert_eq!(restored.terminals[0].session_epoch, original.session_epoch);
-    assert_eq!(
-        fs::read_to_string(host.root.path().join("starts")).unwrap(),
-        "start\n"
-    );
-    first
-        .terminate_many_confirmed(vec![original.session_id])
-        .unwrap();
-    assert!(catalog(&first).terminals.is_empty());
-    pump_until(cx, "closed pane reconciled", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
-    });
-    second.shutdown_client();
-    first.shutdown_client();
-}
-
-#[gpui::test]
-fn unavailable_pane_reconnects_when_session_reappears_without_spawning(cx: &mut TestAppContext) {
-    let host = RecoveryHost::start();
-    let runtime = host.client("first");
-    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
-    pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running())
-            && fs::read_to_string(host.root.path().join("starts"))
-                .ok()
-                .as_deref()
-                == Some("start\n")
-    });
-    let original = catalog(&runtime).terminals.remove(0);
-    runtime
-        .terminate_many_confirmed(vec![original.session_id.clone()])
-        .unwrap();
-    pump_until(cx, "unavailable pane", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
-    });
-    cx.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.start_host_terminal(window, cx, TerminalStartIntent::Attach);
-        })
-    });
-    pump_until(cx, "failed reconnect settles", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
-    });
-    assert!(catalog(&runtime).terminals.is_empty());
-    assert_eq!(
-        fs::read_to_string(host.root.path().join("starts")).unwrap(),
-        "start\n"
-    );
-    let response = runtime
-        .request_blocking_typed(Request::SpawnTerminal {
-            start_id: "explicit-replacement".into(),
-            expected_host_epoch: catalog(&runtime).host_epoch,
-            spec: TerminalSpawnSpec {
-                session_id: original.session_id.clone(),
-                project_id: original.project_id,
-                cwd: yttt_protocol::ProjectRelativePath::root(),
-                execution: TerminalExecutionSpec::Command {
-                    shell: "/bin/sh".into(),
-                    program: "/bin/sh".into(),
-                    args: vec!["-c".into(), COMMAND.into()],
-                    return_to_shell: false,
-                },
-                geometry: original.geometry,
-                geometry_epoch: 1,
-                query_palette: vec![],
-                palette_revision: 1,
-                scrollback_limit: 1000,
-                environment: vec![],
-                removed_environment: vec![],
-            },
-        })
-        .unwrap();
-    let Response::TerminalSpawned { session_epoch, .. } = response else {
-        panic!("replacement did not spawn")
-    };
-    assert_ne!(session_epoch, original.session_epoch);
-    pump_until(cx, "reattached replacement", |cx| {
-        cx.read(|app| pane.read(app).is_running())
-    });
-    send_input(&pane, cx);
-    pump_until(cx, "input reaches replacement", |_| {
-        received_input_count(host.root.path(), "x") == 1
-    });
-    assert_eq!(
-        fs::read_to_string(host.root.path().join("starts")).unwrap(),
-        "start\nstart\n"
-    );
-    runtime
-        .terminate_many_confirmed(vec![original.session_id])
-        .unwrap();
-    pump_until(cx, "closed pane reconciled", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
-    });
-    runtime.shutdown_client();
-}
-
-#[gpui::test]
-fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut TestAppContext) {
+fn a_lost_pane_attaches_to_the_terminal_the_host_restarts(cx: &mut TestAppContext) {
     let host = RecoveryHost::start();
     let runtime = host.client("first");
     let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
@@ -430,64 +357,21 @@ fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut T
     runtime
         .terminate_many_confirmed(vec![original.session_id.clone()])
         .unwrap();
-    // Replay the exit-before-removal ordering deterministically instead of relying
-    // on the relative scheduling of the Host's metadata and catalog channels.
-    cx.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            let generation = pane.generation;
-            pane.handle_host_viewport_metadata(
-                &final_metadata,
-                &runtime,
-                &original.session_id,
-                generation,
-                cx,
-            );
-            pane.handle_host_event(
-                ClientEvent::TerminalUnavailable(original.session_id.clone()),
-                runtime.clone(),
-                &original.session_id,
-                generation,
-                window,
-                cx,
-            );
-        });
+    pump_until(cx, "lost pane", |cx| {
+        cx.read(|app| stopped(&pane.read(app).lifecycle))
     });
-    pump_until(cx, "unavailable pane", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
-    });
+
+    // Nothing replays the command until the pane is restarted.
+    cx.run_until_parked();
     assert!(catalog(&runtime).terminals.is_empty());
     assert_eq!(
         fs::read_to_string(host.root.path().join("starts")).unwrap(),
         "start\n"
     );
+    cx.read(|app| assert!(stopped(&pane.read(app).lifecycle)));
 
-    cx.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.retry_terminal(window, cx);
-            // A new subscription can receive the old mirror before the spawn reply.
-            pane.handle_host_viewport_metadata(
-                &final_metadata,
-                &runtime,
-                &original.session_id,
-                pane.generation,
-                cx,
-            );
-            assert!(pane.terminal.is_some(), "old exit cleared the replacement");
-            pane.handle_host_event(
-                ClientEvent::TerminalUnavailable(original.session_id.clone()),
-                runtime.clone(),
-                &original.session_id,
-                pane.generation,
-                window,
-                cx,
-            );
-            assert!(
-                pane.terminal.is_some(),
-                "old catalog removal cleared the replacement"
-            );
-        });
-    });
-    pump_until(cx, "explicit replacement terminal", |cx| {
+    restart_pane(&runtime);
+    pump_until(cx, "restarted terminal", |cx| {
         cx.read(|app| pane.read(app).is_running())
             && fs::read_to_string(host.root.path().join("starts"))
                 .ok()
@@ -497,21 +381,15 @@ fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut T
     let replacement = catalog(&runtime).terminals.remove(0);
     assert_eq!(replacement.session_id, original.session_id);
     assert_ne!(replacement.session_epoch, original.session_epoch);
+    // Late events about the terminal the Host replaced must not stop the
+    // replacement.
     cx.update(|window, cx| {
         pane.update(cx, |pane, cx| {
-            pane.handle_host_viewport_metadata(
-                &final_metadata,
-                &runtime,
-                &original.session_id,
-                pane.generation,
-                cx,
-            );
+            pane.handle_host_viewport_metadata(&final_metadata, &runtime, cx);
             assert!(pane.is_running(), "old exit stopped the replacement");
             pane.handle_host_event(
                 ClientEvent::TerminalUnavailable(original.session_id.clone()),
-                runtime.clone(),
-                &original.session_id,
-                pane.generation,
+                &runtime,
                 window,
                 cx,
             );
@@ -526,127 +404,7 @@ fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut T
         .terminate_many_confirmed(vec![original.session_id])
         .unwrap();
     pump_until(cx, "replacement closed", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
+        cx.read(|app| stopped(&pane.read(app).lifecycle))
     });
-    runtime.shutdown_client();
-}
-
-#[gpui::test]
-fn missing_terminal_waits_for_control_without_automatically_replaying(cx: &mut TestAppContext) {
-    let host = RecoveryHost::start();
-    let runtime = host.client("first");
-    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
-    pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running())
-            && fs::read_to_string(host.root.path().join("starts"))
-                .ok()
-                .as_deref()
-                == Some("start\n")
-    });
-    let original = catalog(&runtime).terminals.remove(0);
-    runtime
-        .terminate_many_confirmed(vec![original.session_id.clone()])
-        .unwrap();
-    pump_until(cx, "unavailable pane", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
-    });
-    let controller = host.client("second");
-    controller
-        .request_blocking_typed(Request::ProfileControl(
-            ProfileControlRequest::RequestControl,
-        ))
-        .unwrap();
-    pump_until(cx, "control transferred", |_| {
-        controller.shared_editing_enabled() && !runtime.shared_editing_enabled()
-    });
-
-    // A restoration that races control transfer must remain recoverable.
-    cx.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.start_restored_terminal(window, cx, false);
-        })
-    });
-    pump_until(cx, "restoration settles", |cx| {
-        cx.read(|app| {
-            matches!(
-                pane.read(app).lifecycle,
-                PaneLifecycle::Lost { .. } | PaneLifecycle::SpawnFailed { .. }
-            )
-        })
-    });
-    cx.read(|app| {
-        assert!(matches!(
-            pane.read(app).lifecycle,
-            PaneLifecycle::Lost { .. }
-        ))
-    });
-    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.retry_terminal(window, cx)));
-    cx.run_until_parked();
-    assert!(catalog(&runtime).terminals.is_empty());
-    runtime
-        .request_blocking_typed(Request::ProfileControl(
-            ProfileControlRequest::RequestControl,
-        ))
-        .unwrap();
-    pump_until(cx, "control reclaimed", |_| {
-        runtime.shared_editing_enabled()
-    });
-    cx.run_until_parked();
-    assert!(
-        catalog(&runtime).terminals.is_empty(),
-        "taking control is not consent to replay a command"
-    );
-    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.retry_terminal(window, cx)));
-    pump_until(cx, "explicit replacement", |cx| {
-        cx.read(|app| pane.read(app).is_running())
-            && fs::read_to_string(host.root.path().join("starts"))
-                .ok()
-                .as_deref()
-                == Some("start\nstart\n")
-    });
-    runtime
-        .terminate_many_confirmed(vec![original.session_id])
-        .unwrap();
-    pump_until(cx, "replacement closed", |cx| {
-        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
-    });
-    controller.shutdown_client();
-    runtime.shutdown_client();
-}
-
-#[gpui::test]
-fn rejected_input_during_publication_recovers_without_restarting_process(cx: &mut TestAppContext) {
-    let host = RecoveryHost::start();
-    let runtime = host.client("controller");
-    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
-    pump_until(cx, "initial terminal", |cx| {
-        cx.read(|app| pane.read(app).is_running())
-            && fs::read_to_string(host.root.path().join("starts"))
-                .ok()
-                .as_deref()
-                == Some("start\n")
-    });
-    let original = catalog(&runtime).terminals.remove(0);
-    runtime.begin_exit_publication();
-    send_input(&pane, cx);
-    pump_until(cx, "input rejection", |cx| {
-        cx.read(|app| pane.read(app).terminal_error.is_some())
-    });
-    runtime.cancel_exit_publication();
-    send_input(&pane, cx);
-    pump_until(cx, "input after publication cancelled", |_| {
-        received_input_count(host.root.path(), "x") == 1
-    });
-    assert_eq!(
-        fs::read_to_string(host.root.path().join("starts")).unwrap(),
-        "start\n"
-    );
-    assert_eq!(
-        catalog(&runtime).terminals[0].session_epoch,
-        original.session_epoch
-    );
-    runtime
-        .terminate_many_confirmed(vec![original.session_id])
-        .unwrap();
     runtime.shutdown_client();
 }

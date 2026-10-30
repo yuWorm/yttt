@@ -759,9 +759,6 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
         cx.quit();
         return;
     };
-    if runtime.preparing_transfer().is_some() {
-        return;
-    }
     let stops_host = stop_all || runtime.actual_lifetime() == yttt_host::HostLifetime::DesktopOwned;
     let text = UiText::current(cx);
     let answer = window.prompt(
@@ -787,14 +784,12 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
         if !matches!(answer.await, Ok(1)) {
             return;
         }
-        let transfer = runtime.begin_exit_publication();
-        cx.update(|cx| cx.refresh_windows());
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let publication = loop {
-            if !runtime.is_controller() {
+            if !runtime.is_connected() {
                 break Ok(());
             }
-            match runtime.exit_publication_ready(&transfer) {
+            match runtime.documents_synced() {
                 Ok(true) => break Ok(()),
                 Err(error) => break Err(error),
                 Ok(false) if std::time::Instant::now() >= deadline => {
@@ -834,8 +829,6 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
                 None => false,
             };
             if !discard {
-                runtime.cancel_exit_publication();
-                cx.update(|cx| cx.refresh_windows());
                 return;
             }
         }
@@ -845,7 +838,6 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
                 .recv_async()
                 .await;
             if !matches!(result, Ok(Ok(LifecycleResponse::Draining))) {
-                runtime.cancel_exit_publication();
                 cx.update(|cx| {
                     let _ = window_handle.update(cx, |_, window, cx| {
                         let text = UiText::current(cx);
@@ -1175,36 +1167,15 @@ mod tests {
         use crate::model::{
             ids::ProjectId,
             project::{ProjectDescriptor, ProjectLocation},
-            workspace::Workspace,
         };
         use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
-        use yttt_protocol::workspace::{
-            WorkspaceId, WorkspaceOperationId, WorkspaceRequest, WorkspaceSnapshot,
-        };
+        use yttt_core::model::host_workspace::{ProjectPanel, WorkspaceIntent};
+        use yttt_protocol::workspace::{WorkspaceId, WorkspaceRequest};
 
         let host = RecoveryHost::start();
         let source = host.client("source");
         let project_id = ProjectId::new("already-open");
-        let mut workspace = Workspace::new();
-        workspace
-            .open_project(
-                ProjectDescriptor::new(
-                    project_id.clone(),
-                    ProjectLocation::local(host.root.path().to_path_buf()),
-                ),
-                crate::config::default_layout::DefaultLayoutTemplate::builtin()
-                    .materialize("Already open"),
-            )
-            .unwrap();
         let workspace_id = WorkspaceId::new("existing-window").unwrap();
-        let mut editor = crate::model::editor::ProjectEditorWorkspaceState::default();
-        editor.open_project(
-            project_id.clone(),
-            host.root.path(),
-            Some("shell".into()),
-            true,
-            240.0,
-        );
         source
             .workspace_request(WorkspaceRequest::Register {
                 workspace_id: workspace_id.clone(),
@@ -1212,18 +1183,21 @@ mod tests {
             })
             .unwrap();
         source
-            .workspace_request(WorkspaceRequest::Commit {
+            .workspace_request(WorkspaceRequest::Apply {
                 workspace_id,
-                expected_revision: 0,
-                operation_id: WorkspaceOperationId::new("seed").unwrap(),
-                snapshot: WorkspaceSnapshot::new(serde_json::json!({
-                    "schema_version": 1,
-                    "workspace": workspace.persisted_state(),
-                    "editor": editor.snapshot(),
-                    "documents": [],
-                }))
-                .unwrap(),
-                drafts: vec![],
+                intent: WorkspaceIntent::OpenProject {
+                    descriptor: ProjectDescriptor::new(
+                        project_id.clone(),
+                        ProjectLocation::local(host.root.path().to_path_buf()),
+                    ),
+                    layout: crate::config::default_layout::DefaultLayoutTemplate::builtin()
+                        .materialize("Already open"),
+                    panel: ProjectPanel {
+                        visible: true,
+                        width: 240.0,
+                    },
+                },
+                expected_revision: None,
             })
             .unwrap();
         let remote = host.client("remote");

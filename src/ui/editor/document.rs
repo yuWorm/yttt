@@ -86,11 +86,25 @@ impl From<&EditorSettings> for EditorAppearance {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectEditorDocumentEvent {
-    Changed { generation: u64 },
+    Changed {
+        generation: u64,
+    },
     SelectionChanged,
     Focused,
     Blurred,
-    Error { message: String },
+    Error {
+        message: String,
+    },
+    /// The user asked to take the edit lease from the Client holding it.
+    TakeOver,
+}
+
+/// Another Client holds the document's edit lease; this one shows its latest
+/// uploaded draft (or the file when it uploaded none) read-only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldDocument {
+    pub draft: Option<String>,
+    pub draft_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -383,7 +397,9 @@ pub struct ProjectEditorDocument {
     vim_enabled: bool,
     vim: Option<VimState>,
     _vim_keystroke_subscription: Subscription,
-    read_only_preview: Option<(u64, Entity<InputState>)>,
+    /// The preview's source: the model generation and the held draft revision.
+    read_only_preview: Option<((u64, u64), Entity<InputState>)>,
+    held_elsewhere: Option<HeldDocument>,
 }
 
 impl ProjectEditorDocument {
@@ -431,6 +447,7 @@ impl ProjectEditorDocument {
             vim: None,
             _vim_keystroke_subscription: vim_keystroke_subscription,
             read_only_preview: None,
+            held_elsewhere: None,
         };
         document.request_breadcrumb_parse(0, cx);
         document
@@ -707,6 +724,19 @@ impl ProjectEditorDocument {
         }
         cx.notify();
     }
+
+    /// Shows the document read-only while another Client holds its edit lease.
+    pub fn set_held_elsewhere(&mut self, held: Option<HeldDocument>, cx: &mut Context<Self>) {
+        if self.held_elsewhere != held {
+            self.held_elsewhere = held;
+            cx.notify();
+        }
+    }
+
+    pub fn held_elsewhere(&self) -> Option<&HeldDocument> {
+        self.held_elsewhere.as_ref()
+    }
+
     pub fn selection_snapshot(&self, cx: &gpui::App) -> EditorSelectionSnapshot {
         let Some(input) = self.code_input() else {
             return EditorSelectionSnapshot::default();
@@ -1325,42 +1355,82 @@ impl EventEmitter<ProjectEditorDocumentEvent> for ProjectEditorDocument {}
 
 impl Render for ProjectEditorDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let read_only = cx
+        let disconnected = cx
             .try_global::<crate::host_runtime::HostRuntimeGlobal>()
             .is_some_and(|status| {
                 status
                     .runtime()
-                    .is_none_or(|runtime| !runtime.shared_editing_enabled())
+                    .is_none_or(|runtime| !runtime.is_connected())
             });
-        if read_only {
-            let generation = self.model.generation();
+        if disconnected || self.held_elsewhere.is_some() {
+            let source = (
+                self.model.generation(),
+                self.held_elsewhere
+                    .as_ref()
+                    .map_or(0, |held| held.draft_revision),
+            );
             if self
                 .read_only_preview
                 .as_ref()
-                .is_none_or(|(captured, _)| *captured != generation)
+                .is_none_or(|(captured, _)| *captured != source)
             {
+                let text = self
+                    .held_elsewhere
+                    .as_ref()
+                    .and_then(|held| held.draft.clone())
+                    .unwrap_or_else(|| self.current_text(cx));
                 let editor = CodeEditorState::new(
                     &self.model.document_id().canonical_path,
                     self.model.editor().config().clone(),
-                    self.current_text(cx),
+                    text,
                 );
                 let input = cx.new(|input_cx| {
                     let mut input = code_editor_input_state(window, input_cx, &editor);
                     input.set_text_input_enabled(false, input_cx);
                     input
                 });
-                self.read_only_preview = Some((generation, input));
+                self.read_only_preview = Some((source, input));
             }
             let input = &self
                 .read_only_preview
                 .as_ref()
                 .expect("read-only document")
                 .1;
+            let ui_style = current_ui_style(cx);
+            let banner = self.held_elsewhere.is_some().then(|| {
+                let ui_text = &self.markdown_config.ui_text;
+                div()
+                    .id("document-held-elsewhere")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_between()
+                    .gap(ui_style.spacing.md)
+                    .px(ui_style.spacing.md)
+                    .py(ui_style.spacing.xs)
+                    .bg(cx.theme().muted)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(ui_text.get(UiTextKey::EditorHeldElsewhere))
+                    .child(
+                        yttt_ui::primitives::button::yttt_button(
+                            "document-take-over",
+                            ui_text.get(UiTextKey::EditorTakeOver),
+                            yttt_ui::primitives::button::YtttButtonVariant::Secondary,
+                            current_workbench_theme(cx),
+                            ui_style,
+                            cx,
+                        )
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(ProjectEditorDocumentEvent::TakeOver);
+                        })),
+                    )
+            });
             return div()
                 .id("observed-document")
                 .flex()
                 .flex_col()
                 .size_full()
+                .children(banner)
                 .child(
                     styled_code_editor_input(input, &self.appearance)
                         .flex_1()

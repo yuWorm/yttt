@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use yttt_agent_core::{
-    AgentInstanceId, AgentProcessState, AgentSessionMetadata, AgentSnapshot, AgentTurnState,
-    AgentViewState, ProviderId,
+    AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState, AgentViewState, ProviderId,
 };
 
 use yttt::model::{
@@ -567,7 +566,7 @@ fn rename_selected_tab_changes_title_without_changing_id() {
 }
 
 #[test]
-fn host_recovery_distinguishes_lost_running_panes_from_exited_and_idle_panes() {
+fn legacy_restoring_pane_reads_as_running() {
     let mut workspace = Workspace::new();
     let project_id = workspace
         .open_project(
@@ -578,90 +577,13 @@ fn host_recovery_distinguishes_lost_running_panes_from_exited_and_idle_panes() {
     workspace
         .mark_pane_running(&project_id, "dev", "shell")
         .unwrap();
-    workspace
-        .record_pane_exited(&project_id, "dev", "server")
-        .unwrap();
-    let saved = workspace.persisted_state();
-    let live = std::collections::HashSet::from([format!("{project_id}:dev:shell")]);
-    assert!(workspace.reconcile_host_resources(&live).is_empty());
-    assert_eq!(workspace.persisted_state(), saved);
+    let saved = serde_json::to_string(&workspace.persisted_state())
+        .unwrap()
+        .replace("\"Running\"", "\"Restoring\"");
+    assert!(saved.contains("\"Restoring\""));
 
-    let losses = workspace.reconcile_host_resources(&Default::default());
-    assert_eq!(losses.len(), 1);
-    assert_eq!(losses[0].pane_id, "shell");
-    let restored = Workspace::restore_persisted_state(workspace.persisted_state()).unwrap();
-    let project = restored.project(&project_id).unwrap();
-    assert_eq!(project.layout, saved.opened_projects[0].layout);
-    let panes = &project.tab_state("dev").unwrap().pane_states;
-    assert_eq!(
-        panes
-            .iter()
-            .find(|pane| pane.pane_id == "shell")
-            .unwrap()
-            .process_state,
-        PaneProcessState::Restoring
-    );
-    assert_eq!(
-        panes
-            .iter()
-            .find(|pane| pane.pane_id == "server")
-            .unwrap()
-            .process_state,
-        PaneProcessState::Exited
-    );
-    assert_eq!(
-        project.tab_state("agent").unwrap().pane_states[0].process_state,
-        PaneProcessState::Idle
-    );
-}
-
-#[test]
-fn host_recovery_resumes_exited_agent_session_without_replaying_its_command() {
-    let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(
-            local_project(PathBuf::from("/tmp/recovery")),
-            sample_layout(),
-        )
-        .unwrap();
-    let mut snapshot = completed_agent_snapshot();
-    snapshot.provider_id = ProviderId::from_static("omp");
-    snapshot.process_state = AgentProcessState::Exited;
-    snapshot.session = Some(AgentSessionMetadata {
-        session_id: Some("saved-omp-session".into()),
-        ..Default::default()
-    });
-    // A shell can also own an Agent session started interactively.
-    workspace
-        .record_agent_snapshot(&project_id, "dev", "shell", snapshot.clone())
-        .unwrap();
-    workspace
-        .record_pane_exited(&project_id, "dev", "shell")
-        .unwrap();
-    let mut agent_snapshot = snapshot.clone();
-    agent_snapshot.provider_id = ProviderId::from_static("codex");
-    workspace
-        .record_agent_snapshot(&project_id, "agent", "codex", agent_snapshot)
-        .unwrap();
-    workspace
-        .record_pane_exited(&project_id, "agent", "codex")
-        .unwrap();
-    let mut restored = Workspace::restore_persisted_state(workspace.persisted_state()).unwrap();
-    assert!(
-        restored
-            .reconcile_host_resources(&Default::default())
-            .is_empty()
-    );
-    assert_eq!(
-        restored
-            .project(&project_id)
-            .unwrap()
-            .tab_state("agent")
-            .unwrap()
-            .pane_states[0]
-            .process_state,
-        PaneProcessState::Restoring
-    );
+    let restored =
+        Workspace::restore_persisted_state(serde_json::from_str(&saved).unwrap()).unwrap();
     let pane = restored
         .project(&project_id)
         .unwrap()
@@ -671,63 +593,7 @@ fn host_recovery_resumes_exited_agent_session_without_replaying_its_command() {
         .iter()
         .find(|pane| pane.pane_id == "shell")
         .unwrap();
-    assert_eq!(pane.process_state, PaneProcessState::Restoring);
-    assert_eq!(pane.agent_snapshot.as_ref(), Some(&snapshot));
-
-    let mut runtime = yttt_agent_runtime::AgentRuntime::default();
-    for provider in yttt_agent_providers::builtin_providers() {
-        runtime.register_provider(provider);
-    }
-    let (launch, _) = runtime
-        .prepare_launch_with_snapshot(
-            "$SHELL",
-            yttt_agent_runtime::AgentScopeKey::new("restored-shell").unwrap(),
-            pane.agent_snapshot.as_ref(),
-        )
-        .unwrap();
-    assert_eq!(launch.program_override(), Some("omp"));
-    assert_eq!(launch.resume_arguments(), ["--resume", "saved-omp-session"]);
-
-    // Reconciliation must reattach a surviving session rather than resume twice.
-    let live = std::collections::HashSet::from([format!("{project_id}:dev:shell")]);
-    assert!(restored.reconcile_host_resources(&live).is_empty());
-    assert_eq!(
-        restored
-            .project(&project_id)
-            .unwrap()
-            .tab_state("dev")
-            .unwrap()
-            .pane_states
-            .iter()
-            .find(|pane| pane.pane_id == "shell")
-            .unwrap()
-            .process_state,
-        PaneProcessState::Running
-    );
-}
-
-#[test]
-fn host_recovery_does_not_start_a_fresh_session_for_an_exited_agent() {
-    let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(
-            local_project(PathBuf::from("/tmp/recovery")),
-            sample_layout(),
-        )
-        .unwrap();
-    workspace
-        .record_agent_snapshot(&project_id, "agent", "codex", completed_agent_snapshot())
-        .unwrap();
-    workspace
-        .record_pane_exited(&project_id, "agent", "codex")
-        .unwrap();
-    let saved = workspace.persisted_state();
-    assert!(
-        workspace
-            .reconcile_host_resources(&Default::default())
-            .is_empty()
-    );
-    assert_eq!(workspace.persisted_state(), saved);
+    assert_eq!(pane.process_state, PaneProcessState::Running);
 }
 
 fn sample_layout() -> yttt::model::layout::ProjectLayout {

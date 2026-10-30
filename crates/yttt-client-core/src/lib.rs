@@ -8,7 +8,7 @@ use std::{
     hash::{Hash, Hasher},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -23,8 +23,8 @@ use tokio::{
 };
 use yttt_core::model::{host_workspace::HostWorkspaceState, ids::TerminalSessionId};
 use yttt_protocol::{
-    ClientRequest, ConnectionChannel, ControlMessage, HostEvent, HostResponse, ProtocolFailure,
-    Request, ResourceCatalog, Response, ServerEvent,
+    ClientRequest, ConnectionChannel, ControlMessage, HostEvent, ProtocolFailure, Request,
+    ResourceCatalog, Response, ServerEvent,
     agent::{AgentSnapshotCursor, AgentSnapshotUpdate, ProjectTokenUsage},
     terminal::{TerminalInput, TerminalStreamUpdate},
     workspace::{WorkspaceId, WorkspaceLayoutUpdate, WorkspaceRequest, WorkspaceResponse},
@@ -123,38 +123,6 @@ struct VisibilityScopes {
     revision: u64,
 }
 
-#[derive(Default)]
-struct LocalControlRecovery {
-    enabled: AtomicBool,
-    eligible: AtomicBool,
-}
-
-impl LocalControlRecovery {
-    fn observe(
-        &self,
-        status: &yttt_protocol::session::ControlStatus,
-        client_id: &yttt_core::model::ids::ClientInstanceId,
-    ) {
-        self.eligible
-            .store(status.owner.as_ref() == Some(client_id), Ordering::Release);
-    }
-
-    fn can_recover(&self) -> bool {
-        self.enabled.load(Ordering::Acquire) && self.eligible.load(Ordering::Acquire)
-    }
-}
-
-fn should_reacquire_local_control(
-    local_control_recovery: &LocalControlRecovery,
-    was_controller: bool,
-    status: &yttt_protocol::session::ControlStatus,
-) -> bool {
-    local_control_recovery.can_recover()
-        && was_controller
-        && status.owner.is_none()
-        && status.transfer.is_none()
-}
-
 pub struct ClientCore {
     inner: Arc<ClientCoreInner>,
 }
@@ -173,8 +141,6 @@ struct ClientCoreInner {
     next_request_id: Arc<AtomicU64>,
     shutdown: watch::Sender<bool>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
-    control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
-    local_control_recovery: Arc<LocalControlRecovery>,
     client_id: yttt_core::model::ids::ClientInstanceId,
     visibility_scopes: Mutex<VisibilityScopes>,
     visibility: watch::Sender<Option<Arc<VisibleTerminals>>>,
@@ -193,7 +159,6 @@ struct ClientCommand {
     request_id: Option<u64>,
     body: Request,
     reply: Option<oneshot::Sender<Result<Response, ClientCoreError>>>,
-    control: Option<yttt_protocol::session::ControlContext>,
     deadline: tokio::time::Instant,
 }
 
@@ -211,18 +176,10 @@ impl PendingClientRequest {
     }
 }
 
-/// The workspaces this Client opened, with what it last learned about each
-/// one's Host layout. A workspace without a valid Host layout is still kept,
-/// so it is reopened on a new connection.
-type WorkspaceLayouts = Arc<RwLock<HashMap<WorkspaceId, HeldLayout>>>;
-
-/// The newest workspace revision this Client learned of and the Host layout at
-/// that revision; `layout` is `None` while the Host holds no valid layout.
-#[derive(Clone, Debug, Default, PartialEq)]
-struct HeldLayout {
-    revision: u64,
-    layout: Option<HostWorkspaceState>,
-}
+/// The workspaces this Client opened, each with the newest Host layout it
+/// received; `None` until the first one arrives, so a workspace is reopened on
+/// a new connection even before its layout came back.
+type WorkspaceLayouts = Arc<RwLock<HashMap<WorkspaceId, Option<HostWorkspaceState>>>>;
 
 enum PendingRequest {
     User {
@@ -256,8 +213,6 @@ struct ClientSessionContext {
     diagnostics: Arc<ClientPipelineDiagnostics>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
     shutdown: watch::Receiver<bool>,
-    control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
-    local_control_recovery: Arc<LocalControlRecovery>,
 }
 
 impl ClientCore {
@@ -280,8 +235,6 @@ impl ClientCore {
         let workspace_layouts = WorkspaceLayouts::default();
         let next_request_id = Arc::new(AtomicU64::new(1));
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
-        let control = Arc::new(RwLock::new(None));
-        let local_control_recovery = Arc::new(LocalControlRecovery::default());
         let (visibility, visibility_rx) = watch::channel(None);
         let (initial_tx, initial_rx) = oneshot::channel();
         let supervisor = tokio::spawn(run_supervisor(
@@ -303,8 +256,6 @@ impl ClientCore {
             diagnostics.clone(),
             shutdown.clone(),
             initial_tx,
-            control.clone(),
-            local_control_recovery.clone(),
         ));
         let inner = Arc::new(ClientCoreInner {
             commands: command_tx,
@@ -319,8 +270,6 @@ impl ClientCore {
             workspace_layouts,
             shutdown,
             diagnostics,
-            control,
-            local_control_recovery,
             client_id: identity.client_instance_id.clone(),
             visibility_scopes: Mutex::default(),
             visibility,
@@ -342,30 +291,10 @@ impl ClientCore {
         &self.inner.client_id
     }
 
-    pub fn control_status(&self) -> Option<yttt_protocol::session::ControlStatus> {
-        self.inner.control.read().clone()
-    }
-
-    pub fn is_controller(&self) -> bool {
-        self.inner
-            .control
-            .read()
-            .as_ref()
-            .is_some_and(|status| status.owner.as_ref() == Some(self.client_id()))
-    }
-
-    /// Permits this local client to recover control only after it reconnects as
-    /// the prior controller and the Host still has no owner or transfer.
-    pub fn enable_local_control_recovery(&self) {
-        self.inner
-            .local_control_recovery
-            .enabled
-            .store(true, Ordering::Release);
-        if let Some(status) = self.inner.control.read().as_ref() {
-            self.inner
-                .local_control_recovery
-                .observe(status, self.client_id());
-        }
+    /// The epoch of the Host this Client last connected to; it stays while
+    /// the Client reconnects.
+    pub fn host_epoch(&self) -> Option<u64> {
+        self.inner.terminal_state.read().host_epoch
     }
 
     /// Records the terminals one window (`scope`) currently renders. The Host
@@ -505,17 +434,17 @@ impl ClientCore {
             .workspace_layouts
             .read()
             .get(workspace_id)
-            .and_then(|held| held.layout.clone())
+            .and_then(|held| held.clone())
     }
 
     /// The revision of the newest layout received for a workspace this Client
-    /// opened; `None` while the Host holds no valid layout for it.
+    /// opened.
     pub fn workspace_layout_revision(&self, workspace_id: &WorkspaceId) -> Option<u64> {
         self.inner
             .workspace_layouts
             .read()
             .get(workspace_id)
-            .and_then(|held| held.layout.as_ref().map(|layout| layout.revision))
+            .and_then(|held| held.as_ref().map(|layout| layout.revision))
     }
 
     pub fn enqueue_request(&self, body: Request) -> Result<PendingClientRequest, ClientCoreError> {
@@ -564,12 +493,6 @@ impl ClientCore {
                 request_id,
                 body,
                 reply,
-                control: self
-                    .inner
-                    .control
-                    .read()
-                    .as_ref()
-                    .map(|status| status.context),
             })
             .map_err(|error| match error {
                 mpsc::error::TrySendError::Full(_) => ClientCoreError::Backpressure,
@@ -617,13 +540,11 @@ async fn run_supervisor(
     diagnostics: Arc<ClientPipelineDiagnostics>,
     shutdown_tx: watch::Sender<bool>,
     initial: oneshot::Sender<Result<(), String>>,
-    profile_control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
-    local_control_recovery: Arc<LocalControlRecovery>,
 ) {
     let _shutdown_guard = ShutdownOnDrop(shutdown_tx.clone());
     let mut shutdown = shutdown_tx.subscribe();
     let mut initial_attempt = 0;
-    let (mut connection, control_status) = loop {
+    let mut connection = loop {
         set_state(&state, &events, ConnectionState::Connecting);
         diagnostics.record_connection_attempt();
         let result = tokio::select! {
@@ -667,19 +588,10 @@ async fn run_supervisor(
         agent_snapshots: &agent_snapshots,
         project_token_usage: &project_token_usage,
         workspace_layouts: &workspace_layouts,
-        profile_control: &profile_control,
         events: &events,
     };
     install_host_epoch(connection.host.host_epoch, &epoch_state);
     identity.host_epoch_hint = Some(connection.host.host_epoch);
-    update_profile_control(
-        &profile_control,
-        &control_status,
-        &host_epoch,
-        connection.host.host_epoch,
-        &identity.client_instance_id,
-        &local_control_recovery,
-    );
     set_state(
         &state,
         &events,
@@ -707,8 +619,6 @@ async fn run_supervisor(
             diagnostics: diagnostics.clone(),
             visibility: visibility.clone(),
             shutdown: shutdown.clone(),
-            control: profile_control.clone(),
-            local_control_recovery: local_control_recovery.clone(),
         };
         let disconnected = connected_session(
             connection,
@@ -722,12 +632,8 @@ async fn run_supervisor(
             set_state(&state, &events, ConnectionState::Disconnected);
             return;
         };
-        let was_controller = profile_control.read().as_ref().is_some_and(|status| {
-            status.owner.as_ref() == Some(&identity.client_instance_id) && status.transfer.is_none()
-        });
         attempt = attempt.saturating_add(1);
         diagnostics.record_reconnect();
-        *profile_control.write() = None;
         while let Ok(command) = commands.try_recv() {
             if let Some(reply) = command.reply {
                 let _ = reply.send(Err(ClientCoreError::NotConnected));
@@ -766,35 +672,11 @@ async fn run_supervisor(
                     return;
                 }
             };
-            let result = match result {
-                Ok((mut new_connection, status)) => {
-                    install_host_epoch(new_connection.host.host_epoch, &epoch_state);
-                    if should_reacquire_local_control(
-                        &local_control_recovery,
-                        was_controller,
-                        &status,
-                    ) {
-                        reacquire_local_control(&mut new_connection, &identity, status.context)
-                            .await
-                            .map(|status| (new_connection, status))
-                    } else {
-                        Ok((new_connection, status))
-                    }
-                }
-                result => result,
-            };
             match result {
-                Ok((new_connection, status)) => {
+                Ok(new_connection) => {
                     connection = new_connection;
+                    install_host_epoch(connection.host.host_epoch, &epoch_state);
                     identity.host_epoch_hint = Some(connection.host.host_epoch);
-                    update_profile_control(
-                        &profile_control,
-                        &status,
-                        &host_epoch,
-                        connection.host.host_epoch,
-                        &identity.client_instance_id,
-                        &local_control_recovery,
-                    );
                     attempt = 0;
                     set_state(
                         &state,
@@ -839,78 +721,61 @@ struct SessionConnection {
     writer: SessionWriter,
     writer_task: SessionWriterTask,
     host: AuthenticatedHost,
-    /// Events that arrived while connecting, applied once the session starts.
+    /// Events that arrived before the binding was confirmed, applied once the
+    /// session starts.
     buffered: Vec<HostEvent>,
 }
 
-impl SessionConnection {
-    /// Sends one request and waits for its response before the session loop runs.
-    async fn request(
-        &mut self,
-        request: ClientRequest,
-        timeout_message: &str,
-    ) -> Result<HostResponse, ConnectFailure> {
-        let request_id = request.request_id;
-        self.writer
-            .send_reliable(&ControlMessage::Request(request))
-            .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-        let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
-        loop {
-            let message = tokio::time::timeout_at(deadline, self.reader.receive())
-                .await
-                .map_err(|_| ConnectFailure::Retry(timeout_message.to_string()))?
-                .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-            match message {
-                ControlMessage::Response(response) if response.request_id == request_id => {
-                    return Ok(response);
-                }
-                ControlMessage::Event(event) => self.buffered.push(event),
-                _ => {
-                    return Err(ConnectFailure::Fatal(
-                        "Host sent an unexpected message while connecting".to_string(),
-                    ));
-                }
-            }
-        }
-    }
-}
-
+/// Opens a Session connection and waits until the Host has bound it to this
+/// Client session: the Host closes a connection that presents another
+/// session's identity after the handshake, so only a served request proves it.
 async fn establish_session(
     connector: &SharedConnector,
     identity: &ClientIdentity,
     token: &AuthToken,
-) -> Result<(SessionConnection, yttt_protocol::session::ControlStatus), ConnectFailure> {
+) -> Result<SessionConnection, ConnectFailure> {
+    const BIND_REQUEST_ID: u64 = u64::MAX;
     let mut session_identity = identity.clone();
     session_identity.channel = ConnectionChannel::Session;
     let (stream, host) = establish(connector, &session_identity, token).await?;
     let (reader, writer) = split(stream);
     let (writer, writer_task) = SessionWriter::spawn(writer);
-    let mut connection = SessionConnection {
-        reader: SessionReader::new(reader),
+    let mut reader = SessionReader::new(reader);
+    writer
+        .send_reliable(&ControlMessage::Request(ClientRequest::new(
+            BIND_REQUEST_ID,
+            Request::Ping { sent_millis: 0 },
+        )))
+        .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+    let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+    let mut buffered = Vec::new();
+    loop {
+        let message = tokio::time::timeout_at(deadline, reader.receive())
+            .await
+            .map_err(|_| ConnectFailure::Retry("Host session binding timed out".to_string()))?
+            .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+        match message {
+            ControlMessage::Response(response) if response.request_id == BIND_REQUEST_ID => {
+                response
+                    .result
+                    .map_err(|failure| ConnectFailure::Fatal(failure.message))?;
+                break;
+            }
+            ControlMessage::Event(event) => buffered.push(event),
+            _ => {
+                return Err(ConnectFailure::Fatal(
+                    "Host sent an unexpected message while connecting".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(SessionConnection {
+        reader,
         writer,
         writer_task,
         host,
-        buffered: Vec::new(),
-    };
-    let status = connection
-        .request(
-            ClientRequest::new(
-                u64::MAX,
-                Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
-            ),
-            "Host control status timed out",
-        )
-        .await?;
-    let HostResponse {
-        result: Ok(Response::ProfileControl(control_status)),
-        ..
-    } = status
-    else {
-        return Err(ConnectFailure::Fatal(
-            "Host did not provide authenticated profile control state".to_string(),
-        ));
-    };
-    Ok((connection, control_status))
+        buffered,
+    })
 }
 
 async fn establish(
@@ -929,38 +794,6 @@ async fn establish(
         .await
         .map_err(ConnectFailure::from)?;
     Ok((stream, host))
-}
-
-async fn reacquire_local_control(
-    connection: &mut SessionConnection,
-    identity: &ClientIdentity,
-    context: yttt_protocol::session::ControlContext,
-) -> Result<yttt_protocol::session::ControlStatus, ConnectFailure> {
-    const REACQUIRE_REQUEST_ID: u64 = u64::MAX - 1;
-    let response = connection
-        .request(
-            ClientRequest {
-                request_id: REACQUIRE_REQUEST_ID,
-                actor_device_id: Some(identity.client_instance_id.to_string()),
-                lease_epoch: None,
-                control: Some(context),
-                body: Request::ProfileControl(
-                    yttt_protocol::session::ProfileControlRequest::ReacquireIfUnowned { context },
-                ),
-            },
-            "Host control reacquisition timed out",
-        )
-        .await?;
-    let HostResponse {
-        result: Ok(Response::ProfileControl(status)),
-        ..
-    } = response
-    else {
-        return Err(ConnectFailure::Fatal(
-            "Host did not return profile control state after local recovery request".to_string(),
-        ));
-    };
-    Ok(status)
 }
 
 /// Serves one Session connection until it fails or the client shuts down.
@@ -1101,7 +934,6 @@ async fn connected_session(
                     request_id,
                     body,
                     reply,
-                    control,
                     deadline,
                 }) = command else {
                     break None;
@@ -1112,7 +944,7 @@ async fn connected_session(
                 }
                 let message = match (body, request_id) {
                     (Request::TerminalInput(input), None) => {
-                        ControlMessage::TerminalInput { input, control }
+                        ControlMessage::TerminalInput { input }
                     }
                     (
                         body @ (
@@ -1125,7 +957,6 @@ async fn connected_session(
                         request_id,
                         actor_device_id: actor(),
                         lease_epoch: None,
-                        control,
                         body,
                     }),
                     (_, _) => {
@@ -1214,7 +1045,6 @@ async fn connected_session(
                     request_id,
                     body,
                     reply,
-                    control,
                     deadline,
                 }) = command else {
                     break None;
@@ -1237,7 +1067,6 @@ async fn connected_session(
                     request_id,
                     actor_device_id: actor(),
                     lease_epoch: None,
-                    control,
                     body,
                 });
                 if let Err(error) = writer.send_reliable(&message) {
@@ -1354,8 +1183,7 @@ fn handle_state_event(event: HostEvent, context: &ClientSessionContext) -> Resul
                 workspace_id,
                 layout,
             } = *update;
-            let revision = layout.revision;
-            apply_workspace_layout(workspace_id, revision, Some(layout), context);
+            apply_workspace_layout(workspace_id, layout, context);
             return Ok(());
         }
         body => HostEvent {
@@ -1363,16 +1191,6 @@ fn handle_state_event(event: HostEvent, context: &ClientSessionContext) -> Resul
             body,
         },
     };
-    if let ServerEvent::ProfileControl(status) = &event.body {
-        update_profile_control(
-            &context.control,
-            status,
-            &context.current_host_epoch,
-            context.host_epoch,
-            &context.identity.client_instance_id,
-            &context.local_control_recovery,
-        );
-    }
     if let ServerEvent::ProjectTokenUsage(summary) = &event.body {
         apply_project_token_usage(
             summary.clone(),
@@ -1411,16 +1229,6 @@ fn handle_response(
     result: Result<Response, ProtocolFailure>,
     context: &ClientSessionContext,
 ) {
-    if let Ok(Response::ProfileControl(status)) = &result {
-        update_profile_control(
-            &context.control,
-            status,
-            &context.current_host_epoch,
-            context.host_epoch,
-            &context.identity.client_instance_id,
-            &context.local_control_recovery,
-        );
-    }
     match pending {
         PendingRequest::User {
             reply,
@@ -1429,12 +1237,10 @@ fn handle_response(
         } => {
             if let (
                 Some(workspace_id),
-                Ok(Response::Workspace(WorkspaceResponse::Opened {
-                    layout, revision, ..
-                })),
+                Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })),
             ) = (opens, &result)
             {
-                apply_workspace_layout(workspace_id, *revision, layout.clone(), context);
+                apply_workspace_layout(workspace_id, layout.clone(), context);
             }
             match &result {
                 Ok(Response::TerminalSpawned { lease, .. })
@@ -1496,10 +1302,8 @@ fn handle_response(
         }
         PendingRequest::Visibility => {}
         PendingRequest::Reopen(workspace_id) => match result {
-            Ok(Response::Workspace(WorkspaceResponse::Opened {
-                layout, revision, ..
-            })) => {
-                apply_workspace_layout(workspace_id, revision, layout, context);
+            Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })) => {
+                apply_workspace_layout(workspace_id, layout, context);
             }
             // A workspace forgotten meanwhile is no longer opened.
             Err(failure) if failure.code == yttt_protocol::FailureCode::NotFound => {
@@ -1615,29 +1419,6 @@ fn register_terminal(context: &ClientSessionContext, session_id: TerminalSession
     if terminal_state.host_epoch == Some(context.host_epoch) {
         terminal_state.known_sessions.insert(session_id.clone());
         terminal_state.attached.insert(session_id);
-    }
-}
-
-fn update_profile_control(
-    cache: &RwLock<Option<yttt_protocol::session::ControlStatus>>,
-    status: &yttt_protocol::session::ControlStatus,
-    current_host_epoch: &RwLock<Option<u64>>,
-    host_epoch: u64,
-    client_id: &yttt_core::model::ids::ClientInstanceId,
-    local_control_recovery: &LocalControlRecovery,
-) {
-    let current_host_epoch = current_host_epoch.read();
-    if *current_host_epoch != Some(host_epoch) || status.context.host_epoch != host_epoch {
-        return;
-    }
-    let mut current = cache.write();
-    if current.as_ref().is_none_or(|current| {
-        status.context.host_epoch > current.context.host_epoch
-            || (status.context.host_epoch == current.context.host_epoch
-                && status.revision >= current.revision)
-    }) {
-        *current = Some(status.clone());
-        local_control_recovery.observe(status, client_id);
     }
 }
 
@@ -1781,13 +1562,11 @@ fn apply_project_token_usage(
     }
 }
 
-/// Records what an opened workspace's Host layout is at `revision`, keeping
-/// only newer revisions, and publishes a layout that replaces what this Client
-/// held.
+/// Keeps an opened workspace's Host layout when it is newer than the one this
+/// Client holds, and publishes it.
 fn apply_workspace_layout(
     workspace_id: WorkspaceId,
-    revision: u64,
-    layout: Option<HostWorkspaceState>,
+    layout: HostWorkspaceState,
     context: &ClientSessionContext,
 ) {
     let current_host_epoch = context.current_host_epoch.read();
@@ -1796,17 +1575,14 @@ fn apply_workspace_layout(
     }
     let mut layouts = context.workspace_layouts.write();
     let held = layouts.entry(workspace_id.clone()).or_default();
-    if held.revision > revision || (held.revision == revision && held.layout.is_some()) {
+    if held
+        .as_ref()
+        .is_some_and(|held| held.revision >= layout.revision)
+    {
         return;
     }
-    *held = HeldLayout {
-        revision,
-        layout: layout.clone(),
-    };
+    *held = Some(layout.clone());
     drop(layouts);
-    let Some(layout) = layout else {
-        return;
-    };
     let _ = context
         .events
         .send(ClientEvent::WorkspaceLayoutChanged(Box::new(
@@ -1853,7 +1629,6 @@ fn send_internal_request(
             request_id,
             actor_device_id,
             lease_epoch: None,
-            control: None,
             body,
         }))
         .map_err(|_| ())?;
@@ -1876,8 +1651,7 @@ struct HostEpochState<'a> {
     catalog: &'a RwLock<Option<Arc<ResourceCatalog>>>,
     agent_snapshots: &'a RwLock<HashMap<String, AgentSnapshotUpdate>>,
     project_token_usage: &'a RwLock<HashMap<String, ProjectTokenUsage>>,
-    workspace_layouts: &'a RwLock<HashMap<WorkspaceId, HeldLayout>>,
-    profile_control: &'a RwLock<Option<yttt_protocol::session::ControlStatus>>,
+    workspace_layouts: &'a RwLock<HashMap<WorkspaceId, Option<HostWorkspaceState>>>,
     events: &'a broadcast::Sender<ClientEvent>,
 }
 
@@ -1889,7 +1663,6 @@ fn install_host_epoch(next_host_epoch: u64, state: &HostEpochState<'_>) {
         agent_snapshots,
         project_token_usage,
         workspace_layouts,
-        profile_control,
         events,
     } = state;
     let mut current_host_epoch = current_host_epoch.write();
@@ -1909,9 +1682,8 @@ fn install_host_epoch(next_host_epoch: u64, state: &HostEpochState<'_>) {
             project_token_usage.write().clear();
             // A new Host has new revisions; keep the opened set, forget the layouts.
             for held in workspace_layouts.write().values_mut() {
-                *held = HeldLayout::default();
+                *held = None;
             }
-            profile_control.write().take();
             *current_host_epoch = Some(next_host_epoch);
             let _ = events.send(ClientEvent::AgentSnapshotsReset {
                 host_epoch: next_host_epoch,

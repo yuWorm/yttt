@@ -1,16 +1,17 @@
 use super::*;
 use crate::model::host_workspace::{NewTab, WorkspaceIntent};
 
-fn wait_until(
+/// Drives both the windows and the persistence tick until `done` holds.
+pub(super) fn wait_until(
     cx: &mut gpui::VisualTestContext,
     view: &Entity<WorkbenchView>,
     what: &str,
-    done: impl Fn(&WorkbenchView) -> bool,
+    done: impl Fn(&WorkbenchView, &App) -> bool,
 ) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         cx.run_until_parked();
-        if view.read_with(cx, |root, _| done(root)) {
+        if view.read_with(cx, |root, cx| done(root, cx)) {
             return;
         }
         assert!(
@@ -18,64 +19,83 @@ fn wait_until(
             "{what}: {:?}",
             view.read_with(cx, |root, _| root.workspace_persistence.last_error.clone())
         );
+        cx.executor().advance_clock(WORKSPACE_PERSISTENCE_INTERVAL);
         std::thread::sleep(Duration::from_millis(10));
     }
 }
 
-#[gpui::test]
-fn a_host_layout_change_made_elsewhere_replaces_the_local_layout_without_an_echo_commit(
+/// Opens a window on `runtime` whose workspace starts with the project at
+/// `root`, and waits until the Host workspace shows that project.
+pub(super) fn open_window(
     cx: &mut gpui::TestAppContext,
-) {
+    runtime: &Arc<crate::host_runtime::DesktopHostRuntime>,
+    root: &Path,
+    config: PathBuf,
+    view: Option<crate::session_coordinator::WorkspaceViewLease>,
+) -> (Entity<WorkbenchView>, gpui::VisualTestContext) {
+    let mut state = Workspace::new();
+    state
+        .open_project(
+            ProjectDescriptor::new(
+                ProjectId::new("mirror-project"),
+                ProjectLocation::local(root.to_path_buf()),
+            ),
+            dev_fixture_layout(),
+        )
+        .unwrap();
+    let paths = AppConfigPaths::from_config_dir(config);
+    let handle =
+        cx.add_window(|_, _| WorkbenchView::with_workspace_for_test_and_config_paths(state, paths));
+    let window = handle.root(cx).unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    window.update_in(&mut visual, |root, window, cx| {
+        root.terminal.host_runtime = Some(runtime.clone());
+        if let Some(view) = view {
+            root.set_workspace_view(view);
+        }
+        root.start_workspace_persistence(false, window, cx);
+    });
+    wait_until(
+        &mut visual,
+        &window,
+        "opening the Host workspace",
+        |root, _| {
+            root.workspace_persistence.mode == WorkspacePersistenceMode::Active
+                && !root.workspace.opened_projects().is_empty()
+        },
+    );
+    (window, visual)
+}
+
+#[gpui::test]
+fn a_host_layout_change_made_elsewhere_replaces_the_local_layout(cx: &mut gpui::TestAppContext) {
     use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
     cx.update(gpui_component::init);
     cx.background_executor.allow_parking();
     cx.skip_drawing();
     let host = RecoveryHost::start();
     let runtime = host.client("host-mirror");
-    let lease = runtime.claim_workspace_view(false).unwrap();
-    let id = lease.id().clone();
-    let project_id = ProjectId::new("mirror-project");
-    let mut state = Workspace::new();
-    state
-        .open_project(
-            ProjectDescriptor::new(
-                project_id.clone(),
-                ProjectLocation::local(host.root.path().to_path_buf()),
-            ),
-            dev_fixture_layout(),
+    let (view, mut cx) = open_window(
+        cx,
+        &runtime,
+        host.root.path(),
+        host.root.path().join("ui-config"),
+        None,
+    );
+    let cx = &mut cx;
+    let (id, project_id) = view.read_with(cx, |root, _| {
+        (
+            root.workspace_persistence
+                .view
+                .as_ref()
+                .unwrap()
+                .id()
+                .clone(),
+            root.workspace.opened_projects()[0].id.clone(),
         )
-        .unwrap();
-    state
-        .mark_pane_running(&project_id, "dev", "shell")
-        .unwrap();
-    let paths = AppConfigPaths::from_config_dir(host.root.path().join("ui-config"));
-    let (view, cx) = cx.add_window_view(|_, _| {
-        WorkbenchView::with_workspace_for_test_and_config_paths(state, paths)
-    });
-    view.update_in(cx, |root, window, cx| {
-        root.terminal.host_runtime = Some(runtime.clone());
-        root.workspace_persistence.view = Some(lease);
-        root.workspace_persistence.revision = Some(0);
-        root.workspace_persistence.host_epoch = remote_host_epoch(&runtime);
-        root.workspace_persistence.control_context =
-            runtime.control_status().map(|status| status.context);
-        root.workspace_persistence.mode = WorkspacePersistenceMode::Active;
-        root.commit_remote_workspace_if_changed(runtime.clone(), id.clone(), window, cx);
-    });
-    wait_until(cx, &view, "initial commit", |root| {
-        root.workspace_persistence.revision == Some(1)
-    });
-    assert!(matches!(
-        runtime.workspace_request(WorkspaceRequest::Open {
-            workspace_id: id.clone(),
-        }),
-        Ok(WorkspaceResponse::Opened { revision: 1, .. })
-    ));
-    view.update_in(cx, |root, window, cx| {
-        root.ensure_host_layout_listener(&runtime, &id, window, cx);
     });
 
-    // Another window of this profile adds a tab.
+    // Another Client adds a tab.
     assert!(matches!(
         runtime.workspace_request(WorkspaceRequest::Apply {
             workspace_id: id.clone(),
@@ -88,14 +108,16 @@ fn a_host_layout_change_made_elsewhere_replaces_the_local_layout_without_an_echo
             },
             expected_revision: None,
         }),
-        Ok(WorkspaceResponse::Applied { revision: 2, .. })
+        Ok(WorkspaceResponse::Applied { .. })
     ));
-    wait_until(cx, &view, "adopting the Host layout", |root| {
-        root.workspace_persistence.revision == Some(2)
+    // Starting panes moves the Host revision too; the Client follows each one.
+    wait_until(cx, &view, "adopting the Host layout", |root, _| {
+        root.workspace
+            .project(&project_id)
+            .is_some_and(|project| project.layout.tab("mirrored").is_some())
+            && root.workspace_persistence.revision == runtime.workspace_layout_revision(&id)
     });
     view.read_with(cx, |root, _| {
-        let project = root.workspace.project(&project_id).unwrap();
-        assert!(project.layout.tab("mirrored").is_some());
         assert!(
             root.project
                 .project_editor_runtime
@@ -108,17 +130,4 @@ fn a_host_layout_change_made_elsewhere_replaces_the_local_layout_without_an_echo
             "the editor work area mirrors the Host tabs"
         );
     });
-
-    // The adopted layout is what the Host holds, so nothing is republished.
-    view.update_in(cx, |root, window, cx| {
-        root.commit_remote_workspace_if_changed(runtime.clone(), id.clone(), window, cx);
-    });
-    cx.run_until_parked();
-    std::thread::sleep(Duration::from_millis(100));
-    cx.run_until_parked();
-    assert_eq!(
-        view.read_with(cx, |root, _| root.workspace_persistence.revision),
-        Some(2)
-    );
-    assert_eq!(runtime.workspace_layout_revision(&id), Some(2));
 }

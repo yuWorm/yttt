@@ -329,7 +329,6 @@ mod tests {
                 },
                 bytes: b"typed".to_vec(),
             },
-            control: None,
         };
 
         let encoded = encode_message(FrameKind::Control, &message).unwrap();
@@ -427,24 +426,21 @@ mod tests {
 
     #[test]
     fn six_mib_draft_with_json_escapes_roundtrips_in_one_control_frame() {
-        use crate::workspace::{
-            DraftBase, DraftContentRevision, DraftRef, MAX_DRAFT_CONTENT_BYTES, WorkspaceId,
-            WorkspaceRequest,
-        };
-        let draft = DraftContentRevision {
-            revision: 1,
-            base: DraftBase::Json {
-                metadata: serde_json::json!({}),
-            },
-            content: "\0".repeat(MAX_DRAFT_CONTENT_BYTES),
-        };
-        let reference = DraftRef::for_document(b"document", &draft);
+        use crate::workspace::{DraftBase, MAX_DRAFT_CONTENT_BYTES, WorkspaceId, WorkspaceRequest};
         let request = ControlMessage::Request(crate::ClientRequest::new(
             1,
-            crate::Request::Workspace(WorkspaceRequest::PutDraft {
+            crate::Request::Workspace(WorkspaceRequest::PutDocumentDraft {
                 workspace_id: WorkspaceId::new("window").unwrap(),
-                reference,
-                content: draft.content.into_bytes(),
+                document: yttt_core::model::editor::DocumentId {
+                    project_id: yttt_core::model::ids::ProjectId::new("project"),
+                    canonical_path: "/project/notes.md".into(),
+                },
+                epoch: 1,
+                revision: 1,
+                base: DraftBase::Json {
+                    metadata: serde_json::json!({}),
+                },
+                content: vec![0; MAX_DRAFT_CONTENT_BYTES],
             }),
         ));
         let encoded = encode_message(FrameKind::Control, &request).unwrap();
@@ -454,9 +450,7 @@ mod tests {
 
     #[test]
     fn maximum_agent_state_roundtrips_without_json_byte_array_expansion() {
-        use crate::workspace::{
-            AgentStateRef, MAX_AGENT_STATE_BYTES, WorkspaceId, WorkspaceRequest,
-        };
+        use crate::workspace::{AgentStateRef, MAX_AGENT_STATE_BYTES, WorkspaceResponse};
         let content = vec![b'x'; MAX_AGENT_STATE_BYTES];
         let reference = AgentStateRef::for_content(
             yttt_core::model::ids::ProjectId::new("project"),
@@ -464,17 +458,16 @@ mod tests {
             "pane".into(),
             &content,
         );
-        let request = ControlMessage::Request(crate::ClientRequest::new(
-            1,
-            crate::Request::Workspace(WorkspaceRequest::PutAgentState {
-                workspace_id: WorkspaceId::new("workspace").unwrap(),
+        let response = ControlMessage::Response(HostResponse {
+            request_id: 1,
+            result: Ok(Response::Workspace(WorkspaceResponse::AgentState {
                 reference,
                 content,
-            }),
-        ));
-        let encoded = encode_message(FrameKind::Control, &request).unwrap();
+            })),
+        });
+        let encoded = encode_message(FrameKind::Control, &response).unwrap();
         let decoded: ControlMessage = decode_message(&decode_frame(&encoded).unwrap()).unwrap();
-        assert_eq!(decoded, request);
+        assert_eq!(decoded, response);
     }
 
     #[test]

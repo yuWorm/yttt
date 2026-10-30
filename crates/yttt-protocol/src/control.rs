@@ -40,7 +40,6 @@ pub struct ClientRequest {
     pub actor_device_id: Option<String>,
     #[serde(default)]
     pub lease_epoch: Option<u64>,
-    pub control: Option<crate::session::ControlContext>,
     pub body: Request,
 }
 
@@ -50,7 +49,6 @@ impl ClientRequest {
             request_id,
             actor_device_id: None,
             lease_epoch: None,
-            control: None,
             body,
         }
     }
@@ -117,7 +115,6 @@ pub enum ControlMessage {
     /// One-way terminal input without a response.
     TerminalInput {
         input: TerminalInput,
-        control: Option<crate::session::ControlContext>,
     },
     Chunk(MessageChunk),
 }
@@ -203,7 +200,6 @@ pub enum Request {
         session_id: TerminalSessionId,
     },
     Workspace(WorkspaceRequest),
-    ProfileControl(crate::session::ProfileControlRequest),
     ReadDeviceSettings,
     SetLoginStartupConsent {
         granted: bool,
@@ -222,7 +218,6 @@ impl Request {
     pub fn required_capability(&self) -> Option<Capability> {
         match self {
             Self::Ping { .. }
-            | Self::ProfileControl(_)
             | Self::ReadDeviceSettings
             | Self::SetLoginStartupConsent { .. }
             | Self::RemoteAccess(_)
@@ -268,7 +263,7 @@ impl Request {
                 | WorkspaceRequest::OmpSessionExists { .. }
                 | WorkspaceRequest::Open { .. }
                 | WorkspaceRequest::OpenExisting { .. }
-                | WorkspaceRequest::GetDraft { .. }
+                | WorkspaceRequest::GetDocumentDraft { .. }
                 | WorkspaceRequest::GetAgentState { .. } => Capability::WorkspaceRead,
                 _ => Capability::WorkspaceMutate,
             }),
@@ -318,7 +313,6 @@ impl Request {
             Self::RemoteFile(request) => remote_file_resource(request),
             Self::RemoteCommand(request) => request.project_id.to_string(),
             Self::Workspace(_)
-            | Self::ProfileControl(_)
             | Self::ReadDeviceSettings
             | Self::SetLoginStartupConsent { .. }
             | Self::RemoteAccess(_) => String::new(),
@@ -426,7 +420,6 @@ pub enum Response {
         holder: ClientInstanceId,
     },
     Workspace(WorkspaceResponse),
-    ProfileControl(crate::session::ControlStatus),
     RemoteAccess(crate::remote_access::RemoteAccessResponse),
     DeviceSettings(crate::remote_access::RemoteAccessSettings),
 }
@@ -434,7 +427,6 @@ pub enum Response {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerEvent {
     Terminal(TerminalStreamUpdate),
-    ProfileControl(crate::session::ControlStatus),
     TerminalLeaseRevoked {
         session_id: TerminalSessionId,
         previous_owner: ClientInstanceId,
@@ -481,6 +473,9 @@ pub enum ServerEvent {
     /// A workspace this Client opened changed; carries its complete layout.
     /// On one connection a newer layout replaces an older one not yet sent.
     WorkspaceChanged(Box<crate::workspace::WorkspaceLayoutUpdate>),
+    /// A document of a workspace this Client opened changed its edit lease or
+    /// draft; carries its complete state.
+    DocumentChanged(Box<crate::workspace::DocumentUpdate>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

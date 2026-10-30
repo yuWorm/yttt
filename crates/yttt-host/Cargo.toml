@@ -24,6 +24,7 @@ rcgen = "0.13"
 rand = "0.8"
 yttt-agent-core = { path = "../yttt-agent-core" }
 yttt-agent-providers = { path = "../yttt-agent-providers" }
+yttt-agent-runtime = { path = "../yttt-agent-runtime" }
 yttt-core = { path = "../yttt-core" }
 yttt-protocol = { path = "../yttt-protocol" }
 yttt-project-core = { path = "../yttt-project-core" }

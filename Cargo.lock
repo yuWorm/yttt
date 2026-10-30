@@ -11640,6 +11640,7 @@ dependencies = [
  "uuid",
  "yttt-agent-core",
  "yttt-agent-providers",
+ "yttt-agent-runtime",
  "yttt-core",
  "yttt-project-core",
  "yttt-protocol",

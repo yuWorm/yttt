@@ -497,7 +497,7 @@ fn settings_failed_save_banner(
                     theme,
                     cx,
                     cx.listener(|this, _, _window, cx| {
-                        this.discard_failed_settings_save(cx);
+                        this.discard_failed_settings_save();
                         cx.notify();
                     }),
                 )),

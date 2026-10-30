@@ -22,8 +22,7 @@ use yttt_ui::primitives::{
 
 use crate::{
     remote_host::{
-        RemoteConnectCancellation, RemoteConnectEvent, RemoteConnectStatus, RemoteControlOwner,
-        RemoteEnvironment,
+        RemoteConnectCancellation, RemoteConnectEvent, RemoteConnectStatus, RemoteEnvironment,
     },
     remote_launch::RemoteLaunch,
 };
@@ -77,7 +76,6 @@ struct RemoteConnectView {
     text: UiText,
     status: UiTextKey,
     status_detail: Option<String>,
-    show_details: bool,
     scroll: ScrollHandle,
     focus: FocusHandle,
     error: Option<String>,
@@ -93,26 +91,15 @@ struct RemoteConnectView {
 
 enum ConnectPrompt {
     HostKey(yttt_ssh::HostKeyChallenge),
-    Takeover {
-        owner: RemoteControlOwner,
-        force: bool,
-        answer: flume::Sender<bool>,
-    },
 }
 
 impl ConnectPrompt {
     fn reject(self) {
-        match self {
-            Self::HostKey(challenge) => {
-                let _ = challenge.respond(yttt_ssh::HostKeyDecision {
-                    accept: false,
-                    remember: false,
-                });
-            }
-            Self::Takeover { answer, .. } => {
-                let _ = answer.send(false);
-            }
-        }
+        let Self::HostKey(challenge) = self;
+        let _ = challenge.respond(yttt_ssh::HostKeyDecision {
+            accept: false,
+            remember: false,
+        });
     }
 }
 
@@ -131,7 +118,6 @@ impl RemoteConnectView {
             on_ready: Some(on_ready),
             status: UiTextKey::RemoteConnectPreparing,
             status_detail: None,
-            show_details: false,
             scroll: ScrollHandle::new(),
             focus,
             error: None,
@@ -318,9 +304,6 @@ impl RemoteConnectView {
                             remember: choice == Some(2),
                         });
                     }
-                    RemoteConnectEvent::Takeover { answer, .. } => {
-                        let _ = answer.send(false);
-                    }
                     RemoteConnectEvent::Status(_) => {}
                 }
             }
@@ -333,18 +316,6 @@ impl RemoteConnectView {
             match event {
                 RemoteConnectEvent::HostKey(challenge) => {
                     ConnectPrompt::HostKey(challenge).reject()
-                }
-                RemoteConnectEvent::Takeover {
-                    owner,
-                    force,
-                    answer,
-                } => {
-                    ConnectPrompt::Takeover {
-                        owner,
-                        force,
-                        answer,
-                    }
-                    .reject();
                 }
                 RemoteConnectEvent::Status(_) => {}
             }
@@ -388,18 +359,6 @@ impl RemoteConnectView {
                 self.status = UiTextKey::SshHostKeyTitle;
                 self.prompts.push_back(ConnectPrompt::HostKey(challenge));
             }
-            RemoteConnectEvent::Takeover {
-                owner,
-                force,
-                answer,
-            } => {
-                self.status = UiTextKey::RemoteTakeoverTitle;
-                self.prompts.push_back(ConnectPrompt::Takeover {
-                    owner,
-                    force,
-                    answer,
-                });
-            }
         }
         cx.notify();
     }
@@ -421,14 +380,9 @@ impl RemoteConnectView {
                     return;
                 };
                 self.connected.set(true);
-                while let Some(prompt) = self.prompts.pop_front() {
-                    match prompt {
-                        ConnectPrompt::HostKey(challenge) => {
-                            if let Some(events) = &self.event_sender {
-                                let _ = events.send(RemoteConnectEvent::HostKey(challenge));
-                            }
-                        }
-                        prompt => prompt.reject(),
+                while let Some(ConnectPrompt::HostKey(challenge)) = self.prompts.pop_front() {
+                    if let Some(events) = &self.event_sender {
+                        let _ = events.send(RemoteConnectEvent::HostKey(challenge));
                     }
                 }
                 // Keep a window alive until its replacements exist: remote Clients quit when
@@ -533,30 +487,6 @@ impl RemoteConnectView {
         cx.notify();
     }
 
-    fn decline_takeover(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.answer_takeover(false, cx);
-    }
-
-    fn approve_takeover(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.answer_takeover(true, cx);
-    }
-
-    fn answer_takeover(&mut self, take_over: bool, cx: &mut Context<Self>) {
-        if !matches!(self.prompts.front(), Some(ConnectPrompt::Takeover { .. })) {
-            return;
-        }
-        let Some(ConnectPrompt::Takeover { answer, .. }) = self.prompts.pop_front() else {
-            return;
-        };
-        let _ = answer.send(take_over);
-        self.status = if take_over {
-            UiTextKey::RemoteConnectTakingControl
-        } else {
-            UiTextKey::RemoteConnectObserving
-        };
-        cx.notify();
-    }
-
     fn host_label(&self) -> String {
         self.launch.target.label()
     }
@@ -613,76 +543,6 @@ impl RemoteConnectView {
                 .children(challenge.previous_fingerprint.as_ref().map(|previous| {
                     self.detail(UiTextKey::SshHostKeySavedFingerprint, previous.clone(), cx)
                 }))
-            }
-            Some(ConnectPrompt::Takeover { owner, force, .. }) => {
-                let body = body
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(if *force {
-                                theme.danger
-                            } else {
-                                theme.text_muted
-                            })
-                            .child(text.get(if *force {
-                                UiTextKey::RemoteTakeoverForceDescription
-                            } else {
-                                UiTextKey::RemoteTakeoverDescription
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(style.spacing.xl)
-                            .child(
-                                self.detail(UiTextKey::RemoteProfile, owner.profile_id.clone(), cx)
-                                    .flex_1(),
-                            )
-                            .child(self.detail(
-                                UiTextKey::RemoteWorkspaceCount,
-                                owner.workspace_count.to_string(),
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div().flex().child(
-                            yttt_button(
-                                "remote-connect-details",
-                                text.get(if self.show_details {
-                                    UiTextKey::RemoteConnectHideDetails
-                                } else {
-                                    UiTextKey::RemoteConnectDetails
-                                }),
-                                YtttButtonVariant::Ghost,
-                                theme,
-                                style,
-                                cx,
-                            )
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.show_details = !view.show_details;
-                                cx.notify();
-                            })),
-                        ),
-                    );
-                if self.show_details {
-                    body.child(self.detail(
-                        UiTextKey::RemoteEnvironment,
-                        owner.environment_id.clone(),
-                        cx,
-                    ))
-                    .child(
-                        self.detail(
-                            UiTextKey::RemoteClient,
-                            owner
-                                .client_id
-                                .clone()
-                                .unwrap_or_else(|| text.get(UiTextKey::RemoteUnowned).into()),
-                            cx,
-                        ),
-                    )
-                } else {
-                    body
-                }
             }
             None => body.children(
                 self.error
@@ -772,41 +632,6 @@ impl RemoteConnectView {
                     )
                     .on_click(cx.listener(Self::trust_host_key_and_remember)),
                 ),
-            Some(ConnectPrompt::Takeover { force, .. }) => actions
-                .child(
-                    yttt_button(
-                        "remote-workspace-takeover-cancel",
-                        text.get(if *force {
-                            UiTextKey::RemoteCancelTransfer
-                        } else {
-                            UiTextKey::RemoteObserveOnly
-                        }),
-                        YtttButtonVariant::Secondary,
-                        theme,
-                        style,
-                        cx,
-                    )
-                    .on_click(cx.listener(Self::decline_takeover)),
-                )
-                .child(
-                    yttt_button(
-                        "remote-workspace-takeover-confirm",
-                        text.get(if *force {
-                            UiTextKey::RemoteForceContinue
-                        } else {
-                            UiTextKey::RemoteContinueHere
-                        }),
-                        if *force {
-                            YtttButtonVariant::Danger
-                        } else {
-                            YtttButtonVariant::Primary
-                        },
-                        theme,
-                        style,
-                        cx,
-                    )
-                    .on_click(cx.listener(Self::approve_takeover)),
-                ),
             None => actions.when(self.error.is_some() && !self.connecting, |actions| {
                 actions.child(
                     yttt_button(
@@ -856,13 +681,6 @@ impl Render for RemoteConnectView {
                     UiTextKey::SshHostKeyChangedTitle
                 } else {
                     UiTextKey::SshHostKeyTitle
-                }
-            }
-            Some(ConnectPrompt::Takeover { force, .. }) => {
-                if *force {
-                    UiTextKey::RemoteTakeoverForceTitle
-                } else {
-                    UiTextKey::RemoteTakeoverTitle
                 }
             }
             None => self.status,

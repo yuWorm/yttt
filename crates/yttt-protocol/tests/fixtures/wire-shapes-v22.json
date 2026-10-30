@@ -296,7 +296,6 @@
     "": [
       "actor_device_id",
       "body",
-      "control",
       "lease_epoch",
       "request_id"
     ]
@@ -313,37 +312,13 @@
       "workspace_epoch"
     ]
   },
-  "ControlContext": {
-    "": [
-      "control_epoch",
-      "host_epoch"
-    ]
-  },
   "ControlMessage": {
     "Chunk": [],
     "Event": [],
     "Request": [],
     "Response": [],
     "TerminalInput": [
-      "control",
       "input"
-    ]
-  },
-  "ControlStatus": {
-    "": [
-      "context",
-      "owner",
-      "revision",
-      "transfer"
-    ]
-  },
-  "ControlTransfer": {
-    "": [
-      "deadline_millis",
-      "id",
-      "phase",
-      "previous_owner",
-      "requester"
     ]
   },
   "CredentialAnswer": {
@@ -386,6 +361,25 @@
     "": [
       "canonical_path",
       "project_id"
+    ]
+  },
+  "DocumentLease": {
+    "": [
+      "epoch",
+      "holder"
+    ]
+  },
+  "DocumentState": {
+    "": [
+      "document",
+      "draft",
+      "lease"
+    ]
+  },
+  "DocumentUpdate": {
+    "": [
+      "state",
+      "workspace_id"
     ]
   },
   "DraftBase": {
@@ -594,24 +588,6 @@
   "PathSegmentWire": {
     "Bytes": [],
     "Utf8": []
-  },
-  "ProfileControlRequest": {
-    "Cancel": [
-      "transfer_id"
-    ],
-    "ConfirmForce": [
-      "transfer_id"
-    ],
-    "ReacquireIfUnowned": [
-      "context"
-    ],
-    "Ready": [
-      "revisions",
-      "transfer_id"
-    ],
-    "Release": [],
-    "RequestControl": [],
-    "Status": []
   },
   "ProjectChange": {
     "": [
@@ -918,11 +894,9 @@
     "": [
       "bound_address",
       "clients",
-      "control",
       "effective",
       "error",
-      "settings",
-      "sharing_ready"
+      "settings"
     ]
   },
   "RemoteClientSummary": {
@@ -1105,7 +1079,6 @@
     "Ping": [
       "sent_millis"
     ],
-    "ProfileControl": [],
     "Project": [],
     "ReadAgentSnapshots": [
       "acknowledged"
@@ -1192,7 +1165,6 @@
       "host_millis",
       "sent_millis"
     ],
-    "ProfileControl": [],
     "Project": [],
     "RemoteAccess": [],
     "RemoteCommand": [],
@@ -1371,9 +1343,9 @@
   "ServerEvent": {
     "AgentSnapshot": [],
     "CredentialChallenge": [],
+    "DocumentChanged": [],
     "HostDraining": [],
     "HostStopping": [],
-    "ProfileControl": [],
     "ProjectChanged": [],
     "ProjectTokenUsage": [],
     "ResourceCatalogChanged": [],
@@ -1695,11 +1667,6 @@
     "Terminate": [],
     "TerminateMany": []
   },
-  "TransferPhase": {
-    "Fencing": [],
-    "ForceConfirmationRequired": [],
-    "Preparing": []
-  },
   "WaitingReason": {
     "approval": [],
     "external": [],
@@ -1773,6 +1740,11 @@
     "settings": []
   },
   "WorkspaceRequest": {
+    "AcquireDocument": [
+      "document",
+      "takeover",
+      "workspace_id"
+    ],
     "AgentSessions": [
       "project_root",
       "providers"
@@ -1785,13 +1757,6 @@
     "Browse": [
       "include_hidden",
       "path"
-    ],
-    "Commit": [
-      "drafts",
-      "expected_revision",
-      "operation_id",
-      "snapshot",
-      "workspace_id"
     ],
     "CreateConfigDirectory": [
       "relative_directory"
@@ -1814,8 +1779,8 @@
       "reference",
       "workspace_id"
     ],
-    "GetDraft": [
-      "reference",
+    "GetDocumentDraft": [
+      "document",
       "workspace_id"
     ],
     "InstallAgentHooks": [],
@@ -1838,14 +1803,12 @@
     "OpenExisting": [
       "workspace_id"
     ],
-    "PutAgentState": [
+    "PutDocumentDraft": [
+      "base",
       "content",
-      "reference",
-      "workspace_id"
-    ],
-    "PutDraft": [
-      "content",
-      "reference",
+      "document",
+      "epoch",
+      "revision",
       "workspace_id"
     ],
     "ReadConfig": [
@@ -1857,6 +1820,11 @@
     ],
     "Register": [
       "name",
+      "workspace_id"
+    ],
+    "ReleaseDocument": [
+      "document",
+      "epoch",
       "workspace_id"
     ],
     "RemoveConfigDirectory": [
@@ -1894,16 +1862,8 @@
       "content",
       "reference"
     ],
-    "AgentStateStored": [
-      "reference"
-    ],
     "Applied": [
       "revision",
-      "workspace_id"
-    ],
-    "Committed": [
-      "revision",
-      "snapshot",
       "workspace_id"
     ],
     "Config": [],
@@ -1916,11 +1876,9 @@
       "revision"
     ],
     "Directory": [],
-    "Draft": [
+    "Document": [],
+    "DocumentDraft": [
       "content",
-      "reference"
-    ],
-    "DraftStored": [
       "reference"
     ],
     "Environment": [],
@@ -1929,19 +1887,12 @@
     ],
     "OmpSessionExists": [],
     "Opened": [
-      "drafts",
-      "layout",
-      "revision",
-      "snapshot"
+      "agent_states",
+      "documents",
+      "layout"
     ],
     "Registered": [],
     "Workspaces": []
-  },
-  "WorkspaceRevision": {
-    "": [
-      "revision",
-      "workspace_id"
-    ]
   },
   "WorkspaceState": {
     "": [

@@ -151,7 +151,7 @@ use crate::{
             MAX_WINDOW_OPACITY, MIN_UI_FONT_SIZE, MIN_UI_LINE_HEIGHT, MIN_WINDOW_OPACITY,
             SettingsLoadWarning, SettingsSaveError, VimModeSetting, WindowBackgroundEffect,
             detect_shell_candidates, detect_system_language_setting,
-            is_valid_environment_variable_name, load_settings, resolve_default_shell,
+            is_valid_environment_variable_name, load_settings,
         },
         theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },
@@ -163,17 +163,14 @@ use crate::{
             apply_intent,
         },
         ids::ProjectId,
-        layout::{LayoutNode, PaneConfig, ProcessExitBehavior, ProjectLayout, SplitDirection},
+        layout::{LayoutNode, PaneConfig, ProjectLayout, SplitDirection},
         project::{ProjectDescriptor, ProjectLocation},
         split_tree::ResizeDirection,
         work_area::{
             TabGroup, TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode,
             WorkAreaSplitAxis, WorkAreaSplitId,
         },
-        workspace::{
-            CloseProjectDecision, CloseProjectError, PaneExitCloseOutcome, Workspace,
-            WorkspaceError,
-        },
+        workspace::{CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError},
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
@@ -297,8 +294,7 @@ use crate::{
         },
         surface::WorkbenchSurface,
         terminal::pane::{
-            SshTerminalContext, TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
-            TerminalPaneStartedEvent, TerminalPaneView,
+            TerminalPaneContext, TerminalPaneEvent, TerminalPaneRestartRequest, TerminalPaneView,
         },
         theme::{
             AppearanceState, EditorTheme, ThemeRuntime, UiStyle, UiStyleId, WorkbenchTheme,
@@ -342,9 +338,6 @@ pub struct WorkbenchView {
     project: ProjectControllerState,
     ssh: SshControllerState,
     agent_manager: AgentManager,
-    agent_initialization_task: Option<Task<()>>,
-    agent_initialization_attempt: Option<yttt_protocol::session::ControlContext>,
-    agent_initialization_error: Option<String>,
     agent_sessions: AgentSessionsControllerState,
     settings: SettingsControllerState,
     settings_sync_task: Option<Task<()>>,
@@ -734,7 +727,10 @@ impl WorkbenchView {
         let mut workspace = self.workspace.clone();
         let mut editor = self.project.project_editor_runtime.workspace().clone();
         let panes = apply_intent(&mut workspace, &mut editor, intent.clone())?;
-        if !self.publish_workspace_intent(intent) && !panes.removed.is_empty() {
+        let published = self
+            .publish_workspace_intent(intent)
+            .map_err(WorkbenchError::HostWorkspace)?;
+        if !published && !panes.removed.is_empty() {
             let removed = panes
                 .removed
                 .iter()
@@ -845,30 +841,6 @@ impl WorkbenchView {
         restored
     }
 
-    fn restore_project_agent_snapshots(&mut self, project_id: &ProjectId) {
-        if self
-            .terminal
-            .host_runtime
-            .as_ref()
-            .is_some_and(|runtime| runtime.is_remote())
-        {
-            return;
-        }
-        self.agent_manager
-            .enable_project_session_restore(project_id.as_str());
-        for (address, snapshot) in self.agent_manager.retained_snapshots() {
-            if address.project_id != project_id.as_str() {
-                continue;
-            }
-            let _ = self.workspace.record_agent_snapshot(
-                project_id,
-                &address.tab_id,
-                &address.pane_id,
-                snapshot,
-            );
-        }
-    }
-
     fn persist_opened_project_paths(&mut self) -> Option<String> {
         let projects = self
             .workspace
@@ -896,8 +868,7 @@ impl WorkbenchView {
         let command_registry = bindable_registry();
         let recent_projects_config = load_recent_projects(&config_paths).unwrap_or_default();
         let (ssh, ssh_load_error) = SshControllerState::new(&config_paths);
-        let agent_manager = AgentManager::new(&config_paths);
-        let agent_setup_error = agent_manager.state_load_error().map(str::to_string);
+        let agent_manager = AgentManager::default();
         let recent_projects = recent_projects_for_palette(&recent_projects_config);
         let (app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
         let ui_language = match app_settings.general.language {
@@ -937,7 +908,6 @@ impl WorkbenchView {
             layout_load_warning_message(default_layout_state.warnings()),
         );
         let load_error = combine_load_messages(load_error, ssh_load_error);
-        let load_error = combine_load_messages(load_error, agent_setup_error);
         let system_notifications_enabled = app_settings.notifications.system;
         let vim = VimControllerState::new(app_settings.vim.mode);
         let onboarding = ((force_onboarding || !app_settings.general.onboarding_completed)
@@ -989,9 +959,6 @@ impl WorkbenchView {
             },
             ssh,
             agent_manager,
-            agent_initialization_task: None,
-            agent_initialization_attempt: None,
-            agent_initialization_error: None,
             agent_sessions: AgentSessionsControllerState::default(),
             active_project_file_watcher: None,
             active_keybindings_watcher: None,
@@ -1025,10 +992,7 @@ impl WorkbenchView {
             pending_projects_focus: false,
             window_activation_subscription: None,
             command_center: CommandCenterState::default(),
-            terminal: TerminalControllerState::new(
-                app_settings.terminal.environment.clone(),
-                shell_candidates,
-            ),
+            terminal: TerminalControllerState::new(shell_candidates),
             sidebar_collapsed: false,
             active_sidebar_resize_drag: None,
             active_split_resize_drag: None,
@@ -1198,9 +1162,9 @@ impl WorkbenchView {
         runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
     ) -> Result<(DefaultLayoutState, AppSettings), String> {
         let can_write = || {
-            runtime.as_ref().map_or(paths.is_test_fixture(), |runtime| {
-                runtime.shared_editing_enabled()
-            })
+            runtime
+                .as_ref()
+                .map_or(paths.is_test_fixture(), |runtime| runtime.is_connected())
         };
         if !can_write() {
             return Err(UiText::from_language(state.selected_language)
@@ -2507,15 +2471,12 @@ impl WorkbenchView {
 
         let mut contexts = Vec::new();
         let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
-        let shell = self.resolved_terminal_shell();
         collect_terminal_pane_contexts(
             &project_id,
             &project_path,
             &project_title,
             &tab_id,
             &tab_title,
-            &shell,
-            &self.terminal.environment,
             &layout,
             focused_pane_id.as_deref(),
             &self.terminal.terminal_input_gate,
@@ -2534,47 +2495,20 @@ impl WorkbenchView {
             .unwrap_or(false)
     }
 
-    pub fn handle_terminal_pane_started(
+    /// Asks the Host to start an exited pane again; the pane view attaches
+    /// once the Host lists the new terminal.
+    pub fn restart_terminal_pane(
         &mut self,
-        event: TerminalPaneStartedEvent,
+        request: TerminalPaneRestartRequest,
     ) -> Result<(), WorkbenchError> {
-        self.workspace.mark_pane_running(
-            &ProjectId::new(event.project_id),
-            &event.tab_id,
-            &event.pane_id,
-        )?;
+        self.apply_workspace_intent(WorkspaceIntent::RestartPane {
+            project_id: ProjectId::new(request.project_id),
+            tab_id: request.tab_id,
+            pane_id: request.pane_id,
+            resume: request.resume,
+        })?;
         self.load_error = None;
         Ok(())
-    }
-
-    pub fn handle_terminal_pane_exit(
-        &mut self,
-        event: TerminalPaneExitedEvent,
-    ) -> Result<PaneExitCloseOutcome, WorkbenchError> {
-        let project_id = ProjectId::new(event.project_id.clone());
-        if event.exit_behavior != ProcessExitBehavior::Close {
-            self.workspace
-                .record_pane_exited(&project_id, &event.tab_id, &event.pane_id)?;
-            self.load_error = None;
-            return Ok(PaneExitCloseOutcome::PaneKept);
-        }
-
-        self.apply_workspace_intent(WorkspaceIntent::ClosePaneForExit {
-            project_id: project_id.clone(),
-            tab_id: event.tab_id.clone(),
-            pane_id: event.pane_id.clone(),
-        })?;
-        let outcome = match self.workspace.project(&project_id) {
-            Some(project) if project.layout.tab(&event.tab_id).is_some() => {
-                PaneExitCloseOutcome::PaneClosed
-            }
-            Some(project) if project.layout.tabs.is_empty() => PaneExitCloseOutcome::ProjectEmptied,
-            _ => PaneExitCloseOutcome::TabClosed,
-        };
-        self.reconcile_active_terminal_with_workspace()?;
-        self.load_error = None;
-
-        Ok(outcome)
     }
 
     pub fn focus_visible_terminal_pane(&mut self, pane_id: &str) -> Result<(), WorkbenchError> {
@@ -3187,7 +3121,6 @@ impl WorkbenchView {
                         .transpose()
                         .map_err(WorkbenchError::HostProject)?
                 };
-                let already_open = self.workspace.project(&opened.descriptor.id).is_some();
                 let project_id = opened.descriptor.id.clone();
                 self.apply_workspace_intent(WorkspaceIntent::OpenProject {
                     descriptor: opened.descriptor,
@@ -3197,16 +3130,6 @@ impl WorkbenchView {
                         width: self.app_settings.project_panel.width,
                     },
                 })?;
-                if !already_open {
-                    match mode {
-                        ProjectOpenMode::Fresh => self
-                            .agent_manager
-                            .reset_project_sessions(project_id.as_str()),
-                        ProjectOpenMode::RestoreLastSession => {
-                            self.restore_project_agent_snapshots(&project_id)
-                        }
-                    }
-                }
                 if let Some(project_services) = project_services {
                     if let Some(error) = project_services.watch_error() {
                         self.load_error =
@@ -3547,8 +3470,7 @@ impl WorkbenchView {
             self.overlays.pending_git_diff_load = None;
         }
         self.remove_terminal_panes_for_project(project_id.as_str());
-        self.agent_manager
-            .reset_project_sessions(project_id.as_str());
+        self.agent_manager.forget_project(project_id.as_str());
         self.project
             .project_editor_runtime
             .close_project(project_id);
@@ -4049,64 +3971,13 @@ impl WorkbenchView {
         }
     }
 
-    fn ensure_agent_initialization(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(runtime) = self.terminal.host_runtime.clone() else {
-            return;
-        };
-        if !runtime.shared_editing_enabled() {
-            self.agent_initialization_attempt = None;
-            return;
-        }
-        if self.agent_manager.is_initialized() || self.agent_initialization_task.is_some() {
-            return;
-        }
-        let Some(context) = runtime.control_status().map(|status| status.context) else {
-            return;
-        };
-        if self.agent_initialization_attempt == Some(context) {
-            return;
-        }
-        self.agent_initialization_attempt = Some(context);
-        self.agent_initialization_error = None;
-        let paths = self.config_paths.clone();
-        let task = cx.background_spawn(async move { AgentManager::provision(paths, runtime) });
-        self.agent_initialization_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            let _ = this.update_in(cx, |root, _window, cx| {
-                root.agent_initialization_task = None;
-                let still_controls = root.terminal.host_runtime.as_ref().is_some_and(|runtime| {
-                    runtime.shared_editing_enabled()
-                        && runtime
-                            .control_status()
-                            .is_some_and(|status| status.context == context)
-                });
-                if !still_controls {
-                    root.agent_initialization_attempt = None;
-                    cx.notify();
-                    return;
-                }
-                if let Err(error) =
-                    result.and_then(|ready| root.agent_manager.ensure_initialized(ready))
-                {
-                    let message = root
-                        .ui_text
-                        .get(UiTextKey::AgentInitializationFailed)
-                        .replace("{error}", &error.to_string());
-                    root.agent_initialization_error = Some(message.clone());
-                    root.load_error = Some(message);
-                }
-                cx.notify();
-            });
-        }));
-    }
-
     fn localized_command_disabled_reason(&self, reason: &str) -> String {
         let key = match reason {
             "Open a project first" => UiTextKey::CommandDisabledOpenProjectFirst,
             "Focus a project file first" => UiTextKey::CommandDisabledFocusProjectFileFirst,
             "Open a terminal or file first" => UiTextKey::CommandDisabledOpenWorkItemFirst,
             "Switch to a terminal tab first" => UiTextKey::CommandDisabledSwitchTerminalFirst,
-            "Shared editing control is required" => UiTextKey::SettingsReadOnlyObserver,
+            "Connect to the Host first" => UiTextKey::WorkbenchI18nSharedEditingControlRequired,
             "Connect to an existing Host from a local desktop session" => {
                 UiTextKey::RemoteManageLocally
             }
@@ -4344,6 +4215,8 @@ pub enum WorkbenchError {
     HostProject(String),
     #[error("Host terminal operation failed: {0}")]
     HostTerminal(String),
+    #[error("Host workspace operation failed: {0}")]
+    HostWorkspace(String),
     #[error("remote projects are not available in this operation")]
     UnsupportedRemoteProject,
     #[error("{0}")]

@@ -14,9 +14,6 @@ impl Render for WorkbenchView {
         self.flush_pending_onboarding_completion(window, cx);
         self.ensure_settings_sync(window, cx);
         self.ui_text.activate(cx);
-        if !self.command_center_is_active() {
-            self.ensure_agent_initialization(window, cx);
-        }
         self.ensure_settings_project_target_loaded(window, cx);
         let appearance = self.appearance.runtime();
         self.app_settings.theme.ui_style = appearance.style_id;
@@ -170,7 +167,7 @@ impl Render for WorkbenchView {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .child(self.profile_control_banner(cx))
+                    .child(self.workspace_status_banner(cx))
                     .child(self.command_center_view(window, cx))
             } else if let Some((project_id, node, active_group_id)) = work_area_snapshot {
                 self.work_area_view(

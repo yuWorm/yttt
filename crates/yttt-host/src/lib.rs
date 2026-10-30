@@ -2,10 +2,11 @@
 mod agent_hooks;
 mod agent_processes;
 mod audit;
-mod control;
 mod device_settings;
 pub mod diagnostics;
 mod lifecycle;
+mod pane_launch;
+mod pane_runtime;
 mod project;
 mod remote_access;
 pub mod runtime;
@@ -245,8 +246,6 @@ where
     let client_attachments = Arc::new(Mutex::new(HashMap::new()));
     let start_attempts = Arc::new(Mutex::new(StartAttemptRegistry::default()));
     let sessions = Arc::new(Mutex::new(HashMap::new()));
-    let mutation_gate = Arc::new(tokio::sync::RwLock::new(()));
-    let (profile_changes, _) = watch::channel(0_u64);
     let audit = Arc::new(HostAuditLog::new());
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let runtime = HostRuntime::new();
@@ -341,6 +340,20 @@ where
             }
         }
     });
+    let pane_runtime = pane_runtime::PaneRuntime::new(
+        workspaces.clone(),
+        runtime.clone(),
+        agent_hooks.clone(),
+        ssh.clone(),
+        projects.clone(),
+        lifecycle.clone(),
+        &bootstrap.config_root,
+    );
+    pane_runtime.start(stop_rx.clone());
+    if bootstrap.lifetime == HostLifetime::Independent {
+        let startup = pane_runtime.clone();
+        tokio::task::spawn_blocking(move || startup.ensure_all());
+    }
     let (remote_access, remote_commands) = remote_access::RemoteAccessHandle::channel();
     let connection_context = ConnectionContext {
         identity: (*identity).clone(),
@@ -350,17 +363,16 @@ where
         agent_hooks: agent_hooks.clone(),
         projects: projects.clone(),
         workspaces: workspaces.clone(),
+        pane_runtime: pane_runtime.clone(),
         device_settings: device_settings.clone(),
         remote_access,
         network_admission: None,
         handshake_permit: None,
         handshake_deadline: None,
-        mutation_gate: mutation_gate.clone(),
         request_journals: request_journals.clone(),
         start_attempts: start_attempts.clone(),
         client_attachments: client_attachments.clone(),
         sessions: sessions.clone(),
-        profile_changes: profile_changes.clone(),
         runtime: runtime.clone(),
         lifecycle: lifecycle.clone(),
         audit: audit.clone(),
@@ -382,24 +394,11 @@ where
 
     let mut exit_reaper = tokio::time::interval(Duration::from_secs(60));
     exit_reaper.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut profile_deadline_changes = profile_changes.subscribe();
     loop {
         tokio::select! {
             changed = stop_rx.changed() => {
                 if changed.is_err() || *stop_rx.borrow() {
                     break;
-                }
-            }
-            changed = profile_deadline_changes.changed() => {
-                if changed.is_err() {
-                    break;
-                }
-            }
-            _ = wait_for_preparation_deadline(
-                workspaces.control.preparation_deadline_millis()
-            ) => {
-                if workspaces.control.expire_preparation() {
-                    profile_changes.send_modify(|revision| *revision = revision.wrapping_add(1));
                 }
             }
             _ = exit_reaper.tick() => {
@@ -499,18 +498,17 @@ struct ConnectionContext {
     agent_hooks: Arc<HostAgentHookRuntime>,
     projects: Arc<HostProjectRuntime>,
     workspaces: Arc<WorkspaceService>,
+    pane_runtime: Arc<pane_runtime::PaneRuntime>,
     device_settings: Arc<Mutex<device_settings::DeviceSettingsStore>>,
     remote_access: remote_access::RemoteAccessHandle,
     network_admission: Option<Arc<remote_access::NetworkAdmission>>,
     handshake_permit: Option<Arc<Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>>,
     handshake_deadline: Option<tokio::time::Instant>,
-    mutation_gate: Arc<tokio::sync::RwLock<()>>,
     request_journals:
         Arc<Mutex<HashMap<ClientInstanceId, Arc<tokio::sync::Mutex<RequestJournal>>>>>,
     start_attempts: Arc<Mutex<StartAttemptRegistry>>,
     client_attachments: Arc<Mutex<HashMap<ClientInstanceId, SharedTerminalAttachments>>>,
     sessions: Arc<Mutex<HashMap<ClientInstanceId, SessionBinding>>>,
-    profile_changes: watch::Sender<u64>,
     runtime: Arc<HostRuntime>,
     lifecycle: Arc<HostLifecycle>,
     audit: Arc<HostAuditLog>,
@@ -702,7 +700,6 @@ fn request_is_journalable(request: &Request) -> bool {
             request,
             Request::SshConnect(_)
                 | Request::CredentialAnswer { .. }
-                | Request::ProfileControl(_)
                 | Request::RemoteAccess(_)
                 | Request::TerminateMany { .. }
         )
@@ -719,9 +716,6 @@ fn authorize_ingress(
                 | Request::ReadDeviceSettings
                 | Request::SetLoginStartupConsent { .. }
                 | Request::RemoteAccess(_)
-                | Request::ProfileControl(
-                    yttt_protocol::session::ProfileControlRequest::ReacquireIfUnowned { .. }
-                )
         )
     {
         return Err(ProtocolFailure::new(
@@ -821,6 +815,7 @@ fn prune_inactive_sessions(context: &ConnectionContext) {
         sessions.remove(&id);
         journals.remove(&id);
         attachments.remove(&id);
+        context.workspaces.release_client_documents(&id);
     }
 }
 
@@ -959,15 +954,8 @@ async fn serve_client_session(
         context,
     )
     .await;
-    {
-        let _fence = context.mutation_gate.write().await;
-        context.workspaces.control.disconnect(&client_id);
-        context.runtime.release_client(&client_id);
-        context.projects.disconnect(&client_id);
-        context
-            .profile_changes
-            .send_modify(|revision| *revision = revision.wrapping_add(1));
-    }
+    context.runtime.release_client(&client_id);
+    context.projects.disconnect(&client_id);
     context.ssh.abandon_challenges(&client_id);
     attachments.lock().await.clear();
     {
@@ -1095,17 +1083,32 @@ async fn serve_session_connection(
         },
         streams: HashMap::new(),
     };
-    // Each opened workspace keeps at most one unsent layout on this connection,
-    // so a slow Client skips straight to the latest one.
-    let _layouts = context.workspaces.subscribe_layouts(client_id.clone(), {
+    // Each opened workspace keeps at most one unsent layout, and each of its
+    // documents one unsent state, on this connection, so a slow Client skips
+    // straight to the latest ones.
+    let _workspaces = context.workspaces.subscribe(client_id.clone(), {
         let writer = writer.clone();
         let host_sequence = context.host_sequence.clone();
-        Box::new(move |update| {
+        Box::new(move |event| {
+            let (key, body) = match event {
+                workspace::WorkspaceEvent::Layout(update) => (
+                    format!("workspace-layout:{}", update.workspace_id.as_str()),
+                    ServerEvent::WorkspaceChanged(Box::new(update.clone())),
+                ),
+                workspace::WorkspaceEvent::Document(update) => (
+                    format!(
+                        "workspace-document:{}:{}:{}",
+                        update.workspace_id.as_str(),
+                        update.state.document.project_id.as_str(),
+                        update.state.document.canonical_path.display()
+                    ),
+                    ServerEvent::DocumentChanged(Box::new(update.clone())),
+                ),
+            };
             let message = ControlMessage::Event(HostEvent {
                 host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                body: ServerEvent::WorkspaceChanged(Box::new(update.clone())),
+                body,
             });
-            let key = format!("workspace-layout:{}", update.workspace_id.as_str());
             writer.send_reliable_latest(&key, &message).is_ok()
         })
     });
@@ -1173,12 +1176,11 @@ async fn serve_session_connection(
                         }
                     };
                     match message {
-                        ControlMessage::TerminalInput { input, control } => {
+                        ControlMessage::TerminalInput { input } => {
                             let request = ClientRequest {
                                 request_id: 0,
                                 actor_device_id: Some(client_id.to_string()),
                                 lease_epoch: None,
-                                control,
                                 body: Request::TerminalInput(input),
                             };
                             interactive
@@ -1345,15 +1347,12 @@ async fn process_control_request(
     subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
     request_journal: &Arc<tokio::sync::Mutex<RequestJournal>>,
 ) -> HostResponse {
-    let mutation_guard = match admit_mutation(&request, context, client_id).await {
-        Ok(guard) => guard,
-        Err(failure) => {
-            return HostResponse {
-                request_id: request.request_id,
-                result: Err(failure),
-            };
-        }
-    };
+    if let Err(failure) = authorize_ingress(&request.body, context.identity.ingress) {
+        return HostResponse {
+            request_id: request.request_id,
+            result: Err(failure),
+        };
+    }
     if let Err(failure) =
         authorize_terminal_termination(&request.body, context, client_id, subscriptions)
     {
@@ -1433,7 +1432,6 @@ async fn process_control_request(
                     client_id,
                     subscriptions,
                     context.host_sequence.fetch_add(1, Ordering::Relaxed),
-                    mutation_guard.blocking.clone(),
                 )
                 .await;
                 journal.insert(fingerprint, response.clone());
@@ -1448,7 +1446,6 @@ async fn process_control_request(
                 client_id,
                 subscriptions,
                 context.host_sequence.fetch_add(1, Ordering::Relaxed),
-                mutation_guard.blocking.clone(),
             )
             .await,
             true,
@@ -1566,22 +1563,20 @@ async fn run_interactive_requests(
             InteractiveRequest::Request(request) => (request, true),
         };
         let mut attachments = attachments.lock().await;
-        let admission = admit_mutation(&request, &context, &client_id).await;
-        let response = match &admission {
-            Ok(guard) => {
+        let response = match authorize_ingress(&request.body, context.identity.ingress) {
+            Ok(()) => {
                 handle_request(
                     request,
                     &context,
                     &client_id,
                     &mut attachments,
                     context.host_sequence.fetch_add(1, Ordering::Relaxed),
-                    guard.blocking.clone(),
                 )
                 .await
             }
             Err(failure) => HostResponse {
                 request_id: request.request_id,
-                result: Err(failure.clone()),
+                result: Err(failure),
             },
         };
         if let Ok(result) = &response.result {
@@ -1629,17 +1624,6 @@ async fn forward_state_events(
     let mut project_events = context.projects.subscribe();
     let mut runtime_events = context.runtime.subscribe();
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
-    let mut profile_changes = context.profile_changes.subscribe();
-    send_host_state_event(
-        &writer,
-        context,
-        ServerEvent::ProfileControl(
-            context
-                .workspaces
-                .control
-                .status(context.identity.host_epoch),
-        ),
-    )?;
     for update in context.agent_hooks.snapshots_after(&[]) {
         send_host_state_event(
             &writer,
@@ -1655,11 +1639,6 @@ async fn forward_state_events(
     }
     loop {
         tokio::select! {
-            changed = profile_changes.changed() => {
-                changed.map_err(|_| ())?;
-                send_host_state_event(&writer, context,
-                    ServerEvent::ProfileControl(context.workspaces.control.status(context.identity.host_epoch)))?;
-            }
             event = runtime_events.recv() => {
                 let server_event = {
                     let mut subscriptions = attachments.lock().await;
@@ -1964,124 +1943,12 @@ async fn serve_lifecycle_connection(
     }
 }
 
-fn request_mutates(body: &Request) -> bool {
-    matches!(
-        body.required_capability(),
-        Some(
-            yttt_protocol::Capability::WorkspaceMutate
-                | yttt_protocol::Capability::ProjectMutate
-                | yttt_protocol::Capability::GitMutate
-                | yttt_protocol::Capability::TerminalInteractive
-                | yttt_protocol::Capability::SshConnect
-                | yttt_protocol::Capability::RemoteCommandPrivileged
-        )
-    )
-}
-
-#[derive(Default)]
-struct MutationAdmission {
-    _direct: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
-    blocking: Option<Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
-}
-
-async fn admit_mutation(
-    request: &ClientRequest,
-    context: &ConnectionContext,
-    client_id: &ClientInstanceId,
-) -> Result<MutationAdmission, ProtocolFailure> {
-    authorize_ingress(&request.body, context.identity.ingress)?;
-    if !request_mutates(&request.body) {
-        return Ok(MutationAdmission::default());
-    }
-    let guard = context.mutation_gate.clone().read_owned().await;
-    // Layout intents serialize in the workspace store; any Client may apply them.
-    if !matches!(
-        &request.body,
-        Request::Workspace(yttt_protocol::workspace::WorkspaceRequest::Apply { .. })
-    ) {
-        let control = request.control.ok_or_else(|| {
-            ProtocolFailure::new(
-                FailureCode::PermissionDenied,
-                "mutation has no authenticated profile control context",
-                false,
-            )
-        })?;
-        context
-            .workspaces
-            .control
-            .authorize(client_id, control, context.identity.host_epoch)?;
-    }
-    // Blocking I/O retains a permit even if its awaiting connection disappears.
-    // Interactive input uses the direct guard without a per-keystroke allocation.
-    if matches!(
-        request.body,
-        Request::Project(_)
-            | Request::Workspace(_)
-            | Request::RemoteFile(_)
-            | Request::RemoteCommand(_)
-    ) {
-        Ok(MutationAdmission {
-            _direct: None,
-            blocking: Some(Arc::new(guard)),
-        })
-    } else {
-        Ok(MutationAdmission {
-            _direct: Some(guard),
-            blocking: None,
-        })
-    }
-}
-
-async fn handle_profile_control(
-    context: &ConnectionContext,
-    client_id: &ClientInstanceId,
-    request: yttt_protocol::session::ProfileControlRequest,
-) -> Result<yttt_protocol::session::ControlStatus, ProtocolFailure> {
-    let expired = context.workspaces.control.expire_preparation();
-    let changes = !matches!(
-        request,
-        yttt_protocol::session::ProfileControlRequest::Status
-    );
-    let fence = context
-        .workspaces
-        .control
-        .request(client_id, context.identity.host_epoch, request);
-    if expired {
-        context
-            .profile_changes
-            .send_modify(|revision| *revision = revision.wrapping_add(1));
-    }
-    let fence = fence?;
-    if changes {
-        context
-            .profile_changes
-            .send_modify(|revision| *revision = revision.wrapping_add(1));
-    }
-    if let Some(id) = fence {
-        let _guard = context.mutation_gate.write().await;
-        let result = context.workspaces.control.finish(&id, |revisions| {
-            context.workspaces.verify_revisions(revisions)
-        });
-        context
-            .profile_changes
-            .send_modify(|revision| *revision = revision.wrapping_add(1));
-        if let Some(previous) = result? {
-            context.runtime.release_client(&previous);
-        }
-    }
-    Ok(context
-        .workspaces
-        .control
-        .status(context.identity.host_epoch))
-}
-
 async fn handle_request(
     request: ClientRequest,
     context: &ConnectionContext,
     client_id: &ClientInstanceId,
     attachments: &mut HashMap<yttt_core::model::ids::TerminalSessionId, TerminalAttachment>,
     host_sequence: u64,
-    mutation_guard: Option<Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
 ) -> HostResponse {
     let ConnectionContext {
         identity,
@@ -2460,35 +2327,28 @@ async fn handle_request(
         Request::RemoteFile(request) => {
             let ssh = ssh.clone();
             let projects = projects.clone();
-            tokio::task::spawn_blocking(move || {
-                let _guard = mutation_guard;
-                ssh.remote_file(&projects, request)
-            })
-            .await
-            .map_err(|error| ssh_failure(error.to_string()))
-            .and_then(|result| result.map_err(project_failure))
+            tokio::task::spawn_blocking(move || ssh.remote_file(&projects, request))
+                .await
+                .map_err(|error| ssh_failure(error.to_string()))
+                .and_then(|result| result.map_err(project_failure))
         }
         Request::RemoteCommand(request) => {
             let ssh = ssh.clone();
             let projects = projects.clone();
-            tokio::task::spawn_blocking(move || {
-                let _guard = mutation_guard;
-                ssh.remote_command(&projects, request)
-            })
-            .await
-            .map_err(|error| ssh_failure(error.to_string()))
-            .and_then(|result| result.map_err(project_failure))
+            tokio::task::spawn_blocking(move || ssh.remote_command(&projects, request))
+                .await
+                .map_err(|error| ssh_failure(error.to_string()))
+                .and_then(|result| result.map_err(project_failure))
         }
         Request::Project(request) => {
             let projects = projects.clone();
             let client_id = client_id.clone();
-            tokio::task::spawn_blocking(move || {
-                let _guard = mutation_guard;
-                projects.handle(&client_id, request)
-            })
-            .await
-            .map_err(|error| ProtocolFailure::new(FailureCode::Internal, error.to_string(), false))
-            .and_then(|result| result.map(Response::Project).map_err(project_failure))
+            tokio::task::spawn_blocking(move || projects.handle(&client_id, request))
+                .await
+                .map_err(|error| {
+                    ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)
+                })
+                .and_then(|result| result.map(Response::Project).map_err(project_failure))
         }
         Request::ReadAgentSnapshots { acknowledged } => {
             let (snapshots, has_more) = agent_hooks.snapshot_page(&acknowledged);
@@ -2509,40 +2369,65 @@ async fn handle_request(
             let requesting_client = client_id.clone();
             let projects = context.projects.clone();
             let runtime = context.runtime.clone();
+            let pane_runtime = context.pane_runtime.clone();
             tokio::task::spawn_blocking(move || {
-                let _guard = mutation_guard;
-                let result = match request {
+                // Requests after which the workspace may have panes to start.
+                let launching = match &request {
+                    WorkspaceRequest::Open { workspace_id }
+                    | WorkspaceRequest::Apply { workspace_id, .. }
+                    | WorkspaceRequest::Register { workspace_id, .. }
+                    | WorkspaceRequest::SetRestoreOnStartup { workspace_id, .. } => {
+                        Some(workspace_id.clone())
+                    }
+                    _ => None,
+                };
+                // A forgotten workspace takes its panes with it.
+                let forgotten_panes = match &request {
+                    WorkspaceRequest::Forget { workspace_id, .. } => {
+                        workspaces.pane_addresses(workspace_id)
+                    }
+                    _ => Vec::new(),
+                };
+                let (result, removed_panes) = match request {
                     WorkspaceRequest::Apply {
                         workspace_id,
                         intent,
                         expected_revision,
                     } => {
-                        let applied = workspaces.apply(workspace_id.clone(), intent, expected_revision)?;
-                        // Subscribers already have the new layout queued, so a
-                        // terminal's exit reaches them after its pane is gone.
-                        for pane in &applied.removed_panes {
-                            let session_id = pane.terminal_session_id();
-                            match runtime.terminate(&session_id) {
-                                Ok(_) | Err(HostRuntimeError::NotFound(_)) => {}
-                                Err(error) => {
-                                    eprintln!("closed pane terminal {session_id} was not terminated: {error}");
-                                }
-                            }
-                        }
-                        WorkspaceResponse::Applied {
+                        let applied =
+                            workspaces.apply(workspace_id.clone(), intent, expected_revision)?;
+                        let response = WorkspaceResponse::Applied {
                             workspace_id,
                             revision: applied.revision,
+                        };
+                        (response, applied.removed_panes)
+                    }
+                    request => (
+                        workspaces.handle(&requesting_client, request)?,
+                        forgotten_panes,
+                    ),
+                };
+                // Subscribers already have the new layout queued, so a
+                // terminal's exit reaches them after its pane is gone.
+                for pane in &removed_panes {
+                    let session_id = pane.terminal_session_id();
+                    match runtime.terminate(&session_id) {
+                        Ok(_) | Err(HostRuntimeError::NotFound(_)) => {}
+                        Err(error) => {
+                            eprintln!(
+                                "closed pane terminal {session_id} was not terminated: {error}"
+                            );
                         }
                     }
-                    request => workspaces.handle(&requesting_client, request)?,
-                };
+                }
                 if matches!(
                     &result,
-                    WorkspaceResponse::Committed { .. }
-                        | WorkspaceResponse::Applied { .. }
-                        | WorkspaceResponse::Forgotten { .. }
+                    WorkspaceResponse::Applied { .. } | WorkspaceResponse::Forgotten { .. }
                 ) {
                     projects.sync_workspaces(workspaces.referenced_projects());
+                }
+                if let Some(workspace_id) = launching {
+                    pane_runtime.ensure(&workspace_id);
                 }
                 Ok(result)
             })
@@ -2550,9 +2435,6 @@ async fn handle_request(
             .map_err(|error| ProtocolFailure::new(FailureCode::Internal, error.to_string(), false))
             .and_then(|result| result.map(Response::Workspace))
         }
-        Request::ProfileControl(request) => handle_profile_control(context, client_id, request)
-            .await
-            .map(Response::ProfileControl),
         Request::ReadDeviceSettings => Ok(Response::DeviceSettings(
             context.device_settings.lock().settings().clone(),
         )),
@@ -2564,7 +2446,7 @@ async fn handle_request(
             .map_err(|error| ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)),
         Request::RemoteAccess(request) => context
             .remote_access
-            .request(client_id.clone(), request)
+            .request(request)
             .await
             .map(Response::RemoteAccess),
     };
@@ -3154,18 +3036,6 @@ fn now_millis() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
-}
-
-async fn wait_for_preparation_deadline(deadline_millis: Option<u64>) {
-    match deadline_millis {
-        Some(deadline_millis) => {
-            tokio::time::sleep(Duration::from_millis(
-                deadline_millis.saturating_sub(now_millis()),
-            ))
-            .await;
-        }
-        None => std::future::pending::<()>().await,
-    }
 }
 
 #[cfg(unix)]

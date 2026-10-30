@@ -292,6 +292,13 @@ impl HostSshRuntime {
         connections
     }
 
+    pub fn is_connected(&self, connection_id: &str) -> bool {
+        self.statuses
+            .lock()
+            .get(connection_id)
+            .is_some_and(|status| status.state == SshConnectionState::Connected)
+    }
+
     pub async fn connect(
         &self,
         spec: SshConnectSpec,

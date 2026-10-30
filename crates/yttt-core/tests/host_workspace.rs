@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
+use yttt_agent_core::{
+    AgentInstanceId, AgentReducer, AgentSessionMetadata, AgentSnapshot, ProviderId,
+};
 use yttt_core::model::{
     editor::{DocumentId, ProjectWorkItemSession, WorkItemId},
     host_workspace::{
         HostWorkspace, HostWorkspaceError, HostWorkspaceState, IntentError, NewTab, PaneAddress,
-        ProjectPanel, WorkspaceIntent,
+        PaneLaunchTarget, ProjectPanel, WorkspaceIntent,
     },
     ids::ProjectId,
     layout::{PaneKind, ProjectLayout, SplitDirection, TerminalExecutionMode},
@@ -705,28 +708,144 @@ fn resizing_an_unknown_work_area_split_is_rejected() {
     assert_eq!(workspace.revision(), 8);
 }
 
+fn process_state(host: &HostWorkspace, tab_id: &str, pane_id: &str) -> PaneProcessState {
+    host.pane(&pane(tab_id, pane_id)).unwrap().1.process_state
+}
+
+fn claimed(targets: &[PaneLaunchTarget]) -> Vec<(&str, bool)> {
+    targets
+        .iter()
+        .map(|target| (target.address.pane_id.as_str(), target.restore))
+        .collect()
+}
+
+fn claim(host: &mut HostWorkspace, restoring: bool) -> Vec<PaneLaunchTarget> {
+    host.claim_launches(|_, _| Some(restoring))
+}
+
+fn agent_snapshot_with_session() -> AgentSnapshot {
+    let mut snapshot = AgentReducer::new(
+        AgentInstanceId::random(),
+        ProviderId::from_static("codex"),
+        1,
+    )
+    .snapshot()
+    .clone();
+    snapshot.session = Some(AgentSessionMetadata {
+        session_id: Some("saved".into()),
+        ..Default::default()
+    });
+    snapshot
+}
+
 #[test]
-fn recorded_pane_runtime_never_changes_the_host_layout() {
+fn host_claims_each_idle_pane_of_a_started_tab_once() {
     let mut host = migrated();
-    let mut observed = host.workspace().clone();
-    observed
-        .mark_pane_running(&project_id(), "dev", "server")
-        .unwrap();
-    observed.select_project(&project_id()).unwrap();
-    observed.close_tabs(&["agent".to_string()]).unwrap();
-    let layout_before = project(&host).layout.clone();
 
-    host.record_pane_runtime(&observed, 8);
-
+    let targets = claim(&mut host, false);
+    assert_eq!(
+        claimed(&targets),
+        [("server", false), ("shell", false), ("pane-1", false)]
+    );
+    assert_eq!(targets[0].pane.command, "$SHELL");
     assert_eq!(host.revision(), 8);
-    assert_eq!(project(&host).layout, layout_before);
-    let process_state = |tab_id: &str, pane_id: &str| {
-        project(&host)
-            .tab_state(tab_id)
-            .and_then(|tab| tab.pane_states.iter().find(|pane| pane.pane_id == pane_id))
-            .map(|pane| pane.process_state)
-            .unwrap()
+    assert_eq!(
+        process_state(&host, "dev", "server"),
+        PaneProcessState::Running
+    );
+    assert!(claim(&mut host, false).is_empty());
+    assert_eq!(host.revision(), 8);
+
+    // The lazy tab starts once it is selected.
+    host.apply(
+        WorkspaceIntent::ActivateItem {
+            project_id: project_id(),
+            item: WorkItemId::Terminal("agent".into()),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(claimed(&claim(&mut host, false)), [("codex", false)]);
+}
+
+#[test]
+fn restoring_reclaims_running_panes_and_resumable_agents_only() {
+    let mut host = migrated();
+    claim(&mut host, false);
+    assert!(host.record_pane_exited(&pane("dev", "server")).unwrap());
+    assert!(!host.record_pane_exited(&pane("dev", "server")).unwrap());
+    host.set_agent_snapshot(&pane("dev", "shell"), Some(agent_snapshot_with_session()))
+        .unwrap();
+    host.record_pane_exited(&pane("dev", "shell")).unwrap();
+    let revision = host.revision();
+
+    assert!(claim(&mut host, false).is_empty());
+    // A project whose machine is unreachable keeps its panes for later.
+    assert!(host.claim_launches(|_, _| None).is_empty());
+    assert_eq!(host.revision(), revision);
+    let targets = claim(&mut host, true);
+    assert_eq!(claimed(&targets), [("shell", true), ("pane-1", true)]);
+    assert_eq!(
+        targets[0]
+            .agent_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session.as_ref())
+            .and_then(|session| session.session_id.as_deref()),
+        Some("saved")
+    );
+    assert_eq!(host.revision(), revision + 1);
+    assert_eq!(
+        process_state(&host, "dev", "server"),
+        PaneProcessState::Exited
+    );
+}
+
+#[test]
+fn restarting_a_pane_hands_it_back_to_the_host_launcher() {
+    let mut host = migrated();
+    claim(&mut host, false);
+    let restart = |resume| WorkspaceIntent::RestartPane {
+        project_id: project_id(),
+        tab_id: "dev".into(),
+        pane_id: "shell".into(),
+        resume,
     };
-    assert_eq!(process_state("dev", "server"), PaneProcessState::Running);
-    assert_eq!(process_state("agent", "codex"), PaneProcessState::Idle);
+    assert_eq!(
+        host.apply(restart(true), None).unwrap_err(),
+        IntentError::Workspace(WorkspaceError::PaneRunning("shell".into()))
+    );
+
+    host.set_agent_snapshot(&pane("dev", "shell"), Some(agent_snapshot_with_session()))
+        .unwrap();
+    host.record_pane_exited(&pane("dev", "shell")).unwrap();
+    host.apply(restart(true), None).unwrap();
+    let targets = claim(&mut host, false);
+    assert_eq!(claimed(&targets), [("shell", false)]);
+    assert!(targets[0].agent_snapshot.is_some());
+
+    host.record_pane_exited(&pane("dev", "shell")).unwrap();
+    host.apply(restart(false), None).unwrap();
+    assert_eq!(process_state(&host, "dev", "shell"), PaneProcessState::Idle);
+    assert!(claim(&mut host, false)[0].agent_snapshot.is_none());
+}
+
+#[test]
+fn agent_snapshots_stay_out_of_the_published_layout() {
+    let mut host = migrated();
+    host.set_agent_snapshot(&pane("agent", "codex"), Some(agent_snapshot_with_session()))
+        .unwrap();
+
+    let state = host.state();
+    assert!(
+        state
+            .workspace
+            .opened_projects
+            .iter()
+            .flat_map(|project| &project.tab_states)
+            .flat_map(|tab| &tab.pane_states)
+            .all(|pane| pane.agent_snapshot.is_none())
+    );
+    let snapshots = host.agent_snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].0, pane("agent", "codex"));
 }

@@ -205,12 +205,6 @@ async fn installer_preflight_stops_idle_host_and_preserves_busy_host() {
     let client = ClientCore::connect(connector, identity, token)
         .await
         .unwrap();
-    client
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap();
     let project_root = temporary.path().join("installer-blocker");
     fs::create_dir_all(&project_root).unwrap();
     let project_id = ProjectId::new("installer-blocker");
@@ -391,12 +385,6 @@ async fn previous_build_host_with_the_same_protocol_is_attached_while_busy() {
     )
     .await
     .unwrap();
-    client
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap();
     let project_root = temp.path().join("busy-project");
     fs::create_dir_all(&project_root).unwrap();
     let project_id = ProjectId::new("upgrade-blocker");

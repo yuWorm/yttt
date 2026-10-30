@@ -474,7 +474,7 @@ impl WorkbenchView {
         if !io.can_write_host {
             return Err(self
                 .ui_text
-                .get(UiTextKey::SettingsReadOnlyObserver)
+                .get(UiTextKey::SettingsReadOnlyDisconnected)
                 .to_string());
         }
         let confirmed = self
@@ -691,19 +691,10 @@ impl WorkbenchView {
         let Some(runtime) = self.terminal.host_runtime.as_ref() else {
             return Some(UiTextKey::SettingsReadOnlyDisconnected);
         };
-        if runtime.preparing_transfer().is_some() {
-            return Some(UiTextKey::SettingsReadOnlyPreparingTransfer);
-        }
-        if !matches!(
-            runtime.state(),
-            yttt_client_core::ConnectionState::Ready { .. }
-        ) {
+        if !runtime.is_connected() {
             return Some(UiTextKey::SettingsReadOnlyDisconnected);
         }
-        if runtime.shared_editing_enabled() {
-            return None;
-        }
-        Some(UiTextKey::SettingsReadOnlyObserver)
+        None
     }
 
     pub(super) fn settings_scope_is_editable(&self, scope: SettingsScope) -> bool {
@@ -912,7 +903,6 @@ impl WorkbenchView {
         if !self.persist_app_settings(false)? {
             return Ok(Default::default());
         }
-        self.sync_terminal_environment();
         self.settings.settings_environment_name_input = None;
         self.settings.settings_environment_value_input = None;
         Ok(true)
@@ -935,15 +925,7 @@ impl WorkbenchView {
         if !self.persist_app_settings(false)? {
             return Ok(Default::default());
         }
-        self.sync_terminal_environment();
         Ok(true)
-    }
-
-    fn sync_terminal_environment(&self) {
-        self.terminal
-            .environment
-            .write()
-            .clone_from(&self.app_settings.terminal.environment);
     }
 
     pub fn set_ui_font_family(&mut self, font_family: &str) -> Result<(), WorkbenchError> {
@@ -2031,13 +2013,6 @@ impl WorkbenchView {
         self.keybindings_reload_requested = true;
         self.settings.keybinding_warning_lines.clear();
         Ok(())
-    }
-
-    pub(super) fn resolved_terminal_shell(&self) -> String {
-        resolve_default_shell(
-            &self.app_settings.terminal.shell,
-            &self.terminal.shell_candidates,
-        )
     }
 
     pub(super) fn available_theme_names(&self) -> Vec<String> {

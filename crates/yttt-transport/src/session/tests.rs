@@ -38,7 +38,6 @@ fn input(bytes: usize) -> ControlMessage {
             },
             bytes: vec![b'x'; bytes],
         },
-        control: None,
     }
 }
 

@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -36,9 +37,7 @@ use yttt::{
     model::{
         editor::{DocumentId, WorkItemId},
         ids::{ProfileId, ProjectId},
-        layout::{
-            LayoutNode, PaneKind, ProcessExitBehavior, SplitDirection, TerminalExecutionMode,
-        },
+        layout::{LayoutNode, PaneKind, SplitDirection, TerminalExecutionMode},
         project::{ProjectDescriptor, ProjectLocation},
         split_tree::ResizeDirection,
         work_area::{WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis},
@@ -60,10 +59,7 @@ use yttt::{
     ui::primitives::sidebar::SidebarSide,
     ui::project_tree::{DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind},
     ui::surface::WorkbenchSurface,
-    ui::terminal::pane::{
-        TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalPaneStartedEvent,
-        notification_for_terminal_pane_exit,
-    },
+    ui::terminal::pane::{TerminalPaneExitInput, notification_for_terminal_pane_exit},
     ui::vim::WorkbenchVimMode,
     ui::workbench::shell::sidebar::visible_project_items,
     ui::{
@@ -6614,13 +6610,15 @@ fn root_view_icon_theme_setting_persists_and_can_reset() {
     );
 }
 
+/// The Host reads `[terminal]` shell and environment whenever it starts a
+/// pane, so the desktop only has to persist them.
 #[test]
-fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
+fn root_view_terminal_shell_setting_persists_for_new_shell_tabs() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("shell-settings-project");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths_for_test(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
     root.open_project_path(&project_dir).unwrap();
 
     root.set_terminal_shell("/bin/bash").unwrap();
@@ -6633,23 +6631,18 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
     assert_eq!(pane.command, "");
     assert_eq!(pane.execution_mode, TerminalExecutionMode::Shell);
     assert_eq!(
-        root.visible_terminal_pane_contexts()
-            .into_iter()
-            .find(|context| context.pane.id == "shell")
-            .unwrap()
-            .shell,
+        load_settings(&paths).unwrap().settings.terminal.shell,
         "/bin/bash"
     );
 }
 
 #[test]
-fn root_view_terminal_environment_persists_and_updates_existing_panes() {
+fn root_view_terminal_environment_persists_valid_variables() {
     let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("environment-settings-project");
-    fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
-    root.open_project_path(&project_dir).unwrap();
+    let persisted =
+        |paths: &AppConfigPaths| load_settings(paths).unwrap().settings.terminal.environment;
 
     assert!(
         !root
@@ -6660,42 +6653,20 @@ fn root_view_terminal_environment_persists_and_updates_existing_panes() {
         root.set_terminal_environment_variable("YTTT_PROFILE", "development")
             .unwrap()
     );
-    root.run_command(CommandId::TabNew).unwrap();
-
-    let environment = root
-        .visible_terminal_pane_contexts()
-        .into_iter()
-        .find(|context| context.pane.id == "shell")
-        .unwrap()
-        .environment;
-    assert_eq!(
-        environment.read().get("YTTT_PROFILE"),
-        Some(&"development".to_string())
-    );
-
     assert!(
         root.set_terminal_environment_variable("YTTT_PROFILE", "production")
             .unwrap()
     );
     assert_eq!(
-        environment.read().get("YTTT_PROFILE"),
-        Some(&"production".to_string())
-    );
-    assert_eq!(
-        load_settings(&paths)
-            .unwrap()
-            .settings
-            .terminal
-            .environment
-            .get("YTTT_PROFILE"),
-        Some(&"production".to_string())
+        persisted(&paths),
+        BTreeMap::from([("YTTT_PROFILE".to_string(), "production".to_string())])
     );
 
     assert!(
         root.remove_terminal_environment_variable("YTTT_PROFILE")
             .unwrap()
     );
-    assert!(environment.read().is_empty());
+    assert!(persisted(&paths).is_empty());
 }
 
 #[test]
@@ -8494,194 +8465,6 @@ fn root_view_split_command_queues_new_terminal_focus() {
 }
 
 #[test]
-fn root_view_terminal_exit_closes_exact_split_pane() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
-
-    root.handle_terminal_pane_exit(terminal_pane_exited_event("dev", "server"))
-        .unwrap();
-
-    assert_eq!(visible_pane_titles(root.workspace()), vec!["shell"]);
-    assert!(
-        root.visible_terminal_pane_contexts()
-            .iter()
-            .all(|context| context.pane.id != "server")
-    );
-}
-
-#[test]
-fn root_view_terminal_exit_closes_single_pane_tab() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
-    root.workspace_mut().select_tab("agent").unwrap();
-
-    root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
-        .unwrap();
-
-    assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev"]);
-    let project_id = root.workspace().selected_project_id().unwrap().clone();
-    let project = root.workspace().project(&project_id).unwrap();
-    assert_eq!(project.selected_tab_id, "dev");
-}
-
-#[test]
-fn root_view_terminal_exit_reconciles_active_work_item() {
-    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
-    root.select_work_item(WorkItemId::Terminal("agent".to_string()))
-        .unwrap();
-
-    root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
-        .unwrap();
-
-    assert_eq!(
-        root.active_work_item(),
-        Some(WorkItemId::Terminal("dev".to_string()))
-    );
-}
-
-#[test]
-fn root_view_terminal_exit_keeps_project_open_and_allows_new_tab() {
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(
-            local_project(PathBuf::from("/tmp/single")),
-            single_tab_layout(),
-        )
-        .unwrap();
-    let mut root = WorkbenchView::with_workspace_for_test(workspace);
-
-    root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
-        project_id: local_project_id("/tmp/single").as_str().to_string(),
-        tab_id: "dev".to_string(),
-        pane_id: "shell".to_string(),
-        status: ProcessStatus::Exited { code: Some(0) },
-        exit_reason: ExitReason::Completed,
-        exit_behavior: ProcessExitBehavior::Close,
-        generation: 0,
-        agent_instance_id: None,
-    })
-    .unwrap();
-
-    assert_eq!(root.workspace().opened_projects().len(), 1);
-    assert!(visible_tab_titles(root.workspace()).is_empty());
-    assert!(root.visible_terminal_pane_contexts().is_empty());
-    assert!(root.selected_project_is_empty());
-
-    root.run_command(CommandId::TabNew).unwrap();
-
-    let project_id = root.workspace().selected_project_id().unwrap();
-    let project = root.workspace().project(project_id).unwrap();
-    assert_eq!(project.layout.tabs.len(), 1);
-    assert_eq!(project.selected_tab_id, "tab-1");
-    assert_eq!(
-        root.active_work_item(),
-        Some(WorkItemId::Terminal("tab-1".to_string()))
-    );
-    assert!(!root.selected_project_is_empty());
-    assert_eq!(root.visible_error_message(), None);
-}
-
-#[test]
-fn root_view_terminal_exit_keeps_split_pane_for_manual_restart() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
-
-    let outcome = root
-        .handle_terminal_pane_exit(terminal_pane_exited_event_with_behavior(
-            "dev",
-            "server",
-            ProcessExitBehavior::ManualRestart,
-        ))
-        .unwrap();
-
-    assert_eq!(
-        outcome,
-        yttt::model::workspace::PaneExitCloseOutcome::PaneKept
-    );
-    assert_eq!(
-        visible_pane_titles(root.workspace()),
-        vec!["server", "shell"]
-    );
-    let project_id = root.workspace().selected_project_id().unwrap();
-    let project = root.workspace().project(project_id).unwrap();
-    let server = project
-        .tab_state("dev")
-        .unwrap()
-        .pane_states
-        .iter()
-        .find(|pane| pane.pane_id == "server")
-        .unwrap();
-    assert_eq!(server.process_state, PaneProcessState::Exited);
-}
-
-#[test]
-fn root_view_auto_restart_exit_transitions_back_to_running() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
-    root.workspace_mut().select_tab("agent").unwrap();
-
-    root.handle_terminal_pane_exit(terminal_pane_exited_event_with_behavior(
-        "agent",
-        "codex",
-        ProcessExitBehavior::AutoRestart,
-    ))
-    .unwrap();
-
-    assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev", "Agent"]);
-    let project_id = root.workspace().selected_project_id().unwrap().clone();
-    let project = root.workspace().project(&project_id).unwrap();
-    assert_eq!(
-        project.tab_state("agent").unwrap().pane_states[0].process_state,
-        PaneProcessState::Exited
-    );
-
-    root.handle_terminal_pane_started(TerminalPaneStartedEvent {
-        project_id: project_id.as_str().to_string(),
-        tab_id: "agent".to_string(),
-        pane_id: "codex".to_string(),
-        generation: 0,
-        agent_instance_id: None,
-    })
-    .unwrap();
-
-    let project = root.workspace().project(&project_id).unwrap();
-    assert_eq!(
-        project.tab_state("agent").unwrap().pane_states[0].process_state,
-        PaneProcessState::Running
-    );
-}
-
-#[test]
-fn root_view_terminal_exit_keeps_last_tab_for_manual_restart() {
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(
-            local_project(PathBuf::from("/tmp/single")),
-            single_tab_layout(),
-        )
-        .unwrap();
-    let mut root = WorkbenchView::with_workspace_for_test(workspace);
-
-    root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
-        project_id: local_project_id("/tmp/single").as_str().to_string(),
-        tab_id: "dev".to_string(),
-        pane_id: "shell".to_string(),
-        status: ProcessStatus::Exited { code: Some(0) },
-        exit_reason: ExitReason::Completed,
-        exit_behavior: ProcessExitBehavior::ManualRestart,
-        generation: 0,
-        agent_instance_id: None,
-    })
-    .unwrap();
-
-    assert_eq!(root.workspace().opened_projects().len(), 1);
-    assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev"]);
-    assert!(!root.selected_project_is_empty());
-    let project_id = root.workspace().selected_project_id().unwrap();
-    let project = root.workspace().project(project_id).unwrap();
-    assert_eq!(
-        project.tab_state("dev").unwrap().pane_states[0].process_state,
-        PaneProcessState::Exited
-    );
-}
-
-#[test]
 fn root_view_focus_notification_target_queues_terminal_focus() {
     let mut root = WorkbenchView::dev_fixture_for_test();
     let event = notification_event();
@@ -8868,25 +8651,6 @@ fn terminal_pane_agent_exit_builds_notification_event() {
 }
 
 #[test]
-fn terminal_pane_exit_event_preserves_process_identity() {
-    let event = TerminalPaneExitedEvent {
-        project_id: local_project_id("/tmp/yttt").as_str().to_string(),
-        tab_id: "dev".to_string(),
-        pane_id: "server".to_string(),
-        status: ProcessStatus::Exited { code: Some(0) },
-        exit_reason: ExitReason::Completed,
-        exit_behavior: ProcessExitBehavior::ManualRestart,
-        generation: 0,
-        agent_instance_id: None,
-    };
-
-    assert_eq!(event.project_id, local_project_id("/tmp/yttt").as_str());
-    assert_eq!(event.tab_id, "dev");
-    assert_eq!(event.pane_id, "server");
-    assert_eq!(event.exit_behavior, ProcessExitBehavior::ManualRestart);
-}
-
-#[test]
 fn terminal_pane_user_kill_emits_no_notification_event() {
     let event = notification_for_terminal_pane_exit(terminal_pane_exit_input(
         ProcessStatus::Exited { code: None },
@@ -8912,27 +8676,6 @@ fn terminal_pane_exit_input(
         notify_on_exit: true,
         status,
         exit_reason,
-    }
-}
-
-fn terminal_pane_exited_event(tab_id: &str, pane_id: &str) -> TerminalPaneExitedEvent {
-    terminal_pane_exited_event_with_behavior(tab_id, pane_id, ProcessExitBehavior::Close)
-}
-
-fn terminal_pane_exited_event_with_behavior(
-    tab_id: &str,
-    pane_id: &str,
-    exit_behavior: ProcessExitBehavior,
-) -> TerminalPaneExitedEvent {
-    TerminalPaneExitedEvent {
-        project_id: local_project_id("/tmp/yttt").as_str().to_string(),
-        tab_id: tab_id.to_string(),
-        pane_id: pane_id.to_string(),
-        status: ProcessStatus::Exited { code: Some(0) },
-        exit_reason: ExitReason::Completed,
-        exit_behavior,
-        generation: 0,
-        agent_instance_id: None,
     }
 }
 
@@ -9163,22 +8906,6 @@ fn sample_layout() -> yttt::model::layout::ProjectLayout {
         id = "agent"
         title = "Agent"
         layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", notify_on_exit = true }
-    "#,
-    )
-    .unwrap()
-}
-
-fn single_tab_layout() -> yttt::model::layout::ProjectLayout {
-    toml::from_str(
-        r#"
-        [project]
-        name = "single"
-        default_tab = "dev"
-
-        [[tabs]]
-        id = "dev"
-        title = "Dev"
-        layout = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
     "#,
     )
     .unwrap()

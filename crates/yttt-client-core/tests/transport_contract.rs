@@ -154,14 +154,15 @@ fn spawn_request(spec: TerminalSpawnSpec, expected_host_epoch: u64) -> Request {
     }
 }
 
+async fn host_epoch(client: &ClientCore) -> u64 {
+    let Response::Resources(catalog) = client.request(Request::ListResources).await.unwrap() else {
+        panic!("ListResources must return a catalog");
+    };
+    catalog.host_epoch
+}
+
 async fn assert_host_contract<C: TransportConnector + Clone>(host: ContractHost<C>) {
     let owner = connect_client(&host, "contract-owner").await;
-    owner
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap();
     let Response::Resources(catalog) = owner.request(Request::ListResources).await.unwrap() else {
         panic!("ListResources must return a catalog");
     };
@@ -292,17 +293,9 @@ async fn a_new_session_cannot_inherit_an_existing_actors_journal_or_terminals() 
     let (listener, connector) = memory_pair();
     let host = start_host(listener, connector).await;
     let owner = connect_client(&host, "bound-owner").await;
+    let epoch = host_epoch(&owner).await;
     owner
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap();
-    owner
-        .request(spawn_request(
-            contract_spawn_spec(),
-            owner.control_status().unwrap().context.host_epoch,
-        ))
+        .request(spawn_request(contract_spawn_spec(), epoch))
         .await
         .unwrap();
     let identity = ClientIdentity {
@@ -332,52 +325,28 @@ async fn a_new_session_cannot_inherit_an_existing_actors_journal_or_terminals() 
         resources.terminals[0].session_id,
         TerminalSessionId::new("contract-session")
     );
-    assert!(owner.is_controller());
     owner.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tls_existing_host_authentication_rotation_and_shutdown_preserve_local_resources() {
-    use yttt_protocol::{remote_access::*, session::ProfileControlRequest, workspace::*};
+    use yttt_protocol::{remote_access::*, workspace::*};
     use yttt_transport_tls::TlsConnector;
     let (listener, connector) = memory_pair();
     let host = start_host(listener, connector).await;
     let local = connect_client(&host, "desktop").await;
-    local
-        .request(Request::ProfileControl(
-            ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap();
     let workspace_id = WorkspaceId::new("desktop-window").unwrap();
     local
         .request(Request::Workspace(WorkspaceRequest::Register {
-            workspace_id: workspace_id.clone(),
-            name: "Desktop".into(),
-        }))
-        .await
-        .unwrap();
-    local
-        .request(Request::Workspace(WorkspaceRequest::Commit {
             workspace_id,
-            expected_revision: 0,
-            operation_id: WorkspaceOperationId::new("initial").unwrap(),
-            snapshot: WorkspaceSnapshot::new(serde_json::json!({"unsaved": "original desktop"}))
-                .unwrap(),
-            drafts: Vec::new(),
+            name: "Desktop".into(),
         }))
         .await
         .unwrap();
     let spec = contract_spawn_spec();
     let session_id = spec.session_id.clone();
-    local
-        .request(spawn_request(
-            spec,
-            local.control_status().unwrap().context.host_epoch,
-        ))
-        .await
-        .unwrap();
-    let epoch = local.control_status().unwrap().context.host_epoch;
+    let epoch = host_epoch(&local).await;
+    local.request(spawn_request(spec, epoch)).await.unwrap();
     let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = occupied.local_addr().unwrap();
     assert!(
@@ -493,7 +462,7 @@ async fn tls_existing_host_authentication_rotation_and_shutdown_preserve_local_r
     else {
         panic!("workspaces")
     };
-    assert_eq!(index[0].revision, 1);
+    assert_eq!(index[0].workspace_id.as_str(), "desktop-window");
     remote
         .request(Request::AttachTerminal(AttachTerminal {
             session_id: session_id.clone(),
@@ -623,7 +592,7 @@ async fn tls_existing_host_authentication_rotation_and_shutdown_preserve_local_r
     );
     fs::remove_dir(&settings_path).unwrap();
     fs::rename(backup_path, settings_path).unwrap();
-    assert_eq!(local.control_status().unwrap().context.host_epoch, epoch);
+    assert_eq!(host_epoch(&local).await, epoch);
     let Response::Resources(resources) = local.request(Request::ListResources).await.unwrap()
     else {
         panic!("resources")
@@ -641,7 +610,7 @@ async fn tls_existing_host_authentication_rotation_and_shutdown_preserve_local_r
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ssh_work_credential_cannot_administer_host_and_survives_tcp_disable() {
-    use yttt_protocol::{remote_access::RemoteAccessRequest, session::ProfileControlRequest};
+    use yttt_protocol::remote_access::RemoteAccessRequest;
     let (admin_listener, admin_connector) = memory_pair();
     let (work_listener, work_connector) = memory_pair();
     let work_token = [0x93; 32];
@@ -699,11 +668,6 @@ async fn ssh_work_credential_cannot_administer_host_and_survives_tcp_disable() {
     let work = ClientCore::connect(work_connector, identity, AuthToken::from_bytes(work_token))
         .await
         .unwrap();
-    work.request(Request::ProfileControl(
-        ProfileControlRequest::RequestControl,
-    ))
-    .await
-    .unwrap();
     assert!(work.request(Request::ReadDeviceSettings).await.is_err());
     assert!(
         work.request(Request::RemoteAccess(RemoteAccessRequest::Status))
@@ -719,14 +683,6 @@ async fn ssh_work_credential_cannot_administer_host_and_survives_tcp_disable() {
         }))
         .await
         .unwrap();
-    let Response::ProfileControl(status) = work
-        .request(Request::ProfileControl(ProfileControlRequest::Status))
-        .await
-        .unwrap()
-    else {
-        panic!("control status")
-    };
-    assert_eq!(status.owner.as_ref(), Some(work.client_id()));
     let Response::Resources(catalog) = work.request(Request::ListResources).await.unwrap() else {
         panic!("SSH work connection must remain usable")
     };

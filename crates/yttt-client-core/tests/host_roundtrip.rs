@@ -126,7 +126,7 @@ impl RunningHost {
     }
 
     async fn client(&self, id: &str) -> ClientCore {
-        let client = ClientCore::connect(
+        ClientCore::connect(
             LocalConnector::new(host_endpoint(&self.bootstrap)),
             ClientIdentity {
                 expected_environment: None,
@@ -143,16 +143,7 @@ impl RunningHost {
             AuthToken::from_bytes(self.token),
         )
         .await
-        .unwrap();
-        if client.control_status().unwrap().owner.is_none() {
-            client
-                .request(Request::ProfileControl(
-                    yttt_protocol::session::ProfileControlRequest::RequestControl,
-                ))
-                .await
-                .unwrap();
-        }
-        client
+        .unwrap()
     }
 
     async fn lifecycle_request(
@@ -259,12 +250,9 @@ async fn raw_interactive_request(
     stream: &mut yttt_transport_local::LocalStream,
     request_id: u64,
     body: Request,
-    control: Option<yttt_protocol::session::ControlContext>,
     events: &mut std::collections::VecDeque<HostEvent>,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
-    let mut request = ClientRequest::new(request_id, body);
-    request.control = control;
-    raw_exchange(stream, request, events).await
+    raw_exchange(stream, ClientRequest::new(request_id, body), events).await
 }
 
 async fn raw_request(
@@ -282,52 +270,7 @@ async fn raw_request_keeping_events(
     body: Request,
     events: &mut std::collections::VecDeque<HostEvent>,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
-    let mut request = ClientRequest::new(request_id, body);
-    if matches!(
-        request.body,
-        Request::SpawnTerminal { .. }
-            | Request::TerminateTerminal { .. }
-            | Request::AcknowledgeTerminalExit { .. }
-    ) {
-        let Response::ProfileControl(mut status) = raw_exchange(
-            stream,
-            ClientRequest::new(
-                u64::MAX,
-                Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
-            ),
-            events,
-        )
-        .await?
-        else {
-            panic!("profile status")
-        };
-        if status.owner.is_none() {
-            let Response::ProfileControl(acquired) = raw_exchange(
-                stream,
-                ClientRequest::new(
-                    u64::MAX,
-                    Request::ProfileControl(
-                        yttt_protocol::session::ProfileControlRequest::RequestControl,
-                    ),
-                ),
-                events,
-            )
-            .await?
-            else {
-                panic!("profile control")
-            };
-            status = acquired;
-        }
-        request.control = Some(status.context);
-    }
-    raw_exchange(stream, request, events).await
-}
-
-async fn raw_send(
-    stream: &mut yttt_transport_local::LocalStream,
-    request: ClientRequest,
-) -> Result<Response, yttt_protocol::ProtocolFailure> {
-    raw_exchange(stream, request, &mut Default::default()).await
+    raw_exchange(stream, ClientRequest::new(request_id, body), events).await
 }
 
 async fn raw_exchange(
@@ -487,16 +430,6 @@ async fn one_session_connection_carries_requests_output_and_ordered_exit() {
     };
     let geometry_epoch = viewport.geometry_epoch;
     let mut mirror = TerminalMirror::new(viewport);
-    let Response::ProfileControl(control_status) = raw_request_keeping_events(
-        &mut session,
-        2,
-        Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
-        &mut pending,
-    )
-    .await
-    .unwrap() else {
-        panic!("control status")
-    };
     assert_eq!(
         raw_interactive_request(
             &mut session,
@@ -512,7 +445,6 @@ async fn one_session_connection_carries_requests_output_and_ordered_exit() {
                 },
                 bytes: b"shared\r".to_vec(),
             }),
-            Some(control_status.context),
             &mut pending,
         )
         .await
@@ -1245,13 +1177,7 @@ async fn sixel_pixels_survive_host_reattach_and_clear_through_the_semantic_strea
         })
         .await
         .unwrap();
-    // Reattachment starts after the Host acknowledges control release, not just local shutdown.
-    first
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::Release,
-        ))
-        .await
-        .unwrap();
+    // Reattachment starts after the Host acknowledges the detach, not just local shutdown.
     first.shutdown().await;
     drop(first);
 
@@ -1383,12 +1309,6 @@ async fn kitty_animation_advances_without_output_and_survives_reattach_until_del
         .request(Request::DetachTerminal {
             session_id: session_id.clone(),
         })
-        .await
-        .unwrap();
-    first
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::Release,
-        ))
         .await
         .unwrap();
     first.shutdown().await;
@@ -1570,131 +1490,6 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
         .unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn forced_takeover_waits_for_an_admitted_git_write_to_finish() {
-    use yttt_protocol::session::{ProfileControlRequest, TransferPhase};
-    let host = RunningHost::start().await;
-    let owner = host.client("slow-writer").await;
-    let successor = host.client("waiting-writer").await;
-    let project_root = host._temp.path().join("fenced-git");
-    fs::create_dir_all(&project_root).unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec!["config", "user.name", "Smoke"],
-        vec!["config", "user.email", "smoke@example.invalid"],
-        vec!["commit", "--allow-empty", "-qm", "initial"],
-        vec!["branch", "next"],
-    ] {
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(&project_root)
-                .args(args)
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
-    let hook = project_root.join(".git/hooks/post-checkout");
-    fs::write(&hook, "#!/bin/sh\ntouch .git/write-entered\ni=0\nwhile [ ! -f .git/write-release ]; do i=$((i + 1)); [ \"$i\" -lt 400 ] || exit 1; sleep 0.05; done\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
-    let project_id = ProjectId::new("fenced-git");
-    owner
-        .request(Request::Project(ProjectRequest::Register {
-            view_id: "writer".into(),
-            project_id: project_id.clone(),
-            root: host_path(&project_root),
-        }))
-        .await
-        .unwrap();
-    let write = owner
-        .enqueue_request(Request::Project(ProjectRequest::Git {
-            project_id,
-            operation: ProjectGitOperation::Switch {
-                name: "next".into(),
-                track_remote: false,
-            },
-        }))
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !project_root.join(".git/write-entered").exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("real Git hook must enter the admitted mutation");
-    let Response::ProfileControl(preparing) = successor
-        .request(Request::ProfileControl(
-            ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap()
-    else {
-        panic!("preparing")
-    };
-    let transfer_id = preparing.transfer.unwrap().id;
-    tokio::time::timeout(Duration::from_secs(6), async {
-        loop {
-            let Response::ProfileControl(status) = successor
-                .request(Request::ProfileControl(ProfileControlRequest::Status))
-                .await
-                .unwrap()
-            else {
-                panic!("status")
-            };
-            assert_eq!(
-                status.owner.as_ref(),
-                Some(owner.client_id()),
-                "deadline alone must not grant control"
-            );
-            if status.transfer.unwrap().phase == TransferPhase::ForceConfirmationRequired {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("force confirmation deadline");
-    let forced = successor
-        .enqueue_request(Request::ProfileControl(
-            ProfileControlRequest::ConfirmForce { transfer_id },
-        ))
-        .unwrap();
-    let mut forced = Box::pin(forced.wait());
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut forced)
-            .await
-            .is_err(),
-        "takeover must drain the in-flight Git mutation"
-    );
-    fs::write(project_root.join(".git/write-release"), "").unwrap();
-    write.wait().await.unwrap();
-    let Response::ProfileControl(granted) = tokio::time::timeout(Duration::from_secs(5), forced)
-        .await
-        .unwrap()
-        .unwrap()
-    else {
-        panic!("granted")
-    };
-    assert_eq!(granted.owner.as_ref(), Some(successor.client_id()));
-    assert_eq!(
-        fs::read_to_string(project_root.join(".git/HEAD"))
-            .unwrap()
-            .trim(),
-        "ref: refs/heads/next"
-    );
-    assert_eq!(
-        host.lifecycle_request(LifecycleRequest::ForceStop, true)
-            .await,
-        LifecycleResponse::Draining
-    );
-    tokio::time::timeout(Duration::from_secs(5), host.task)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-}
-
 #[tokio::test]
 async fn request_journal_replays_mutations_without_repeating_side_effects() {
     let host = RunningHost::start().await;
@@ -1790,57 +1585,6 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
         .await
         .unwrap(),
         acknowledged
-    );
-
-    let Response::ProfileControl(old_control) = raw_request(
-        &mut client,
-        70,
-        Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
-    )
-    .await
-    .unwrap() else {
-        panic!("old control")
-    };
-    let successor = host.client("journal-successor").await;
-    let Response::ProfileControl(preparing) = successor
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap()
-    else {
-        panic!("preparing")
-    };
-    raw_request(
-        &mut client,
-        71,
-        Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Ready {
-            transfer_id: preparing.transfer.unwrap().id,
-            revisions: vec![],
-        }),
-    )
-    .await
-    .unwrap();
-    let mut stale_replay = ClientRequest::new(41, spawn_request(spec.clone(), host.host_epoch()));
-    stale_replay.control = Some(old_control.context);
-    assert_eq!(
-        raw_send(&mut client, stale_replay).await.unwrap_err().code,
-        FailureCode::StaleEpoch
-    );
-    assert_eq!(
-        raw_request(&mut client, 41, spawn_request(spec, host.host_epoch()))
-            .await
-            .unwrap_err()
-            .code,
-        FailureCode::PermissionDenied
-    );
-    let Response::Resources(resources) = successor.request(Request::ListResources).await.unwrap()
-    else {
-        panic!("resources")
-    };
-    assert!(
-        resources.terminals.is_empty(),
-        "denied replay must not respawn acknowledged terminals"
     );
 
     assert_eq!(
@@ -2894,30 +2638,12 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         .unwrap_err();
     assert!(matches!(
         conflict,
-        ClientCoreError::Protocol(failure) if failure.code == FailureCode::PermissionDenied
+        ClientCoreError::Protocol(failure) if failure.code == FailureCode::Conflict
     ));
-    use yttt_protocol::session::ProfileControlRequest;
-    let Response::ProfileControl(preparing) = observer
-        .request(Request::ProfileControl(
-            ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap()
-    else {
-        panic!("profile transfer")
-    };
-    let transfer = preparing
-        .transfer
-        .expect("previous controller must publish");
     owner
-        .request(Request::ProfileControl(ProfileControlRequest::Ready {
-            transfer_id: transfer.id,
-            revisions: Vec::new(),
-        }))
-        .await
-        .unwrap();
-    observer
-        .request(Request::ProfileControl(ProfileControlRequest::Status))
+        .request(Request::ReleaseTerminalControl {
+            session_id: session_id.clone(),
+        })
         .await
         .unwrap();
     let Response::TerminalLease(new_owner_lease) = observer
@@ -3070,7 +2796,6 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
             context: mutation_context(&owner, session_epoch, observer_lease.lease_epoch, 100, 1),
             geometry: observer_geometry,
         }),
-        None,
         &mut slow_pending,
     )
     .await
@@ -3502,29 +3227,29 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
         panic!("unexpected Agent snapshot acknowledgement response");
     };
     assert!(current.is_empty());
-    // Disconnect completion is asynchronous at the Host. A replaying observer must explicitly
-    // acquire control before reattaching interactively or terminating the surviving Agent.
+    // Disconnect completion is asynchronous at the Host: the departed Client
+    // holds the Interactive lease until the Host releases it.
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let status = observer.control_status().unwrap();
-            if status
-                .owner
-                .as_ref()
-                .is_none_or(|owner| owner.as_str() == "agent-observer")
+            match observer
+                .request(Request::AcquireTerminalLease {
+                    session_id: session_id.clone(),
+                    mode: TerminalLeaseMode::Interactive,
+                })
+                .await
             {
-                break;
+                Ok(_) => break,
+                Err(ClientCoreError::Protocol(failure))
+                    if failure.code == FailureCode::Conflict =>
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("Agent terminal lease acquisition failed: {error:?}"),
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("disconnected Agent control owner release timeout");
-    observer
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::RequestControl,
-        ))
-        .await
-        .unwrap();
+    .expect("disconnected Agent owner lease release timeout");
     let attached = observer
         .request(Request::AttachTerminal(AttachTerminal {
             session_id: session_id.clone(),
@@ -3532,7 +3257,7 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
             after_sequence: observer
                 .terminal_snapshot(&session_id)
                 .map(|viewport| viewport.sequence),
-            mode: yttt_protocol::terminal::TerminalLeaseMode::Interactive,
+            mode: TerminalLeaseMode::Interactive,
             query_palette: Vec::new(),
             palette_revision: 1,
             geometry: geometry(),
@@ -4478,12 +4203,6 @@ async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output()
         })
         .await
         .unwrap();
-    first
-        .request(Request::ProfileControl(
-            yttt_protocol::session::ProfileControlRequest::Release,
-        ))
-        .await
-        .unwrap();
     first.shutdown().await;
     drop(first);
 
@@ -4899,12 +4618,8 @@ async fn raw_open_layout(
         events,
     )
     .await;
-    let Ok(Response::Workspace(WorkspaceResponse::Opened {
-        layout: Some(layout),
-        ..
-    })) = response
-    else {
-        panic!("workspace did not open with a layout: {response:?}");
+    let Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })) = response else {
+        panic!("workspace did not open: {response:?}");
     };
     layout
 }
@@ -4948,7 +4663,7 @@ async fn concurrent_intents_from_two_clients_converge_on_one_layout() {
     let mut alice = raw_client(&host, "layout-alice").await;
     let mut bob = raw_client(&host, "layout-bob").await;
     let (mut alice_events, mut bob_events) = Default::default();
-    let opened = raw_apply(
+    raw_apply(
         &mut alice,
         1,
         open_project_intent(&host, &["alice", "bob"]),
@@ -4961,8 +4676,9 @@ async fn concurrent_intents_from_two_clients_converge_on_one_layout() {
     // Neither Client holds profile control; both intents are accepted in
     // arrival order.
     let alice_task = async {
+        let mut last = 0;
         for round in 0..ROUNDS {
-            raw_apply(
+            last = raw_apply(
                 &mut alice,
                 10 + round,
                 rename_tab_intent("alice", format!("alice-{round}")),
@@ -4970,10 +4686,12 @@ async fn concurrent_intents_from_two_clients_converge_on_one_layout() {
             )
             .await;
         }
+        last
     };
     let bob_task = async {
+        let mut last = 0;
         for round in 0..ROUNDS {
-            raw_apply(
+            last = raw_apply(
                 &mut bob,
                 10 + round,
                 rename_tab_intent("bob", format!("bob-{round}")),
@@ -4981,10 +4699,13 @@ async fn concurrent_intents_from_two_clients_converge_on_one_layout() {
             )
             .await;
         }
+        last
     };
-    tokio::join!(alice_task, bob_task);
+    let (alice_last, bob_last) = tokio::join!(alice_task, bob_task);
 
-    let last = opened + 2 * ROUNDS;
+    // The Host also moves the revision when it starts panes, so wait for the
+    // later of the two final intents rather than counting them.
+    let last = alice_last.max(bob_last);
     let alice_seen = raw_layouts_until(&mut alice, &mut alice_events, last).await;
     let bob_seen = raw_layouts_until(&mut bob, &mut bob_events, last).await;
     for seen in [&alice_seen, &bob_seen] {
@@ -5151,4 +4872,254 @@ async fn closing_a_pane_delivers_its_layout_before_its_terminal_exit() {
         .unwrap(),
         Response::TerminalExitAcknowledged
     );
+}
+
+/// A one-tab project whose single pane runs `script` in `execution_mode`
+/// with `exit_behavior`.
+fn open_pane_project_intent(
+    host: &RunningHost,
+    execution_mode: &str,
+    script: &str,
+    exit_behavior: &str,
+) -> yttt_core::model::host_workspace::WorkspaceIntent {
+    let root = host._temp.path().join("layout-project");
+    fs::create_dir_all(&root).unwrap();
+    let layout = serde_json::from_value(serde_json::json!({
+        "project": { "name": "Layout" },
+        "tabs": [{
+            "id": "tab",
+            "title": "Tab",
+            "layout": {
+                "type": "pane",
+                "id": "job",
+                "title": "Job",
+                "command": "/bin/sh",
+                "args": ["-c", script],
+                "execution_mode": execution_mode,
+                "exit_behavior": exit_behavior,
+            },
+        }],
+    }))
+    .unwrap();
+    yttt_core::model::host_workspace::WorkspaceIntent::OpenProject {
+        descriptor: yttt_core::model::project::ProjectDescriptor::new(
+            ProjectId::new("layout-project"),
+            yttt_core::model::project::ProjectLocation::local(&root),
+        ),
+        layout,
+        panel: yttt_core::model::host_workspace::ProjectPanel {
+            visible: true,
+            width: 240.0,
+        },
+    }
+}
+
+/// Reads layout events until `done` accepts one; returns that layout.
+async fn raw_layout_where(
+    stream: &mut yttt_transport_local::LocalStream,
+    events: &mut std::collections::VecDeque<HostEvent>,
+    done: impl Fn(&yttt_core::model::host_workspace::HostWorkspaceState) -> bool,
+) -> yttt_core::model::host_workspace::HostWorkspaceState {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = match events.pop_front() {
+                Some(event) => event,
+                None => match raw_receive(stream).await {
+                    ControlMessage::Event(event) => event,
+                    message => panic!("unexpected raw session message: {message:?}"),
+                },
+            };
+            if let ServerEvent::WorkspaceChanged(update) = event.body
+                && done(&update.layout)
+            {
+                return update.layout;
+            }
+        }
+    })
+    .await
+    .expect("layout timeout")
+}
+
+fn job_process_state(
+    layout: &yttt_core::model::host_workspace::HostWorkspaceState,
+) -> Option<yttt_core::model::workspace::PaneProcessState> {
+    layout
+        .workspace
+        .opened_projects
+        .first()?
+        .tab_states
+        .iter()
+        .find(|tab| tab.tab_id == "tab")?
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "job")
+        .map(|pane| pane.process_state)
+}
+
+/// Polls the Host catalog until the pane's terminal has an epoch above
+/// `after`. A layout shows the pane `Running` once the Host claims it; its
+/// terminal follows when the spawn completes.
+async fn job_epoch_after(
+    stream: &mut yttt_transport_local::LocalStream,
+    request_id: &mut u64,
+    events: &mut std::collections::VecDeque<HostEvent>,
+    after: u64,
+) -> u64 {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            *request_id += 1;
+            let Response::Resources(resources) =
+                raw_request_keeping_events(stream, *request_id, Request::ListResources, events)
+                    .await
+                    .unwrap()
+            else {
+                panic!("unexpected resources response");
+            };
+            if let Some(epoch) = resources
+                .terminals
+                .iter()
+                .find(|terminal| terminal.session_id.as_str() == "layout-project:tab:job")
+                .map(|terminal| terminal.session_epoch)
+                .filter(|epoch| *epoch > after)
+            {
+                break epoch;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the Host did not start the pane's terminal")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_starts_a_pane_and_closes_it_when_its_process_exits() {
+    use yttt_core::model::workspace::PaneProcessState;
+    let host = RunningHost::start().await;
+    let mut client = raw_client(&host, "pane-close").await;
+    let mut pending = std::collections::VecDeque::new();
+    raw_open_layout(&mut client, 1, &mut pending).await;
+    raw_apply(
+        &mut client,
+        2,
+        open_pane_project_intent(&host, "command", "sleep 1", "close"),
+        &mut pending,
+    )
+    .await;
+
+    // No Client spawned anything: the Host started the pane itself.
+    raw_layout_where(&mut client, &mut pending, |layout| {
+        job_process_state(layout) == Some(PaneProcessState::Running)
+    })
+    .await;
+    job_epoch_after(&mut client, &mut 2, &mut pending, 0).await;
+
+    let closed = raw_layout_where(&mut client, &mut pending, |layout| {
+        job_process_state(layout).is_none()
+    })
+    .await;
+    assert!(
+        closed
+            .workspace
+            .opened_projects
+            .iter()
+            .all(|project| project.layout.tabs.iter().all(|tab| tab.id != "tab")),
+        "the Host closed the exited pane's tab: {closed:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_restarts_an_auto_restart_pane_after_its_process_exits() {
+    use yttt_core::model::workspace::PaneProcessState;
+    let host = RunningHost::start().await;
+    let mut client = raw_client(&host, "pane-restart").await;
+    let mut pending = std::collections::VecDeque::new();
+    raw_open_layout(&mut client, 1, &mut pending).await;
+    raw_apply(
+        &mut client,
+        2,
+        open_pane_project_intent(&host, "command", "sleep 1", "auto_restart"),
+        &mut pending,
+    )
+    .await;
+    raw_layout_where(&mut client, &mut pending, |layout| {
+        job_process_state(layout) == Some(PaneProcessState::Running)
+    })
+    .await;
+    let mut request_id = 2;
+    let first = job_epoch_after(&mut client, &mut request_id, &mut pending, 0).await;
+
+    raw_layout_where(&mut client, &mut pending, |layout| {
+        job_process_state(layout) == Some(PaneProcessState::Exited)
+    })
+    .await;
+    raw_layout_where(&mut client, &mut pending, |layout| {
+        job_process_state(layout) == Some(PaneProcessState::Running)
+    })
+    .await;
+    let restarted = job_epoch_after(&mut client, &mut request_id, &mut pending, first).await;
+    assert!(restarted > first);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarted_host_restores_its_panes_before_any_client_opens_the_workspace() {
+    use yttt_core::model::workspace::PaneProcessState;
+    let host = RunningHost::start().await;
+    let mut client = raw_client(&host, "pane-restore").await;
+    let mut pending = std::collections::VecDeque::new();
+    raw_open_layout(&mut client, 1, &mut pending).await;
+    raw_apply(
+        &mut client,
+        2,
+        // Only shell panes come back after a restart; command panes stay exited.
+        open_pane_project_intent(&host, "shell", "sleep 30", "manual_restart"),
+        &mut pending,
+    )
+    .await;
+    raw_layout_where(&mut client, &mut pending, |layout| {
+        job_process_state(layout) == Some(PaneProcessState::Running)
+    })
+    .await;
+    job_epoch_after(&mut client, &mut 2, &mut pending, 0).await;
+    drop(client);
+
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::ForceStop, true)
+            .await,
+        LifecycleResponse::Draining
+    );
+    let RunningHost {
+        _temp,
+        bootstrap,
+        token,
+        task,
+        ..
+    } = host;
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("first Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+    let restart_endpoint = host_endpoint(&bootstrap);
+    let restarted = tokio::spawn(run(bootstrap.clone(), || {
+        LocalListener::bind(restart_endpoint)
+    }));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !bootstrap.ready_file().exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("restarted Host ready timeout");
+
+    // This Client never opens the workspace, so only the Host's own startup
+    // restoration can have started the pane.
+    let restarted_host = RunningHost {
+        _temp,
+        bootstrap,
+        token,
+        task: restarted,
+        session_nonces: Default::default(),
+    };
+    let mut observer = raw_client(&restarted_host, "pane-restore-observer").await;
+    job_epoch_after(&mut observer, &mut 0, &mut pending, 0).await;
 }

@@ -1,11 +1,12 @@
 use super::*;
 
 impl WorkbenchView {
+    /// Whether this window may change Host-owned state: any connected Client may.
     pub(super) fn shared_mutation_allowed(&self) -> bool {
         self.workspace_allows_mutation()
             && self.terminal.host_runtime.as_ref().map_or(
                 cfg!(test) || self.local_project_services_for_test,
-                |runtime| runtime.shared_editing_enabled(),
+                |runtime| runtime.is_connected(),
             )
     }
 
@@ -907,6 +908,9 @@ impl WorkbenchView {
             }
             ProjectEditorDocumentEvent::Error { message } => {
                 self.load_error = Some(message.clone());
+            }
+            ProjectEditorDocumentEvent::TakeOver => {
+                self.take_over_document(document_id, window, cx);
             }
         }
         cx.notify();

@@ -19,9 +19,7 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 use yttt_core::model::ids::ClientInstanceId;
-use yttt_protocol::{
-    FailureCode, ProtocolFailure, remote_access::*, session::ProfileControlRequest,
-};
+use yttt_protocol::{FailureCode, ProtocolFailure, remote_access::*};
 use yttt_transport::{AuthToken, IngressKind};
 use yttt_transport_tls::TlsListener;
 use zeroize::{Zeroize as _, Zeroizing};
@@ -29,7 +27,6 @@ use zeroize::{Zeroize as _, Zeroizing};
 #[derive(Clone)]
 pub(crate) struct RemoteAccessHandle(mpsc::Sender<Command>);
 pub(crate) struct Command {
-    client: ClientInstanceId,
     request: RemoteAccessRequest,
     reply: oneshot::Sender<Result<RemoteAccessResponse, ProtocolFailure>>,
 }
@@ -40,16 +37,11 @@ impl RemoteAccessHandle {
     }
     pub async fn request(
         &self,
-        client: ClientInstanceId,
         request: RemoteAccessRequest,
     ) -> Result<RemoteAccessResponse, ProtocolFailure> {
         let (reply, receive) = oneshot::channel();
         self.0
-            .send(Command {
-                client,
-                request,
-                reply,
-            })
+            .send(Command { request, reply })
             .await
             .map_err(|_| failure("remote access manager stopped"))?;
         receive
@@ -267,7 +259,7 @@ pub(crate) async fn run(
             changed = stop.changed() => { if changed.is_err() || *stop.borrow() { break; } }
             command = commands.recv() => {
                 let Some(command) = command else { break };
-                let result = manager.handle(command.client, command.request).await;
+                let result = manager.handle(command.request).await;
                 let _ = command.reply.send(result);
             }
             _ = health.tick() => {
@@ -288,23 +280,16 @@ impl Manager {
             settings: self.store.lock().settings().clone(),
             effective: self.effective,
             bound_address: self.network.as_ref().map(|network| network.address),
-            sharing_ready: self.context.workspaces.sharing_ready(),
             error: self.error.clone(),
             clients: self
                 .network
                 .as_ref()
                 .map(|network| network.admission.summaries())
                 .unwrap_or_default(),
-            control: self
-                .context
-                .workspaces
-                .control
-                .status(self.context.identity.host_epoch),
         }
     }
     async fn handle(
         &mut self,
-        client: ClientInstanceId,
         request: RemoteAccessRequest,
     ) -> Result<RemoteAccessResponse, ProtocolFailure> {
         match request {
@@ -341,7 +326,6 @@ impl Manager {
                     settings.enabled = false;
                     settings.listen_address = listen_address;
                     self.error = self.store.lock().save(settings).err().map(|error| format!("Network is closed for this run, but the disabled preference could not be saved: {error}"));
-                    self.return_local_control(&client).await?;
                 }
             }
             RemoteAccessRequest::ExportConnectionInfo => {
@@ -360,7 +344,6 @@ impl Manager {
             }
             RemoteAccessRequest::ResetCredentials => {
                 self.stop_network().await;
-                self.return_local_control(&client).await?;
                 let root = self.store.lock().root().to_path_buf();
                 let mut credentials = Credentials::load(&root)
                     .map_err(io_failure)?
@@ -388,35 +371,15 @@ impl Manager {
                     network.admission.cancel(Some(&client_id));
                     network.admission.drain(Some(&client_id)).await;
                 }
-                self.return_local_control(&client).await?;
             }
             RemoteAccessRequest::DisconnectAll => {
                 if let Some(network) = &self.network {
                     network.admission.cancel(None);
                     network.admission.drain(None).await;
                 }
-                self.return_local_control(&client).await?;
             }
         }
         Ok(RemoteAccessResponse::Status(self.status()))
-    }
-    async fn return_local_control(&self, client: &ClientInstanceId) -> Result<(), ProtocolFailure> {
-        if self
-            .context
-            .workspaces
-            .control
-            .status(self.context.identity.host_epoch)
-            .owner
-            .is_none()
-        {
-            super::handle_profile_control(
-                &self.context,
-                client,
-                ProfileControlRequest::RequestControl,
-            )
-            .await?;
-        }
-        Ok(())
     }
     async fn stop_network(&mut self) {
         if let Some(network) = self.network.take() {
@@ -432,11 +395,6 @@ impl Manager {
         address: SocketAddr,
         existing_only: bool,
     ) -> Result<(), ProtocolFailure> {
-        if !self.context.workspaces.sharing_ready() {
-            return Err(failure(
-                "all workspaces must finish their initial publication before enabling remote access",
-            ));
-        }
         if address.port() == 0 {
             return Err(failure("choose an explicit nonzero listening port"));
         }

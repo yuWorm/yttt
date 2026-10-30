@@ -354,7 +354,7 @@ impl CommandId {
             return disabled("Reveal Host files from a local desktop session");
         }
         if self.requires_shared_editing(context) && !context.shared_editing_enabled {
-            return disabled("Shared editing control is required");
+            return disabled("Connect to the Host first");
         }
 
         match self {

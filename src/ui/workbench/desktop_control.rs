@@ -135,7 +135,6 @@ impl WorkbenchView {
                         state: runtime_state.unwrap_or_else(|| {
                             match pane.process_state {
                                 crate::model::workspace::PaneProcessState::Idle => "idle",
-                                crate::model::workspace::PaneProcessState::Restoring => "restoring",
                                 crate::model::workspace::PaneProcessState::Running => "running",
                                 crate::model::workspace::PaneProcessState::Exited => "exited",
                             }
@@ -641,12 +640,9 @@ impl WorkbenchView {
         else {
             return "pending".into();
         };
-        if self.agent_launch_waits_for_initialization(&context) {
-            return "initializing".into();
-        }
         self.ensure_terminal_pane(context, window, cx)
-            .map(|pane| pane.read(cx).control_state())
-            .unwrap_or_else(|| "pending".into())
+            .read(cx)
+            .control_state()
     }
 }
 
@@ -820,57 +816,6 @@ mod tests {
         assert_eq!(
             response.try_recv().unwrap().unwrap_err().code,
             DesktopControlErrorCode::NotFound
-        );
-        root.read_with(cx, |root, _| {
-            assert_eq!(root.workspace.persisted_state(), before)
-        });
-    }
-    #[cfg(unix)]
-    #[gpui::test]
-    fn cli_control_observer_can_list_but_cannot_mutate(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
-        let host = crate::ui::terminal::pane::recovery_tests::RecoveryHost::start();
-        let _owner = host.client("cli-owner");
-        let observer = host.client("cli-observer");
-        assert!(!observer.shared_editing_enabled());
-        let paths = AppConfigPaths::from_config_dir(host.root.path().join("view-config"));
-        let (root, cx) =
-            cx.add_window_view(|_, _| WorkbenchView::with_config_paths_for_test(paths));
-        root.update_in(cx, |root, _, _| {
-            root.open_project_path(host.root.path()).unwrap()
-        });
-        let before = root.read_with(cx, |root, _| root.workspace.persisted_state());
-        root.update_in(cx, |root, _, _| {
-            root.terminal.host_runtime = Some(observer.clone())
-        });
-        let project = before.selected_project_id.as_ref().unwrap().as_str();
-        root.read_with(cx, |root, app| {
-            let DesktopControlResponse::Projects(projects) =
-                root.control_list("1", &request(project, DesktopControlCommand::Projects), app)
-            else {
-                unreachable!()
-            };
-            assert_eq!(projects.len(), 1);
-        });
-        let (reply, response) = flume::bounded(1);
-        root.update_in(cx, |root, window, cx| {
-            root.handle_control(
-                "1",
-                request(
-                    project,
-                    DesktopControlCommand::CreateShell {
-                        command: "must not run".into(),
-                        title: None,
-                    },
-                ),
-                reply,
-                window,
-                cx,
-            )
-        });
-        assert_eq!(
-            response.try_recv().unwrap().unwrap_err().code,
-            DesktopControlErrorCode::PermissionDenied
         );
         root.read_with(cx, |root, _| {
             assert_eq!(root.workspace.persisted_state(), before)

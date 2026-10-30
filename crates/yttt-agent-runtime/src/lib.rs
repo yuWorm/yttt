@@ -104,6 +104,17 @@ impl PreparedAgentLaunch {
     }
 }
 
+/// Provider decision for one pane launch; see [`AgentRuntime::plan_launch`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchPlan {
+    pub provider_id: ProviderId,
+    pub provider_display_name: &'static str,
+    /// Program replacing the pane command when a saved session is resumed.
+    pub program_override: Option<&'static str>,
+    pub resume_arguments: Vec<String>,
+    pub restored_title: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct AgentRuntimeUpdate {
     pub scope: AgentScopeKey,
@@ -156,22 +167,22 @@ impl AgentRuntime {
         self.prepare_launch_with_snapshot(command, scope, None)
     }
 
-    pub fn prepare_launch_with_snapshot(
-        &mut self,
+    /// Chooses the provider, resume command and restored title for a launch
+    /// without registering an instance. `None` means the command is not an
+    /// Agent, or the snapshot carries a session its provider cannot resume.
+    pub fn plan_launch(
+        &self,
         command: &str,
-        scope: AgentScopeKey,
         restored: Option<&AgentSnapshot>,
-    ) -> Option<(PreparedAgentLaunch, AgentSnapshot)> {
+    ) -> Option<AgentLaunchPlan> {
         let command_provider = self
             .providers
             .iter()
-            .find(|provider| provider.matches_command(command))
-            .cloned();
+            .find(|provider| provider.matches_command(command));
         let restored_provider = restored.and_then(|snapshot| {
             self.providers
                 .iter()
                 .find(|provider| provider.descriptor().id == snapshot.provider_id)
-                .cloned()
         });
         let provider = command_provider.or(restored_provider)?;
         let descriptor = provider.descriptor();
@@ -185,15 +196,37 @@ impl AgentRuntime {
         {
             return None;
         }
-        let restored = resume_command.as_ref().and(restored);
-        let program_override = resume_command.as_ref().map(|command| command.program);
-        let resume_arguments = resume_command
+        let restored_title = resume_command
             .as_ref()
-            .map(|command| command.arguments.clone())
-            .unwrap_or_default();
-        let restored_title = restored
+            .and(restored)
             .and_then(|snapshot| snapshot.session.as_ref())
             .and_then(|session| session.title.clone());
+        Some(AgentLaunchPlan {
+            provider_id: descriptor.id,
+            provider_display_name: descriptor.display_name,
+            program_override: resume_command.as_ref().map(|command| command.program),
+            resume_arguments: resume_command
+                .map(|command| command.arguments)
+                .unwrap_or_default(),
+            restored_title,
+        })
+    }
+
+    pub fn prepare_launch_with_snapshot(
+        &mut self,
+        command: &str,
+        scope: AgentScopeKey,
+        restored: Option<&AgentSnapshot>,
+    ) -> Option<(PreparedAgentLaunch, AgentSnapshot)> {
+        let plan = self.plan_launch(command, restored)?;
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.descriptor().id == plan.provider_id)
+            .cloned()
+            .expect("planned provider is registered");
+        let descriptor = provider.descriptor();
+        let restored = plan.program_override.and(restored);
         let instance_id = AgentInstanceId::random();
         let token = AgentLaunchToken::random();
         let now = now_millis();
@@ -223,10 +256,10 @@ impl AgentRuntime {
                 provider_id: descriptor.id,
                 token,
                 scope,
-                resume_arguments,
-                program_override,
-                restored_title,
-                provider_display_name: descriptor.display_name,
+                resume_arguments: plan.resume_arguments,
+                program_override: plan.program_override,
+                restored_title: plan.restored_title,
+                provider_display_name: plan.provider_display_name,
             },
             snapshot,
         ))

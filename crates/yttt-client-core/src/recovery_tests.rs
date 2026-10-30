@@ -3,7 +3,9 @@ use yttt_agent_core::{
     AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState, ProviderId,
 };
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
-use yttt_protocol::{BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, terminal::*};
+use yttt_protocol::{
+    BuildIdentity, HostResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, terminal::*,
+};
 use yttt_transport::{
     TransportListener, memory_pair, receive_control, receive_handshake, send_control,
 };
@@ -64,8 +66,6 @@ fn context() -> TestContext {
             diagnostics: Arc::default(),
             visibility: watch::channel(None).1,
             shutdown,
-            control: Arc::default(),
-            local_control_recovery: Arc::default(),
         },
         shutdown_tx,
     }
@@ -474,7 +474,6 @@ fn host_epoch_reset_clears_agents_and_rejects_old_terminal_frames() {
             agent_snapshots: &context.agent_snapshots,
             project_token_usage: &context.project_token_usage,
             workspace_layouts: &context.workspace_layouts,
-            profile_control: &context.control,
             events: &context.events,
         },
     );
@@ -590,119 +589,6 @@ fn handshake_rejections_have_explicit_retry_policy() {
     ));
 }
 
-#[test]
-fn local_control_recovery_only_targets_an_unowned_profile() {
-    use yttt_protocol::session::{ControlContext, ControlStatus, ControlTransfer, TransferPhase};
-
-    let local = ClientInstanceId::new("local-controller");
-    let other = ClientInstanceId::new("other-controller");
-    let context = ControlContext {
-        host_epoch: 1,
-        control_epoch: 4,
-    };
-    let owned = ControlStatus {
-        context,
-        revision: 1,
-        owner: Some(local.clone()),
-        transfer: None,
-    };
-    let recovery = LocalControlRecovery::default();
-    recovery.enabled.store(true, Ordering::Release);
-    recovery.observe(&owned, &local);
-    let unowned = ControlStatus {
-        owner: None,
-        ..owned.clone()
-    };
-    assert!(should_reacquire_local_control(&recovery, true, &unowned));
-
-    let already_owned = ControlStatus {
-        owner: Some(other.clone()),
-        ..unowned.clone()
-    };
-    assert!(!should_reacquire_local_control(
-        &recovery,
-        true,
-        &already_owned
-    ));
-    let transfer_pending = ControlStatus {
-        transfer: Some(ControlTransfer {
-            id: "handoff".to_string(),
-            requester: other,
-            previous_owner: Some(local.clone()),
-            phase: TransferPhase::Preparing,
-            deadline_millis: 10,
-        }),
-        ..owned.clone()
-    };
-    assert!(!should_reacquire_local_control(
-        &recovery,
-        true,
-        &transfer_pending
-    ));
-
-    recovery.observe(&already_owned, &local);
-    assert!(
-        !recovery.can_recover(),
-        "a completed handoff clears recovery"
-    );
-    recovery.observe(&owned, &local);
-    assert!(
-        recovery.can_recover(),
-        "a later explicit local acquisition restores the opted-in policy"
-    );
-}
-
-#[tokio::test]
-async fn prior_local_controller_reacquires_only_with_the_authenticated_context() {
-    use yttt_protocol::session::{ControlContext, ControlStatus, ProfileControlRequest};
-
-    let identity = identity();
-    let context = ControlContext {
-        host_epoch: 3,
-        control_epoch: 8,
-    };
-    let recovered = ControlStatus {
-        context,
-        revision: 5,
-        owner: Some(identity.client_instance_id.clone()),
-        transfer: None,
-    };
-    let (client, mut server) = tokio::io::duplex(8192);
-    let mut client = session(Box::new(client));
-    let server_context = context;
-    let server_status = recovered.clone();
-    let server = tokio::spawn(async move {
-        let ControlMessage::Request(request) = receive_control(&mut server).await.unwrap() else {
-            panic!("expected recovery request");
-        };
-        assert_eq!(request.actor_device_id.as_deref(), Some("recovery-test"));
-        assert_eq!(request.control, Some(server_context));
-        assert!(matches!(
-            request.body,
-            Request::ProfileControl(ProfileControlRequest::ReacquireIfUnowned {
-                context: request_context,
-            }) if request_context == server_context
-        ));
-        send_control(
-            &mut server,
-            &ControlMessage::Response(HostResponse {
-                request_id: request.request_id,
-                result: Ok(Response::ProfileControl(server_status)),
-            }),
-        )
-        .await
-        .unwrap();
-    });
-
-    assert_eq!(
-        reacquire_local_control(&mut client, &identity, context)
-            .await
-            .unwrap(),
-        recovered
-    );
-    server.await.unwrap();
-}
-
 #[tokio::test(start_paused = true)]
 async fn blocked_frame_write_has_a_deadline() {
     let (mut writer, _reader) = tokio::io::duplex(1);
@@ -759,7 +645,6 @@ async fn expired_queued_request_is_rejected_before_transmission() {
             request_id: Some(100),
             body: Request::Ping { sent_millis: 100 },
             reply: Some(reply),
-            control: None,
             deadline: tokio::time::Instant::now(),
         })
         .await
@@ -824,10 +709,9 @@ fn the_layout_mirror_keeps_the_newest_revision_until_the_host_changes() {
             opens: Some(id.clone()),
         },
         Ok(Response::Workspace(WorkspaceResponse::Opened {
-            snapshot: serde_json::from_value(serde_json::json!({})).unwrap(),
-            revision: 2,
-            drafts: Vec::new(),
-            layout: Some(layout(2)),
+            layout: layout(2),
+            documents: Vec::new(),
+            agent_states: Vec::new(),
         })),
         &context,
     );
@@ -844,33 +728,6 @@ fn the_layout_mirror_keeps_the_newest_revision_until_the_host_changes() {
     }
     assert_eq!(published, [2, 3]);
 
-    // The Host no longer holds a valid layout at a newer revision: the stale
-    // layout is dropped rather than kept as if it were current.
-    let (reply, _response) = oneshot::channel();
-    handle_response(
-        PendingRequest::User {
-            reply,
-            detaches: Vec::new(),
-            opens: Some(id.clone()),
-        },
-        Ok(Response::Workspace(WorkspaceResponse::Opened {
-            snapshot: serde_json::from_value(serde_json::json!({})).unwrap(),
-            revision: 4,
-            drafts: Vec::new(),
-            layout: None,
-        })),
-        &context,
-    );
-    handle_state_event(layout_changed(3), &context).unwrap();
-    assert_eq!(
-        context.workspace_layouts.read().get(&id),
-        Some(&HeldLayout {
-            revision: 4,
-            layout: None
-        })
-    );
-    assert!(events.try_recv().is_err());
-
     install_host_epoch(
         2,
         &HostEpochState {
@@ -880,15 +737,11 @@ fn the_layout_mirror_keeps_the_newest_revision_until_the_host_changes() {
             agent_snapshots: &context.agent_snapshots,
             project_token_usage: &context.project_token_usage,
             workspace_layouts: &context.workspace_layouts,
-            profile_control: &context.control,
             events: &context.events,
         },
     );
     // The new Host's revisions restart; the workspace stays opened for reopening.
-    assert_eq!(
-        context.workspace_layouts.read().get(&id),
-        Some(&HeldLayout::default())
-    );
+    assert_eq!(context.workspace_layouts.read().get(&id), Some(&None));
 }
 
 #[test]

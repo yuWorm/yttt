@@ -1,4 +1,4 @@
-use yttt_agent_core::AgentViewState;
+use yttt_agent_core::{AgentProcessState, AgentViewState};
 
 use crate::{
     model::{
@@ -48,7 +48,12 @@ pub fn pane_agent_status(
     pane_config: &PaneConfig,
     pane_state: &PaneState,
 ) -> Option<AgentViewState> {
-    if let Some(snapshot) = &pane_state.agent_snapshot {
+    // The Host keeps an ended Agent's snapshot as pane history; it is not live.
+    if let Some(snapshot) = pane_state
+        .agent_snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.process_state != AgentProcessState::Exited)
+    {
         return Some(snapshot.view_state());
     }
     if !is_agent_pane(pane_config) {
@@ -56,7 +61,7 @@ pub fn pane_agent_status(
     }
 
     match pane_state.process_state {
-        PaneProcessState::Running | PaneProcessState::Restoring => Some(AgentViewState::Stale),
+        PaneProcessState::Running => Some(AgentViewState::Stale),
         PaneProcessState::Idle | PaneProcessState::Exited => None,
     }
 }

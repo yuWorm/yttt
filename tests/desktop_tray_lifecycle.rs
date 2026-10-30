@@ -163,17 +163,11 @@ fn confirmed_terminal_close_is_idempotent_without_reading_legacy_client_placemen
         environment: Vec::new(),
         removed_environment: Vec::new(),
     };
-    let request = desktop
-        .terminal_start_request(
-            spec.clone(),
-            &catalog,
-            yttt::host_runtime::TerminalStartIntent::Fresh,
-            &yttt::host_runtime::TerminalStartAttempt {
-                start_id: "close-test-start".to_string(),
-                expected_host_epoch: catalog.host_epoch,
-            },
-        )
-        .unwrap();
+    let request = Request::SpawnTerminal {
+        spec: spec.clone(),
+        start_id: "close-test-start".to_string(),
+        expected_host_epoch: catalog.host_epoch,
+    };
     let Response::TerminalSpawned { .. } = desktop.request_blocking_typed(request).unwrap() else {
         panic!("Host did not spawn the Agent close test terminal");
     };

@@ -11,16 +11,19 @@ use std::{
     path::PathBuf,
 };
 
+use yttt_agent_core::AgentSnapshot;
+
 use crate::model::{
     editor::{DocumentId, ProjectEditorWorkspaceSnapshot, ProjectEditorWorkspaceState, WorkItemId},
     ids::ProjectId,
-    layout::{ProjectLayout, SplitDirection},
-    project::ProjectDescriptor,
+    layout::{PaneConfig, ProjectLayout, SplitDirection},
+    project::{ProjectDescriptor, ProjectLocation},
     split_tree::{FocusDirection, ResizeDirection},
     work_area::{TabGroupId, WorkAreaDropPlacement, WorkAreaSplitId},
     workspace::{
-        CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError, WorkspaceRestoreError,
-        WorkspaceState, agent_tab_config, shell_tab_config,
+        CloseProjectDecision, CloseProjectError, PaneProcessState, PaneState, TabStartState,
+        Workspace, WorkspaceError, WorkspaceRestoreError, WorkspaceState, agent_tab_config,
+        shell_tab_config,
     },
 };
 
@@ -188,6 +191,27 @@ pub enum WorkspaceIntent {
         project_id: ProjectId,
         panel: ProjectPanel,
     },
+    /// Starts an exited pane again. With `resume` an Agent pane resumes its
+    /// saved session; otherwise the session is dropped and the pane's
+    /// command starts fresh.
+    RestartPane {
+        project_id: ProjectId,
+        tab_id: String,
+        pane_id: String,
+        resume: bool,
+    },
+}
+
+/// A pane the Host must start, with what it needs to build the launch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaneLaunchTarget {
+    pub address: PaneAddress,
+    pub location: ProjectLocation,
+    pub pane: PaneConfig,
+    pub agent_snapshot: Option<AgentSnapshot>,
+    /// The pane ran in an earlier Host and lost its terminal; its startup
+    /// command must not run again.
+    pub restore: bool,
 }
 
 /// A pane by its stable address. Its terminal session ID is
@@ -326,12 +350,37 @@ impl HostWorkspace {
         })
     }
 
+    /// The layout as Clients see it and as it is stored. Agent snapshots are
+    /// left out: they are stored as separate objects and reach Clients
+    /// through Agent events; see [`Self::agent_snapshots`].
     pub fn state(&self) -> HostWorkspaceState {
         HostWorkspaceState {
             revision: self.revision,
-            workspace: self.workspace.persisted_state(),
+            workspace: self.workspace.persisted_layout_state(),
             editor: self.editor.snapshot(),
         }
+    }
+
+    /// Every pane's recorded Agent snapshot.
+    pub fn agent_snapshots(&self) -> Vec<(PaneAddress, &AgentSnapshot)> {
+        let mut snapshots = Vec::new();
+        for project in self.workspace.opened_projects() {
+            for tab in &project.tab_states {
+                for pane in &tab.pane_states {
+                    if let Some(snapshot) = &pane.agent_snapshot {
+                        snapshots.push((
+                            PaneAddress {
+                                project_id: project.id.clone(),
+                                tab_id: tab.tab_id.clone(),
+                                pane_id: pane.pane_id.clone(),
+                            },
+                            snapshot,
+                        ));
+                    }
+                }
+            }
+        }
+        snapshots
     }
 
     pub fn revision(&self) -> u64 {
@@ -346,11 +395,129 @@ impl HostWorkspace {
         &self.editor
     }
 
-    /// Records the pane runtime a Client observed — process state and Agent
-    /// snapshots — as `revision`, without changing the layout.
-    pub fn record_pane_runtime(&mut self, observed: &Workspace, revision: u64) {
-        self.workspace.keep_pane_runtime_from(observed);
-        self.revision = revision;
+    /// Whether `document` is open in its project's work area.
+    pub fn contains_document(&self, document: &DocumentId) -> bool {
+        self.editor
+            .session(&document.project_id)
+            .is_some_and(|session| session.file_ids().contains(document))
+    }
+
+    /// Claims the panes the Host must start and records them as `Running`,
+    /// advancing the revision once when any is claimed.
+    ///
+    /// `launch` decides per project: `None` skips it for now (its machine is
+    /// not reachable), `Some(restoring)` claims its panes. `Idle` panes of
+    /// started tabs are always claimed. When `restoring` — the Host has no
+    /// terminal from an earlier run — panes recorded as running and exited
+    /// panes with a resumable Agent session are claimed too, as restores.
+    pub fn claim_launches(
+        &mut self,
+        mut launch: impl FnMut(&ProjectId, &ProjectLocation) -> Option<bool>,
+    ) -> Vec<PaneLaunchTarget> {
+        let mut targets = Vec::new();
+        for project in self.workspace.opened_projects_mut() {
+            let Some(restoring) = launch(&project.id, &project.location) else {
+                continue;
+            };
+            for tab in &mut project.tab_states {
+                let Some(tab_config) = project.layout.tab(&tab.tab_id) else {
+                    continue;
+                };
+                for pane in &mut tab.pane_states {
+                    let restore = match pane.process_state {
+                        PaneProcessState::Idle if tab.start_state == TabStartState::Started => {
+                            false
+                        }
+                        PaneProcessState::Running if restoring => true,
+                        PaneProcessState::Exited
+                            if restoring
+                                && pane
+                                    .agent_snapshot
+                                    .as_ref()
+                                    .is_some_and(|snapshot| snapshot.session.is_some()) =>
+                        {
+                            true
+                        }
+                        _ => continue,
+                    };
+                    let Some(config) = tab_config.layout.find_pane(&pane.pane_id) else {
+                        continue;
+                    };
+                    pane.process_state = PaneProcessState::Running;
+                    targets.push(PaneLaunchTarget {
+                        address: PaneAddress {
+                            project_id: project.id.clone(),
+                            tab_id: tab.tab_id.clone(),
+                            pane_id: pane.pane_id.clone(),
+                        },
+                        location: project.location.clone(),
+                        pane: config.clone(),
+                        agent_snapshot: pane.agent_snapshot.clone(),
+                        restore,
+                    });
+                }
+            }
+        }
+        if !targets.is_empty() {
+            self.revision += 1;
+        }
+        targets
+    }
+
+    /// The pane's layout config and runtime state.
+    pub fn pane(&self, address: &PaneAddress) -> Option<(&PaneConfig, &PaneState)> {
+        let project = self.workspace.project(&address.project_id)?;
+        let config = project
+            .layout
+            .tab(&address.tab_id)?
+            .layout
+            .find_pane(&address.pane_id)?;
+        let state = project
+            .tab_state(&address.tab_id)?
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == address.pane_id)?;
+        Some((config, state))
+    }
+
+    /// Records that a pane's process exited or its launch did not start,
+    /// advancing the revision. Returns `false` when it was already exited.
+    pub fn record_pane_exited(&mut self, address: &PaneAddress) -> Result<bool, WorkspaceError> {
+        if self
+            .pane(address)
+            .is_some_and(|(_, state)| state.process_state == PaneProcessState::Exited)
+        {
+            return Ok(false);
+        }
+        self.workspace.record_pane_exited(
+            &address.project_id,
+            &address.tab_id,
+            &address.pane_id,
+        )?;
+        self.revision += 1;
+        Ok(true)
+    }
+
+    /// Replaces a pane's Agent snapshot without advancing the revision:
+    /// Clients follow Agent activity through Agent events, not layouts.
+    pub fn set_agent_snapshot(
+        &mut self,
+        address: &PaneAddress,
+        snapshot: Option<AgentSnapshot>,
+    ) -> Result<(), WorkspaceError> {
+        match snapshot {
+            Some(snapshot) => self.workspace.record_agent_snapshot(
+                &address.project_id,
+                &address.tab_id,
+                &address.pane_id,
+                snapshot,
+            ),
+            None => self.workspace.clear_agent_snapshot(
+                &address.project_id,
+                &address.tab_id,
+                &address.pane_id,
+            ),
+        }
     }
 
     /// Applies one intent. Only `ReplaceProjectLayout` requires
@@ -648,6 +815,15 @@ impl IntentExecutor {
                 session.set_project_panel_visible(panel.visible);
                 session.set_project_panel_width(panel.width);
             }
+            WorkspaceIntent::RestartPane {
+                project_id,
+                tab_id,
+                pane_id,
+                resume,
+            } => self
+                .workspace
+                .project_mut(&project_id)?
+                .restart_pane(&tab_id, &pane_id, resume)?,
         }
         Ok(())
     }

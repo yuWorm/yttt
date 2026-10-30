@@ -100,6 +100,16 @@ Host 启动（或 workspace 首次打开）时，对每个绑定的 pane：
 
 Client 只附加。`Restoring` 状态、`reconcile_host_resources` 与桌面侧的自动重建删除。新建 pane 也由 Host 启动：`SplitPane`/`CreateTab`（eager）在同一步内 spawn，`StartTab` 启动 lazy tab；`SpawnTerminal` 请求保留给不进入布局的临时终端（如有），否则删除。
 
+#### 2.4.1 C4-4 实施细化（2026-10-29 确认采用"整体移入 Host"）
+
+- **启动输入。** Host 每次启动 pane 时读取 `<config_root>/settings.toml` 的 `[terminal]`：`shell`（`auto` 取 Host 自己探测的第一个 shell 候选，与 `Environment` 响应同源）、`environment`、`scrollback`。这些键本就是 Host 作用域、"新会话生效"（`src/config/scope.rs:99-147`），因此改设置后只影响之后启动的 pane，与现状一致。调色板用默认值，首个 Interactive 附加按 `palette_revision` 更新；几何缺省 120×40，首个附加 resize。cwd 取 Host 项目注册的根目录；SSH 项目用项目描述里的 `connection_id`。
+- **启动规则只有一个协调函数**（`ensure_pane_processes`）：每个被接受的意图之后、以及 Host 启动加载 workspace 之后执行。`Started` tab 中 `Idle` 的 pane → 启动；启动时额外处理"记录为 `Running` 但终端不在"的 pane 和"已退出但 Agent 快照仍带会话"的 pane → 启动，Agent 按 provider resume。lazy tab 被选中时由现有意图置为 `Started`，下一次协调即启动，不另加 `StartTab`。
+- **重启与退出。** 新意图 `RestartPane { project, tab, pane, resume }`：把 pane 置回 `Idle`（`resume = false` 时清除 Agent 会话），由协调函数启动。Host 监听终端退出：记 `Exited`；退出行为 `Close` 由 Host 自己执行 `ClosePaneForExit`，`AutoRestart` 由 Host 在 500 ms 后重启（与桌面现值一致），`ManualRestart` 保持退出。桌面不再发 `ClosePaneForExit`，也不再自己重启。
+- **Agent。** Host 新增 `pane_launch`：依赖 `yttt-agent-runtime`，移植 `AgentManager::prepare_pane`（resume、OMP 无会话时以 `omp` 新起、本地 `--extension <config_root>/agent-providers/omp/…`、远程扩展包装命令）与 `TerminalPane` 的命令/环境拼装。首次启动 Agent 前 Host 自行安装托管 hook 与 OMP 扩展（`installer::install_managed_hooks_at` 已在 Host 内）；桌面的 provisioning 门控删除。
+- **运行状态归 Host。** Host 启动成功记 `Running`、退出记 `Exited`，均推进 revision 并广播。Agent hook 更新按 `{project}:{tab}:{pane}` 写入 pane 的 `agent_snapshot`（合并看板、resume 未确认时保留旧会话、resume 失败保留会话以便再次 resume），不推进 revision、不广播（Client 已经收到 `AgentSnapshot` 事件），持久化合并到 1 秒一次。过渡期 `Commit` 不再覆盖 pane 运行状态与 Agent 快照。
+- **桌面只附加。** pane 视图在目录里出现对应终端时附加，未出现时显示"正在启动"，退出后的重启/resume 按钮发 `RestartPane`。删除：`host_spawn_spec` 等拼装、`TerminalStartIntent`/`TerminalStartAttempt`/`PendingTerminalStart`/启动结果未知的对账、`start_restored_terminal`、`reconcile_host_resources`、`PaneProcessState::Restoring`（读取旧记录时视为 `Running`）、`AgentManager` 的 launch/provisioning/本地 `agent-state.json` 保留副本。`SpawnTerminal` 请求与 Host 的 start-attempt 记录已无生产调用方，但约 40 个 Host 集成测试用它造终端，删除需要把这些测试改为经布局启动；随 C4-6 的协议删除与 `wire-shapes-v22.json` 重写一起做。
+- **Host 自身停止不算 pane 退出。** drain 或 ForceStop 期间结束的终端不记 `Exited`、不执行退出行为，pane 保持 `Running`，下次启动由协调函数恢复。实施中发现：否则 Quit 后所有 pane 记为退出，`Close` pane 被删，重启后什么都不恢复。
+
 ### 2.5 文档编辑 lease 与草稿
 
 - `DocumentStore` 按 `(workspace_id, DocumentId)` 记录：`lease { holder: ClientInstanceId, epoch }`、草稿 `{ revision, base: DraftBase, content_sha256, bytes }`、持有者最近的选区快照。正文沿用 `drafts/<workspace>` 的 SHA-256 对象存储与 6 MiB / 64 MiB 上限。

@@ -10,7 +10,6 @@ pub mod lifecycle;
 pub mod path;
 pub mod project;
 pub mod remote_access;
-pub mod session;
 pub mod ssh;
 pub mod terminal;
 pub mod workspace;

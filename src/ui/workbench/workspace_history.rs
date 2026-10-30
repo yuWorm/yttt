@@ -1,9 +1,9 @@
 use super::*;
 use chrono::{DateTime, Datelike as _, Local, TimeZone};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
-use serde::Deserialize as _;
+use yttt_core::model::workspace::WorkspaceState;
 use yttt_protocol::workspace::{
-    WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot, WorkspaceSummary,
+    WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary,
 };
 
 use crate::ui::{
@@ -32,45 +32,31 @@ pub(super) struct WorkspaceHistoryEntry {
 impl WorkspaceHistoryEntry {
     fn new(
         summary: WorkspaceSummary,
-        snapshot: Result<WorkspaceSnapshot, String>,
+        layout: Result<WorkspaceState, String>,
         text: UiText,
         now: DateTime<Local>,
     ) -> Self {
         let mut names = Vec::new();
         let mut paths = Vec::new();
         let mut metadata_error = None;
-        match snapshot {
-            Ok(snapshot) => {
-                if let Some(workspace) = snapshot.as_value().get("workspace")
-                    && let Some(projects) =
-                        workspace.get("opened_projects").and_then(|v| v.as_array())
-                {
-                    let selected = workspace.get("selected_project_id");
-                    // The selected project leads, but every project's name and path is searchable.
-                    let selected_index = projects
-                        .iter()
-                        .position(|project| project.get("id") == selected);
-                    let ordered = selected_index
-                        .into_iter()
-                        .chain((0..projects.len()).filter(|index| Some(*index) != selected_index));
-                    for index in ordered {
-                        let project = &projects[index];
-                        let location = project
-                            .get("location")
-                            .and_then(|value| ProjectLocation::deserialize(value).ok());
-                        let name = project
-                            .pointer("/layout/project/name")
-                            .and_then(|value| value.as_str())
-                            .filter(|name| !name.trim().is_empty())
-                            .map(str::to_owned)
-                            .or_else(|| location.as_ref().map(ProjectLocation::fallback_title));
-                        if let Some(name) = name {
-                            names.push(name);
-                        }
-                        if let Some(location) = location {
-                            paths.push(location.display_path());
-                        }
-                    }
+        match layout {
+            Ok(workspace) => {
+                let projects = &workspace.opened_projects;
+                // The selected project leads, but every project's name and path is searchable.
+                let selected_index = projects.iter().position(|project| {
+                    Some(&project.id) == workspace.selected_project_id.as_ref()
+                });
+                let ordered = selected_index
+                    .into_iter()
+                    .chain((0..projects.len()).filter(|index| Some(*index) != selected_index));
+                for index in ordered {
+                    let project = &projects[index];
+                    let name = Some(project.layout.project.name.trim())
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| project.location.fallback_title());
+                    names.push(name);
+                    paths.push(project.location.display_path());
                 }
             }
             Err(error) => metadata_error = Some(error),
@@ -197,21 +183,21 @@ impl WorkbenchView {
                     .then_with(|| a.workspace_id.as_str().cmp(b.workspace_id.as_str()))
             });
             let now = Local::now();
-            // Read one snapshot at a time; retain only display metadata, never draft bodies.
+            // Read one layout at a time; retain only display metadata.
             let entries = entries
                 .into_iter()
                 .map(|summary| {
-                    let snapshot =
+                    let layout =
                         match load_runtime.workspace_request(WorkspaceRequest::OpenExisting {
                             workspace_id: summary.workspace_id.clone(),
                         }) {
-                            Ok(WorkspaceResponse::Opened { snapshot, .. }) => Ok(snapshot),
+                            Ok(WorkspaceResponse::Opened { layout, .. }) => Ok(layout.workspace),
                             Ok(response) => {
                                 Err(format!("Unexpected workspace response: {response:?}"))
                             }
                             Err(error) => Err(error),
                         };
-                    WorkspaceHistoryEntry::new(summary, snapshot, text, now)
+                    WorkspaceHistoryEntry::new(summary, layout, text, now)
                 })
                 .collect::<Vec<_>>();
             Ok::<_, String>(entries)
@@ -388,7 +374,7 @@ impl WorkbenchView {
                     .terminal
                     .host_runtime
                     .as_ref()
-                    .is_some_and(|runtime| runtime.is_controller())
+                    .is_some_and(|runtime| runtime.is_connected())
             {
                 let summary = entry.summary.clone();
                 let owner = cx.weak_entity();

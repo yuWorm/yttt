@@ -2,51 +2,12 @@ use super::super::layout_editor_controller::validate_bars_editor_source;
 use super::super::*;
 use crate::config::scope::SettingsScope;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ProjectSettingsRecoveryKind {
-    Project,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ProjectSettingsRecoveryCandidate {
-    kind: ProjectSettingsRecoveryKind,
-    project_id: String,
-    project_path: std::path::PathBuf,
+#[derive(serde::Serialize)]
+struct ProjectSettingsDraftCandidate<'a> {
+    project_id: &'a str,
+    project_path: &'a std::path::Path,
     key: crate::config::project_settings::ProjectEditorSettingKey,
-    candidate: Option<crate::config::project_settings::ProjectEditorSettingValue>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ProjectSettingsRecoveryConfirmed {
-    kind: ProjectSettingsRecoveryKind,
-    project_id: String,
-    project_path: std::path::PathBuf,
-    key: crate::config::project_settings::ProjectEditorSettingKey,
-    confirmed: crate::config::project_settings::EffectiveProjectEditorSetting,
-}
-
-fn project_settings_recovery_values(
-    draft: &ProjectSettingsSaveDraft,
-) -> (serde_json::Value, serde_json::Value) {
-    (
-        serde_json::to_value(ProjectSettingsRecoveryCandidate {
-            kind: ProjectSettingsRecoveryKind::Project,
-            project_id: draft.project_id.clone(),
-            project_path: draft.project_path.clone(),
-            key: draft.key,
-            candidate: draft.candidate.clone(),
-        })
-        .expect("project settings recovery candidate is JSON serializable"),
-        serde_json::to_value(ProjectSettingsRecoveryConfirmed {
-            kind: ProjectSettingsRecoveryKind::Project,
-            project_id: draft.project_id.clone(),
-            project_path: draft.project_path.clone(),
-            key: draft.key,
-            confirmed: draft.confirmed.clone(),
-        })
-        .expect("project settings recovery baseline is JSON serializable"),
-    )
+    candidate: &'a Option<crate::config::project_settings::ProjectEditorSettingValue>,
 }
 
 fn project_editor_defaults_changed(current: &AppSettings, next: &AppSettings) -> bool {
@@ -71,8 +32,13 @@ impl WorkbenchView {
 
     pub(super) fn copy_failed_settings_draft(&mut self, cx: &mut Context<Self>) {
         let source = if let Some(draft) = self.settings.failed_project_settings_save.as_ref() {
-            let (candidate, _) = project_settings_recovery_values(draft);
-            serde_json::to_string_pretty(&candidate).map_err(|error| error.to_string())
+            serde_json::to_string_pretty(&ProjectSettingsDraftCandidate {
+                project_id: &draft.project_id,
+                project_path: &draft.project_path,
+                key: draft.key,
+                candidate: &draft.candidate,
+            })
+            .map_err(|error| error.to_string())
         } else {
             let Some((candidate, _, bars_only)) = self.failed_settings_save.as_ref() else {
                 return;
@@ -95,16 +61,9 @@ impl WorkbenchView {
         }
     }
 
-    pub(super) fn discard_failed_settings_save(&mut self, cx: &mut Context<Self>) {
-        if let Some(draft) = self.settings.failed_project_settings_save.take() {
-            let (candidate, confirmed) = project_settings_recovery_values(&draft);
-            self.clear_pending_settings_recovery(candidate, confirmed, cx);
-        } else if let Some((candidate, baseline, _)) = self.failed_settings_save.take() {
-            self.clear_pending_settings_recovery(
-                serde_json::to_value(candidate).expect("AppSettings is JSON serializable"),
-                serde_json::to_value(baseline).expect("AppSettings is JSON serializable"),
-                cx,
-            );
+    pub(super) fn discard_failed_settings_save(&mut self) {
+        if self.settings.failed_project_settings_save.take().is_none() {
+            self.failed_settings_save = None;
         }
         self.settings.settings_save_error = None;
     }
@@ -156,74 +115,6 @@ impl WorkbenchView {
         Ok(())
     }
 
-    pub(in super::super) fn restore_recovered_settings_draft(&mut self) {
-        if self.has_failed_settings_save() || self.settings_save_pending() {
-            return;
-        }
-        let Some((candidate, baseline)) = self.take_recoverable_settings_recovery() else {
-            return;
-        };
-        self.stage_recovered_settings_draft(candidate, baseline);
-    }
-
-    fn stage_recovered_settings_draft(
-        &mut self,
-        candidate: serde_json::Value,
-        baseline: serde_json::Value,
-    ) {
-        if candidate.get("kind").is_some() || baseline.get("kind").is_some() {
-            match (
-                serde_json::from_value::<ProjectSettingsRecoveryCandidate>(candidate),
-                serde_json::from_value::<ProjectSettingsRecoveryConfirmed>(baseline),
-            ) {
-                (Ok(candidate), Ok(baseline))
-                    if candidate.project_id == baseline.project_id
-                        && candidate.project_path == baseline.project_path
-                        && candidate.key == baseline.key
-                        && baseline.confirmed.key == candidate.key =>
-                {
-                    self.settings.failed_project_settings_save = Some(ProjectSettingsSaveDraft {
-                        project_id: candidate.project_id,
-                        project_path: candidate.project_path,
-                        target_generation: 0,
-                        key: candidate.key,
-                        candidate: candidate.candidate,
-                        confirmed: baseline.confirmed,
-                    });
-                    self.settings.settings_save_error = Some(
-                        "A recovered project settings draft is available. Review it before retrying; it has not been applied to the Host.".into(),
-                    );
-                }
-                _ => {
-                    self.load_error = Some(
-                        self.ui_text
-                            .get(UiTextKey::SettingsDraftProjectInvalid)
-                            .into(),
-                    );
-                }
-            }
-            return;
-        }
-        match (
-            serde_json::from_value::<AppSettings>(candidate),
-            serde_json::from_value::<AppSettings>(baseline),
-        ) {
-            (Ok(candidate), Ok(baseline)) => {
-                self.failed_settings_save = Some((candidate, baseline, false));
-                self.settings.settings_save_error = Some(
-                    "A recovered settings draft is available. Review it before retrying; it has not been applied to the Host.".into(),
-                );
-            }
-            (Err(error), _) | (_, Err(error)) => {
-                self.load_error = Some(
-                    self.ui_text
-                        .get(UiTextKey::SettingsDraftInvalid)
-                        .replace("{error}", &error.to_string()),
-                );
-            }
-        }
-    }
-
     /// Pure configuration test backends remain synchronous; live saves run off the UI thread.
     pub(in super::super) fn persist_app_settings(
         &mut self,
@@ -244,14 +135,16 @@ impl WorkbenchView {
             ));
         }
         if let Some(runtime) = &self.terminal.host_runtime {
-            if !runtime.shared_editing_enabled()
+            if !runtime.is_connected()
                 && crate::config::scope::host_settings_changed(
                     &candidate,
                     &self.settings.confirmed_settings,
                 )
             {
                 return Err(WorkbenchError::SettingsUnavailable(
-                    self.ui_text.get(UiTextKey::SettingsNoSharedControl).into(),
+                    self.ui_text
+                        .get(UiTextKey::SettingsReadOnlyDisconnected)
+                        .into(),
                 ));
             }
             self.settings.pending_settings_save = Some((candidate, bars_only));
@@ -299,13 +192,6 @@ impl WorkbenchView {
                         .is_ok_and(|bars| bars == settings.bars)
             })
             .map(|session| session.editor().value().to_string());
-        let host_changed = crate::config::scope::host_settings_changed(&settings, &confirmed);
-        if host_changed {
-            self.retain_pending_settings_recovery(
-                serde_json::to_value(&settings).expect("AppSettings is JSON serializable"),
-                serde_json::to_value(&confirmed).expect("AppSettings is JSON serializable"),
-            );
-        }
         let runtime = self.terminal.host_runtime.clone();
         let task = cx.background_spawn(async move {
             let theme_store = load_theme_store(&paths).map_err(|error| error.to_string())?;
@@ -321,7 +207,7 @@ impl WorkbenchView {
                     &confirmed,
                     runtime
                         .as_ref()
-                        .is_some_and(|runtime| runtime.shared_editing_enabled()),
+                        .is_some_and(|runtime| runtime.is_connected()),
                 )
                 .map_err(|error| error.to_string())?;
             }
@@ -344,15 +230,6 @@ impl WorkbenchView {
                     Ok((settings, theme, icons)) => {
                         root.settings.settings_save_error = None;
                         root.failed_settings_save = None;
-                        if host_changed {
-                            root.clear_pending_settings_recovery(
-                                serde_json::to_value(&retained.0)
-                                    .expect("AppSettings is JSON serializable"),
-                                serde_json::to_value(&retained.1)
-                                    .expect("AppSettings is JSON serializable"),
-                                cx,
-                            );
-                        }
                         root.apply_confirmed_settings(settings, theme, icons, window, cx);
                         if same_bars_draft {
                             root.cancel_layout_toml_editor();
@@ -399,12 +276,10 @@ impl WorkbenchView {
         let confirmed = draft.confirmed.clone();
         let local_test_authority = cfg!(test) || self.local_project_services_for_test;
         let runtime = self.terminal.host_runtime.clone();
-        let recovery = project_settings_recovery_values(&draft);
-        self.retain_pending_settings_recovery(recovery.0.clone(), recovery.1.clone());
         let task = cx.background_spawn(async move {
-            let can_write_host = runtime.as_ref().map_or(local_test_authority, |runtime| {
-                runtime.shared_editing_enabled()
-            });
+            let can_write_host = runtime
+                .as_ref()
+                .map_or(local_test_authority, |runtime| runtime.is_connected());
             let host_editor_settings = crate::config::settings::load_settings(&paths)
                 .map_err(|error| error.to_string())?
                 .settings
@@ -428,11 +303,6 @@ impl WorkbenchView {
                     Ok(saved) => {
                         root.settings.settings_save_error = None;
                         root.settings.failed_project_settings_save = None;
-                        root.clear_pending_settings_recovery(
-                            recovery.0.clone(),
-                            recovery.1.clone(),
-                            cx,
-                        );
                         let cache_matches_target = root
                             .settings_project_target()
                             .is_some_and(|(project_id, generation)| {
@@ -518,7 +388,6 @@ impl WorkbenchView {
                 .project_editor_runtime
                 .cancel_all_autosave_tasks();
         }
-        self.sync_terminal_environment();
         self.sync_input_owner_state();
         self.sync_vim_controller(window, cx);
         self.settings.keybinding_rows_cache = None;
@@ -628,7 +497,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_recovered_settings_draft_cannot_overwrite_a_newer_confirmed_value() {
+    fn a_failed_settings_draft_cannot_overwrite_a_newer_confirmed_value() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
         let mut root = WorkbenchView::with_config_paths(paths.clone());
@@ -644,41 +513,5 @@ mod tests {
         assert!(!root.settings_save_pending());
         assert_eq!(root.app_settings.editor.tab_size, 2);
         assert!(!paths.settings_file().exists());
-    }
-
-    #[test]
-    fn recovered_project_settings_draft_is_staged_without_replaying() {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-        let draft = ProjectSettingsSaveDraft {
-            project_id: "project-a".to_string(),
-            project_path: temp.path().join("project-a"),
-            target_generation: 17,
-            key: crate::config::project_settings::ProjectEditorSettingKey::TabSize,
-            candidate: Some(crate::config::project_settings::ProjectEditorSettingValue::TabSize(2)),
-            confirmed: crate::config::project_settings::EffectiveProjectEditorSetting {
-                key: crate::config::project_settings::ProjectEditorSettingKey::TabSize,
-                value: crate::config::project_settings::ProjectEditorSettingValue::TabSize(4),
-                source: crate::config::project_settings::ProjectSettingSource::Host,
-            },
-        };
-        let (candidate, baseline) = project_settings_recovery_values(&draft);
-        let mut root = WorkbenchView::with_config_paths(paths);
-
-        root.stage_recovered_settings_draft(candidate, baseline);
-
-        let recovered = root
-            .settings
-            .failed_project_settings_save
-            .as_ref()
-            .expect("recovered project draft should be retained");
-        assert_eq!(recovered.project_id, draft.project_id);
-        assert_eq!(recovered.project_path, draft.project_path);
-        assert_eq!(recovered.key, draft.key);
-        assert_eq!(recovered.candidate, draft.candidate);
-        assert_eq!(recovered.confirmed, draft.confirmed);
-        assert!(root.has_failed_settings_save());
-        assert!(root.settings.pending_project_settings_save.is_none());
-        assert!(!root.settings.project_settings_save_in_flight);
     }
 }

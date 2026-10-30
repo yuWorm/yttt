@@ -204,29 +204,6 @@ impl WorkbenchView {
         }
     }
 
-    /// Repairs the work area after a test edits the layout model directly.
-    #[cfg(test)]
-    pub(super) fn reconcile_project_work_area(&mut self, project_id: &ProjectId) {
-        let Some(terminal_ids) = self.workspace.project(project_id).map(|project| {
-            project
-                .layout
-                .tabs
-                .iter()
-                .map(|tab| tab.id.clone())
-                .collect::<Vec<_>>()
-        }) else {
-            return;
-        };
-        if let Some(session) = self
-            .project
-            .project_editor_runtime
-            .workspace_mut()
-            .session_mut(project_id)
-        {
-            session.reconcile_work_area(&terminal_ids);
-        }
-    }
-
     fn apply_work_area_active_change(
         &mut self,
         previous: Option<WorkItemId>,

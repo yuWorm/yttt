@@ -226,16 +226,16 @@ impl WorkbenchView {
         );
 
         let status_enabled = self.app_settings.bars.status.enabled;
-        let profile_control_required = self.terminal.host_runtime.is_some();
+        let workspace_status_required = self.terminal.host_runtime.is_some();
         let empty_layout = BarLayoutSettings::default();
         let status_layout = if status_enabled {
             &self.app_settings.bars.status.layout
         } else {
             &empty_layout
         };
-        let status = if status_enabled || profile_control_required {
-            let profile = profile_control_required
-                .then(|| self.profile_control_banner(cx).into_any_element());
+        let status = if status_enabled || workspace_status_required {
+            let profile = workspace_status_required
+                .then(|| self.workspace_status_banner(cx).into_any_element());
             Some(self.render_bar_sections(
                 BarHost::Status,
                 status_layout,

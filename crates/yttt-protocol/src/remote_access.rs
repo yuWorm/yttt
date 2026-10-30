@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use zeroize::Zeroize;
 
-use crate::session::ControlStatus;
-
 pub const DEFAULT_REMOTE_ADDRESS: &str = "127.0.0.1:43123";
 pub const MAX_CONNECTION_INFO_BYTES: usize = 8 * 1024;
 pub const TLS_SERVER_NAME: &str = "yttt-host.local";
@@ -83,10 +81,8 @@ pub struct RemoteAccessStatus {
     pub settings: RemoteAccessSettings,
     pub effective: RemoteAccessState,
     pub bound_address: Option<SocketAddr>,
-    pub sharing_ready: bool,
     pub error: Option<String>,
     pub clients: Vec<RemoteClientSummary>,
-    pub control: ControlStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

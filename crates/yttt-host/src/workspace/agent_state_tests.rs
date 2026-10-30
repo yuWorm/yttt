@@ -1,6 +1,5 @@
 use super::publication_tests::{register, setup};
 use super::*;
-use std::slice::from_ref;
 
 fn agent_content(label: &str, messages: usize) -> Vec<u8> {
     use yttt_agent_core::{
@@ -41,35 +40,57 @@ fn agent_content(label: &str, messages: usize) -> Vec<u8> {
     serde_json::to_vec(&agent).unwrap()
 }
 
-fn agent_ref(pane: &str, content: &[u8]) -> AgentStateRef {
-    AgentStateRef::for_content(
-        yttt_core::model::ids::ProjectId::new("project"),
-        "tab".into(),
-        pane.into(),
-        content,
-    )
-}
-
-fn commit_agents(
+/// A workspace whose project has one Agent pane in each of `tabs` tabs.
+fn agent_workspace(
+    root: &Path,
     service: &WorkspaceService,
     client: &ClientInstanceId,
-    id: &WorkspaceId,
-    revision: u64,
-    references: &[AgentStateRef],
-) -> Result<WorkspaceResponse, ProtocolFailure> {
-    service.handle(
-        client,
-        WorkspaceRequest::Commit {
-            workspace_id: id.clone(),
-            expected_revision: revision,
-            operation_id: WorkspaceOperationId::new(format!("agents-{revision}")).unwrap(),
-            snapshot: WorkspaceSnapshot::new(serde_json::json!({
-                "layout": "split", "agent_states": references, "schema_version": 2, "editor": { "sessions": [] }, "workspace": { "opened_projects": [], "selected_project_id": null },
-            }))
-            .unwrap(),
-            drafts: Vec::new(),
-        },
-    )
+    name: &str,
+    tabs: usize,
+) -> WorkspaceId {
+    let id = register(service, client, name);
+    let project_root = root.join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let layout = serde_json::from_value(serde_json::json!({
+        "project": { "name": "Agents" },
+        "tabs": (0..tabs).map(|index| serde_json::json!({
+            "id": format!("tab-{index}"),
+            "title": "Agent",
+            "layout": { "type": "pane", "id": "agent", "title": "Agent", "command": "omp", "kind": "agent" },
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap();
+    service
+        .apply(
+            id.clone(),
+            WorkspaceIntent::OpenProject {
+                descriptor: yttt_core::model::project::ProjectDescriptor::new(
+                    yttt_core::model::ids::ProjectId::new("project"),
+                    yttt_core::model::project::ProjectLocation::local(&project_root),
+                ),
+                layout,
+                panel: yttt_core::model::host_workspace::ProjectPanel {
+                    visible: true,
+                    width: 240.0,
+                },
+            },
+            None,
+        )
+        .unwrap();
+    id
+}
+
+fn agent_pane(tab: usize) -> PaneAddress {
+    PaneAddress {
+        project_id: yttt_core::model::ids::ProjectId::new("project"),
+        tab_id: format!("tab-{tab}"),
+        pane_id: "agent".into(),
+    }
+}
+
+fn record_agent(service: &WorkspaceService, id: &WorkspaceId, tab: usize, content: &[u8]) {
+    let snapshot: AgentSnapshot = serde_json::from_slice(content).unwrap();
+    service.update_agent_snapshot(id, &agent_pane(tab), |_| Some(snapshot));
 }
 
 fn read_agent(
@@ -90,42 +111,28 @@ fn read_agent(
     }
 }
 
-#[test]
-fn agent_histories_larger_than_the_manifest_budget_survive_host_restart() {
-    let root = tempfile::tempdir().unwrap();
-    let (service, client) = setup(root.path());
-    let id = register(&service, &client, "history");
-    let mut references = Vec::new();
-    let mut expected = Vec::new();
-    for index in 0..5 {
-        let pane = format!("agent-{index}");
-        let content = agent_content(&pane, 256);
-        let reference = agent_ref(&pane, &content);
-        service
-            .handle(
-                &client,
-                WorkspaceRequest::PutAgentState {
-                    workspace_id: id.clone(),
-                    reference: reference.clone(),
-                    content: content.clone(),
-                },
-            )
-            .unwrap();
-        references.push(reference);
-        expected.push(content);
-    }
-    assert!(
-        expected.iter().map(Vec::len).sum::<usize>()
-            > yttt_protocol::workspace::MAX_WORKSPACE_MANIFEST_BYTES
-    );
-    commit_agents(&service, &client, &id, 0, &references).unwrap();
-    drop(service);
-    let (service, client) = setup(root.path());
+fn stored_snapshots(service: &WorkspaceService, id: &WorkspaceId) -> Vec<(PaneAddress, Vec<u8>)> {
+    let state = service.state.lock();
+    state.workspaces[id]
+        .layout
+        .agent_snapshots()
+        .into_iter()
+        .map(|(address, snapshot)| (address, serde_json::to_vec(snapshot).unwrap()))
+        .collect()
+}
+
+fn opened_agent_states(
+    service: &WorkspaceService,
+    client: &ClientInstanceId,
+    id: &WorkspaceId,
+) -> (u64, Vec<AgentStateRef>) {
     let WorkspaceResponse::Opened {
-        snapshot, revision, ..
+        layout,
+        agent_states,
+        ..
     } = service
         .handle(
-            &client,
+            client,
             WorkspaceRequest::Open {
                 workspace_id: id.clone(),
             },
@@ -134,149 +141,134 @@ fn agent_histories_larger_than_the_manifest_budget_survive_host_restart() {
     else {
         panic!("workspace")
     };
-    assert_eq!(revision, 1);
-    assert_eq!(
-        agent_state_references(snapshot.as_value()).unwrap(),
-        references
-    );
-    for (reference, expected) in references.iter().zip(expected) {
+    (layout.revision, agent_states)
+}
+
+#[test]
+fn host_recorded_agent_histories_survive_host_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let (service, client) = setup(root.path());
+    let id = agent_workspace(root.path(), &service, &client, "history", 5);
+    let expected = (0..5)
+        .map(|tab| agent_content(&format!("agent-{tab}"), 256))
+        .collect::<Vec<_>>();
+    for (tab, content) in expected.iter().enumerate() {
+        record_agent(&service, &id, tab, content);
+    }
+    service.flush_agent_states();
+    drop(service);
+
+    let (service, client) = setup(root.path());
+    let (_, references) = opened_agent_states(&service, &client, &id);
+    assert_eq!(references.len(), 5);
+    for reference in &references {
+        let tab = reference
+            .tab_id
+            .trim_start_matches("tab-")
+            .parse::<usize>()
+            .unwrap();
         assert_eq!(
             read_agent(&service, &client, &id, reference).unwrap(),
-            expected
+            expected[tab]
+        );
+    }
+    let restored = stored_snapshots(&service, &id);
+    assert_eq!(
+        restored.len(),
+        5,
+        "the restarted Host puts each history back on its pane"
+    );
+    for (address, content) in restored {
+        let tab = address
+            .tab_id
+            .trim_start_matches("tab-")
+            .parse::<usize>()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<AgentSnapshot>(&content).unwrap(),
+            serde_json::from_slice::<AgentSnapshot>(&expected[tab]).unwrap()
         );
     }
 }
 
 #[test]
-fn missing_foreign_or_mismatched_agent_objects_cannot_replace_published_history() {
+fn a_failed_agent_store_keeps_the_previous_generation_and_retries() {
     let root = tempfile::tempdir().unwrap();
     let (service, client) = setup(root.path());
-    let id = register(&service, &client, "owner");
-    let other = register(&service, &client, "other");
-    let content = agent_content("original", 80);
-    let original = agent_ref("pane", &content);
-    assert!(commit_agents(&service, &client, &id, 0, from_ref(&original)).is_err());
-    assert!(
-        service
-            .handle(
-                &client,
-                WorkspaceRequest::PutAgentState {
-                    workspace_id: id.clone(),
-                    reference: original.clone(),
-                    content: b"wrong".to_vec(),
-                }
-            )
-            .is_err()
-    );
-    service
-        .handle(
-            &client,
-            WorkspaceRequest::PutAgentState {
-                workspace_id: id.clone(),
-                reference: original.clone(),
-                content: content.clone(),
-            },
-        )
-        .unwrap();
-    assert!(commit_agents(&service, &client, &other, 0, from_ref(&original)).is_err());
-    assert_eq!(
-        read_agent(&service, &client, &id, &original)
-            .unwrap_err()
-            .code,
-        FailureCode::NotFound
-    );
-    commit_agents(&service, &client, &id, 0, from_ref(&original)).unwrap();
-    let replacement = agent_ref("pane", &agent_content("replacement", 80));
-    assert!(commit_agents(&service, &client, &id, 1, &[replacement]).is_err());
-    assert_eq!(
-        read_agent(&service, &client, &id, &original).unwrap(),
-        content
-    );
-    assert!(matches!(
-        service
-            .handle(&client, WorkspaceRequest::Open { workspace_id: id })
-            .unwrap(),
-        WorkspaceResponse::Opened { revision: 1, .. }
-    ));
-}
+    let id = agent_workspace(root.path(), &service, &client, "atomic", 1);
+    let stored =
+        |service: &WorkspaceService| service.state.lock().workspaces[&id].agent_states.clone();
+    let original = agent_content("original", 80);
+    record_agent(&service, &id, 0, &original);
+    service.flush_agent_states();
+    let original_reference = stored(&service).remove(0);
 
-#[test]
-fn failed_agent_publication_and_restart_keep_the_previous_generation() {
-    let root = tempfile::tempdir().unwrap();
-    let (service, client) = setup(root.path());
-    let id = register(&service, &client, "atomic");
-    let original_content = agent_content("original", 80);
-    let original = agent_ref("pane", &original_content);
-    service
-        .handle(
-            &client,
-            WorkspaceRequest::PutAgentState {
-                workspace_id: id.clone(),
-                reference: original.clone(),
-                content: original_content.clone(),
-            },
-        )
-        .unwrap();
-    commit_agents(&service, &client, &id, 0, from_ref(&original)).unwrap();
-    let replacement_content = agent_content("replacement", 80);
-    let replacement = agent_ref("pane", &replacement_content);
-    service
-        .handle(
-            &client,
-            WorkspaceRequest::PutAgentState {
-                workspace_id: id.clone(),
-                reference: replacement.clone(),
-                content: replacement_content,
-            },
-        )
-        .unwrap();
+    let replacement = agent_content("replacement", 80);
+    record_agent(&service, &id, 0, &replacement);
     let manifest = root.path().join("workspaces/atomic.json");
     let backup = root.path().join("previous-manifest");
     fs::rename(&manifest, &backup).unwrap();
     fs::create_dir(&manifest).unwrap();
-    assert!(commit_agents(&service, &client, &id, 1, from_ref(&replacement)).is_err());
+    service.flush_agent_states();
     assert_eq!(
-        read_agent(&service, &client, &id, &original).unwrap(),
-        original_content
+        read_agent(&service, &client, &id, &original_reference).unwrap(),
+        original,
+        "a store that could not be published keeps the published history"
     );
+
     fs::remove_dir(&manifest).unwrap();
     fs::rename(&backup, &manifest).unwrap();
-    drop(service);
-    let (service, client) = setup(root.path());
-    assert_eq!(
-        read_agent(&service, &client, &id, &original).unwrap(),
-        original_content
+    service.flush_agent_states();
+    let references = stored(&service);
+    assert_eq!(references.len(), 1);
+    assert_ne!(
+        references[0], original_reference,
+        "the next flush stores the replacement"
     );
     assert_eq!(
-        read_agent(&service, &client, &id, &replacement)
+        read_agent(&service, &client, &id, &references[0]).unwrap(),
+        replacement
+    );
+    drop(service);
+
+    let (service, client) = setup(root.path());
+    assert_eq!(
+        read_agent(&service, &client, &id, &references[0]).unwrap(),
+        replacement
+    );
+    assert_eq!(
+        read_agent(&service, &client, &id, &original_reference)
             .unwrap_err()
             .code,
         FailureCode::NotFound
     );
-    assert!(service.agent_states.read(&id, &replacement).is_err());
 }
 
 #[test]
 fn legacy_agent_history_migrates_atomically_without_losing_acceptance_or_revision() {
     let root = tempfile::tempdir().unwrap();
+    // A schema 2 record carrying the layout a Client published, with the
+    // Agent snapshot inline on its pane.
+    let layout = {
+        let (service, client) = setup(root.path());
+        let id = agent_workspace(root.path(), &service, &client, "legacy", 1);
+        service.state.lock().workspaces[&id].layout.state()
+    };
+    fs::remove_dir_all(root.path().join("workspaces")).unwrap();
     fs::create_dir(root.path().join("workspaces")).unwrap();
     let content = agent_content("legacy", 80);
-    let agent: serde_json::Value = serde_json::from_slice(&content).unwrap();
+    let mut workspace = serde_json::to_value(&layout.workspace).unwrap();
+    workspace["opened_projects"][0]["tab_states"][0]["pane_states"][0]["agent_snapshot"] =
+        serde_json::from_slice(&content).unwrap();
     let legacy = serde_json::json!({
         "schema_version": 2, "revision": 7, "restore_on_startup": true,
-        "snapshot": {
-            "schema_version": 1,
-            "workspace": {"opened_projects": [{
-                "id": "project", "tab_states": [{"tab_id": "tab", "pane_states": [{
-                    "pane_id": "pane", "agent_snapshot": agent,
-                }]}],
-            }]},
-        },
+        "snapshot": { "schema_version": 2, "workspace": workspace, "editor": layout.editor },
     });
     let manifest = root.path().join("workspaces/legacy.json");
     let bytes = serde_json::to_vec(&legacy).unwrap();
     fs::write(&manifest, &bytes).unwrap();
     let object_root = root.path().join("agent-states");
+    fs::remove_dir_all(&object_root).ok();
     fs::write(&object_root, b"blocked").unwrap();
     assert!(
         WorkspaceService::new(
@@ -288,35 +280,21 @@ fn legacy_agent_history_migrates_atomically_without_losing_acceptance_or_revisio
     );
     assert_eq!(fs::read(&manifest).unwrap(), bytes);
     fs::remove_file(object_root).unwrap();
+
     let (service, client) = setup(root.path());
     let id = WorkspaceId::new("legacy").unwrap();
-    let WorkspaceResponse::Opened {
-        snapshot, revision, ..
-    } = service
-        .handle(
-            &client,
-            WorkspaceRequest::Open {
-                workspace_id: id.clone(),
-            },
-        )
-        .unwrap()
-    else {
-        panic!("workspace")
-    };
+    let (revision, references) = opened_agent_states(&service, &client, &id);
     assert_eq!(revision, 7);
-    assert!(snapshot.as_value()["workspace"]["opened_projects"][0]["tab_states"][0]
-        ["pane_states"][0]["agent_snapshot"].is_null());
-    let reference = agent_state_references(snapshot.as_value())
-        .unwrap()
-        .remove(0);
+    assert_eq!(references.len(), 1);
     assert_eq!(
-        read_agent(&service, &client, &id, &reference).unwrap(),
+        read_agent(&service, &client, &id, &references[0]).unwrap(),
         content
     );
+    assert_eq!(stored_snapshots(&service, &id).len(), 1);
     drop(service);
     let (service, client) = setup(root.path());
     assert_eq!(
-        read_agent(&service, &client, &id, &reference).unwrap(),
+        read_agent(&service, &client, &id, &references[0]).unwrap(),
         content
     );
 }

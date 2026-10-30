@@ -160,7 +160,11 @@ impl AppConfigPaths {
     }
 
     /// Device-private durable state. Callers must use local filesystem operations for this path.
+    /// Test fixtures bind no Device profile and keep it under their own root.
     pub fn device_state_dir(&self) -> Option<PathBuf> {
+        if self.test_fixture {
+            return Some(self.config_dir.join("device-state"));
+        }
         super::scope::device_state_dir()
     }
 
@@ -251,10 +255,6 @@ impl AppConfigPaths {
 
     pub fn agent_provider_dir(&self, provider: &str) -> PathBuf {
         self.config_dir.join("agent-providers").join(provider)
-    }
-
-    pub fn agent_state_path(&self) -> PathBuf {
-        self.config_dir.join("agent-state.json")
     }
 }
 

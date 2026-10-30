@@ -141,51 +141,12 @@ impl Workspace {
         }
     }
 
-    /// Reconciles persisted pane activity with the authoritative Host catalog.
-    ///
-    /// Missing running panes retain their place and become pending recovery.
-    /// Exited Agent panes with saved sessions also become pending recovery.
-    /// Other exited panes and never-started panes are not restarted.
-    pub fn reconcile_host_resources(
-        &mut self,
-        available_terminal_sessions: &HashSet<String>,
-    ) -> Vec<RemoteResourceLoss> {
-        let mut losses = Vec::new();
-        for project in &mut self.opened_projects {
-            for tab in &mut project.tab_states {
-                for pane in &mut tab.pane_states {
-                    let session_id = format!("{}:{}:{}", project.id, tab.tab_id, pane.pane_id);
-                    if available_terminal_sessions.contains(&session_id) {
-                        pane.process_state = PaneProcessState::Running;
-                        continue;
-                    }
-                    let was_running = pane.process_state == PaneProcessState::Running;
-                    let has_exited_agent_session = pane.process_state == PaneProcessState::Exited
-                        && pane
-                            .agent_snapshot
-                            .as_ref()
-                            .is_some_and(|snapshot| snapshot.session.is_some());
-                    if was_running || has_exited_agent_session {
-                        pane.process_state = PaneProcessState::Restoring;
-                        if let Some(snapshot) = pane.agent_snapshot.as_mut() {
-                            snapshot.mark_disconnected();
-                        }
-                        if was_running {
-                            losses.push(RemoteResourceLoss {
-                                project_id: project.id.clone(),
-                                tab_id: tab.tab_id.clone(),
-                                pane_id: pane.pane_id.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        losses
-    }
-
     pub fn opened_projects(&self) -> &[OpenedProject] {
         &self.opened_projects
+    }
+
+    pub(crate) fn opened_projects_mut(&mut self) -> &mut [OpenedProject] {
+        &mut self.opened_projects
     }
 
     pub fn selected_project_id(&self) -> Option<&ProjectId> {
@@ -619,6 +580,39 @@ impl OpenedProject {
             .sum()
     }
 
+    /// Puts an exited pane back to `Idle` and starts its tab, so the Host
+    /// launches it again. Without `resume` its Agent session is dropped.
+    pub(crate) fn restart_pane(
+        &mut self,
+        tab_id: &str,
+        pane_id: &str,
+        resume: bool,
+    ) -> Result<(), WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        if self.layout.tabs[tab_index]
+            .layout
+            .find_pane(pane_id)
+            .is_none()
+        {
+            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+        }
+        let tab = self
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        let pane = tab
+            .pane_state_mut(pane_id)
+            .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
+        if pane.process_state == PaneProcessState::Running {
+            return Err(WorkspaceError::PaneRunning(pane_id.to_string()));
+        }
+        pane.process_state = PaneProcessState::Idle;
+        if !resume {
+            pane.agent_snapshot = None;
+        }
+        tab.start_state = TabStartState::Started;
+        Ok(())
+    }
+
     fn tab_index(&self, tab_id: &str) -> Result<usize, WorkspaceError> {
         self.layout
             .tabs
@@ -971,7 +965,7 @@ pub struct TabState {
 }
 
 impl TabState {
-    fn pane_state_mut(&mut self, pane_id: &str) -> Option<&mut PaneState> {
+    pub(crate) fn pane_state_mut(&mut self, pane_id: &str) -> Option<&mut PaneState> {
         self.pane_states
             .iter_mut()
             .find(|pane| pane.pane_id == pane_id)
@@ -994,7 +988,9 @@ pub enum TabStartState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum PaneProcessState {
     Idle,
-    Restoring,
+    /// Records written before the Host started panes itself mark a pane
+    /// awaiting recovery `Restoring`; the Host restores it like a running one.
+    #[serde(alias = "Restoring")]
     Running,
     Exited,
 }
@@ -1010,13 +1006,6 @@ pub enum PaneExitCloseOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClosedProject {
     pub project_id: ProjectId,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteResourceLoss {
-    pub project_id: ProjectId,
-    pub tab_id: String,
-    pub pane_id: String,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -1055,6 +1044,8 @@ pub enum WorkspaceError {
     CannotCloseLastTab,
     #[error("title cannot be empty")]
     EmptyTitle,
+    #[error("pane is running: {0}")]
+    PaneRunning(String),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

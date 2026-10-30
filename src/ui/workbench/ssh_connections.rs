@@ -1239,7 +1239,6 @@ impl WorkbenchView {
             root.clone(),
         )
         .map_err(WorkbenchError::RemoteProject)?;
-        let already_open = self.workspace.project(&opened.descriptor.id).is_some();
         let project_id = opened.descriptor.id.clone();
         if let Err(error) = self.apply_workspace_intent(WorkspaceIntent::OpenProject {
             descriptor: opened.descriptor,
@@ -1251,16 +1250,6 @@ impl WorkbenchView {
         }) {
             let _ = services.close_host_registration();
             return Err(error);
-        }
-        if !already_open {
-            match mode {
-                ProjectOpenMode::Fresh => self
-                    .agent_manager
-                    .reset_project_sessions(project_id.as_str()),
-                ProjectOpenMode::RestoreLastSession => {
-                    self.restore_project_agent_snapshots(&project_id)
-                }
-            }
         }
         self.project.services.insert(project_id.clone(), services);
         self.queue_selected_terminal_focus();

@@ -407,6 +407,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::FileReload => "Reload",
         UiTextKey::MarkdownShowRendered => "Show rendered Markdown",
         UiTextKey::MarkdownShowSource => "Edit Markdown source",
+        UiTextKey::EditorHeldElsewhere => {
+            "Another client is editing this file. Showing its unsaved changes read-only."
+        }
+        UiTextKey::EditorTakeOver => "Take Over Editing",
+        UiTextKey::DocumentLeaseLostTitle => "Another client took over this file",
+        UiTextKey::DocumentLeaseLostBody => {
+            "Your changes to {path} that were not yet stored on the Host were saved to {copy}."
+        }
+        UiTextKey::DocumentLeaseLostKeep => "Keep Copy",
+        UiTextKey::DocumentLeaseLostDiscard => "Discard Copy",
         UiTextKey::Tabs => "Tabs",
         UiTextKey::TabCloseCurrent => "Close Current",
         UiTextKey::TabCloseAll => "Close All",
@@ -873,12 +883,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsApplyReopenFile => "Applies when files reopen",
         UiTextKey::SettingsSourceHost => "Using environment default",
         UiTextKey::SettingsSourceProject => "Project override",
-        UiTextKey::SettingsReadOnlyObserver => {
-            "Another client controls this environment. Environment and project settings are read-only; local preferences remain editable."
-        }
-        UiTextKey::SettingsReadOnlyPreparingTransfer => {
-            "Control is transferring. Environment and project settings are read-only; local preferences remain editable."
-        }
         UiTextKey::SettingsReadOnlyDisconnected => {
             "Environment disconnected. Its settings are read-only; local preferences remain editable."
         }
@@ -895,20 +899,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "This page manages desktop permissions on this device, not the remote Host."
         }
         UiTextKey::SettingsCopyDraft => "Copy draft",
-        UiTextKey::RemoteDeviceDraftRecoveryAvailable => " · Device draft recovery available",
-        UiTextKey::RemoteRecoverDeviceDrafts => "Recover device drafts",
-        UiTextKey::ProfileControlDisconnected => "Connection disconnected · not synchronized",
-        UiTextKey::ProfileControlRemoteIdentity => "Remote · {host}",
-        UiTextKey::ProfileControlLocalIdentity => "Local",
-        UiTextKey::ProfileControlRestoreFailed => " · Restore failed",
-        UiTextKey::ProfileControlLost => " · Not synchronized; edits retained",
-        UiTextKey::ProfileControlTransferring => " · Transferring control",
-        UiTextKey::ProfileControlRestoring => " · Restoring",
-        UiTextKey::ProfileControlReadOnly => " · Read-only",
-        UiTextKey::ProfileControlSaving => " · Saving",
-        UiTextKey::ProfileControlRecoverWorkspace => "Recover workspace…",
-        UiTextKey::ProfileControlRecoverFullWorkspace => "Recover full workspace…",
-        UiTextKey::ProfileControlWorkspaceHistory => "Workspace history…",
+        UiTextKey::WorkspaceStatusDisconnected => "Connection disconnected · not synchronized",
+        UiTextKey::WorkspaceStatusRemoteIdentity => "Remote · {host}",
+        UiTextKey::WorkspaceStatusLocalIdentity => "Local",
+        UiTextKey::WorkspaceStatusRestoreFailed => " · Restore failed",
+        UiTextKey::WorkspaceStatusRestoring => " · Restoring",
+        UiTextKey::WorkspaceStatusSaving => " · Saving",
+        UiTextKey::WorkspaceStatusHistory => "Workspace history…",
+        UiTextKey::PersistenceDocumentSyncFailed => {
+            "Could not store unsaved edits of {path} on the Host: {error}"
+        }
+        UiTextKey::PersistenceWorkspaceDeleted => "This workspace no longer exists on the Host",
+        UiTextKey::PersistenceOpenFailed => "Could not open the workspace on the Host: {error}",
         UiTextKey::WorkspaceHistoryTitle => "Open workspace",
         UiTextKey::WorkspaceHistorySearch => "Search workspace names, paths or IDs…",
         UiTextKey::WorkspaceHistoryEmpty => "No closed workspaces",
@@ -983,13 +985,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessClients => "Connected devices",
         UiTextKey::RemoteAccessNoClients => "No remote devices connected",
         UiTextKey::RemoteAccessStreams => "streams",
-        UiTextKey::RemoteAccessControlOwner => "Current controller",
         UiTextKey::RemoteAccessEnable => "Enable",
         UiTextKey::RemoteAccessDisable => "Disable",
         UiTextKey::RemoteAccessApply => "Apply address",
         UiTextKey::RemoteAccessCopy => "Copy connection information",
         UiTextKey::RemoteAccessReset => "Reset credentials",
-        UiTextKey::RemoteAccessReclaim => "Reclaim control",
         UiTextKey::RemoteAccessDisconnect => "Disconnect all remote clients",
         UiTextKey::RemoteAccessRefresh => "Refresh",
         UiTextKey::RemoteAccessConfirmTitle => "Change remote access?",
@@ -997,9 +997,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "This may disconnect remote clients. A non-loopback address exposes the port to your network. Forced control uses the last confirmed state; unpublished edits on the previous client may be lost. Continue only if you understand these consequences."
         }
         UiTextKey::RemoteAccessConfirm => "Confirm",
-        UiTextKey::RemoteAccessNotReady => {
-            "Wait for every work window to finish publishing its state before enabling remote access."
-        }
         UiTextKey::RemoteAccessCopied => {
             "Base64 connection code copied, including the address and access key. Keep it private."
         }
@@ -1046,8 +1043,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteConnectPreparing => "Preparing connection…",
         UiTextKey::RemoteConnectFailed => "Unable to connect",
         UiTextKey::RemoteConnectCancel => "Cancel connection",
-        UiTextKey::RemoteConnectDetails => "Connection details",
-        UiTextKey::RemoteConnectHideDetails => "Hide details",
         UiTextKey::RemoteConnectErrorDetails => "Technical details",
         UiTextKey::RemoteConnectVerifyingHost => "Verifying the Host certificate and environment…",
         UiTextKey::RemoteConnectCheckingServer => {
@@ -1061,25 +1056,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteConnectSshReconnecting => "Reconnecting to SSH…",
         UiTextKey::RemoteConnectSshRejected => "SSH host key rejected",
         UiTextKey::RemoteConnectContinuing => "Continuing connection…",
-        UiTextKey::RemoteConnectTakingControl => "Transferring workspace control…",
-        UiTextKey::RemoteConnectObserving => "Opening read-only workspace…",
-        UiTextKey::RemoteTakeoverTitle => "Continue this workspace here?",
-        UiTextKey::RemoteTakeoverDescription => {
-            "Continue here to transfer control of all workspaces to this window. The previous Client will save its state and become read-only. Running terminals and tasks will not stop."
-        }
-        UiTextKey::RemoteTakeoverForceTitle => "The previous Client could not save its state",
-        UiTextKey::RemoteTakeoverForceDescription => {
-            "Force continuation uses only the last confirmed state. Unpublished edits on the previous Client may be lost. Cancel to leave control with that Client."
-        }
-        UiTextKey::RemoteObserveOnly => "Open read-only",
-        UiTextKey::RemoteContinueHere => "Continue here",
-        UiTextKey::RemoteForceContinue => "Force continue",
-        UiTextKey::RemoteCancelTransfer => "Cancel transfer",
-        UiTextKey::RemoteProfile => "Profile",
-        UiTextKey::RemoteWorkspaceCount => "Workspaces",
-        UiTextKey::RemoteEnvironment => "Environment ID",
-        UiTextKey::RemoteClient => "Current Client",
-        UiTextKey::RemoteUnowned => "No current controller",
         UiTextKey::RemoteKeyAlgorithm => "Key algorithm",
         UiTextKey::RemoteManageLocally => {
             "Manage remote connections and credentials from the local yttt window."
@@ -1160,11 +1136,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsAgentPrimaryDescription => {
             "The agent selected during onboarding and used for session discovery."
         }
-        UiTextKey::AgentInitializationPreparing => "Preparing Agent hooks on the Host…",
-        UiTextKey::AgentInitializationControllerRequired => {
-            "This Agent has not started. The controlling Client must initialize it."
-        }
-        UiTextKey::AgentInitializationRetry => "Retry Agent initialization",
         UiTextKey::SettingsAgentSessions => "Session list",
         UiTextKey::SettingsAgentSessionsDescription => {
             "Show the Agent Sessions tab. The primary agent is included by default."
@@ -1809,7 +1780,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsVimGlobal => "Global",
         UiTextKey::SettingsVimEditorOnly => "Editor only",
         UiTextKey::DialogOk => "OK",
-        UiTextKey::DialogContinue => "Continue",
         UiTextKey::DesktopRestoreClientsFailed => "Cannot restore remote Clients",
         UiTextKey::DesktopQuitTitle => "Quit yttt?",
         UiTextKey::DesktopQuitOwnedHostBody => {
@@ -1836,16 +1806,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceRestoreLoading => "Restoring workspace…",
         UiTextKey::WorkspaceRestoreFailedBody => "The saved workspace state could not be restored.",
         UiTextKey::WorkspaceRestoreFailedTitle => "Workspace restore failed",
-        UiTextKey::ProfileForceControlTitle => "Force control of this profile?",
-        UiTextKey::ProfileContinueTitle => "Continue this entire profile here?",
-        UiTextKey::ProfileForceControlBody => {
-            "Only the last confirmed state will be restored. Unpublished edits on the previous client may be missing."
-        }
-        UiTextKey::ProfileContinueBody => {
-            "All workspaces transfer together. The previous client will publish its edits and become an observer. Running terminal processes are not restarted."
-        }
-        UiTextKey::ProfileUnexpectedControlResponse => "Unexpected control response",
-        UiTextKey::WorkspaceSettingsUnconfirmed => "Settings have not been confirmed by the Host",
         UiTextKey::WorkspaceUnsavedTitle => "Changes have not been saved",
         UiTextKey::WorkspaceKeepOpen => "Keep window open",
         UiTextKey::WorkspaceCloseUnsaved => "Close without saving",
@@ -1855,175 +1815,23 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceFlushHostUnavailable => {
             "Remote workspace cannot be flushed because the Host is unavailable"
         }
-        UiTextKey::WorkspaceFlushControlUnavailable => {
-            "Remote workspace changes could not be flushed before closing because exclusive Host control is unavailable"
-        }
-        UiTextKey::WorkspaceFlushIdentityUnavailable => {
-            "Remote workspace cannot be flushed because its ID is unavailable"
-        }
-        UiTextKey::PersistenceRecoveryRequested => "Workspace recovery requested",
-        UiTextKey::PersistenceRecoveryWaitOperation => {
-            "Wait for the current workspace operation before restoring saved recovery"
-        }
-        UiTextKey::PersistenceRecoveryReconcile => {
-            "Reconcile the Host workspace before restoring saved recovery"
-        }
-        UiTextKey::PersistenceRecoveryPublishFirst => {
-            "Publish or reconcile current changes before restoring a saved full workspace"
-        }
-        UiTextKey::PersistenceRecoveryControlUnavailable => "Workspace control is unavailable",
-        UiTextKey::PersistenceRecoveryDifferentWorkspace => {
-            "Saved recovery belongs to a different Host workspace"
-        }
-        UiTextKey::PersistenceRestoreRetryHostUnavailable => {
-            "Cannot retry workspace restore because the Host is unavailable"
-        }
-        UiTextKey::PersistenceRestoreRetryIdentityUnavailable => {
-            "Cannot retry workspace restore because its Host workspace identity is unavailable"
-        }
-        UiTextKey::PersistenceRestoreIdentityLost => "Remote Host lost its workspace identity",
-        UiTextKey::PersistencePublishDisconnected => {
-            "The Host disconnected before local edits were published"
-        }
-        UiTextKey::PersistenceRecoveryObserver => {
-            "Recovered Device-private drafts remain local while this Client observes"
-        }
-        UiTextKey::PersistencePublishForcedControl => "Host control was forced to another Client",
-        UiTextKey::PersistencePublishLostControl => "workspace publication lost control",
-        UiTextKey::PersistencePublishEpochChanged => {
-            "Host or workspace control epoch changed before local edits were published"
-        }
-        UiTextKey::PersistenceRestoreEpochChanged => {
-            "Remote Host epoch changed while this Client was disconnected"
-        }
-        UiTextKey::PersistenceDraftReconcileFirst => {
-            "Reconcile the Host workspace before recovering Device-private drafts"
-        }
-        UiTextKey::PersistenceDraftHostUnavailable => {
-            "Cannot recover Device-private drafts while the Host is unavailable"
-        }
-        UiTextKey::PersistenceDraftIdentityUnavailable => {
-            "Cannot recover Device-private drafts because the workspace identity is unavailable"
-        }
-        UiTextKey::PersistenceDraftDifferentWorkspace => {
-            "Device-private draft recovery belongs to a different Host workspace"
-        }
-        UiTextKey::PersistenceDraftInvalidText => {
-            "Cannot recover Device-private drafts with invalid text"
-        }
-        UiTextKey::PersistenceDraftMissingBody => {
-            "Cannot recover Device-private drafts because a document body is missing"
-        }
-        UiTextKey::PersistenceDraftManifestMismatch => {
-            "Cannot recover Device-private drafts because a document body does not match its manifest"
-        }
-        UiTextKey::PersistenceDraftNoMatchingProjects => {
-            "No Device-private drafts match projects currently open from this Host workspace"
-        }
-        UiTextKey::PersistenceDraftScopeMismatch => {
-            "Local draft recovery scope does not match this Host workspace"
-        }
-        UiTextKey::PersistencePublishWorkspaceChanged => {
-            "Workspace control changed before local edits were published"
-        }
-        UiTextKey::PersistenceHostClosedEditedFiles => {
-            "Another Client closed files with unsaved edits in this window"
-        }
-        UiTextKey::PersistencePublishInterrupted => {
-            "Connection interrupted while publishing; waiting to reconcile"
-        }
-        UiTextKey::PersistencePublishStaleResponse => {
-            "Ignored a stale workspace publication response; local edits were not replayed"
-        }
         UiTextKey::PersistenceDraftDocumentLimit => {
             "Document draft exceeds the 6 MiB recovery limit"
-        }
-        UiTextKey::PersistenceDraftWorkspaceLimit => {
-            "Workspace drafts exceed the 64 MiB recovery limit"
         }
         UiTextKey::PersistenceRemoveHistory => "Cannot remove workspace history: {detail}",
         UiTextKey::PersistenceOpenInitialProject => {
             "Could not open the requested initial project: {error}"
         }
-        UiTextKey::PersistencePublicationRejected => {
-            "Remote Host rejected workspace publication: {error}"
-        }
-        UiTextKey::PersistenceControlUnavailable => {
-            "Remote workspace control is unavailable: {error}"
-        }
         UiTextKey::PersistenceStateRestoreFailed => {
             "Remote workspace state could not be restored: {error}"
-        }
-        UiTextKey::PersistenceEditorRestoreFailed => {
-            "Remote editor layout could not be restored: {error}"
-        }
-        UiTextKey::PersistenceEditorFinalizeFailed => {
-            "Remote editor layout could not be finalized: {error}"
-        }
-        UiTextKey::PersistenceRecoverDraftsFailed => {
-            "Cannot recover Device-private drafts: {error}"
-        }
-        UiTextKey::PersistenceLocalRecoveryUnavailable => {
-            "Local draft recovery is unavailable: {error}"
-        }
-        UiTextKey::PersistenceListRecoveryFailed => {
-            "Local draft recovery could not be listed: {error}"
-        }
-        UiTextKey::PersistenceReadRecoveryFailed => {
-            "Local draft recovery could not be read: {error}"
-        }
-        UiTextKey::PersistencePrepareRecoveryFailed => {
-            "{reason}; unpublished edits remain open, but their local recovery snapshot could not be prepared: {error}"
-        }
-        UiTextKey::PersistenceRecoveryStorageUnavailable => {
-            "{reason}; unpublished edits remain open, but Device-private recovery storage is unavailable"
-        }
-        UiTextKey::PersistenceLocateRecoveryFailed => {
-            "{reason}; unpublished edits remain open, but Device-private recovery storage could not be located: {error}"
-        }
-        UiTextKey::PersistenceScopeRecoveryFailed => {
-            "{reason}; unpublished edits remain open, but Device-private recovery storage could not be scoped: {error}"
-        }
-        UiTextKey::PersistenceRecoverySaved => {
-            "{reason}; unpublished edits were saved to Device-private recovery storage and will not replace the Host workspace automatically"
-        }
-        UiTextKey::PersistenceRecoveryStorageFailed => {
-            "{reason}; unpublished edits remain open, but Device-private recovery storage failed: {error}"
         }
         UiTextKey::PersistenceCloseSavedWorkspace => "Cannot close saved workspace: {detail}",
         UiTextKey::PersistenceUpdateClientRestore => {
             "Cannot update remote Client restore state: {error}"
         }
-        UiTextKey::PersistenceOperationIdInvalid => {
-            "Remote workspace operation ID is invalid: {error}"
-        }
-        UiTextKey::PersistenceSnapshotInvalid => {
-            "Remote workspace snapshot is invalid; changes remain unsaved: {error}"
-        }
-        UiTextKey::PersistenceUnexpectedCommitResponse => {
-            "Remote Host returned an unexpected workspace commit response: {detail}"
-        }
-        UiTextKey::PersistenceCommitControlLost => {
-            "Remote workspace commit was rejected; control was lost: {error}"
-        }
-        UiTextKey::PersistencePublishDisconnectedDetail => {
-            "The Host disconnected while publishing: {error}"
-        }
-        UiTextKey::PersistenceCommitFailed => {
-            "Remote workspace commit failed; prior snapshot remains intact: {error}"
-        }
         UiTextKey::SettingsIconThemeBuiltin => "Built-in",
         UiTextKey::SettingsTerminalThemeFollowUi => "Follow UI theme",
         UiTextKey::SettingsShellAuto => "Auto",
-        UiTextKey::PersistenceRecoveringDrafts => {
-            "Recovering Device-private drafts: {count}. The Host workspace will not be replaced."
-        }
-        UiTextKey::PersistenceRecoverableProjects => {
-            " Projects still available for recovery: {count}."
-        }
-        UiTextKey::PersistenceLostTerminals => {
-            "Host lost terminal processes: {count}. Restoring shells and Agent sessions without replaying other commands."
-        }
         UiTextKey::SettingsDeviceUnbound => {
             "Device preferences are not bound for this Client profile."
         }
@@ -2046,10 +1854,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Settings changed since this draft was created. The draft is retained; review the current values before discarding it and applying your changes again."
         }
         UiTextKey::SettingsDraftControl => "Host control is required to retry this settings draft.",
-        UiTextKey::SettingsDraftProjectInvalid => "Recovered project settings draft is invalid.",
-        UiTextKey::SettingsNoSharedControl => {
-            "This window does not currently control the shared environment."
-        }
         UiTextKey::OnboardingConfirmImport => {
             "confirm whether to import Zed themes before completing onboarding"
         }
@@ -2074,18 +1878,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Previous SSH projects remain in Recent Projects; open them in an isolated remote workspace."
         }
         UiTextKey::PersistenceWorkspaceAlreadyOpen => "Workspace is open in this Client",
-        UiTextKey::PersistenceMissingIndex => "Host did not return its workspace index",
-        UiTextKey::PersistenceMissingRevision => "Workspace revision is unavailable",
         UiTextKey::SettingsDraftCopyFailed => "Settings draft could not be copied: {error}",
-        UiTextKey::SettingsDraftInvalid => "Recovered settings draft is invalid: {error}",
         UiTextKey::SettingsSaveFailed => "Settings were not saved: {error}",
         UiTextKey::SettingsProjectSaveFailed => "Project settings were not saved: {error}",
         UiTextKey::SettingsRefreshFailed => "Settings could not be refreshed: {error}",
         UiTextKey::HostProjectRegistrationFailed => "Host project registration failed: {error}",
         UiTextKey::SettingsUnknownGroup => "Unknown settings group: {group_id}",
-        UiTextKey::PersistenceClearSettingsRecoveryFailed => {
-            "Device-private settings recovery could not be cleared: {error}"
-        }
         UiTextKey::LayoutSourceGlobal => "global default",
         UiTextKey::LayoutSourceGlobalPatched => "global default + personal patch",
         UiTextKey::LayoutSourceProject => "project config",
@@ -2102,22 +1900,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ThemeWarningFile => "Theme {path}: {error}",
         UiTextKey::ThemeWarningColor => "Theme {theme} has invalid color {field}; using fallback",
         UiTextKey::DevicePreferencesUnbound => "Device preferences are not bound.",
-        UiTextKey::PersistenceRevisionChanged => {
-            "Remote workspace changed from revision {previous} to {current} while this Client was disconnected"
-        }
-        UiTextKey::PersistenceQueueFile => "Could not queue restored editor file {path}",
-        UiTextKey::PersistenceProjectService => {
-            "Remote project service is unavailable for restored file {path}"
-        }
-        UiTextKey::PersistenceDocumentMissing => "Restored editor document {path} was not created",
         UiTextKey::PersistenceDraftConflict => {
             "Recovered draft for {path} conflicts with the current remote file; review before saving"
-        }
-        UiTextKey::PersistenceDraftProjectMissing => {
-            "Cannot recover draft {path} because its project is unavailable"
-        }
-        UiTextKey::PersistenceDraftBaseMissing => {
-            "Recovered draft {path} has no current remote base file; it remains unsaved"
         }
         UiTextKey::SettingsInspectKeybindings => {
             "Failed to inspect keybindings directory {path}: {error}"
@@ -2128,21 +1912,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsWatchKeybindings => "Failed to watch keybindings at {path}: {error}",
         UiTextKey::HostTerminalCloseRejected => "Host rejected terminal close: {details}",
         UiTextKey::RevealPathFailed => "Failed to reveal {path}: {error}",
-        UiTextKey::PersistenceHostUnavailable => "Host is unavailable",
-        UiTextKey::PersistenceWorkspaceUnavailable => "Workspace is unavailable",
-        UiTextKey::PersistenceNoSavedRecovery => "No saved recovery workspace",
-        UiTextKey::WorkspaceRecoveryTitle => "Recover workspace",
-        UiTextKey::WorkspaceRecoveryBody => {
-            "Reconciling does not overwrite conflicts. Using the Host snapshot replaces the current layout while preserving the local recovery copy. Keeping local changes and publishing replaces this workspace’s layout and drafts on the Host; terminal commands are not replayed."
-        }
-        UiTextKey::WorkspaceRecoveryReconcile => "Reconcile",
-        UiTextKey::WorkspaceRecoveryUseHost => "Use Host snapshot",
-        UiTextKey::WorkspaceRecoveryPublishLocal => "Keep local and publish",
-        UiTextKey::WorkspaceFullRecoveryTitle => "Restore the entire workspace?",
-        UiTextKey::WorkspaceFullRecoveryBody => {
-            "Replace this Host workspace with the layout, file tabs and drafts retained on this device. Current changes must finish publishing first; terminal commands are not replayed."
-        }
-        UiTextKey::WorkspaceRestoreAndPublish => "Restore and publish",
         UiTextKey::KeybindingUiCommandCenterTitle => "Toggle Dispatch Center",
         UiTextKey::KeybindingUiCommandCenterDescription => {
             "Show or hide the single-screen agent dispatch center."
@@ -2314,9 +2083,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::TerminalI18nIoMailbox => "event mailbox",
         UiTextKey::TerminalI18nIoInputQueue => "input queue",
         UiTextKey::TerminalI18nIoClipboard => "clipboard",
-        UiTextKey::TerminalI18nControlTransferInProgress => {
-            "This client is observing or publishing a control transfer."
-        }
         UiTextKey::TerminalI18nHostConnectionNotReady => "Host terminal connection is not ready.",
         UiTextKey::TerminalI18nInputTerminalNotRunning => {
             "Terminal is not running; inspect the panes list before sending input."
@@ -2327,29 +2093,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::TerminalI18nInputEmpty => "Input is empty.",
         UiTextKey::TerminalI18nHostRuntimeUnavailable => "Host runtime is unavailable.",
         UiTextKey::TerminalI18nHostRuntimeNotConnected => "Host runtime is not connected.",
-        UiTextKey::TerminalI18nHostRestartedBeforeReconcile => {
-            "Host restarted before the terminal launch could be reconciled."
-        }
-        UiTextKey::TerminalI18nAddressConflict => {
-            "Terminal address conflicts with Host session {session_id}: expected fingerprint {expected}, received {actual}"
-        }
-        UiTextKey::TerminalI18nSessionNoLongerAvailable => {
-            "Terminal {session_id} is no longer available on the Host."
-        }
-        UiTextKey::TerminalI18nControlRequired => {
-            "Starting terminal {session_id} requires workspace control and no control transfer in progress."
-        }
-        UiTextKey::TerminalI18nHostEpochChanged => {
-            "Host epoch changed while reconciling terminal start: expected {expected}, observed {actual}."
-        }
-        UiTextKey::TerminalI18nHostCatalogRequestClosed => "Host catalog request channel closed.",
-        UiTextKey::TerminalI18nHostCatalogResponseUnexpected => "Unexpected Host catalog response.",
         UiTextKey::TerminalI18nHostTerminalRequestClosed => "Host terminal request channel closed.",
         UiTextKey::TerminalI18nHostTerminalResponseUnexpected => {
             "Unexpected Host terminal response: {response}"
-        }
-        UiTextKey::TerminalI18nLaunchOutcomeUnknown => {
-            "Terminal launch outcome is still unknown; retry uses the same launch attempt."
         }
         UiTextKey::TerminalI18nSessionMissingFromCatalog => {
             "Terminal session is no longer present in the Host catalog."
@@ -2365,23 +2111,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::TerminalI18nSessionUnavailable => "Terminal session unavailable",
         UiTextKey::TerminalI18nCommand => "command: {command}",
         UiTextKey::TerminalI18nWorkingDirectory => "cwd: {cwd}",
-        UiTextKey::TerminalI18nPreviousProcessUnavailable => {
-            "The previous process is no longer available. Nothing will be restarted until you choose to continue."
-        }
-        UiTextKey::TerminalI18nTakeWorkspaceControl => {
-            "The previous process is no longer available. Take workspace control and wait for any transfer to finish before starting it."
-        }
         UiTextKey::TerminalI18nStatus => "status: {status}",
-        UiTextKey::TerminalI18nLaunchReconciling => "Terminal launch outcome is being reconciled",
         UiTextKey::TerminalI18nProcessLifecycle => "Process {state}",
         UiTextKey::TerminalI18nResumeSavedSession => "Resume saved session",
         UiTextKey::TerminalI18nStartNewProcess => "Start a new process",
-        UiTextKey::TerminalI18nReconnect => "Reconnect",
         UiTextKey::TerminalI18nRetry => "Retry",
         UiTextKey::TerminalI18nRestart => "Restart",
         UiTextKey::TerminalI18nLifecycleIdle => "idle",
         UiTextKey::TerminalI18nLifecycleStarting => "starting",
-        UiTextKey::TerminalI18nLifecycleReconciling => "reconciling",
         UiTextKey::TerminalI18nLifecycleRunning => "running",
         UiTextKey::TerminalI18nLifecycleStopping => "stopping",
         UiTextKey::TerminalI18nLifecycleExitedCode => "exited {code}",
@@ -2443,7 +2180,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::BarI18nDurationDaysHours => "{days}d {hours}h",
         UiTextKey::BarI18nUpdateNotChecked => "Update status has not been checked",
         UiTextKey::BarI18nUpdateAvailable => "v{version} available",
-        UiTextKey::AgentInitializationFailed => "Agent initialization failed: {error}",
         UiTextKey::CliLocalizationCtlHelp => {
             "Usage: yttt ctl <resource> <action> [options]\n\n  windows list\n  projects list\n  tabs list | create | focus | rename | close\n  panes list | split | focus | rename | close | resize | send | read\n  agents list | create | send\n  board show                   Opens the native multi-project Dispatch center\n\nTargets:\n  --window ID                  Window ID from windows list (required if ambiguous)\n  --project ID                 Project ID from projects list\n  --tab ID                     Terminal tab ID from tabs list\n  --pane ID                    Pane ID within the tab\n\nCreate / manage:\n  tabs create --project ID [--command 'cargo test'] [--title NAME]\n  agents create --project ID --provider codex [--title NAME] [-- <provider arguments>]\n  panes split --project ID --tab ID --pane ID --direction horizontal|vertical [--command CMD]\n  panes resize --project ID --tab ID --pane ID --direction left|right|up|down [--percent 5]\n  tabs|panes rename <targets> --title NAME\n  tabs|panes close <targets>   Terminates processes in the target\n\nInput:\n  panes send <targets> --text TEXT [--enter] [--raw]\n  agents send <targets> --text TEXT\n  agents send <targets> --prompt-file PATH\n  panes|agents send <targets> --stdin\n  panes read <targets>        Reads the current terminal viewport\n  board answer <targets> --request ID --answers-json JSON\n                              Queues structured answers; inspect Agent confirmation\n\n  --json                      Machine-readable response (errors go to stderr)\n  --help                      Show this help\n\nThe desktop must already be running. Set YTTT_PROFILE_ROOT for a custom profile.\nLists cover open desktop windows and terminal tabs. Mutations select their target.\nCreated means the layout exists and startup was requested; list panes to check readiness.\nInputAccepted means Host accepted the bytes, not that a command or Agent turn completed.\nAgent send submits text plus Enter and rejects working/waiting/stale Agent states.\nUse panes send for deliberate raw interaction with a busy Agent or an approval prompt.\nRequests are never automatically retried. After a timeout inspect state before retrying.\n"
         }
@@ -2486,7 +2222,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CliLocalizationBooleanTrue => "true",
         UiTextKey::CliLocalizationBooleanFalse => "false",
         UiTextKey::CliLocalizationTabItem => "{target}\t{title}\tpanes={panes}",
-        UiTextKey::CliLocalizationStateRestoring => "restoring",
         UiTextKey::CliLocalizationCreated => "Created {target} ({state})",
         UiTextKey::CliLocalizationUpdated => "Updated {target}",
         UiTextKey::CliLocalizationClosed => "Closed {target}",
@@ -2569,7 +2304,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Failed to initialize desktop control runtime: {error}"
         }
         UiTextKey::CliLocalizationStatePending => "pending",
-        UiTextKey::CliLocalizationStateInitializing => "initializing",
         UiTextKey::CliLocalizationErrorInvalidRequest => "InvalidRequest",
         UiTextKey::CliLocalizationErrorNotFound => "NotFound",
         UiTextKey::CliLocalizationErrorAmbiguousTarget => "AmbiguousTarget",

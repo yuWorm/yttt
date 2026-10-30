@@ -47,8 +47,20 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `TerminalInteractive`、`StateEvents`、`TerminalData` 变体、`TerminalInteractiveMessage` 与
   `ClientHello.terminal_session_id`。session 连接只走 control frame kind;新增
   `ControlMessage::Chunk(MessageChunk { stream, last, bytes })`(超过 256 KiB 的消息分块),
-  `ControlMessage::TerminalInput` 改为 `{ input, control }`。`FrameKind` 中旧的 terminal-interactive(5)、
+  `ControlMessage::TerminalInput` 改为 `{ input }`。`FrameKind` 中旧的 terminal-interactive(5)、
   state-event(6)数值保留不复用,收到即为解码错误。
+  同样在 v22 发布前(直接改写样本,不另升版本)取消 profile 级单写者控制:删除
+  `Request`/`Response`/`ServerEvent::ProfileControl`、`ProfileControlRequest`、`ControlContext`、
+  `ControlStatus`、`ControlTransfer`、`TransferPhase`、`ClientRequest.control` 与
+  `RemoteAccessStatus` 的 `control`/`sharing_ready`。任何已认证 Client 都可写;布局按
+  `Apply` 的 revision 排序,终端输入按 Interactive lease 排他(冲突返回 `Conflict`)。
+  工作区整体发布 `Commit`/`Committed`、`PutDraft`/`GetDraft`/`Draft`/`DraftStored`、
+  `PutAgentState`/`AgentStateStored`、`WorkspaceRevision` 与 `Opened` 的
+  `revision`/`snapshot`/`drafts` 一并删除;`Opened` 改为 `{ layout, documents, agent_states }`。
+  文档改为每文档 lease:新增 `AcquireDocument { takeover }`、`PutDocumentDraft`、
+  `GetDocumentDraft`、`ReleaseDocument` 请求,`Document`/`DocumentDraft` 响应,
+  `DocumentState { document, draft, lease }`、`DocumentLease { holder, epoch }` 与
+  `ServerEvent::DocumentChanged(DocumentUpdate { workspace_id, state })`。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

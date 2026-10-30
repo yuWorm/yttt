@@ -19,7 +19,7 @@
 8. 慢 Client 不能阻塞 PTY reader、其他 Client 或 Host 资源循环。
 9. 本地 IPC 仍须验证操作系统用户、endpoint 权限、profile、build 和一次性认证材料；“仅本机”不等于“可信”。
 10. Wire 协议不序列化 Rust 进程内对象、GPUI Entity、PTY handle 或 SSH channel。
-11. 一个 profile 只有一个可写认证 Client 会话；同一本机桌面的所有工作窗口共享该会话和控制 epoch。
+11. 同一 Host 的所有已认证 Client 会话都可写，不存在 profile 级单写者控制权。写入冲突由资源自身排序：布局按 Host revision，终端输入按 Interactive lease，文件编辑按每文档 lease。
 12. 共享配置、工作区索引及可恢复草稿由 Host 权威持久化，本机 UI 也不能绕过 Host 写入。
 13. 入口来源由 listener 指定；Client 自报 actor、通道或同 UID 不能把 TLS/SSH 工作入口升级为本机管理入口。
 
@@ -165,13 +165,13 @@ Host 的普通控制请求使用最多 64 项的等待队列并按顺序执行�
 
 这是 at-most-once Client 语义。调用方若在断线后重试有副作用操作，必须携带资源 ID、epoch/revision 或幂等键。
 
-mutation 在 journal replay **之前**验证认证会话与 `ControlContext`，并在实际变更执行处持有
-profile 写入屏障检查 Host/control epoch。控制交接先允许旧控制者完成发布，随后进入 Fencing，
-排空已准入写入、递增 epoch、撤销旧终端 lease，才授予新 owner。输入、resize、终端启动/终止、
-配置、文件、Git、草稿和 workspace commit 均受此规则约束。
+mutation 在 journal replay **之前**验证认证会话；journal 按 Client 会话隔离，新会话不能继承
+已有会话的 journal 或终端。不存在 profile 级写入屏障：各资源自己串行化写入——布局在 workspace
+锁内按 revision，终端输入与 resize 按 Interactive lease，文件草稿按文档 lease，终端启动按
+`start_id` 与 `expected_host_epoch`。
 
 `TerminalInput` 从 resource protocol v3 起使用 one-way message（`ControlMessage::TerminalInput`，
-携带可选 `control` 上下文），不分配 `request_id`，也不产生逐按键 response。输入、resize、scroll
+不携带控制上下文），不分配 `request_id`，也不产生逐按键 response。输入、resize、scroll
 与心跳 Ping 在两端都走交互优先级：Host 读端把它们交给每连接的交互 worker 按到达顺序执行，
 不排在项目、文件、Git、catalog 等慢请求之后；lease epoch、geometry epoch 和 `client_sequence`
 仍在 Host 入口单调校验。Desktop 写入有界 interactive command queue 时同步得到
@@ -248,9 +248,9 @@ Host epoch 切换先清空 live Agent／项目计量缓存并发布 reset，再�
 Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须同时匹配 session ID 和 epoch。
 旧 PTY 延迟退出不能结束已经重开的 Agent，失败的 spawn 也只清理自身预备 hook scope。
 
-连接成功或重连成功，完成控制状态握手及有条件的本机控制恢复后，第一项资源对账请求是 `ListResources`。此后 Host 只发送
+连接成功或重连成功后，第一项资源对账请求是 `ListResources`。此后 Host 只发送
 `ResourceCatalogChanged` invalidation；Client 合并重复通知并异步刷新一次 catalog。
-只读 lifecycle 状态查询的连接关闭不发布资源目录变更；session 连接关闭释放资源控制权时仍发布。
+只读 lifecycle 状态查询的连接关闭不发布资源目录变更；session 连接关闭释放终端 lease 时仍发布。
 终端启动、重试与批量关闭另行读取权威 catalog，避免根据过期缓存决定创建或关闭的目标。
 对账规则：
 
@@ -260,23 +260,20 @@ Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须
 2. 终端 sequence gap、epoch 变化或旧 Host 的 `ResyncRequired` 视为对端违约：Client 断开整条
    session 连接并重连，所有终端流以 Host 当前 snapshot 重新开流。Client 不请求 checkpoint 修补 mirror。
 3. Client cache 中存在但 catalog 不存在时，删除 mirror 并发布 `TerminalUnavailable`。
-4. UI 收到当前 pane 的 `TerminalUnavailable` 后结束旧 generation；AutoRestart pane 以新 session generation 重建。
+4. UI 收到当前 pane 的 `TerminalUnavailable` 后结束旧 generation，等待 Host 目录再次列出该 pane 的终端后附加；Client 不重建进程。
 
 对账完成前，旧 mirror 只是一份可见缓存，不是资源仍存活的证据。
 
-### 6.1 多窗口发布与控制交接
+### 6.1 多窗口与多 Client 写入
 
 同一 Desktop Client 的 `SessionCoordinator` 为每个逻辑窗口分配独占的 `WorkspaceId` 视图。
-本机和远程使用同一环境绑定、工作区恢复与发布逻辑。窗口显式关闭在发布或确认丢弃后以 CAS
-清除 `restore_on_startup`；非空记录保留为历史，空记录自动回收。应用退出保留尚未关闭窗口的成员资格。
+本机和远程使用同一环境绑定与工作区恢复逻辑。窗口显式关闭以 `SetRestoreOnStartup` 清除
+`restore_on_startup`；非空记录保留为历史，空记录自动回收。应用退出保留尚未关闭窗口的成员资格。
 历史窗口必须通过 `OpenExisting` 读取，删除后不能因旧列表或重试隐式注册成空窗口。
-正常交接冻结所有窗口编辑及输入，等待在途设置与草稿提交，聚合所有 Ready revision 后由 Host
-核验。五秒超时只转为需要强制确认；取消或保存失败保留原 owner 和未发布编辑。
-强制确认只恢复最后持久版本；旧 Client 重连仍是观察者，不能重放排队 mutation。
-Preparing 的截止时间由 Host 主循环主动推进并发布状态，不依赖下一次 Status 查询；过期后的 Ready
-不能绕过强制确认。本机 Desktop 可显式启用无竞争重连恢复：只有断线前为控制者且重新认证后确认
-owner 和 transfer 均为空，才发送带当前控制上下文的 `ReacquireIfUnowned`。Host 原子复核后授予控制，
-其他控制者或交接优先；远程 Client 不启用此策略，也不重放用户 mutation。
+
+任何已认证 Client 都直接写入，没有控制请求、交接或只读观察者状态；断线重连不冻结编辑，
+也不重放排队 mutation。Session 连接握手后，Client 以一次 `Ping` 往返确认 Host 已把连接绑定到
+本 Client 会话，之后才报告 Ready：以他人会话身份连接会在绑定时被 Host 关闭。
 
 HostBootstrap 显式传入原 `config_root`，不根据 Server descriptor 猜路径。共享配置 RPC 只允许
 已知配置文件与 `projects`、`themes`、`agent-providers` 子树，拒绝设备状态、密钥和 symlink 越界。
@@ -290,49 +287,45 @@ Windows 分隔符会在回传时重新拆为协议 segments，不附加本机盘
 目录浏览、项目注册、Agent 会话记录和文件草稿。本机文件访问及 desktop-shell 本机入口
 继续使用 `HostPath::to_path` / `HostPath::from_path`，不得把远端路径当作本机路径访问。
 
-每个 workspace 有原子 CAS manifest（最大 16 MiB），Client 与 Host 通过协议层同一个函数统计
-`(snapshot, draft_refs)` 的 JSON 字节数，Agent 引用已包含在 snapshot 中。草稿正文每份最大 6 MiB、
-每 workspace 最大 64 MiB；Agent 状态正文每份最大 16 MiB、每 workspace 已发布总量最大 256 MiB。
-两者复用不可变对象存储，分别位于 `drafts/<workspace>` 与 `agent-states/<workspace>`，以 SHA-256 命名。
-Agent 暂存目录允许最多 512 MiB，以便在旧版本仍有效时上传完整替代版本。先持久化并验证全部正文，
-再提交引用它们的 manifest，最后确认幂等操作结果；仅在发布成功后回收被替代的旧正文。
-Agent 引用包含 project/tab/pane、摘要和字节数；只允许读取当前 workspace 已发布的对象。
+每个 workspace 记录（schema 4，最大 24 MiB）保存 Host 布局、打开文档的草稿引用与 pane 的 Agent
+状态引用。草稿正文每份最大 6 MiB、每 workspace 最大 64 MiB；Agent 状态正文每份最大 16 MiB、
+每 workspace 最大 256 MiB。两者为内容寻址的对象，分别位于 `drafts/<workspace>` 与
+`agent-states/<workspace>`。先持久化并验证正文，再替换引用它们的记录；记录写入成功后才回收
+不再引用的旧正文，失败时回收新正文并保留旧记录。只允许读取当前 workspace 引用的对象。
 启动回收未引用正文和已关闭的空记录；非空历史只由显式 `Forget` 删除。旧记录缺省不进入自动恢复集合。
 `Forget` 和空记录自动回收确认后，同步重算项目工作区引用；不再引用的项目不能继续阻塞 Host 空闲退出。
 持久 `workspace-history-initialized` 标记防止清空窗口后重新导入 legacy 状态；尚未初始化的 Host 仍可迁移旧数据。
-旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。Host 记录 schema 3 将旧 schema 1/2 的
-内联 Agent 状态原子迁移为对象，保留 revision、消息、任务与人工验收；Client 快照 schema 2 保存引用，
-仍能读取旧 schema 1。正文写入或清单替换失败时不覆盖旧记录。Device recovery 同时携带正文，
-恢复时校验摘要、大小与 pane 归属；历史问题按原有失联状态规则禁用，不能凭落盘记录重建回答通道。
+schema 1–3 记录（Client 发布的不透明桌面快照）在启动时原子迁移为 schema 4：保留布局、文档草稿与
+Agent 状态（含 revision、消息、任务与人工验收），不保留任何 lease；无法迁移的记录移到一旁，Host 照常启动。
 本机自动恢复只消费 `restore_on_startup` 集合；关闭自动恢复或显式项目启动先归档未打开的旧成员。
-观察者启动记录待归档的旧 ID，获得控制后在注册新窗口前完成；不会以观察者身份写入 Host。
 显式远程连接读取 Host 当前窗口，不被本机的空白启动偏好屏蔽。历史恢复另开独占视图，不覆盖当前窗口。
 Device 远程 Client registry 仅保存 SSH connection ID 或 Host credential ID，用进程锁避免重复启动；
 连接凭据每次从安全存储重新解析。Host-key challenge listener 属于 Client 应用而非初始连接窗口。
-ControlLost 冻结 mutation，显式选择 Host/local 快照前保留完整 Device recovery；本地发布候选不依赖
-Host 快照可成功解析，但必须获取新的 CAS baseline。提交确认必须匹配当前 Host epoch 和控制上下文。
-提交发送前也核验已安装的控制上下文；错过完整交接后，即使 revision 未变也必须重新对账资源。
 PTY 丢失不删除 terminal/file tab、分组或布局。Client 只重建干净 shell 或恢复 Agent 会话，不重放任意命令。
-工作区脏状态比较只忽略 `AgentSnapshot.updated_at` 观测时间，仍保留会话、任务、布局、文档与设置差异。
-Device recovery 使用独立版本文件，不覆盖未处理副本；Host 确认内容已发布且无待恢复设置后移入
-`draft-recovery/resolved`，不删除正文。旧单文件副本仍可发现。草稿恢复仅在有匹配项目草稿或设置时显示；
-完整恢复要求控制权及可安全替换的工作区状态，ControlLost 必须先对账。
+pane `process_state`、`agent_snapshot` 及 Agent 状态引用由 Host 记录，Client 布局意图不会替换。
+
+文档编辑按每文档 lease 排他。文档有未保存修改时，Client 以 `AcquireDocument` 取得 lease，
+之后以 `PutDocumentDraft { epoch, revision, base, content }` 上传草稿；其他 Client 收到
+`ServerEvent::DocumentChanged`，只读显示该草稿（`GetDocumentDraft`），可用 `takeover` 接管。
+保存或丢弃后 `ReleaseDocument` 释放 lease 并删除草稿；过期 `epoch` 不改变任何状态，
+lease 已转移时上传返回 `Conflict`。lease 属于 Client 会话：重连保留，会话过期或被接管时结束；
+草稿随记录持久化，Host 重启后保留，lease 不保留。失去 lease 或文件被其他 Client 关闭时，
+尚未上传的编辑写入本机 `document-copies/` 并提示用户，不再有 Device recovery 对账流程。
 
 独立 `yttt-server` 的 descriptor 只导出 SSH `work.sock`/工作 token。status、stop-if-idle、
 ensure 的管理连接仍使用另一个本机 socket/token；关闭桌面 TLS 不关闭 SSH 工作会话。
 
 ### 6.2 Host 布局与意图
 
-Host 从每个 workspace 的快照派生 `HostWorkspace` 布局（schema 1/2 快照迁移；无法解析时没有布局，
-意图被拒绝）。`WorkspaceRequest::Apply { workspace_id, intent, expected_revision }` 由任意已认证
-Client 发送，不要求 profile 控制权；Host 在 workspace 锁内按到达顺序执行，拒绝时状态与 revision
-不变。不存在的 workspace 按空布局开始，与 `Open` 所见一致，并受 workspace 数量上限约束。
-接受后布局写回快照：不再打开的文档及其草稿、pane 已不存在的 Agent 状态随之移除，
-记录先持久化再发布，然后终止被移除 pane 的终端（session ID 为 `{project}:{tab}:{pane}`）。
-`Commit` 仍可用，提交的快照同样重新派生布局。
+Host 从每个 workspace 记录派生 `HostWorkspace` 布局。
+`WorkspaceRequest::Apply { workspace_id, intent, expected_revision }` 由任意已认证 Client 发送；
+Host 在 workspace 锁内按到达顺序执行，拒绝时状态与 revision 不变。不存在的 workspace 按空布局开始，
+与 `Open` 所见一致，并受 workspace 数量上限约束。接受后：不再打开的文档及其草稿与 lease、
+pane 已不存在的 Agent 状态随之移除，记录先持久化再发布，然后终止被移除 pane 的终端
+（session ID 为 `{project}:{tab}:{pane}`）。
 
-`Open`/`OpenExisting` 返回 `layout` 并把当前 Session 连接订阅到该 workspace；每次 `Apply` 或
-`Commit` 后 Host 向所有订阅连接发 `ServerEvent::WorkspaceChanged`（完整布局）。每条连接每个
+`Open`/`OpenExisting` 返回 `{ layout, documents, agent_states }` 并把当前 Session 连接订阅到该
+workspace；每次布局变化后 Host 向所有订阅连接发 `ServerEvent::WorkspaceChanged`（完整布局）。每条连接每个
 workspace 只保留一份未发出的布局：新布局占据旧布局在可靠队列中的位置，慢 Client 只收最新一份，
 且布局仍在其后入队的 `TerminalExit` 之前到达。Client 只接受 revision 更大的布局；重连后对已打开的
 workspace 重新 `OpenExisting`，Host epoch 变化时清空布局但保留已打开集合。
@@ -344,6 +337,28 @@ workspace 重新 `OpenExisting`，Host epoch 变化时清空布局但保留已�
 可解析但版本不受支持或迁移失败的记录仍使 Host 启动失败，避免以旧备份覆盖较新的数据。
 
 ## 7. 终端资源模型
+
+### 7.0 pane 进程归 Host
+
+布局 pane 的进程由 Host 决定何时运行，Client 只附加。Host 在每个被接受的意图之后、Client 打开
+workspace 时、SSH 机器连接后，以及独立 Host 启动时执行同一个协调：已启动 tab 中 `Idle` 的 pane
+启动；恢复时额外启动记录为 `Running` 而终端不在的 pane，以及带 Agent 会话的 `Exited` pane。
+终端 ID 为 `{project}:{tab}:{pane}`。
+
+- 启动输入：`settings.toml` 的 `[terminal]` `shell`（`auto` 取 Host 探测的首个 shell）、
+  `environment` 与 `scrollback`，每次启动时读取；cwd 为 Host 登记的项目根；
+  SSH 项目经项目描述的 `connection_id`。默认几何 120×40，首个 Interactive 附加按视口 resize。
+- Agent pane：Host 首次启动 Agent 前安装托管 hook 与 OMP 扩展；按 provider 计划 resume 参数，
+  本机 OMP 会话缺失时启动新 OMP。resume 未确认前保留旧会话，resume 失败保持退出而非循环重启。
+- 运行状态：每次启动尝试后发布 `ResourceCatalogChanged`，Client 刷新 catalog 后附加新终端。
+  启动成功记 `Running`、退出记 `Exited`，推进 revision 并广播。退出行为 `Close` 由
+  Host 关闭 pane，`AutoRestart` 500 ms 后重启，`ManualRestart` 保持退出；用户重启发
+  `RestartPane { resume }`（`resume = false` 清除 Agent 会话）。Host 停止（drain 或 ForceStop）时自己
+  结束的终端不记退出、不执行退出行为，pane 保持 `Running`，下次启动按恢复规则重建：shell pane 起干净
+  shell，Agent pane 按会话 resume，command pane 不重跑而记为 `Exited`。
+- Agent hook 报告按终端 ID 写入 pane 的 Agent 快照（保留看板），不推进 revision、不广播，
+  持久化合并到每秒一次。已结束（`Exited`）的快照作为历史留在 pane 上：侧栏、标签页与面板状态
+  不把它算作活动 Agent，结束本身也不发通知。
 
 ### 7.1 创建
 
@@ -380,7 +395,7 @@ Host 是终端生命周期的唯一权威。客户端不再维护 `OpenPending`/
 Host 在修改 Agent Hook 环境和创建进程前原子保留启动记录，使用原始
 `(session_id, project_id, cwd, execution)` 的 SHA-256 识别地址。同标识不同地址被拒绝；
 同标识仍对应存活资源时返回该资源，已清理或无法确认时返回 `OutcomeUnknown`，不能重新执行。
-认证、控制权和 epoch 校验先于结果重放；Host 重启后旧 `expected_host_epoch` 必须被拒绝。
+认证和 epoch 校验先于结果重放；Host 重启后旧 `expected_host_epoch` 必须被拒绝。
 
 记录仅保留在当前 Host 内存，不承诺跨 Host 重启的 exactly-once。每个 Host epoch 最多保留
 4,096 条记录，标识上限 256 字节；记录不保存原始命令参数，且不淘汰后重新接受旧标识。
@@ -612,20 +627,18 @@ Disconnected -> Connecting -> Ready
 - Host 最多保留 64 个认证 Client 会话，包括最多 16 个闲置会话。闲置会话最多保留 5 分钟，保留窗口内可继续使用请求日志；活动会话不参与淘汰。
 - 重连成功：更新 host epoch/connection sequence，立即请求 catalog 与 Agent 快照、对已附加终端重新订阅并重新上报可见集合；终端流以 Host snapshot 恢复 mirror。Host epoch 变化时清除旧 mirror 与已附加集合。
 - Host 在断线期间仍存活：相同 terminal ID 通过新连接的 snapshot 及后续 delta 继续。
-- Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，但保留 tab、pane 和编辑器布局，将缺失的运行中 pane 标记为 `Restoring`。控制 Client 自动重建 shell（不执行旧启动命令）并以 provider resume 恢复 Agent 会话；已启动的 lazy tab 也参与。其他命令保持停止，观察者不创建进程。
-- 工作区恢复／重连的 catalog reconciliation 同样将带有 Agent session 元数据的 `Exited` pane 标记为 `Restoring`，包括普通 shell 中启动的 Agent；按保存的 provider 恢复原会话，不重放 pane 原命令。无保存会话的已退出 pane 仍保持停止；普通进程退出事件不会触发自动重启。
-- 恢复前再次检查 catalog：相同 project/session 的存活进程直接 attach，即使 resume 参数与原启动参数不同也不重复 spawn。仅允许 attach 的命令在此时丢失资源则报错，不能降级为重新执行。
-- 工作区恢复时，若 Host 确认保存的 OMP 会话不存在，则同一 pane 自动启动新 OMP，包括原来在 shell 中启动的 OMP；已有存活终端仍只 attach。历史查询错误或其他 resume 失败保留原会话，不视为会话缺失。
-- Host 确认 `AcknowledgeTerminalExit` 后，Client 将 durable placement 写为 `Closed`，不得留下指向已回收进程的 `Bound`。
+- Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，保留 tab、pane 和编辑器布局。pane 由 Host 恢复（见 §7.0）：记录为 `Running` 而终端不在的 pane 以 shell 重建（不执行旧启动命令），Agent 按保存的 provider resume；已启动的 lazy tab 也参与。其他命令保持 `Exited`。
+- 带 Agent 会话元数据的 `Exited` pane 同样由 Host 在恢复时按保存的 provider resume，包括普通 shell 中启动的 Agent；不重放 pane 原命令。无保存会话的已退出 pane 保持停止；重连或观察者附加都不会启动进程。
+- Host 确认保存的 OMP 会话在本机不存在时，同一 pane 启动新 OMP，包括原来在 shell 中启动的 OMP；已有存活终端只 attach。历史查询错误或其他 resume 失败保留原会话，不视为会话缺失。
 - handshake 的身份、profile、协议版本或认证失败属于 fatal `HostLost`，不能无限重试到错误 Host。
 - SSH 凭据缺失／绑定错误、认证或 Host key 拒绝，以及不可恢复的本机密钥配置错误同样是永久错误。
 - 连接取消贯穿 SSH attempt、部署、ensure、环境初始化和控制确认；关闭窗口不等于选择“观察”。
   取消中断 SSH 并阻止后续上传／发布／启动。已阻塞的 HTTP 读取只能等待其底层超时，但不阻塞
   取消返回，结束后也不得进入下一部署阶段。
 - 用户请求不会跨连接自动重放。
-- 持久化 Agent snapshot 在 Host catalog reconciliation 前统一降级为 `Exited/Stale`；只有
-  当前 Host 的 live snapshot 能恢复 `Running/Working`。terminal `Exited` 必须清除对应 pane
-  的 live Agent 状态；`Lost` 保留会话元数据并交由 catalog reconciliation 决定恢复，不能伪造持久退出或删除 tab。
+- 持久化 Agent snapshot 读取时降级为 `Exited/Stale`；只有当前 Host 的 live snapshot 能恢复
+  `Running/Working`。terminal `Exited` 清除对应 pane 的 live Agent 状态，会话元数据保留在 Host
+  pane 记录中，供 resume 使用；不伪造持久退出或删除 tab。
 
 ## 11. SSH、文件、Git 与 Agent 扩展边界
 
