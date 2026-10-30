@@ -976,11 +976,15 @@ fn open_terminal_performance_window(
                 primary,
                 window,
                 |root: &mut TerminalPerformanceRoot, pane, window, cx| {
-                    let terminal = pane.read(cx).performance_terminal();
-                    if root.terminal == terminal {
+                    let Some(terminal) = pane.read(cx).performance_terminal() else {
+                        // Keep painting the final viewport after the pane exits,
+                        // until the reporter has observed its last sentinel.
+                        return;
+                    };
+                    if root.terminal.as_ref() == Some(&terminal) {
                         return;
                     }
-                    root.terminal = terminal;
+                    root.terminal = Some(terminal);
                     pane.update(cx, |pane, cx| {
                         pane.focus_terminal(window, cx);
                     });

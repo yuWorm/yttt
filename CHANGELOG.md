@@ -4,8 +4,8 @@
 
 ## 0.3.19 - 2026-10-30
 
-- 修复 `perf-metrics` 构建及性能窗口启动：性能项目先交给 Host 启动，窗口等待终端附加，重开时复用既有进程；冒烟结束后显式停止其隔离 Host。
-- Fix the `perf-metrics` build and performance-window startup: let the Host start the fixture project, wait for terminal attachment, reuse existing processes on reopen, and explicitly stop the isolated Host after the smoke run.
+- 修复 `perf-metrics` 构建及性能窗口启动：性能项目先交给 Host 启动，窗口等待终端附加，重开时复用既有进程，并保留退出画面直到最后输出完成绘制；冒烟结束后显式停止其隔离 Host。
+- Fix the `perf-metrics` build and performance-window startup: let the Host start the fixture project, wait for terminal attachment, reuse existing processes on reopen, and retain the exited viewport until its final output is painted. Explicitly stop the isolated Host after the smoke run.
 - 资源协议升至 v22 稳定基线：这是最后一次要求桌面、Host、远端 Server 与 CLI 同步更新。此后新增请求、响应或事件无需升版本；旧端收到不认识的请求回复 `Unsupported`、不认识的响应转为 `Unsupported` 失败、不认识的事件直接跳过，连接不再断开，只失去该功能。
 - Raise the resource protocol to the v22 stable baseline, the last change that requires the desktop, Host, remote Server, and CLI to update together. Later requests, responses, and events append without a version bump: an older peer answers an unknown request with `Unsupported`, resolves an unknown response as `Unsupported`, and skips an unknown event instead of dropping the connection.
 - 桌面升级后直接接入协议兼容的现有 Host，即使 build 不同也不再要求停止；忙碌的独立 Host 不再阻止新版本启动。只有协议不兼容时才在 Host 空闲后替换。
