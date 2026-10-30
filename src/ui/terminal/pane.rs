@@ -1431,7 +1431,7 @@ impl TerminalPaneView {
         terminal.update(cx, |terminal, cx| {
             terminal.start_performance_input_probe(
                 window_handle,
-                Duration::from_millis(delay_ms),
+                std::time::Duration::from_millis(delay_ms),
                 start_file,
                 cx,
             );

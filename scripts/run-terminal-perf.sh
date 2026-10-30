@@ -708,8 +708,10 @@ run_host() {
   terminate_pid "$desktop_pid"
   active_desktop_pid=""
   sleep 2
-  env YTTT_PROFILE_ROOT="$profile_root" "$host_binary" --stop-host || \
-    die "Host did not accept DrainAndStop"
+  # The isolated Host owns the fixture's project even after its Client exits.
+  # StopIfIdle correctly refuses that blocker; this probe owns the whole profile.
+  env YTTT_PROFILE_ROOT="$profile_root" "$host_binary" --force-stop-host || \
+    die "Host did not accept ForceStop for the isolated performance profile"
   sleep 1
   if [[ -f "$diagnostics_path" ]]; then
     cp "$diagnostics_path" "$run_dir/host-diagnostics.jsonl"

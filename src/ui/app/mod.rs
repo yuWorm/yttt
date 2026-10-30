@@ -14,8 +14,6 @@ use gpui::{
 #[cfg(feature = "perf-metrics")]
 use gpui::{IntoElement, ParentElement, Render, WindowKind, div, point};
 use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
-#[cfg(feature = "perf-metrics")]
-use parking_lot::RwLock;
 use reqwest_client::ReqwestClient;
 
 use crate::{
@@ -97,6 +95,14 @@ pub fn run(
         eprintln!("could not archive skipped startup workspaces: {error}");
         return;
     }
+    #[cfg(feature = "perf-metrics")]
+    let performance_contexts = terminal_performance_mode.then(|| {
+        terminal_performance_contexts(
+            host_runtime
+                .runtime()
+                .expect("terminal performance mode requires a connected Host"),
+        )
+    });
     let mut application =
         gpui_platform::application().with_quit_mode(desktop_quit_mode(terminal_performance_mode));
     if !terminal_performance_mode {
@@ -113,8 +119,8 @@ pub fn run(
         cx.set_global(host_runtime.clone());
         yttt_terminal::init(cx);
         #[cfg(feature = "perf-metrics")]
-        if terminal_performance_mode {
-            open_terminal_performance_window(cx);
+        if let Some(contexts) = performance_contexts {
+            open_terminal_performance_window(contexts, cx);
             return;
         }
 
@@ -929,8 +935,10 @@ fn start_desktop_tray_status_monitor(cx: &mut App) {
 }
 
 #[cfg(feature = "perf-metrics")]
-fn open_terminal_performance_window(cx: &mut App) {
-    let contexts = terminal_performance_contexts();
+fn open_terminal_performance_window(
+    contexts: Vec<crate::ui::terminal::pane::TerminalPaneContext>,
+    cx: &mut App,
+) {
     let terminal_config = yttt_terminal::TerminalConfig {
         scrollback: 10_000,
         ..yttt_terminal::TerminalConfig::default()
@@ -956,19 +964,34 @@ fn open_terminal_performance_window(cx: &mut App) {
                 })
             })
             .collect::<Vec<_>>();
-        let primary = panes
-            .first()
-            .expect("terminal performance layout requires pane 'perf'");
-        let terminal_view = primary
-            .read(cx)
-            .performance_terminal()
-            .expect("Host performance terminal must be initialized");
-        primary.update(cx, |terminal, cx| {
-            terminal.focus_terminal(window, cx);
-        });
-        cx.new(|_| TerminalPerformanceRoot {
-            _panes: panes,
-            terminal: terminal_view,
+        cx.new(|cx| {
+            let primary = panes
+                .first()
+                .expect("terminal performance layout requires pane 'perf'");
+            let terminal_view = primary.read(cx).performance_terminal();
+            primary.update(cx, |terminal, cx| {
+                terminal.focus_terminal(window, cx);
+            });
+            let primary_observer = cx.observe_in(
+                primary,
+                window,
+                |root: &mut TerminalPerformanceRoot, pane, window, cx| {
+                    let terminal = pane.read(cx).performance_terminal();
+                    if root.terminal == terminal {
+                        return;
+                    }
+                    root.terminal = terminal;
+                    pane.update(cx, |pane, cx| {
+                        pane.focus_terminal(window, cx);
+                    });
+                    cx.notify();
+                },
+            );
+            TerminalPerformanceRoot {
+                _panes: panes,
+                terminal: terminal_view,
+                _primary_observer: primary_observer,
+            }
         })
     })
     .expect("failed to open Host terminal performance window");
@@ -977,25 +1000,32 @@ fn open_terminal_performance_window(cx: &mut App) {
 #[cfg(feature = "perf-metrics")]
 struct TerminalPerformanceRoot {
     _panes: Vec<Entity<crate::ui::terminal::pane::TerminalPaneView>>,
-    terminal: Entity<yttt_terminal::TerminalView>,
+    terminal: Option<Entity<yttt_terminal::TerminalView>>,
+    _primary_observer: gpui::Subscription,
 }
 
 #[cfg(feature = "perf-metrics")]
 impl Render for TerminalPerformanceRoot {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        div().flex().size_full().child(self.terminal.clone())
+        div().flex().size_full().children(self.terminal.clone())
     }
 }
 
 #[cfg(feature = "perf-metrics")]
-fn terminal_performance_contexts() -> Vec<crate::ui::terminal::pane::TerminalPaneContext> {
+fn terminal_performance_contexts(
+    runtime: &crate::host_runtime::DesktopHostRuntime,
+) -> Vec<crate::ui::terminal::pane::TerminalPaneContext> {
     use crate::{
         model::{
+            host_workspace::{ProjectPanel, WorkspaceIntent},
             ids::ProjectId,
             layout::{LayoutNode, PaneConfig, ProjectLayout},
+            project::{ProjectDescriptor, ProjectLocation},
         },
         ui::interaction::input_owner::TerminalInputGate,
     };
+
+    use yttt_protocol::workspace::{WorkspaceId, WorkspaceRequest, WorkspaceResponse};
 
     let project_path = startup::startup_project_paths()
         .into_iter()
@@ -1029,31 +1059,59 @@ fn terminal_performance_contexts() -> Vec<crate::ui::terminal::pane::TerminalPan
         panes.first().is_some_and(|pane| pane.id == "perf"),
         "terminal performance layout requires pane 'perf'"
     );
-    let project_id =
-        ProjectId::from_legacy_location(&project_path.display().to_string()).to_string();
+    let project_id = ProjectId::from_legacy_location(&project_path.display().to_string());
 
     let project_title = layout.project.name.clone();
     let tab_id = tab.id.clone();
     let tab_title = tab.title.clone();
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let environment = Arc::new(RwLock::new(std::collections::BTreeMap::new()));
+    let workspace_id = WorkspaceId::new(format!("terminal-perf-{project_id}")).unwrap();
+    let opened = runtime
+        .workspace_request(WorkspaceRequest::Open {
+            workspace_id: workspace_id.clone(),
+        })
+        .expect("failed to open the performance workspace on the Host");
+    let WorkspaceResponse::Opened { layout: stored, .. } = opened else {
+        panic!("unexpected performance workspace response: {opened:?}");
+    };
+    // Reopening the desktop must attach to the same Host-owned processes, not
+    // replace the layout and start the workload again.
+    if !stored
+        .workspace
+        .opened_projects
+        .iter()
+        .any(|project| project.id == project_id)
+    {
+        runtime
+            .workspace_request(WorkspaceRequest::Apply {
+                workspace_id,
+                intent: WorkspaceIntent::OpenProject {
+                    descriptor: ProjectDescriptor::new(
+                        project_id.clone(),
+                        ProjectLocation::local(&project_path),
+                    ),
+                    layout,
+                    panel: ProjectPanel {
+                        visible: false,
+                        width: 240.0,
+                    },
+                },
+                expected_revision: None,
+            })
+            .expect("failed to start the performance panes on the Host");
+    }
     panes
         .into_iter()
         .map(|pane| {
             let is_focused = pane.id == "perf";
             crate::ui::terminal::pane::TerminalPaneContext {
-                project_id: project_id.clone(),
+                project_id: project_id.to_string(),
                 project_path: project_path.clone(),
                 project_title: project_title.clone(),
                 tab_id: tab_id.clone(),
                 tab_title: tab_title.clone(),
                 pane,
-                shell: shell.clone(),
-                environment: environment.clone(),
                 is_focused,
                 terminal_input_gate: TerminalInputGate::default(),
-                ssh: None,
-                agent_launch: None,
             }
         })
         .collect()
