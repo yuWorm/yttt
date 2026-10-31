@@ -33,6 +33,12 @@ default-run = "yttt"
 
 [features]
 perf-metrics = ["yttt-terminal/perf-metrics"]
+ui-gallery = ["gpui/test-support", "gpui_platform/test-support"]
+
+[[bin]]
+name = "yttt-ui-gallery"
+path = "src/bin/yttt-ui-gallery.rs"
+required-features = ["ui-gallery"]
 
 [dependencies]
 anyhow = "1"

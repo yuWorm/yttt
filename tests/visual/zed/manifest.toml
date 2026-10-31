@@ -1,0 +1,23 @@
+# Fixed environment for comparing yttt with Zed. Change these together and recapture.
+
+[zed]
+version = "1.26.2"  # Latest stable tag on 2026-11-01; sources/zed has local edits and stays on v1.12.0.
+settings = "tests/visual/zed/settings.json"
+
+[environment]
+macos = "26.6"
+machine = "Mac16,10"
+chip = "Apple M4"
+scale_factor = 2
+
+[gallery]
+window_width = 960
+window_height = 800
+theme = "One Dark"
+rem_size_px = 16
+
+# Initial estimate from the design. Self-noise for the gallery renderer is zero;
+# the Zed window capture is measured by capture-ui-gallery.sh --zed.
+[thresholds]
+channel_delta = 16
+changed_ratio = 0.01

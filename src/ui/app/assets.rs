@@ -145,7 +145,7 @@ pub(crate) fn external_icon_asset_path(relative_path: &Path) -> SharedString {
     .into()
 }
 
-pub(crate) fn load_ui_fonts(cx: &gpui::App) {
+pub fn load_ui_fonts(cx: &gpui::App) {
     cx.text_system()
         .add_fonts(vec![
             Cow::Borrowed(
