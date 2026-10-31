@@ -2,7 +2,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use yttt_core::model::{editor::DocumentId, ids::ClientInstanceId};
+use yttt_core::model::{
+    editor::DocumentId,
+    ids::{ClientInstanceId, TerminalSessionId},
+};
 
 use crate::{HostPath, PathSegment, ProjectRelativePath, project::ProjectFileFingerprint};
 
@@ -518,6 +521,13 @@ pub enum WorkspaceResponse {
 pub struct WorkspaceLayoutUpdate {
     pub workspace_id: WorkspaceId,
     pub layout: yttt_core::model::host_workspace::HostWorkspaceState,
+}
+
+/// The Host dropped a pane's Agent state; a Client stops showing what it holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStateCleared {
+    pub workspace_id: WorkspaceId,
+    pub terminal_session_id: TerminalSessionId,
 }
 
 /// Validation failures raised while constructing strongly validated workspace wire values.

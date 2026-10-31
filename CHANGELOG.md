@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- 修复恢复后普通标签被当作 Agent：窗格的配置决定它是什么，保存的 Agent 记录不再改变窗格身份。普通 shell 只恢复 Host 停止时仍在运行的 Agent，并在 shell 内恢复，退出后回到 shell；已自行结束的 Agent 不再被自动拉起，没有 Agent 的标签也不再显示 Agent 状态。
+- Fix plain tabs being treated as Agents after a restore: a pane's config decides what it is, and saved Agent records no longer change that. A shell pane resumes only an Agent that was still running when the Host stopped, inside the shell it returns to afterward; an Agent that ended on its own is not started again, and a tab without an Agent no longer shows Agent status.
+- 修复 Agent 标签恢复后一直停在“进程正在启动”：保存的会话属于其他 provider 时启动窗格自己的命令；Host 记录的退出状态现在会显示在客户端，可以从窗格上重新启动。
+- Fix Agent tabs stuck on "process starting" after a restore: a saved session from another provider now starts the pane's own command, and clients show the exit state the Host records, so the pane can be restarted.
+- 由 Agent 启动的其他 Agent 不再替换所在窗格的 Agent 身份；`claude-code`、`oh-my-pi`、`codex-*` 等命令在 Host、侧栏和通知中的判定保持一致。
+- An Agent started by another Agent no longer replaces its pane's Agent identity, and commands such as `claude-code`, `oh-my-pi`, and `codex-*` are now identified the same way by the Host, sidebar, and notifications.
+
 ## 0.3.19 - 2026-10-30
 
 - 修复 `perf-metrics` 构建及性能窗口启动：性能项目先交给 Host 启动，窗口等待终端附加，重开时复用既有进程，并保留退出画面直到最后输出完成绘制；冒烟结束后显式停止其隔离 Host。

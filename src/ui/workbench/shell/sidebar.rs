@@ -37,7 +37,7 @@ use crate::ui::{
     },
     theme::{UiStyle, WorkbenchTheme},
 };
-use yttt_agent_core::{AgentTurnState, AgentViewState};
+use yttt_agent_core::{AgentProcessState, AgentTurnState, AgentViewState};
 
 const PROJECT_CONTEXT_COMMANDS: &[CommandId] = &[
     CommandId::ProjectCreate,
@@ -115,6 +115,8 @@ fn project_agent_items(
             let (mut task, action, children, provider_id) = pane_state
                 .agent_snapshot
                 .as_ref()
+                // An ended Agent is history; a configured pane shows its own.
+                .filter(|snapshot| snapshot.process_state != AgentProcessState::Exited)
                 .map(|snapshot| {
                     (
                         snapshot.primary_text(),
@@ -192,16 +194,10 @@ fn child_agent_view_state(state: AgentTurnState) -> AgentViewState {
     }
 }
 fn agent_provider_id_from_command(command: &str) -> String {
-    let program = command.split_whitespace().next().unwrap_or_default();
-    match program
-        .rsplit(['/', '\\'])
-        .find(|component| !component.is_empty())
+    yttt_agent_providers::provider_for_command(command)
+        .or_else(|| yttt_agent_providers::command_program_name(command))
         .unwrap_or_default()
-    {
-        "oh-my-pi" => "omp".to_string(),
-        "groky" => "grok".to_string(),
-        provider => provider.to_string(),
-    }
+        .to_string()
 }
 
 pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {

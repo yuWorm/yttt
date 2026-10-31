@@ -1104,6 +1104,10 @@ async fn serve_session_connection(
                     ),
                     ServerEvent::DocumentChanged(Box::new(update.clone())),
                 ),
+                workspace::WorkspaceEvent::AgentStateCleared(update) => (
+                    format!("workspace-agent:{}", update.terminal_session_id.as_str()),
+                    ServerEvent::AgentStateCleared(update.clone()),
+                ),
             };
             let message = ControlMessage::Event(HostEvent {
                 host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),

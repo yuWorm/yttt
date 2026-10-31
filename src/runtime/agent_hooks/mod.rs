@@ -4,6 +4,7 @@ use std::{
 };
 
 use yttt_client_core::ClientEvent;
+use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::agent::AgentSnapshotUpdate;
 
 use crate::host_runtime::DesktopHostRuntime;
@@ -19,6 +20,7 @@ pub const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
 #[derive(Debug)]
 pub enum AgentSnapshotEvent {
     Update(Box<AgentSnapshotUpdate>),
+    Cleared(TerminalSessionId),
     Reset { host_epoch: u64 },
 }
 
@@ -59,6 +61,9 @@ impl AgentSnapshotClient {
             match self.events.recv_async().await.ok()? {
                 ClientEvent::AgentSnapshotUpdated(update) => {
                     return Some(AgentSnapshotEvent::Update(update));
+                }
+                ClientEvent::AgentStateCleared(terminal_session_id) => {
+                    return Some(AgentSnapshotEvent::Cleared(terminal_session_id));
                 }
                 ClientEvent::AgentSnapshotsReset { host_epoch } => {
                     return Some(AgentSnapshotEvent::Reset { host_epoch });

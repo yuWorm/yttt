@@ -849,3 +849,26 @@ fn agent_snapshots_stay_out_of_the_published_layout() {
     assert_eq!(snapshots.len(), 1);
     assert_eq!(snapshots[0].0, pane("agent", "codex"));
 }
+
+#[test]
+fn a_mirrored_layout_takes_the_host_process_state() {
+    let mut host = migrated();
+    claim(&mut host, false);
+    let client_view = host.workspace().clone();
+    host.record_pane_exited(&pane("dev", "shell")).unwrap();
+
+    let mut mirrored = host.workspace().clone();
+    mirrored.keep_agent_snapshots_from(&client_view);
+
+    let state = mirrored
+        .project(&project_id())
+        .unwrap()
+        .tab_state("dev")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "shell")
+        .unwrap()
+        .process_state;
+    assert_eq!(state, PaneProcessState::Exited);
+}

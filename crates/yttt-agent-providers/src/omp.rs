@@ -22,7 +22,7 @@ impl AgentProvider for OmpProvider {
     }
 
     fn matches_command(&self, command: &str) -> bool {
-        matches!(command_basename(command), Some("omp" | "oh-my-pi"))
+        crate::provider_for_command(command) == Some(OMP_PROVIDER_ID)
     }
 
     fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
@@ -277,13 +277,6 @@ fn string_field(payload: &Value, name: &str) -> Option<String> {
 
 fn bool_field(payload: &Value, name: &str) -> Option<bool> {
     payload.get(name).and_then(Value::as_bool)
-}
-
-fn command_basename(command: &str) -> Option<&str> {
-    let program = command.split_whitespace().next()?;
-    program
-        .rsplit(['/', '\\'])
-        .find(|component| !component.is_empty())
 }
 
 #[cfg(test)]

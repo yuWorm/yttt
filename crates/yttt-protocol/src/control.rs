@@ -476,6 +476,8 @@ pub enum ServerEvent {
     /// A document of a workspace this Client opened changed its edit lease or
     /// draft; carries its complete state.
     DocumentChanged(Box<crate::workspace::DocumentUpdate>),
+    /// The Host dropped a pane's Agent state.
+    AgentStateCleared(crate::workspace::AgentStateCleared),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -479,7 +479,13 @@ impl WorkbenchView {
                 self.reset_window_workspace();
             }
             self.workspace_persistence.host_epoch = Some(opened.host_epoch);
-            self.replace_with_host_layout(host, runtime, window, cx);
+            self.replace_with_host_layout(
+                host,
+                host_mirror::HostAgentStates::Included,
+                runtime,
+                window,
+                cx,
+            );
         }
         self.workspace_persistence.host_epoch = Some(opened.host_epoch);
         self.workspace_persistence.connection_sequence = Some(opened.connection_sequence);

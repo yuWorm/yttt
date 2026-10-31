@@ -1,4 +1,4 @@
-use crate::OmpProvider;
+use crate::{OmpProvider, provider_for_command};
 use serde_json::Value;
 use yttt_agent_core::{
     AgentAction, AgentBoardEvent, AgentEventKind, AgentExecutionRecord, AgentExecutionTelemetry,
@@ -35,7 +35,7 @@ impl AgentProvider for CodexProvider {
     }
 
     fn matches_command(&self, command: &str) -> bool {
-        command_basename(command) == Some("codex")
+        provider_for_command(command) == Some(CODEX_PROVIDER_ID)
     }
 
     fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
@@ -56,7 +56,7 @@ impl AgentProvider for ClaudeProvider {
     }
 
     fn matches_command(&self, command: &str) -> bool {
-        matches!(command_basename(command), Some("claude" | "claude-code"))
+        provider_for_command(command) == Some(CLAUDE_PROVIDER_ID)
     }
 
     fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
@@ -77,7 +77,7 @@ impl AgentProvider for GrokProvider {
     }
 
     fn matches_command(&self, command: &str) -> bool {
-        matches!(command_basename(command), Some("grok" | "groky"))
+        provider_for_command(command) == Some(GROK_PROVIDER_ID)
     }
 
     fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
@@ -98,7 +98,7 @@ impl AgentProvider for OpenCodeProvider {
     }
 
     fn matches_command(&self, command: &str) -> bool {
-        matches!(command_basename(command), Some("opencode" | "open-code"))
+        provider_for_command(command) == Some(OPENCODE_PROVIDER_ID)
     }
 
     fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
@@ -148,7 +148,7 @@ impl AgentProvider for PiProvider {
     }
 
     fn matches_command(&self, command: &str) -> bool {
-        command_basename(command) == Some("pi")
+        provider_for_command(command) == Some(PI_PROVIDER_ID)
     }
 
     fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
@@ -970,14 +970,6 @@ fn tool_detail(value: &Value) -> Option<String> {
 fn non_empty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
-}
-
-fn command_basename(command: &str) -> Option<&str> {
-    command
-        .split_whitespace()
-        .next()?
-        .rsplit(['/', '\\'])
-        .find(|component| !component.is_empty())
 }
 
 #[cfg(test)]

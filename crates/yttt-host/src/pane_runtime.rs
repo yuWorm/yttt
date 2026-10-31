@@ -16,7 +16,7 @@ use std::{
 
 use parking_lot::Mutex;
 use tokio::sync::{broadcast, watch};
-use yttt_agent_core::{AgentSnapshot, AgentViewState};
+use yttt_agent_core::{AgentProcessState, AgentSnapshot, AgentViewState};
 use yttt_agent_providers::{
     OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID,
     sessions::{AgentSessionRoots, omp_session_exists},
@@ -261,14 +261,28 @@ impl PaneRuntime {
             },
         ) {
             PaneLaunch::Start(planned) => *planned,
-            PaneLaunch::NotRestorable | PaneLaunch::Unresumable => {
+            PaneLaunch::NotRestorable => {
+                self.workspaces
+                    .update_agent_snapshot(workspace_id, &target.address, |_| None);
+                self.record_exited(workspace_id, &target.address);
+                return;
+            }
+            PaneLaunch::Unresumable => {
                 self.record_exited(workspace_id, &target.address);
                 return;
             }
         };
-        if planned.clears_agent_snapshot {
+        let session_id = planned.spec.session_id.clone();
+        let terminal_running = self
+            .runtime
+            .terminal(&session_id)
+            .filter(|terminal| !terminal.is_exited());
+        if terminal_running.is_none() {
+            let restore = target.restore;
             self.workspaces
-                .update_agent_snapshot(workspace_id, &target.address, |_| None);
+                .update_agent_snapshot(workspace_id, &target.address, |saved| {
+                    planned.saved_snapshot(saved, restore)
+                });
         }
         if planned.agent.is_some()
             && let Err(error) = self.provision_agents()
@@ -280,7 +294,6 @@ impl PaneRuntime {
             self.record_exited(workspace_id, &target.address);
             return;
         }
-        let session_id = planned.spec.session_id.clone();
         let resuming = planned
             .agent
             .as_ref()
@@ -293,9 +306,7 @@ impl PaneRuntime {
             resuming,
             exited_at: None,
         };
-        if let Some(terminal) = self.runtime.terminal(&session_id)
-            && !terminal.is_exited()
-        {
+        if let Some(terminal) = terminal_running {
             // A window reopened a workspace whose terminal kept running.
             pane.session_epoch = Some(terminal.session_epoch());
             pane.resuming = false;
@@ -452,6 +463,9 @@ impl PaneRuntime {
     /// Records an Agent report on its pane, keeping the board history and,
     /// until the resumed Agent confirms it, the saved session.
     fn agent_updated(&self, update: AgentSnapshotUpdate) {
+        if !records_agent_report(self.lifecycle.state(), &update.snapshot) {
+            return;
+        }
         let (workspace_id, address, resuming) = {
             let launched = self.launched.lock();
             let Some(pane) = launched
@@ -544,6 +558,13 @@ fn drop_missing_omp_session(target: &mut PaneLaunchTarget, omp_root: &Path) -> b
     true
 }
 
+/// A stopping Host ends its Agents itself. They stay recorded as running, like
+/// their panes, so the next Host run resumes them: on a saved snapshot, `Exited`
+/// means the Agent ended on its own.
+fn records_agent_report(host: HostLifecycleState, report: &AgentSnapshot) -> bool {
+    host == HostLifecycleState::Running || report.process_state != AgentProcessState::Exited
+}
+
 /// Merges an Agent report into the pane's previous snapshot, keeping the
 /// board history. While a saved session is being resumed, a report without a
 /// session keeps the saved one, so a failed resume can be tried again.
@@ -625,6 +646,28 @@ mod tests {
             .as_ref()?
             .session_id
             .as_deref()
+    }
+
+    #[test]
+    fn a_stopping_host_does_not_record_its_agents_as_ended() {
+        let mut report = AgentReducer::new(
+            AgentInstanceId::random(),
+            ProviderId::from_static("claude"),
+            1,
+        )
+        .snapshot()
+        .clone();
+        report.process_state = AgentProcessState::Running;
+        assert!(records_agent_report(HostLifecycleState::Draining, &report));
+
+        report.process_state = AgentProcessState::Exited;
+        assert!(records_agent_report(HostLifecycleState::Running, &report));
+        for stopping in [
+            HostLifecycleState::Draining,
+            HostLifecycleState::ForceStopping,
+        ] {
+            assert!(!records_agent_report(stopping, &report));
+        }
     }
 
     #[test]

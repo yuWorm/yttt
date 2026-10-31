@@ -6,6 +6,15 @@ use super::*;
 use crate::model::host_workspace::{HostWorkspace, pane_changes};
 use crate::ui::editor::ProjectFileLoadRequest;
 
+/// Whether the layout being adopted comes with the workspace's Agent states.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HostAgentStates {
+    /// Read when the workspace opened; they replace what this Client held.
+    Included,
+    /// The Host publishes layouts without them.
+    Unpublished,
+}
+
 /// Wakes the workbench when the Host layout of `workspace_id` changes.
 pub(super) struct HostLayoutListener {
     workspace_id: WorkspaceId,
@@ -86,7 +95,13 @@ impl WorkbenchView {
             return;
         };
         match HostWorkspace::restore(layout) {
-            Ok(host) => self.replace_with_host_layout(host, &runtime, window, cx),
+            Ok(host) => self.replace_with_host_layout(
+                host,
+                HostAgentStates::Unpublished,
+                &runtime,
+                window,
+                cx,
+            ),
             Err(error) => self.set_workspace_persistence_error(
                 self.ui_text
                     .get(UiTextKey::PersistenceStateRestoreFailed)
@@ -103,6 +118,7 @@ impl WorkbenchView {
     pub(super) fn replace_with_host_layout(
         &mut self,
         host: HostWorkspace,
+        agent_states: HostAgentStates,
         runtime: &Arc<crate::host_runtime::DesktopHostRuntime>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -131,9 +147,9 @@ impl WorkbenchView {
 
         let state = host.state();
         let mut workspace = host.workspace().clone();
-        // The Host layout carries no Agent boards; this Client keeps the ones
-        // it holds for the panes both layouts contain.
-        workspace.keep_pane_runtime_from(&self.workspace);
+        if agent_states == HostAgentStates::Unpublished {
+            workspace.keep_agent_snapshots_from(&self.workspace);
+        }
         let panes = pane_changes(&self.workspace, &workspace);
         let previous_projects = self
             .workspace

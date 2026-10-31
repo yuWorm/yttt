@@ -487,6 +487,37 @@ async fn shell_mode_runs_the_initial_command_and_keeps_the_shell_alive() {
 }
 
 #[tokio::test]
+async fn a_command_that_returns_to_its_shell_leaves_the_shell_usable() {
+    let runtime = HostRuntime::new();
+    let mut events = runtime.subscribe();
+    let session = TerminalSessionId::new("resumed-in-shell");
+    let mut shell_spec = spec("resumed-in-shell", "unused");
+    shell_spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "printf".to_string(),
+        args: vec![
+            "%s-%s\\n".to_string(),
+            "resumed".to_string(),
+            "agent".to_string(),
+        ],
+        return_to_shell: true,
+    };
+    let terminal = runtime.spawn(shell_spec).unwrap();
+    terminal.set_subscriber_count(1);
+    wait_for_text(&mut events, "resumed-agent").await;
+
+    terminal
+        .input(b"printf 'shell-%s\\n' alive\r".to_vec())
+        .unwrap();
+    wait_for_text(&mut events, "shell-alive").await;
+    assert_eq!(
+        terminal.checkpoint().unwrap().viewport.process_state,
+        yttt_protocol::terminal::TerminalProcessState::Running
+    );
+    runtime.terminate(&session).unwrap();
+}
+
+#[tokio::test]
 async fn unsubscribed_output_is_parsed_without_semantic_encoding() {
     let runtime = HostRuntime::new();
     let terminal = runtime

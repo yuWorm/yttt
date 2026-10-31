@@ -209,6 +209,12 @@
       "terminal_session_id"
     ]
   },
+  "AgentStateCleared": {
+    "": [
+      "terminal_session_id",
+      "workspace_id"
+    ]
+  },
   "AgentStateRef": {
     "": [
       "bytes",
@@ -1342,6 +1348,7 @@
   },
   "ServerEvent": {
     "AgentSnapshot": [],
+    "AgentStateCleared": [],
     "CredentialChallenge": [],
     "DocumentChanged": [],
     "HostDraining": [],

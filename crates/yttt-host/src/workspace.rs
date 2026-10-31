@@ -24,11 +24,12 @@ use yttt_core::model::{
 use yttt_protocol::{
     FailureCode, HostPath, PathSegment, ProjectRelativePath, ProtocolFailure,
     workspace::{
-        AgentSessionOperation, AgentStateRef, DocumentLease, DocumentUpdate, DraftContentRevision,
-        DraftRef, WorkspaceConfig, WorkspaceConfigRevision, WorkspaceDirectory,
-        WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind, WorkspaceEnvironment, WorkspaceId,
-        WorkspaceLayoutUpdate, WorkspaceProjectConfig, WorkspaceProjectConfigFile,
-        WorkspaceRequest, WorkspaceResponse, WorkspaceSummary, encode_project_path,
+        AgentSessionOperation, AgentStateCleared, AgentStateRef, DocumentLease, DocumentUpdate,
+        DraftContentRevision, DraftRef, WorkspaceConfig, WorkspaceConfigRevision,
+        WorkspaceDirectory, WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind,
+        WorkspaceEnvironment, WorkspaceId, WorkspaceLayoutUpdate, WorkspaceProjectConfig,
+        WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary,
+        encode_project_path,
     },
 };
 
@@ -78,6 +79,7 @@ struct ServiceState {
 pub(crate) enum WorkspaceEvent<'a> {
     Layout(&'a WorkspaceLayoutUpdate),
     Document(&'a DocumentUpdate),
+    AgentStateCleared(&'a AgentStateCleared),
 }
 
 /// Delivers a workspace change to one Client; returns `false` once the Client is gone.
@@ -726,6 +728,19 @@ impl WorkspaceService {
         client_id: &ClientInstanceId,
         workspace_id: WorkspaceId,
     ) -> WorkspaceResponse {
+        // A Client only reads Agent states at open, so it gets the current ones.
+        if state
+            .workspaces
+            .get(&workspace_id)
+            .is_some_and(|record| record.agents_changed)
+            && let Err(error) = self.store_agent_states(state, &workspace_id)
+        {
+            eprintln!(
+                "Agent states of workspace {} were not stored: {}",
+                workspace_id.as_str(),
+                error.message
+            );
+        }
         let response = match state.workspaces.get(&workspace_id) {
             Some(record) => WorkspaceResponse::Opened {
                 layout: record.layout.state(),
@@ -923,9 +938,32 @@ impl WorkspaceService {
             return;
         };
         let snapshot = update(pane.agent_snapshot.as_ref());
+        if snapshot.as_ref() == pane.agent_snapshot.as_ref() {
+            return;
+        }
+        let cleared = snapshot.is_none();
         if record.layout.set_agent_snapshot(address, snapshot).is_ok() {
             record.agents_changed = true;
+            if cleared {
+                Self::notify_agent_state_cleared(&mut state, workspace_id, address);
+            }
         }
+    }
+
+    fn notify_agent_state_cleared(
+        state: &mut ServiceState,
+        workspace_id: &WorkspaceId,
+        address: &PaneAddress,
+    ) {
+        let cleared = AgentStateCleared {
+            workspace_id: workspace_id.clone(),
+            terminal_session_id: address.terminal_session_id(),
+        };
+        Self::notify(
+            state,
+            workspace_id,
+            WorkspaceEvent::AgentStateCleared(&cleared),
+        );
     }
 
     /// Stores the Agent snapshots that changed since the last flush.
@@ -994,6 +1032,18 @@ impl WorkspaceService {
         if layout.revision() == current.revision() {
             return Ok(result);
         }
+        // Agent states of panes the layout keeps but no longer holds a state for.
+        let cleared_agents = current
+            .layout
+            .agent_snapshots()
+            .into_iter()
+            .map(|(address, _)| address)
+            .filter(|address| {
+                layout
+                    .pane(address)
+                    .is_some_and(|(_, pane)| pane.agent_snapshot.is_none())
+            })
+            .collect::<Vec<_>>();
         let mut updated = current;
         updated.layout = layout;
         let previous_drafts = updated.draft_refs();
@@ -1016,6 +1066,9 @@ impl WorkspaceService {
         });
         state.workspaces.insert(workspace_id.clone(), updated);
         Self::notify_layout(state, workspace_id);
+        for address in &cleared_agents {
+            Self::notify_agent_state_cleared(state, workspace_id, address);
+        }
         Ok(result)
     }
 
@@ -2306,6 +2359,91 @@ mod tests {
             panic!("open response")
         };
         layout
+    }
+
+    #[test]
+    fn clearing_an_agent_state_tells_the_clients_that_opened_the_workspace() {
+        let root = tempdir().unwrap();
+        let host = std::sync::Arc::new(service(root.path()));
+        open_project(&host, root.path());
+        let address = yttt_core::model::host_workspace::PaneAddress {
+            project_id: ProjectId::new("project"),
+            tab_id: "first".into(),
+            pane_id: "shell".into(),
+        };
+        let saved = yttt_agent_core::AgentReducer::new(
+            yttt_agent_core::AgentInstanceId::random(),
+            yttt_agent_core::ProviderId::from_static("claude"),
+            1,
+        )
+        .snapshot()
+        .clone();
+        host.update_agent_snapshot(&workspace(), &address, |_| Some(saved));
+
+        let cleared = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reader = client("reader");
+        let _subscription = host.subscribe(reader.clone(), {
+            let cleared = cleared.clone();
+            Box::new(move |event| {
+                if let super::WorkspaceEvent::AgentStateCleared(update) = event {
+                    cleared
+                        .lock()
+                        .unwrap()
+                        .push(update.terminal_session_id.clone());
+                }
+                true
+            })
+        });
+        opened_layout(&host, &reader);
+
+        host.update_agent_snapshot(&workspace(), &address, |_| None);
+        host.update_agent_snapshot(&workspace(), &address, |_| None);
+
+        assert_eq!(
+            *cleared.lock().unwrap(),
+            vec![address.terminal_session_id()],
+            "only the change that dropped the state is announced"
+        );
+    }
+
+    #[test]
+    fn open_does_not_publish_an_agent_state_the_launch_cleared() {
+        let root = tempdir().unwrap();
+        let host = service(root.path());
+        open_project(&host, root.path());
+        let address = yttt_core::model::host_workspace::PaneAddress {
+            project_id: ProjectId::new("project"),
+            tab_id: "first".into(),
+            pane_id: "shell".into(),
+        };
+        let saved = yttt_agent_core::AgentReducer::new(
+            yttt_agent_core::AgentInstanceId::random(),
+            yttt_agent_core::ProviderId::from_static("claude"),
+            1,
+        )
+        .snapshot()
+        .clone();
+        host.update_agent_snapshot(&workspace(), &address, |_| Some(saved));
+        host.flush_agent_states();
+
+        // PaneLauncher reports clears_agent_snapshot for a shell pane with no resumable session.
+        host.update_agent_snapshot(&workspace(), &address, |_| None);
+
+        let WorkspaceResponse::Opened { agent_states, .. } = host
+            .handle(
+                &client("reader"),
+                WorkspaceRequest::Open {
+                    workspace_id: workspace(),
+                },
+            )
+            .unwrap()
+        else {
+            panic!("open response")
+        };
+        assert!(
+            agent_states.is_empty(),
+            "Client restored a snapshot the Host already cleared: {agent_states:?}"
+        );
     }
 
     #[test]

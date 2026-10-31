@@ -4537,6 +4537,7 @@ fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
         ClientEvent::Connection(_)
         | ClientEvent::AgentSnapshotsReset { .. }
         | ClientEvent::AgentSnapshotUpdated(_)
+        | ClientEvent::AgentStateCleared(_)
         | ClientEvent::ProjectTokenUsageUpdated(_)
         | ClientEvent::ResourceCatalogUpdated(_)
         | ClientEvent::TerminalUnavailable(_) => true,

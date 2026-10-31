@@ -2,7 +2,21 @@
 //!
 //! Shell, environment and scrollback come from the Host's shared settings
 //! (`[terminal]` in `settings.toml`, Host-scoped keys that apply to new
-//! sessions). Agent panes resume their saved provider session when one exists.
+//! sessions).
+//!
+//! A pane's config says what it is; its saved Agent snapshot only says what
+//! ran there. Restoring never turns a pane into something else:
+//!
+//! | Pane | Saved Agent | Launch |
+//! |---|---|---|
+//! | Agent | same provider, resumable session | resume it |
+//! | Agent | same provider, session it cannot resume | report it unresumable |
+//! | Agent | another provider | the pane's command, without that session |
+//! | Agent | no session | the pane's command |
+//! | Shell | still running when the Host stopped | resume it inside the shell |
+//! | Shell | ended on its own, unresumable or no session | a plain shell |
+//!
+//! A pane in shell mode keeps its shell: an Agent resumed there returns to it.
 
 use std::{
     collections::BTreeMap,
@@ -11,8 +25,10 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use yttt_agent_core::{AgentProvider as _, AgentSnapshot};
-use yttt_agent_providers::{OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID};
+use yttt_agent_core::{AgentProcessState, AgentProvider as _, AgentSnapshot};
+use yttt_agent_providers::{
+    OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID, provider_for_command,
+};
 use yttt_agent_runtime::{AgentLaunchPlan, AgentRuntime};
 use yttt_core::model::{
     host_workspace::PaneAddress,
@@ -132,7 +148,8 @@ pub(crate) struct PaneLaunchRequest<'a> {
 #[derive(Debug)]
 pub(crate) enum PaneLaunch {
     Start(Box<PlannedLaunch>),
-    /// A command pane is not re-run after the Host lost its terminal.
+    /// A command pane is not re-run after the Host lost its terminal, and
+    /// has no Agent to resume instead.
     NotRestorable,
     /// The saved Agent session cannot be resumed by its provider.
     Unresumable,
@@ -145,6 +162,32 @@ pub(crate) struct PlannedLaunch {
     pub agent: Option<AgentLaunchPlan>,
     /// The pane's saved Agent snapshot no longer applies to this launch.
     pub clears_agent_snapshot: bool,
+    /// The saved session belongs to another provider than the pane's: its
+    /// board stays as history, the session is never resumed.
+    pub drops_agent_session: bool,
+}
+
+impl PlannedLaunch {
+    /// The saved Agent snapshot this launch leaves on the pane. A restored
+    /// snapshot describes a process that is gone, so the pane shows no live
+    /// Agent until the new process reports.
+    pub fn saved_snapshot(
+        &self,
+        saved: Option<&AgentSnapshot>,
+        restore: bool,
+    ) -> Option<AgentSnapshot> {
+        if self.clears_agent_snapshot {
+            return None;
+        }
+        let mut snapshot = saved?.clone();
+        if self.drops_agent_session {
+            snapshot.session = None;
+        }
+        if self.drops_agent_session || restore {
+            snapshot.mark_disconnected();
+        }
+        Some(snapshot)
+    }
 }
 
 pub(crate) struct PaneLauncher {
@@ -169,32 +212,36 @@ impl PaneLauncher {
     }
 
     pub fn plan(&self, settings: &LaunchSettings, request: &PaneLaunchRequest<'_>) -> PaneLaunch {
-        let pane = request.pane;
-        let snapshot = request.agent_snapshot;
-        let is_agent = self.is_agent_pane(pane);
-        if request.restore
-            && pane.execution_mode != TerminalExecutionMode::Shell
-            && !is_agent
-            && snapshot.is_none()
-        {
-            return PaneLaunch::NotRestorable;
+        if self.is_agent_pane(request.pane) {
+            self.plan_agent_pane(settings, request)
+        } else {
+            self.plan_plain_pane(settings, request)
         }
-        let (mut command, mut args) = (pane.command.clone(), pane.args.clone());
-        if request.restore && !is_agent && snapshot.is_none() {
-            // Restoring a shell must never replay its old startup command.
-            command.clear();
-            args.clear();
-        }
+    }
 
-        // OMP that never reported a session starts a new OMP, even in a shell pane.
+    fn plan_agent_pane(
+        &self,
+        settings: &LaunchSettings,
+        request: &PaneLaunchRequest<'_>,
+    ) -> PaneLaunch {
+        let pane = request.pane;
+        let (command, args) = (pane.command.as_str(), pane.args.as_slice());
+        // Another provider's session came from something run inside this pane.
+        let foreign = request.agent_snapshot.is_some_and(|snapshot| {
+            provider_for_command(command)
+                .is_some_and(|provider| snapshot.provider_id.as_str() != provider)
+        });
+        let snapshot = request.agent_snapshot.filter(|_| !foreign);
+
+        // OMP that never reported a session starts a new OMP.
         let fresh_omp = snapshot.is_some_and(|snapshot| {
             snapshot.provider_id.as_str() == OMP_PROVIDER_ID && snapshot.session.is_none()
         });
         let fresh_program = (fresh_omp
-            && !yttt_agent_providers::OmpProvider.matches_command(&command))
+            && !yttt_agent_providers::OmpProvider.matches_command(command))
         .then_some(OMP_PROVIDER_ID);
         let plan = self.agents.plan_launch(
-            fresh_program.unwrap_or(&command),
+            fresh_program.unwrap_or(command),
             snapshot.filter(|_| !fresh_omp),
         );
         let Some(plan) = plan else {
@@ -202,29 +249,97 @@ impl PaneLauncher {
                 return PaneLaunch::Unresumable;
             }
             return PaneLaunch::Start(Box::new(PlannedLaunch {
-                spec: self.spec(settings, request, &command, &args, None),
+                spec: self.spec(settings, request, command, args, None),
                 exit_behavior: pane.exit_behavior,
                 agent: None,
                 clears_agent_snapshot: snapshot.is_some(),
+                drops_agent_session: foreign,
             }));
         };
+        self.start_agent(
+            settings,
+            request,
+            command,
+            args,
+            plan,
+            fresh_program,
+            fresh_omp,
+            foreign,
+        )
+    }
+
+    fn plan_plain_pane(
+        &self,
+        settings: &LaunchSettings,
+        request: &PaneLaunchRequest<'_>,
+    ) -> PaneLaunch {
+        let pane = request.pane;
+        let snapshot = request.agent_snapshot;
+        // After a Host restart only an Agent that outlived its pane's Host
+        // comes back; an explicit restart may resume one that ended.
+        let resume = snapshot
+            .filter(|snapshot| {
+                !request.restore || snapshot.process_state != AgentProcessState::Exited
+            })
+            .filter(|snapshot| snapshot.session.is_some())
+            .and_then(|snapshot| self.agents.plan_launch("", Some(snapshot)));
+        if let Some(plan) = resume {
+            return self.start_agent(settings, request, "", &[], plan, None, false, false);
+        }
+        if request.restore && pane.execution_mode != TerminalExecutionMode::Shell {
+            return PaneLaunch::NotRestorable;
+        }
+        // Restoring a shell must never replay its old startup command.
+        let (command, args): (&str, &[String]) = if request.restore {
+            ("", &[])
+        } else {
+            (&pane.command, &pane.args)
+        };
+        PaneLaunch::Start(Box::new(PlannedLaunch {
+            spec: self.spec(settings, request, command, args, None),
+            exit_behavior: pane.exit_behavior,
+            agent: None,
+            // An Agent that ended stays on the pane as history.
+            clears_agent_snapshot: snapshot
+                .is_some_and(|snapshot| snapshot.process_state != AgentProcessState::Exited),
+            drops_agent_session: false,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_agent(
+        &self,
+        settings: &LaunchSettings,
+        request: &PaneLaunchRequest<'_>,
+        command: &str,
+        args: &[String],
+        plan: AgentLaunchPlan,
+        fresh_program: Option<&'static str>,
+        clears_agent_snapshot: bool,
+        drops_agent_session: bool,
+    ) -> PaneLaunch {
+        let pane = request.pane;
+        let in_shell = pane.execution_mode == TerminalExecutionMode::Shell;
         let resuming = !plan.resume_arguments.is_empty();
         let launch = AgentCommand {
             program_override: fresh_program.or(plan.program_override),
             additional_args: self.agent_arguments(&plan, request.location),
             remote_omp_extension: plan.provider_id.as_str() == OMP_PROVIDER_ID
                 && matches!(request.location, ProjectLocation::Ssh { .. }),
+            in_shell,
         };
         PaneLaunch::Start(Box::new(PlannedLaunch {
-            spec: self.spec(settings, request, &command, &args, Some(&launch)),
+            spec: self.spec(settings, request, command, args, Some(&launch)),
             // A failed resume must not loop; the user restarts explicitly.
-            exit_behavior: if resuming {
+            // In a shell it simply returns to the prompt.
+            exit_behavior: if resuming && !in_shell {
                 ProcessExitBehavior::ManualRestart
             } else {
                 pane.exit_behavior
             },
             agent: Some(plan),
-            clears_agent_snapshot: fresh_omp,
+            clears_agent_snapshot,
+            drops_agent_session,
         }))
     }
 
@@ -262,11 +377,21 @@ impl PaneLauncher {
         let program_override = agent.and_then(|agent| agent.program_override);
         let execution = match request.location {
             ProjectLocation::Ssh { connection_id, .. } => {
+                let in_shell = agent.is_some_and(|agent| agent.in_shell);
                 let remote_command = agent
                     .filter(|agent| agent.remote_omp_extension)
                     .map(|agent| agent.remote_omp_command(command, args));
                 let execution = match (remote_command, program_override) {
+                    // The script ends in `exec` and assumes a POSIX shell.
+                    (Some(command), _) if in_shell => RemoteTerminalExecutionSpec::Shell {
+                        command: format!("sh -c {}", shell_quote(&command)),
+                    },
                     (Some(command), _) => RemoteTerminalExecutionSpec::Shell { command },
+                    (None, Some(program)) if in_shell => RemoteTerminalExecutionSpec::Shell {
+                        command: shell_words::join(
+                            std::iter::once(program.to_string()).chain(command_args()),
+                        ),
+                    },
                     (None, Some(program)) => RemoteTerminalExecutionSpec::Command {
                         program: program.to_string(),
                         args: command_args(),
@@ -292,7 +417,7 @@ impl PaneLauncher {
                         shell,
                         program: program.to_string(),
                         args: command_args(),
-                        return_to_shell: false,
+                        return_to_shell: agent.is_some_and(|agent| agent.in_shell),
                     },
                     (None, TerminalExecutionMode::Shell) => TerminalExecutionSpec::Shell {
                         args: interactive_shell_args(&shell),
@@ -335,6 +460,8 @@ struct AgentCommand {
     program_override: Option<&'static str>,
     additional_args: Vec<String>,
     remote_omp_extension: bool,
+    /// The pane keeps its shell: the program runs in it and returns to it.
+    in_shell: bool,
 }
 
 impl AgentCommand {
@@ -505,6 +632,156 @@ mod tests {
         }
     }
 
+    fn agent_pane(command: &str, mode: TerminalExecutionMode) -> PaneConfig {
+        PaneConfig {
+            kind: PaneKind::Agent,
+            ..pane(command, &[], mode)
+        }
+    }
+
+    fn ended(mut snapshot: AgentSnapshot) -> AgentSnapshot {
+        snapshot.process_state = AgentProcessState::Exited;
+        snapshot
+    }
+
+    #[test]
+    fn agent_pane_starts_its_command_when_the_session_is_another_providers() {
+        let omp = agent_pane("omp", TerminalExecutionMode::Command);
+        let saved = snapshot("grok", Some("grok-session"));
+        let planned = started(plan(&local(), &omp, Some(&saved), true));
+
+        assert_eq!(planned.agent.as_ref().unwrap().provider_id.as_str(), "omp");
+        assert_eq!(planned.exit_behavior, omp.exit_behavior);
+        assert!(!planned.clears_agent_snapshot);
+        let kept = planned.saved_snapshot(Some(&saved), true).unwrap();
+        assert!(kept.session.is_none());
+        assert_eq!(kept.process_state, AgentProcessState::Exited);
+    }
+
+    #[test]
+    fn shell_pane_does_not_resume_an_agent_that_ended_on_its_own() {
+        let shell = pane("", &[], TerminalExecutionMode::Shell);
+        let saved = ended(snapshot("claude", Some("claude-session")));
+        let planned = started(plan(&local(), &shell, Some(&saved), true));
+
+        assert!(planned.agent.is_none());
+        assert!(matches!(
+            planned.spec.execution,
+            TerminalExecutionSpec::Shell { .. }
+        ));
+        assert!(
+            !planned.clears_agent_snapshot,
+            "an ended Agent stays as history"
+        );
+    }
+
+    #[test]
+    fn shell_pane_resumes_a_running_agent_inside_its_shell() {
+        let shell = pane("", &[], TerminalExecutionMode::Shell);
+        let saved = snapshot("claude", Some("claude-session"));
+        let planned = started(plan(&local(), &shell, Some(&saved), true));
+
+        assert_eq!(
+            planned.spec.execution,
+            TerminalExecutionSpec::Command {
+                shell: "/bin/zsh".into(),
+                program: "claude".into(),
+                args: vec!["--resume".into(), "claude-session".into()],
+                return_to_shell: true,
+            }
+        );
+        assert_eq!(planned.exit_behavior, shell.exit_behavior);
+        let restored = planned.saved_snapshot(Some(&saved), true).unwrap();
+        assert_eq!(restored.process_state, AgentProcessState::Exited);
+        assert!(
+            restored.session.is_some(),
+            "the resume confirms the session"
+        );
+    }
+
+    #[test]
+    fn ssh_shell_pane_resumes_an_agent_at_its_prompt() {
+        let ssh = ProjectLocation::Ssh {
+            connection_id: ConnectionId::new("connection"),
+            root: RemotePathBuf::new("/srv/project").unwrap(),
+        };
+        let shell = pane("", &[], TerminalExecutionMode::Shell);
+
+        let claude = started(plan(
+            &ssh,
+            &shell,
+            Some(&snapshot("claude", Some("saved session"))),
+            true,
+        ));
+        assert_eq!(
+            claude.spec.execution,
+            TerminalExecutionSpec::Ssh {
+                connection_id: "connection".into(),
+                execution: RemoteTerminalExecutionSpec::Shell {
+                    command: "claude --resume 'saved session'".into()
+                },
+            }
+        );
+
+        let omp = started(plan(
+            &ssh,
+            &shell,
+            Some(&snapshot("omp", Some("saved-session"))),
+            true,
+        ));
+        let TerminalExecutionSpec::Ssh {
+            execution: RemoteTerminalExecutionSpec::Shell { command },
+            ..
+        } = &omp.spec.execution
+        else {
+            panic!("expected a remote shell, got {:?}", omp.spec.execution);
+        };
+        assert!(command.starts_with("sh -c '"), "{command}");
+    }
+
+    #[test]
+    fn shell_pane_with_an_unresumable_session_restores_a_plain_shell() {
+        let shell = pane("cargo test", &[], TerminalExecutionMode::Shell);
+        let saved = snapshot("claude", Some(""));
+        let planned = started(plan(&local(), &shell, Some(&saved), true));
+
+        assert!(planned.agent.is_none());
+        assert!(planned.clears_agent_snapshot);
+        assert!(matches!(
+            planned.spec.execution,
+            TerminalExecutionSpec::Shell {
+                initial_command: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn explicit_restart_resumes_an_ended_agent_in_a_shell_pane() {
+        let shell = pane("", &[], TerminalExecutionMode::Shell);
+        let saved = ended(snapshot("claude", Some("claude-session")));
+        let planned = started(plan(&local(), &shell, Some(&saved), false));
+
+        assert!(planned.agent.is_some());
+        assert_eq!(
+            planned.saved_snapshot(Some(&saved), false).as_ref(),
+            Some(&saved)
+        );
+    }
+
+    #[test]
+    fn a_new_agent_process_does_not_start_in_a_restored_shell() {
+        let shell = pane("", &[], TerminalExecutionMode::Shell);
+        let planned = started(plan(&local(), &shell, Some(&snapshot("omp", None)), true));
+
+        assert!(planned.agent.is_none());
+        assert!(planned.clears_agent_snapshot);
+        assert!(matches!(
+            planned.spec.execution,
+            TerminalExecutionSpec::Shell { .. }
+        ));
+    }
+
     #[test]
     fn settings_read_host_terminal_keys_and_fall_back_per_key() {
         let config = tempfile::tempdir().unwrap();
@@ -635,8 +912,8 @@ mod tests {
 
     #[test]
     fn omp_without_a_session_starts_new_omp_with_the_local_extension() {
-        let shell = pane("", &[], TerminalExecutionMode::Shell);
-        let planned = started(plan(&local(), &shell, Some(&snapshot("omp", None)), true));
+        let agent = agent_pane("", TerminalExecutionMode::Command);
+        let planned = started(plan(&local(), &agent, Some(&snapshot("omp", None)), true));
         assert_eq!(
             planned.spec.execution,
             TerminalExecutionSpec::Command {
