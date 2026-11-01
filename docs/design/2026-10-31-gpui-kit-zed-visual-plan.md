@@ -171,7 +171,7 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 
 ### 任务 1.2：补丁分类（M）
 
-已完成，结论在 `vendor/PATCHES.md`。规范化格式后，56 个差异文件中只有 24 个有真实改动。F 类默认不重放的判断对格式差异成立，但按钮、列表分区、Select 和 gutter 裁剪这 4 项是真实改动，已改为重放。
+已完成，结论在 `vendor/PATCHES.md`。规范化格式后，56 个差异文件中只有 24 个有真实改动。F 类默认不重放的判断对格式差异成立，但列表分区、Select 和 gutter 裁剪这 3 项是真实改动，已改为重放。按钮的自定义颜色 0.8.1 已自带。
 
 - [ ] 用 `a9a7341c` 与 `vendor/gpui-component/crates/ui/src` 逐文件 diff。
 - [ ] 按设计第 7 节 A 到 F 分类，写入 `PATCHES.md`，每项写明原因和删除条件。
@@ -181,7 +181,7 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 
 ### 任务 1.3：迁移底层 crate（L）
 
-已完成。展示页 L2 对比基线：全窗口 307 万像素差异为 0，42 个组件区域和布局全部一致。比对之外，0.8.1 的 `sizing`、`radio`、`popover_style` 和 `Select` 箭头也有默认值变化，都已还原并记入 `PATCHES.md`。
+已完成。展示页 L2 对比基线：全窗口 307 万像素差异为 0，42 个组件区域和布局全部一致。比对之外，0.8.1 的 `sizing`、`radio`、`popover_style` 和 `Select` 箭头也有默认值变化，都已还原并记入 `PATCHES.md`。合入旧补丁时不要依赖 `patch` 的自动判断：它把 0.8.1 已有的按钮修复反向撤销过一次，只有逐行审 diff 才能发现。
 
 - [ ] `vendor/gpui-markdown-editor`：切到 `gpui-pre`。
 - [ ] `crates/yttt-terminal`：切到 `gpui-pre`，迁移滚动事件和文字 API。

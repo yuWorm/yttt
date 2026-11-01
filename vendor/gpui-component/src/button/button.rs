@@ -1,4 +1,3 @@
-// Modified for yttt; see vendor/PATCHES.md.
 use std::{rc::Rc, time::Duration};
 
 use crate::{
@@ -1073,7 +1072,7 @@ impl ButtonVariant {
             }
             Self::Link => cx.theme().link,
             Self::Text => cx.theme().foreground.opacity(0.9),
-            Self::Custom(colors) => colors.color,
+            Self::Custom(colors) => colors.foreground,
         }
     }
 
@@ -1202,12 +1201,7 @@ impl ButtonVariant {
                     cx.theme().tokens.button_info_hover.into()
                 }
             }
-            Self::Custom(colors) => if outline {
-                colors.color.mix_oklab(cx.theme().transparent, 0.2)
-            } else {
-                colors.color.mix_oklab(cx.theme().transparent, 0.3)
-            }
-            .into(),
+            Self::Custom(colors) => colors.hover.into(),
             Self::Ghost => {
                 let accent: Background = cx.theme().tokens.accent.into();
                 if cx.theme().mode.is_dark() {
@@ -1292,7 +1286,7 @@ impl ButtonVariant {
                     cx.theme().tokens.button_info_active.into()
                 }
             }
-            Self::Custom(colors) => colors.color.mix_oklab(cx.theme().transparent, 0.4).into(),
+            Self::Custom(colors) => colors.active.into(),
             Self::Link => cx.theme().transparent.into(),
             Self::Text => cx.theme().transparent.into(),
         };
@@ -2078,23 +2072,6 @@ mod tests {
                 ButtonVariant::Danger.disabled(true, cx).bg,
                 cx.theme().tokens.button_danger.background.opacity(0.15)
             );
-        });
-    }
-
-    #[gpui::test]
-    fn test_custom_variant_uses_configured_interaction_backgrounds(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::init);
-        let window = cx.add_empty_window();
-        window.update(|_, cx| {
-            let hover = cx.theme().success;
-            let active = cx.theme().danger;
-            let variant =
-                ButtonVariant::Custom(ButtonCustomVariant::new(cx).hover(hover).active(active));
-
-            for outline in [false, true] {
-                assert_eq!(variant.hovered(outline, cx).bg, hover.into());
-                assert_eq!(variant.active(outline, cx).bg, active.into());
-            }
         });
     }
 }

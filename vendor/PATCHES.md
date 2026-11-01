@@ -29,7 +29,6 @@
 | `TooltipAppearance` | `src/tooltip.rs` | C | Zed 风格的快捷键提示颜色 | P3 用 `gpui-base` 重做 tooltip |
 | `Notification::always_show_close_button` | `src/notification.rs` | C | 错误通知要始终显示关闭按钮 | P4 重做通知 |
 | `PopupMenuStyle`、`MenuItemAppearance`，带样式时恢复 1px 边框 | `src/menu/*` | C | 0.8.1 的 `popover_style` 去掉了边框，改用阴影环 | P4 自有 context menu |
-| `ButtonCustomVariant` 的 hover、active、前景色 | `src/button/button.rs` | C | 0.8.1 按 `color` 混色，忽略配置 | P3 用 `gpui-base` 重做按钮 |
 | `ListItem::hover_matches_selected`，选中背景 | `src/list/list_item.rs` | C | 文件树和列表的选中外观 | P5、P6 自有行外观 |
 | 各分区标题独立测量 | `src/list/list.rs`、`src/list/cache.rs`、`src/list/delegate.rs` | C | SSH 列表有多个分区 | 上游支持，或 P5 不再使用 `List` |
 | `Select` 触发器 hover，箭头固定 XSmall | `src/select.rs` | C | 保持现有下拉外观 | P5 自有 select |
@@ -55,6 +54,7 @@
 | 文件 | 原因 |
 |---|---|
 | `input/clear_button.rs` | 0.8.1 已改用 `IconName::Close` |
+| `button/button.rs` 的自定义 hover、active、前景色 | 0.8.1 已采用同样的实现 |
 | `lib.rs` 的 `pub mod actions` | `gpui_base::actions` 已公开，yttt 没有直接使用 |
 | `title_bar.rs` | 只有一行注释。Windows 标题栏行为在任务 1.7 验证 |
 | `history.rs` 的 `start_grouping_new_version` | 改由 `undo_manager` 事务承接 |
