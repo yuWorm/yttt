@@ -1689,7 +1689,7 @@ mod tests {
         let (_root, cx) = cx.add_window_view(move |window, cx| {
             let view = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
             *view_slot_for_window.borrow_mut() = Some(view.clone());
-            gpui_component::Root::new(view, window, cx)
+            yttt_ui::window::yttt_root(view, window, cx)
         });
         let view = view_slot.borrow_mut().take().unwrap();
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -1775,7 +1775,7 @@ mod tests {
         let (_root, cx) = cx.add_window_view(move |window, cx| {
             let view = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
             *view_slot_for_window.borrow_mut() = Some(view.clone());
-            gpui_component::Root::new(view, window, cx)
+            yttt_ui::window::yttt_root(view, window, cx)
         });
         let view = view_slot.borrow_mut().take().unwrap();
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -1845,7 +1845,7 @@ mod tests {
             let tree = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
             *view_slot_for_window.borrow_mut() = Some(tree.clone());
             let harness = cx.new(|_| VimTreeHarness { tree, key_context });
-            gpui_component::Root::new(harness, window, cx)
+            yttt_ui::window::yttt_root(harness, window, cx)
         });
         let tree = view_slot.borrow_mut().take().unwrap();
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -1948,7 +1948,7 @@ mod tests {
             let tree = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
             *view_slot_for_window.borrow_mut() = Some(tree.clone());
             let harness = cx.new(|_| VimTreeHarness { tree, key_context });
-            gpui_component::Root::new(harness, window, cx)
+            yttt_ui::window::yttt_root(harness, window, cx)
         });
         let tree = view_slot.borrow_mut().take().unwrap();
         let events = Rc::new(RefCell::new(Vec::new()));

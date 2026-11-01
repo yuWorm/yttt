@@ -193,7 +193,7 @@ fn settings_window_reuses_search_state_and_rebinds_after_native_close(
         register_workbench_keybinding_interceptor(cx, &view);
         yttt::ui::app::register_workbench_focus_restore(window, cx, &view);
         *output.borrow_mut() = Some(view.clone());
-        gpui_component::Root::new(view, window, cx)
+        yttt_ui::window::yttt_root(view, window, cx)
     });
     let view = slot.borrow_mut().take().unwrap();
     view.update(cx, |view, cx| {
@@ -258,7 +258,7 @@ fn layout_editor_window_keeps_invalid_edits_and_outlives_settings(cx: &mut gpui:
         register_workbench_keybinding_interceptor(cx, &view);
         yttt::ui::app::register_workbench_focus_restore(window, cx, &view);
         *output.borrow_mut() = Some(view.clone());
-        gpui_component::Root::new(view, window, cx)
+        yttt_ui::window::yttt_root(view, window, cx)
     });
     let view = slot.borrow_mut().take().unwrap();
     view.update(cx, |view, cx| {
@@ -527,7 +527,7 @@ fn homepage_remote_services_keeps_the_local_workspace(cx: &mut gpui::TestAppCont
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let view = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *output.borrow_mut() = Some(view.clone());
-        gpui_component::Root::new(view, window, cx)
+        yttt_ui::window::yttt_root(view, window, cx)
     });
     let view = slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -554,7 +554,7 @@ fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppCon
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -632,7 +632,7 @@ fn dashboard_and_command_center_follow_open_project_lifecycle(cx: &mut gpui::Tes
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *output.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -916,7 +916,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
@@ -1093,7 +1093,7 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -1141,7 +1141,7 @@ fn double_clicking_project_row_toggles_agent_list(cx: &mut gpui::TestAppContext)
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let _root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
@@ -1207,7 +1207,7 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let _root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
@@ -1296,7 +1296,7 @@ fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -1342,7 +1342,7 @@ fn root_view_error_notification_auto_dismisses(cx: &mut gpui::TestAppContext) {
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -1659,7 +1659,7 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -2034,7 +2034,7 @@ fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppCont
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -2453,7 +2453,7 @@ fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::Test
             root
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -2539,7 +2539,7 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
             root
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     let document = cx
@@ -2674,7 +2674,7 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
             root
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     let document = cx
@@ -3760,7 +3760,7 @@ fn closing_window_with_running_terminal_does_not_request_process_termination(
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     let allowed = root.update(cx, |root, cx| root.request_window_close(cx));
@@ -4020,7 +4020,7 @@ fn layout_default_editor_uses_editor_settings_and_updates_appearance(
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -4415,7 +4415,7 @@ fn settings_vim_actions_navigate_groups_only_when_enabled(cx: &mut gpui::TestApp
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -4490,7 +4490,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         register_workbench_keybinding_interceptor(cx, &root);
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -4813,7 +4813,7 @@ fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::Te
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         register_workbench_keybinding_interceptor(cx, &root);
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -4863,7 +4863,7 @@ fn external_keybindings_edits_reload_without_restart(cx: &mut gpui::TestAppConte
             )
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -5068,7 +5068,7 @@ fn settings_search_finds_shell_and_keeps_terminal_preferences_together(
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -5111,7 +5111,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -5177,7 +5177,7 @@ fn agent_settings_readonly_controls_display_values_without_mutation(cx: &mut gpu
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -5271,7 +5271,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -5352,7 +5352,7 @@ fn enabled_new_tab_toolbar_click_runs_the_selected_configured_command(
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -5410,7 +5410,7 @@ fn dragging_tab_to_group_edge_splits_and_resizes_work_area(cx: &mut gpui::TestAp
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -5526,7 +5526,7 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -5631,7 +5631,7 @@ fn status_bar_keeps_text_and_actions_inside_vertical_insets(cx: &mut gpui::TestA
                 paths,
             )
         });
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     cx.run_until_parked();
     cx.refresh().unwrap();
@@ -5666,7 +5666,7 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
@@ -5817,7 +5817,7 @@ fn bars_agent_components_follow_active_pane_and_attention_transitions(
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *capture.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
@@ -5866,7 +5866,7 @@ fn bars_editor_presets_remain_drafts_until_saved(cx: &mut gpui::TestAppContext) 
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -5979,7 +5979,7 @@ fn bars_editor_preview_cache_drops_invalid_drafts_and_recovers_with_defaults(
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -6039,7 +6039,7 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -6121,7 +6121,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -6175,7 +6175,7 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -6208,7 +6208,7 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -6268,7 +6268,7 @@ fn enabling_login_startup_requires_confirmation_before_backend_registration(
             WorkbenchView::with_config_paths_for_test(paths_for_window).with_login_startup(manager)
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
@@ -6434,7 +6434,7 @@ fn file_finder_action_indexes_gitignored_workspace_and_renders_results(
         let root =
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -6553,7 +6553,7 @@ fn window_background_settings_persist_from_live_window(cx: &mut gpui::TestAppCon
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths_for_window));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -6581,12 +6581,13 @@ fn ui_font_size_updates_window_scale(cx: &mut gpui::TestAppContext) {
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
-    root.update_in(cx, |root, _window, cx| {
+    root.update_in(cx, |root, window, cx| {
         root.set_ui_font_size(20.0).unwrap();
+        root.apply_appearance_change(window, cx);
         cx.notify();
     });
     cx.refresh().unwrap();
@@ -7915,7 +7916,7 @@ fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppC
             WorkbenchView::with_workspace_for_test_and_config_paths(Workspace::new(), paths)
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.refresh().unwrap();
@@ -7956,7 +7957,7 @@ fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::Te
             cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         register_workbench_keybinding_interceptor(cx, &root);
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -8872,7 +8873,7 @@ autosave_delay_ms = {delay_ms}
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         register_workbench_keybinding_interceptor(cx, &root);
         register_workbench_close_guard(window, cx, &root);
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();

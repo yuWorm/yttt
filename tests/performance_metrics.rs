@@ -74,7 +74,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, view_paths)
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     main_cx.run_until_parked();
@@ -120,7 +120,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
             WorkbenchView::with_workspace_for_test_and_config_paths(second_workspace, second_paths)
         });
         *second_root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let second_root = second_root_slot.borrow_mut().take().unwrap();
     assert_cached_performance(&second_root, second_cx);

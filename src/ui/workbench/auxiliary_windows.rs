@@ -176,7 +176,7 @@ fn open_auxiliary_window(
             true
         });
         window.activate_window();
-        cx.new(|cx| ComponentRoot::new(view, window, cx))
+        cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx))
     });
     owner.update(cx, |root, cx| {
         let slot = root.auxiliary_windows.slot(kind);
@@ -285,7 +285,6 @@ impl Render for AuxiliaryWindow {
             root.ensure_settings_project_target_loaded(window, cx);
             root.flush_pending_status_notifications(window, cx);
             let appearance = root.theme_runtime();
-            window.set_rem_size(px(appearance.typography.font_size));
             root.sync_vim_controller(window, cx);
             let title = match kind {
                 AuxiliaryWindowKind::Settings => {

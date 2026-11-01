@@ -12,8 +12,7 @@ use gpui::{
     relative, size,
 };
 use gpui_component::{
-    Icon, IconName, Root as ComponentRoot, Sizable as _, scroll::ScrollableElement as _,
-    spinner::Spinner,
+    Icon, IconName, Sizable as _, scroll::ScrollableElement as _, spinner::Spinner,
 };
 use yttt_ui::primitives::{
     button::{YtttButtonVariant, yttt_button},
@@ -53,7 +52,7 @@ pub(super) fn open(
             true
         });
 
-        cx.new(|cx| ComponentRoot::new(view, window, cx))
+        cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx))
     })?;
     Ok(())
 }
@@ -672,7 +671,6 @@ impl Render for RemoteConnectView {
         let appearance = cx.global::<AppearanceState>().runtime();
         let theme = appearance.ui;
         let style = appearance.style;
-        window.set_rem_size(px(appearance.typography.font_size));
         let title = self.text.get(UiTextKey::RemoteConnectTitle);
         window.set_window_title(&format!("{title} — yttt"));
         let heading = match self.prompts.front() {

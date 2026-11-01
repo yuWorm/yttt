@@ -1,4 +1,5 @@
 disallowed-methods = [
+    { path = "gpui_component::Root::new", reason = "Use yttt_ui::window::yttt_root so every window has one entry point" },
     { path = "gpui_component::alert::Alert::error", reason = "Use yttt_ui::primitives::notification::yttt_alert." },
     { path = "gpui_component::alert::Alert::info", reason = "Use yttt_ui::primitives::notification::yttt_alert." },
     { path = "gpui_component::alert::Alert::success", reason = "Use yttt_ui::primitives::notification::yttt_alert." },

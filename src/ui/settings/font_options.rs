@@ -199,7 +199,7 @@ mod tests {
         AppContext as _, Context, InteractiveElement as _, IntoElement, Modifiers,
         ParentElement as _, Render, Styled as _, TestAppContext, Window, div, px,
     };
-    use gpui_component::{Root, select::SelectState};
+    use gpui_component::select::SelectState;
     use yttt_ui::{primitives::select::yttt_select, style::UiStyle, theme::WorkbenchTheme};
 
     use super::*;
@@ -244,7 +244,7 @@ mod tests {
             });
             *select_slot_for_window.borrow_mut() = Some(select.clone());
             let view = cx.new(|_| FontSelectTestView { select });
-            Root::new(view, window, cx)
+            yttt_ui::window::yttt_root(view, window, cx)
         });
         let select = select_slot.borrow_mut().take().unwrap();
         cx.refresh().unwrap();

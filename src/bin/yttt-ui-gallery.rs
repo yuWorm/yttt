@@ -128,9 +128,8 @@ fn run(options: Options) {
             };
             let handle = cx
                 .open_window(window_options, move |window, cx| {
-                    window.set_rem_size(px(16.));
                     let view = cx.new(|cx| Gallery::new(theme, ui_style, view_layout, window, cx));
-                    cx.new(|cx| Root::new(view, window, cx))
+                    cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx))
                 })
                 .expect("gallery window opens");
             cx.activate(true);

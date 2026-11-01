@@ -67,7 +67,7 @@ fn remote_manager_connects_from_list_and_scrolls_modal_without_losing_list(
         });
         *window_slot.borrow_mut() = Some(root.clone());
         let surface = cx.new(|_| RemoteManagerTestSurface(root));
-        ComponentRoot::new(surface, window, cx)
+        yttt_ui::window::yttt_root(surface, window, cx)
     });
     cx.run_until_parked();
     let root = slot.borrow_mut().take().unwrap();
@@ -251,7 +251,7 @@ fn ssh_project_password_connection_without_a_saved_secret_opens_a_focused_prompt
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths(config_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update_in(cx, |root, _window, cx| {
@@ -296,7 +296,7 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| WorkbenchView::with_config_paths(config_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
 
@@ -737,7 +737,7 @@ fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppCon
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     let pane = cx.update(|_window, cx| {
@@ -1440,7 +1440,7 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
@@ -1521,7 +1521,7 @@ fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &m
             root
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
+        yttt_ui::window::yttt_root(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
     let snapshot = |turn_state| AgentSnapshot {

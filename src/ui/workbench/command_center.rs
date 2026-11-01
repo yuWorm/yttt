@@ -4611,7 +4611,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| view);
             *output.borrow_mut() = Some(root.clone());
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = slot.borrow_mut().take().unwrap();
         cx.run_until_parked();
@@ -4719,7 +4719,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| view);
             *output.borrow_mut() = Some(root.clone());
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = slot.borrow_mut().take().unwrap();
         cx.run_until_parked();
@@ -4844,7 +4844,7 @@ mod tests {
             .insert(target.project_id.to_string());
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| view);
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         cx.run_until_parked();
         cx.refresh().unwrap();
@@ -5143,7 +5143,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| view);
             *output.borrow_mut() = Some(root.clone());
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = slot.borrow_mut().take().unwrap();
         cx.run_until_parked();
@@ -5225,7 +5225,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| view);
             *output.borrow_mut() = Some(root.clone());
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = slot.borrow_mut().take().unwrap();
         root.update_in(cx, |root, window, cx| {
@@ -5402,7 +5402,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| view);
             *output.borrow_mut() = Some(root.clone());
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = slot.borrow_mut().take().unwrap();
         root.update_in(cx, |root, _, cx| {
@@ -5467,7 +5467,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| view);
             *output.borrow_mut() = Some(root.clone());
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = slot.borrow_mut().take().unwrap();
         root.update_in(cx, |root, window, cx| {
@@ -5568,7 +5568,7 @@ mod tests {
             let (_, cx) = cx.add_window_view(|window, cx| {
                 let root = cx.new(|_| view);
                 *output.borrow_mut() = Some(root.clone());
-                ComponentRoot::new(root, window, cx)
+                yttt_ui::window::yttt_root(root, window, cx)
             });
             let root = slot.borrow_mut().take().unwrap();
             root.update_in(cx, |root, window, cx| {
@@ -5599,7 +5599,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
             *output.borrow_mut() = Some(root.clone());
-            ComponentRoot::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = slot.borrow_mut().take().unwrap();
         root.update_in(cx, |root, window, cx| {

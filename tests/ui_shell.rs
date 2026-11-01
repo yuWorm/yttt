@@ -570,7 +570,7 @@ fn show_notification(
 
     let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
         let view = cx.new(|_| gpui::EmptyView);
-        gpui_component::Root::new(view, window, cx)
+        yttt_ui::window::yttt_root(view, window, cx)
     });
     cx.update(|window, cx| {
         gpui_component::WindowExt::push_notification(window, notification(), cx);

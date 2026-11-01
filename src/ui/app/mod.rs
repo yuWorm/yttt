@@ -609,7 +609,7 @@ fn open_workbench_window(
         register_workbench_close_guard(window, cx, &view);
         cx.activate(true);
         window.activate_window();
-        cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
+        cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx).bg(transparent_black()))
     })?;
     Ok(())
 }

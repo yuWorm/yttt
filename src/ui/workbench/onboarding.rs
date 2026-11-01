@@ -1087,7 +1087,7 @@ mod tests {
         let (_component_root, cx) = cx.add_window_view(move |window, cx| {
             let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
             *root_slot_for_window.borrow_mut() = Some(root.clone());
-            gpui_component::Root::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = root_slot.borrow_mut().take().unwrap();
 
