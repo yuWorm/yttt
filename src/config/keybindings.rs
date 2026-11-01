@@ -137,9 +137,9 @@ impl KeybindingsConfig {
         for binding in &self.bindings {
             let keys = resolve_keybinding_sequence(&binding.keys, &leader);
             if keys.is_empty()
-                || keys
-                    .split_whitespace()
-                    .any(|keystroke| crate::config::keybindings::parse_keystroke(keystroke).is_err())
+                || keys.split_whitespace().any(|keystroke| {
+                    crate::config::keybindings::parse_keystroke(keystroke).is_err()
+                })
             {
                 invalid.push(format!("invalid key sequence {:?}", binding.keys));
             }

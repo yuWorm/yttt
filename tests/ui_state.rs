@@ -4658,8 +4658,9 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
     for keys in ["escape", "ctrl-["] {
         cx.read(|app| {
             assert!(
-                root.read(app)
-                    .terminal_should_receive_keystroke(&yttt::config::keybindings::parse_keystroke(keys).unwrap()),
+                root.read(app).terminal_should_receive_keystroke(
+                    &yttt::config::keybindings::parse_keystroke(keys).unwrap()
+                ),
                 "{keys} must remain terminal process input"
             );
         });
@@ -6852,8 +6853,10 @@ fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
     root.open_settings();
 
     assert!(
-        root.runtime_command_for_dispatch(&yttt::config::keybindings::parse_keystroke("cmd-t").unwrap())
-            .is_none()
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("cmd-t").unwrap()
+        )
+        .is_none()
     );
     assert_eq!(
         root.workspace()
@@ -6873,8 +6876,10 @@ fn root_view_layout_editor_blocks_project_file_save_binding() {
 
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
     assert!(
-        root.runtime_command_for_dispatch(&yttt::config::keybindings::parse_keystroke("cmd-s").unwrap())
-            .is_none()
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("cmd-s").unwrap()
+        )
+        .is_none()
     );
 }
 
@@ -7057,7 +7062,9 @@ fn create_project_command_is_configurable_in_keybinding_settings() {
     root.set_keybinding_command_keys(CommandId::ProjectCreate, vec!["cmd-alt-n".to_string()])
         .unwrap();
     assert_eq!(
-        root.runtime_command_for_keystroke(&yttt::config::keybindings::parse_keystroke("cmd-alt-n").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-alt-n").unwrap()
+        ),
         Some(CommandId::ProjectCreate)
     );
 
@@ -7080,11 +7087,15 @@ fn root_view_runtime_keybindings_follow_edited_settings() {
         .unwrap();
 
     assert_eq!(
-        root.runtime_command_for_keystroke(&yttt::config::keybindings::parse_keystroke("cmd-l").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-l").unwrap()
+        ),
         Some(CommandId::TabPalette)
     );
     assert_eq!(
-        root.runtime_command_for_keystroke(&yttt::config::keybindings::parse_keystroke("cmd-j").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-j").unwrap()
+        ),
         None
     );
 }
@@ -7118,10 +7129,14 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
 
     let platform_l = platform_keystroke("l");
     root.begin_keybinding_edit_replacement();
-    assert!(root.record_keybinding_edit_keystroke(&yttt::config::keybindings::parse_keystroke(&platform_l).unwrap()));
+    assert!(root.record_keybinding_edit_keystroke(
+        &yttt::config::keybindings::parse_keystroke(&platform_l).unwrap()
+    ));
     root.finish_keybinding_edit_recording();
     root.begin_keybinding_edit_alternative();
-    assert!(root.record_keybinding_edit_keystroke(&yttt::config::keybindings::parse_keystroke("ctrl-l").unwrap()));
+    assert!(root.record_keybinding_edit_keystroke(
+        &yttt::config::keybindings::parse_keystroke("ctrl-l").unwrap()
+    ));
     root.finish_keybinding_edit_recording();
     root.confirm_keybinding_edit_dialog().unwrap();
 
@@ -7797,8 +7812,10 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert!(
-        root.runtime_command_for_dispatch(&yttt::config::keybindings::parse_keystroke("ctrl-t").unwrap())
-            .is_none()
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("ctrl-t").unwrap()
+        )
+        .is_none()
     );
     assert_eq!(
         root.workspace()
@@ -7820,7 +7837,9 @@ fn root_view_reserves_control_keybindings_when_terminal_is_focused() {
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert_eq!(
-        root.runtime_command_for_dispatch(&yttt::config::keybindings::parse_keystroke("ctrl-t").unwrap()),
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("ctrl-t").unwrap()
+        ),
         Some(CommandId::TabNew)
     );
 }
@@ -7833,7 +7852,9 @@ fn root_view_routes_terminal_special_keys_to_focused_terminal() {
 
     for keys in ["ctrl-c", "tab", "enter", "escape", "up"] {
         assert!(
-            root.terminal_should_receive_keystroke(&yttt::config::keybindings::parse_keystroke(keys).unwrap()),
+            root.terminal_should_receive_keystroke(
+                &yttt::config::keybindings::parse_keystroke(keys).unwrap()
+            ),
             "{keys} should be routed to the focused terminal"
         );
     }
@@ -8995,11 +9016,15 @@ fn configured_git_keybinding_dispatches_from_the_workbench() {
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
 
     assert_eq!(
-        root.runtime_command_for_keystroke(&yttt::config::keybindings::parse_keystroke("cmd-shift-g").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-shift-g").unwrap()
+        ),
         Some(CommandId::GitDiffOpen)
     );
     let command = root
-        .runtime_command_for_dispatch(&yttt::config::keybindings::parse_keystroke("cmd-shift-g").unwrap())
+        .runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("cmd-shift-g").unwrap(),
+        )
         .unwrap();
     root.run_command(command).unwrap();
     assert!(root.git_diff_panel_is_open());

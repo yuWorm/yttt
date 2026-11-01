@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, IconName,
-    input::{InputEvent, EditorState, Position, Rope, Search},
+    input::{EditorState, InputEvent, Position, Rope, Search},
 };
 use gpui_markdown_editor::{
     MarkdownEditor, MarkdownEditorEnvironment, MarkdownEditorEvent, MarkdownEditorMode,

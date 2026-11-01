@@ -3034,12 +3034,7 @@ impl TerminalView {
     /// Handle scroll events.
     ///
     /// Currently a placeholder for future scrollback support.
-    fn on_scroll(
-        &mut self,
-        event: &ScrollEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_scroll(&mut self, event: &ScrollEvent, _window: &mut Window, cx: &mut Context<Self>) {
         self.pointer_hidden = false;
         let Some(viewport) = *self.viewport.lock() else {
             return;

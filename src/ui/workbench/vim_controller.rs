@@ -279,7 +279,11 @@ impl WorkbenchView {
     }
 
     pub(super) fn settings_text_input_is_focused(&self, window: &Window, cx: &App) -> bool {
-        fn focused(input: &Entity<gpui_component::input::InputState>, window: &Window, cx: &App) -> bool {
+        fn focused(
+            input: &Entity<gpui_component::input::InputState>,
+            window: &Window,
+            cx: &App,
+        ) -> bool {
             input.read(cx).focus_handle(cx).is_focused(window)
         }
 

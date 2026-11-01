@@ -4,7 +4,7 @@ use gpui::{
     Action, App, ClipboardItem, Context, Global, KeyBinding, KeyContext, KeystrokeEvent, Window,
     actions,
 };
-use gpui_component::input::{InputCursorShape, EditorState, Rope, RopeExt as _, Search};
+use gpui_component::input::{EditorState, InputCursorShape, Rope, RopeExt as _, Search};
 
 pub const VIM_EDITOR_CONTEXT: &str = "VimEditor";
 pub const VIM_CONTROL_CONTEXT: &str = "VimControl";

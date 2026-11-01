@@ -844,11 +844,17 @@ impl CompiledKeybindingSpec {
             }
             CompiledKeybindingAction::Unbind(Some(action)) => {
                 let action_name = SharedString::from(action.build().name().to_string());
-                KeyBinding::new(crate::config::keybindings::intern_keys(&self.keys), Unbind(action_name), self.context.as_deref())
+                KeyBinding::new(
+                    crate::config::keybindings::intern_keys(&self.keys),
+                    Unbind(action_name),
+                    self.context.as_deref(),
+                )
             }
-            CompiledKeybindingAction::Unbind(None) => {
-                KeyBinding::new(crate::config::keybindings::intern_keys(&self.keys), NoAction, self.context.as_deref())
-            }
+            CompiledKeybindingAction::Unbind(None) => KeyBinding::new(
+                crate::config::keybindings::intern_keys(&self.keys),
+                NoAction,
+                self.context.as_deref(),
+            ),
         }
     }
 }

@@ -574,8 +574,8 @@ fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
             .expect("recorded shortcut must be retained");
         assert_eq!(keybindings.len(), 1);
         let keybinding = &keybindings[0];
-        let parsed =
-            crate::config::keybindings::parse_keystroke(keybinding).expect("recording must produce a parsable keybinding");
+        let parsed = crate::config::keybindings::parse_keystroke(keybinding)
+            .expect("recording must produce a parsable keybinding");
         assert_eq!(parsed.key, "l");
         assert!(
             parsed.modifiers.platform,

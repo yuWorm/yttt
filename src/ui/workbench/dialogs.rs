@@ -1357,9 +1357,10 @@ pub(super) fn project_empty_terminal_state(
                 ui_style,
                 cx,
             )
-            .child(Kbd::new(crate::config::keybindings::parse_keystroke("secondary-t").expect(
-                "new terminal shortcut should be a valid GPUI keystroke",
-            )))
+            .child(Kbd::new(
+                crate::config::keybindings::parse_keystroke("secondary-t")
+                    .expect("new terminal shortcut should be a valid GPUI keystroke"),
+            ))
             .on_click(cx.listener(|this, _, _window, cx| {
                 let _ = this.run_command(CommandId::TabNew);
                 cx.notify();
