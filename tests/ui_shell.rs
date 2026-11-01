@@ -132,7 +132,7 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     assert_eq!(sidebar.resize_hit_area_width, gpui::px(5.0));
     assert_eq!(sidebar.item_height, gpui::rems(1.75));
     assert_eq!(sidebar.item_padding_x, gpui::rems(0.5));
-    assert_eq!(sidebar.background, theme.app_background);
+    assert_eq!(sidebar.background, theme.sidebar_background);
     assert_eq!(tabs.height, gpui::rems(2.0));
     assert_eq!(tabs.item_height, tabs.height);
     assert_eq!(tabs.border_width, gpui::px(1.0));

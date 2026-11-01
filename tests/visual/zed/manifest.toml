@@ -10,6 +10,9 @@ machine = "Mac16,10"
 chip = "Apple M4"
 scale_factor = 2
 
+# screencapture applies the display's color profile, so baseline PNG values are
+# not theme values. On U27N3R, #2f343e captures as #292e36. Compare Zed with yttt
+# only through the same capture chain, or read colors from the Zed theme.
 [gallery]
 window_width = 960
 window_height = 900
