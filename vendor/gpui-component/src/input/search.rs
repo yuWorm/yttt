@@ -327,6 +327,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
 
         v_flex()
             .id("search-panel")
+            .debug_selector(|| "search-panel".to_string())
             .occlude()
             .track_focus(&self.focus_handle(cx))
             .key_context(CONTEXT)

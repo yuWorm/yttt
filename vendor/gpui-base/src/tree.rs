@@ -201,6 +201,11 @@ pub struct TreeState {
 impl EventEmitter<TreeEvent> for TreeState {}
 
 impl TreeState {
+    /// yttt patch: lets a host check whether focus is inside the tree.
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
     pub fn new(cx: &mut App) -> Self {
         Self {
             focus_handle: cx.focus_handle(),

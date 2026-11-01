@@ -410,7 +410,7 @@ impl WorkbenchView {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<InputState>> {
+    ) -> Option<Entity<gpui_component::input::EditorState>> {
         let editor = self.overlays.layout_toml_editor.as_ref()?.editor();
 
         let input = if let Some(input) = &self.overlays.layout_toml_input {
@@ -435,7 +435,7 @@ impl WorkbenchView {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<InputState>> {
+    ) -> Option<Entity<gpui_component::input::InputState>> {
         let query = self
             .overlays
             .layout_toml_editor
@@ -446,7 +446,7 @@ impl WorkbenchView {
             input.clone()
         } else {
             let input = cx.new(|cx| {
-                InputState::new(window, cx)
+                gpui_component::input::InputState::new(window, cx)
                     .placeholder(self.ui_text.get(UiTextKey::BarsEditorSearchComponents))
                     .default_value(query)
             });
@@ -588,7 +588,7 @@ impl WorkbenchView {
 
     pub(super) fn on_layout_toml_input_event(
         &mut self,
-        input: &Entity<InputState>,
+        input: &Entity<gpui_component::input::EditorState>,
         event: &InputEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -626,7 +626,7 @@ impl WorkbenchView {
 
     fn on_bar_component_search_input_event(
         &mut self,
-        input: &Entity<InputState>,
+        input: &Entity<gpui_component::input::InputState>,
         event: &InputEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,

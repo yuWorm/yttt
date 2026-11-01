@@ -101,11 +101,11 @@ impl AssetSource for YtttAssets {
             return Ok(Some(Cow::Borrowed(asset)));
         }
 
-        gpui_component_assets::Assets.load(path)
+        gpui_kit_assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        let mut assets = gpui_component_assets::Assets.list(path)?;
+        let mut assets = gpui_kit_assets::Assets.list(path)?;
         assets.extend(
             BUILTIN_AGENT_ICON_ASSET_PATHS
                 .iter()

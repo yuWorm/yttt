@@ -3,7 +3,7 @@
 use gpui::{Entity, Pixels, Rems, Rgba, prelude::*};
 use gpui_component::{
     Sizable as _,
-    input::{Input, InputState, NumberInput},
+    input::{Editor, EditorState, Input, InputState, NumberInput},
 };
 
 use crate::{style::UiStyle, theme::WorkbenchTheme};
@@ -97,6 +97,10 @@ pub fn yttt_input(
 
 pub fn yttt_borderless_input(state: &Entity<InputState>) -> Input {
     Input::new(state).appearance(false)
+}
+
+pub fn yttt_borderless_editor(state: &Entity<EditorState>) -> Editor {
+    Editor::new(state).appearance(false)
 }
 
 pub fn yttt_number_input(

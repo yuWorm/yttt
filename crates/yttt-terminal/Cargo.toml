@@ -10,8 +10,8 @@ description = "YTTT terminal component for GPUI"
 perf-metrics = ["dep:hdrhistogram", "dep:serde_json"]
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui = { package = "gpui-pre", version = "=0.3.10" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 alacritty_terminal = "0.25.1"
 anyhow = "1"
 portable-pty = "0.9"
@@ -32,4 +32,4 @@ yttt-core = { path = "../yttt-core" }
 
 
 [dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }

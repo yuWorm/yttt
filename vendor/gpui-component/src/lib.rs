@@ -150,6 +150,28 @@ pub fn init(cx: &mut App) {
     tooltip::init(cx);
 }
 
+/// yttt patch: restore component key bindings after `cx.clear_key_bindings()`.
+pub fn rebind_keybindings(cx: &mut App) {
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    inspector::init(cx);
+    root::init(cx);
+    gpui_base::init(cx);
+    input::init(cx);
+    diff::init(cx);
+    date_picker::init(cx);
+    dock::init(cx);
+    sheet::init(cx);
+    list::init(cx);
+    command::init(cx);
+    carousel::init(cx);
+    notification::init(cx);
+    popover::init(cx);
+    questionnaire::init(cx);
+    menu::init(cx);
+    table::init(cx);
+    tooltip::init(cx);
+}
+
 #[inline]
 pub fn locale() -> impl Deref<Target = str> {
     rust_i18n::locale()

@@ -241,7 +241,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// When `collapse` is set, a non-empty selection first collapses to just
     /// outside its start (up) or end (down) before moving, otherwise the cursor
     /// offset is used.
-    fn move_vertical(
+    pub(super) fn move_vertical(
         &mut self,
         move_lines: isize,
         collapse: bool,

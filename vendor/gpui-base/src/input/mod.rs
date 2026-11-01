@@ -76,6 +76,9 @@ mod textarea;
 pub use scrollbar_presentation::{EditorScrollbarContext, EditorScrollbarRenderer};
 #[path = "base/touch.rs"]
 mod touch;
+#[path = "base/yttt_ext.rs"]
+mod yttt_ext;
+pub use yttt_ext::InputCursorShape;
 #[path = "base/undo_manager.rs"]
 mod undo_manager;
 

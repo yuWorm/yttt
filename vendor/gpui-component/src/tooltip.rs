@@ -6,6 +6,7 @@ use std::{
 };
 
 use gpui::{
+    Hsla,
     Action, AnyElement, AnyView, App, AppContext, Bounds, Context, ElementId, GlobalElementId,
     IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
@@ -36,7 +37,24 @@ enum TooltipContext {
 
 /// A Tooltip element that can display text or custom content,
 /// with optional key binding information.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TooltipAppearance {
+    key_binding_foreground: Option<Hsla>,
+}
+
+impl TooltipAppearance {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn key_binding_foreground(mut self, color: impl Into<Hsla>) -> Self {
+        self.key_binding_foreground = Some(color.into());
+        self
+    }
+}
+
 pub struct Tooltip {
+    appearance: TooltipAppearance,
     style: StyleRefinement,
     content: TooltipContext,
     key_binding: Option<Kbd>,
@@ -44,9 +62,15 @@ pub struct Tooltip {
 }
 
 impl Tooltip {
+    pub fn appearance(mut self, appearance: TooltipAppearance) -> Self {
+        self.appearance = appearance;
+        self
+    }
+
     /// Create a Tooltip with a text content.
     pub fn new(text: impl Into<Text>) -> Self {
         Self {
+            appearance: TooltipAppearance::default(),
             style: StyleRefinement::default(),
             content: TooltipContext::Text(text.into()),
             key_binding: None,
@@ -61,6 +85,7 @@ impl Tooltip {
         F: Fn(&mut Window, &mut App) -> E + 'static,
     {
         Self {
+            appearance: TooltipAppearance::default(),
             style: StyleRefinement::default(),
             key_binding: None,
             action: None,
@@ -140,7 +165,11 @@ impl Render for Tooltip {
                         div()
                             .text_xs()
                             .flex_shrink_0()
-                            .text_color(cx.theme().muted_foreground)
+                            .text_color(
+                                self.appearance
+                                    .key_binding_foreground
+                                    .unwrap_or(cx.theme().muted_foreground),
+                            )
                             .child(kbd.appearance(false)),
                     )
                 }),

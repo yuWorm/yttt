@@ -483,6 +483,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) touch_selection: super::touch::TouchSelection,
     pub(crate) disabled: bool,
     pub(crate) readonly: bool,
+    pub(super) text_input_enabled: bool,
+    pub(super) cursor_shape: super::yttt_ext::InputCursorShape,
     pub(crate) text_align: TextAlign,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
@@ -974,6 +976,8 @@ impl<M: InputModeKind> InputBaseState<M> {
             touch_selection: Default::default(),
             disabled: false,
             readonly: false,
+            text_input_enabled: true,
+            cursor_shape: Default::default(),
             text_align: TextAlign::Left,
             masked: false,
             clean_on_escape: false,
@@ -1417,7 +1421,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// This is false when the input is `disabled` or `readonly`, the programmatic
     /// APIs (e.g.: [`Self::set_value`], [`Self::insert`]) are not limited by this.
     pub fn is_editable(&self) -> bool {
-        !self.disabled && !self.readonly
+        !self.disabled && !self.readonly && self.text_input_enabled
     }
 
     /// Set true to clear the input by pressing Escape key.
@@ -3328,16 +3332,22 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
-        self.replay_history(true, window, cx);
+        let _ = self.replay_history(true, window, cx);
     }
 
     pub(super) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
-        self.replay_history(false, window, cx);
+        let _ = self.replay_history(false, window, cx);
     }
 
-    fn replay_history(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Returns the lowest replayed offset (yttt patch).
+    pub(super) fn replay_history(
+        &mut self,
+        undo: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
         if !self.is_editable() {
-            return;
+            return None;
         }
         let replay = if undo {
             self.undo_manager.undo()
@@ -3345,8 +3355,19 @@ impl<M: InputModeKind> InputBaseState<M> {
             self.undo_manager.redo()
         };
         let Some(replay) = replay else {
-            return;
+            return None;
         };
+        let replayed_start = replay
+            .changes
+            .iter()
+            .map(|change| {
+                if undo {
+                    change.new_range.start
+                } else {
+                    change.old_range.start
+                }
+            })
+            .min();
         let token_aware = self.inline_tokens.is_some()
             || replay
                 .changes
@@ -3383,6 +3404,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             cx.emit(InputEvent::Change);
         }
         cx.notify();
+        replayed_start
     }
 
     /// Restore a set of selections captured in a transaction, clamping offsets

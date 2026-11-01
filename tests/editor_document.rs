@@ -112,20 +112,20 @@ fn bar_selection_counts_unicode_and_refreshes_after_same_range_edit(cx: &mut gpu
         )
     });
     let input = cx.read(|app| document.read(app).input().clone());
-    input.update(cx, |input, cx| input.set_selection(9, 0, cx));
+    input.update(cx, |input, cx| input.set_anchored_selection(9, 0, cx));
     cx.run_until_parked();
     let selection = cx.read(|app| document.read(app).bar_selection_info().unwrap());
     assert_eq!((selection.characters, selection.lines), (4, 2));
 
     input.update_in(cx, |input, window, cx| {
         input.set_value("1234567\nA\n", window, cx);
-        input.set_selection(9, 0, cx);
+        input.set_anchored_selection(9, 0, cx);
     });
     cx.run_until_parked();
     let selection = cx.read(|app| document.read(app).bar_selection_info().unwrap());
     assert_eq!((selection.characters, selection.lines), (9, 2));
 
-    input.update(cx, |input, cx| input.set_selection(0, 0, cx));
+    input.update(cx, |input, cx| input.set_anchored_selection(0, 0, cx));
     cx.run_until_parked();
     assert!(cx.read(|app| document.read(app).bar_selection_info().is_none()));
 }
@@ -312,7 +312,7 @@ fn breadcrumb_parsing_debounces_edits_and_uses_the_latest_cursor(cx: &mut gpui::
     );
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_selection(input.text().len(), 0, input_cx);
+        input.set_anchored_selection(input.text().len(), 0, input_cx);
         input.replace("mod current {\n    fn selected() {}\n}\n", window, input_cx);
     });
     cx.run_until_parked();
@@ -894,6 +894,10 @@ fn vim_search_reuses_the_query_for_next_and_previous_matches(cx: &mut gpui::Test
     cx.run_until_parked();
 
     cx.simulate_keystrokes("/");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.refresh().unwrap();
     cx.run_until_parked();
     cx.simulate_keystrokes("o n e");
     cx.run_until_parked();

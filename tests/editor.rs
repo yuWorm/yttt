@@ -43,7 +43,7 @@ export function Card({ title }: Props) {
     let mut highlighter = SyntaxHighlighter::new("tsx");
 
     assert!(highlighter.update(None, &text, None));
-    let styles = highlighter.styles(&(0..source.len()), &theme);
+    let styles = highlighter.styles(&(0..source.len()), &*theme);
 
     assert_token_color(&styles, source, "type", theme.style("keyword").unwrap());
     assert_token_color(&styles, source, "Props", theme.style("type").unwrap());
@@ -62,7 +62,7 @@ fn jsx_highlighter_styles_dom_tags_and_components() {
     let theme = HighlightTheme::default_dark();
     let mut highlighter = SyntaxHighlighter::new("javascript");
     highlighter.update(None, &Rope::from_str(source), None);
-    let styles = highlighter.styles(&(0..source.len()), &theme);
+    let styles = highlighter.styles(&(0..source.len()), &*theme);
 
     assert_token_color(&styles, source, "section", theme.style("tag").unwrap());
     assert_token_color(&styles, source, "Widget", theme.style("type").unwrap());
@@ -99,7 +99,7 @@ const Panel = ({ message }: Props) => <section>{message}</section>;
     let mut highlighter = SyntaxHighlighter::new("vue");
 
     assert!(highlighter.update(None, &text, None));
-    let styles = highlighter.styles(&(0..source.len()), &theme);
+    let styles = highlighter.styles(&(0..source.len()), &*theme);
 
     assert_token_color(&styles, source, "Card", theme.style("tag").unwrap());
     assert_token_color(&styles, source, "v-if", theme.style("keyword").unwrap());
@@ -123,7 +123,7 @@ fn vue_directive_expressions_do_not_inherit_html_string_colors() {
     let string_style = theme.style("string").unwrap();
     let mut highlighter = SyntaxHighlighter::new("vue");
     highlighter.update(None, &Rope::from_str(source), None);
-    let styles = highlighter.styles(&(0..source.len()), &theme);
+    let styles = highlighter.styles(&(0..source.len()), &*theme);
 
     assert_token_color(&styles, source, "tooltip", string_style);
     assert_token_color(&styles, source, "'yes'", string_style);
@@ -159,18 +159,18 @@ fn vue_highlighter_refreshes_script_injection_after_an_edit() {
 
     assert!(highlighter.update(None, &old_text, None));
     assert!(highlighter.update(
-        Some(InputEdit {
+        Some(tree_sitter::InputEdit {
             start_byte,
             old_end_byte,
             new_end_byte,
-            start_position: Point::new(0, start_byte),
-            old_end_position: Point::new(0, old_end_byte),
-            new_end_position: Point::new(0, new_end_byte),
+            start_position: tree_sitter::Point::new(0, start_byte),
+            old_end_position: tree_sitter::Point::new(0, old_end_byte),
+            new_end_position: tree_sitter::Point::new(0, new_end_byte),
         }),
         &new_text,
         None,
     ));
-    let styles = highlighter.styles(&(0..new_source.len()), &theme);
+    let styles = highlighter.styles(&(0..new_source.len()), &*theme);
 
     assert_token_color(
         &styles,
@@ -205,7 +205,7 @@ fn added_language_highlighters_style_language_specific_tokens() {
         let mut highlighter = SyntaxHighlighter::new(language);
 
         assert!(highlighter.update(None, &text, None), "{language}");
-        let styles = highlighter.styles(&(0..source.len()), &theme);
+        let styles = highlighter.styles(&(0..source.len()), &*theme);
         assert_token_color(&styles, source, token, theme.style(capture).unwrap());
     }
 }

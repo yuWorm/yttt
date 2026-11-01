@@ -125,6 +125,7 @@ pub struct Notification {
     placement: Option<Anchor>,
     delivery: Option<NotificationDelivery>,
     autohide: bool,
+    always_show_close_button: bool,
     action_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button>>,
     content_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -185,6 +186,7 @@ impl Notification {
             placement: None,
             delivery: None,
             autohide: true,
+            always_show_close_button: false,
             action_builder: None,
             content_builder: None,
             on_click: None,
@@ -318,6 +320,11 @@ impl Notification {
     }
 
     /// Set the auto hide of the notification, default is true.
+    pub fn always_show_close_button(mut self, always_show: bool) -> Self {
+        self.always_show_close_button = always_show;
+        self
+    }
+
     pub fn autohide(mut self, autohide: bool) -> Self {
         self.autohide = autohide;
         self
@@ -457,8 +464,9 @@ impl Render for Notification {
                     .absolute()
                     .top_1()
                     .right_1()
-                    .invisible()
-                    .group_hover("", |this| this.visible())
+                    .when(!self.always_show_close_button, |this| {
+                        this.invisible().group_hover("", |this| this.visible())
+                    })
                     .child(
                         Button::new("close")
                             .icon(IconName::Close)

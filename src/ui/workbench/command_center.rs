@@ -2109,7 +2109,7 @@ impl WorkbenchView {
         match self.activate_agent_pane(&target.project_id, &target.tab_id, &target.pane_id) {
             Ok(()) => {
                 self.command_center.feedback.remove(&feedback_key);
-                window.blur();
+                window.blur(cx);
             }
             Err(error) => {
                 self.command_center.feedback.insert(

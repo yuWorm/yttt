@@ -436,15 +436,6 @@ impl Render for WorkbenchView {
         if !self.ssh.pending_host_keys.is_empty() && !self.ssh.manager_open {
             root = root.child(ssh_host_key_overlay(self, cx));
         }
-        if let Some(notification_layer) = ComponentRoot::render_notification_layer(window, cx) {
-            root = root.child(notification_layer);
-        }
-        if let Some(sheet_layer) = ComponentRoot::render_sheet_layer(window, cx) {
-            root = root.child(sheet_layer);
-        }
-        if let Some(dialog_layer) = ComponentRoot::render_dialog_layer(window, cx) {
-            root = root.child(dialog_layer);
-        }
 
         if self.onboarding.is_none()
             && self.should_auto_focus_workspace()
@@ -458,7 +449,7 @@ impl Render for WorkbenchView {
         let command_center_shortcuts_active = input_owner == InputOwnerKind::CommandCenter
             && !self.command_center_input_is_focused(window, cx);
         let mut key_context = if input_owner == InputOwnerKind::KeybindingRecorder {
-            gpui::KeyContext::new_with_defaults()
+            gpui::KeyContext::new_with_defaults(crate::config::keybindings::host_os())
         } else {
             self.vim.current_key_context()
         };
@@ -882,7 +873,7 @@ const BAR_COMPONENT_CATALOG: [BarComponentCatalog; 41] = [
 
 pub(super) fn layout_toml_editor_window_content(
     root: &mut WorkbenchView,
-    input: &Entity<InputState>,
+    input: &Entity<gpui_component::input::EditorState>,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -899,7 +890,7 @@ pub(super) fn layout_toml_editor_window_content(
 
 fn standard_layout_toml_editor_window_content(
     root: &mut WorkbenchView,
-    input: &Entity<InputState>,
+    input: &Entity<gpui_component::input::EditorState>,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let appearance = root.theme_runtime();
@@ -951,7 +942,7 @@ fn standard_layout_toml_editor_window_content(
 
 fn bars_toml_editor_window_content(
     root: &mut WorkbenchView,
-    input: &Entity<InputState>,
+    input: &Entity<gpui_component::input::EditorState>,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {

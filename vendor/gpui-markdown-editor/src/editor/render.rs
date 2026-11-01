@@ -771,7 +771,7 @@ impl Render for Editor {
         // is an ancestor of every block, so one listener here covers a link in any
         // block while editing. Gated to the secondary modifier so Shift during
         // selection does not repaint.
-        let follow_modifier_active = window.modifiers().secondary();
+        let follow_modifier_active = window.modifiers().secondary(cx);
 
         let base = div()
             .w_full()
@@ -781,8 +781,8 @@ impl Render for Editor {
             .relative()
             .bg(theme.colors.editor_background)
             .font(editor_text_font())
-            .on_modifiers_changed(move |event, window, _| {
-                if event.modifiers.secondary() != follow_modifier_active {
+            .on_modifiers_changed(move |event, window, cx| {
+                if event.modifiers.secondary(cx) != follow_modifier_active {
                     window.refresh();
                 }
             })

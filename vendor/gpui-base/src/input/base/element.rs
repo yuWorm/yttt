@@ -774,7 +774,12 @@ impl<M: InputModeKind> TextElement<M> {
                         cursor_x,
                         bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
                     ),
-                    size(CURSOR_WIDTH, cursor_height),
+                    match state.cursor_shape {
+                        super::yttt_ext::InputCursorShape::Bar => size(CURSOR_WIDTH, cursor_height),
+                        super::yttt_ext::InputCursorShape::Block => {
+                            size(line_height * 0.6, line_height)
+                        }
+                    },
                 ),
                 is_active,
             });

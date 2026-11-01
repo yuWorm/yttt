@@ -1134,6 +1134,7 @@ impl TerminalRenderer {
                     |window| {
                         let _ = window.paint_image(
                             plan.bounds,
+                            plan.bounds,
                             Corners::default(),
                             plan.image,
                             0,
@@ -1236,8 +1237,10 @@ impl TerminalRenderer {
                 },
             };
             window.with_content_mask(Some(ContentMask { bounds: fragment }), |window| {
+                let padded = padded_image_bounds(image_bounds, image.width, image.height);
                 let _ = window.paint_image(
-                    padded_image_bounds(image_bounds, image.width, image.height),
+                    padded,
+                    padded,
                     Corners::default(),
                     Arc::clone(&image.image),
                     0,

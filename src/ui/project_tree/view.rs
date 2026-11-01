@@ -1515,7 +1515,6 @@ fn render_component_row(
 
     ListItem::new(("project-tree-row", ix))
         .selected(selected)
-        .hover_matches_selected(false)
         .h(ui_style.rows.sidebar_height)
         .pl(px(8.0 + depth as f32 * 14.0))
         .rounded(ui_style.radius.compact)

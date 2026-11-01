@@ -358,7 +358,7 @@ impl Render for AuxiliaryWindow {
                 content = content.child(ssh_host_key_overlay(root, cx));
             }
             let mut key_context = if root.overlays.pending_keybinding_edit.is_some() {
-                gpui::KeyContext::new_with_defaults()
+                gpui::KeyContext::new_with_defaults(crate::config::keybindings::host_os())
             } else {
                 root.vim.current_key_context()
             };
@@ -442,15 +442,6 @@ impl Render for AuxiliaryWindow {
                 .on_action(cx.listener(WorkbenchView::on_vim_enter_insert))
         });
         let mut content = content.track_focus(&self.focus_handle);
-        if let Some(layer) = ComponentRoot::render_notification_layer(window, cx) {
-            content = content.child(layer);
-        }
-        if let Some(layer) = ComponentRoot::render_sheet_layer(window, cx) {
-            content = content.child(layer);
-        }
-        if let Some(layer) = ComponentRoot::render_dialog_layer(window, cx) {
-            content = content.child(layer);
-        }
         content
     }
 }

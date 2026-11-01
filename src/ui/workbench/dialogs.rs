@@ -1123,7 +1123,7 @@ fn empty_workspace_action(
         )
         .children(shortcut.map(|shortcut| {
             Kbd::new(
-                Keystroke::parse(shortcut)
+                crate::config::keybindings::parse_keystroke(shortcut)
                     .expect("empty workspace shortcut should be a valid GPUI keystroke"),
             )
             .text_size(scale.text_rems(0.75))
@@ -1357,7 +1357,7 @@ pub(super) fn project_empty_terminal_state(
                 ui_style,
                 cx,
             )
-            .child(Kbd::new(Keystroke::parse("secondary-t").expect(
+            .child(Kbd::new(crate::config::keybindings::parse_keystroke("secondary-t").expect(
                 "new terminal shortcut should be a valid GPUI keystroke",
             )))
             .on_click(cx.listener(|this, _, _window, cx| {

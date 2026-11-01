@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, IconName,
-    input::{InputEvent, InputState, Position, Rope, Search},
+    input::{InputEvent, EditorState, Position, Rope, Search},
 };
 use gpui_markdown_editor::{
     MarkdownEditor, MarkdownEditorEnvironment, MarkdownEditorEvent, MarkdownEditorMode,
@@ -369,7 +369,7 @@ struct BreadcrumbParseRequest {
 
 enum ProjectEditorSurface {
     Code {
-        input: Entity<InputState>,
+        input: Entity<EditorState>,
         _input_subscription: Subscription,
         _input_observer: Subscription,
     },
@@ -398,7 +398,7 @@ pub struct ProjectEditorDocument {
     vim: Option<VimState>,
     _vim_keystroke_subscription: Subscription,
     /// The preview's source: the model generation and the held draft revision.
-    read_only_preview: Option<((u64, u64), Entity<InputState>)>,
+    read_only_preview: Option<((u64, u64), Entity<EditorState>)>,
     held_elsewhere: Option<HeldDocument>,
 }
 
@@ -567,12 +567,12 @@ impl ProjectEditorDocument {
         matches!(self.surface, ProjectEditorSurface::Markdown { .. })
     }
 
-    pub fn input(&self) -> &Entity<InputState> {
+    pub fn input(&self) -> &Entity<EditorState> {
         self.code_input()
             .expect("Markdown documents do not expose a code-editor input")
     }
 
-    pub fn code_input(&self) -> Option<&Entity<InputState>> {
+    pub fn code_input(&self) -> Option<&Entity<EditorState>> {
         match &self.surface {
             ProjectEditorSurface::Code { input, .. } => Some(input),
             ProjectEditorSurface::Markdown { .. } => None,
@@ -774,7 +774,7 @@ impl ProjectEditorDocument {
         let anchor = selection.anchor.min(length);
         let head = selection.head.min(length);
         input.update(cx, |input, input_cx| {
-            input.set_selection(anchor, head, input_cx);
+            input.set_anchored_selection(anchor, head, input_cx);
         });
     }
 
@@ -796,7 +796,7 @@ impl ProjectEditorDocument {
                 let head = selection.head.min(length);
                 input.update(cx, |input, input_cx| {
                     input.set_value(value, window, input_cx);
-                    input.set_selection(anchor, head, input_cx);
+                    input.set_anchored_selection(anchor, head, input_cx);
                 });
                 self.invalidate_breadcrumbs();
                 self.request_breadcrumb_parse(0, cx);
@@ -865,7 +865,7 @@ impl ProjectEditorDocument {
 
     fn on_input_event(
         &mut self,
-        input: &Entity<InputState>,
+        input: &Entity<EditorState>,
         event: &InputEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -940,7 +940,7 @@ impl ProjectEditorDocument {
 
     fn on_input_notify(
         &mut self,
-        input: Entity<InputState>,
+        input: Entity<EditorState>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -977,7 +977,7 @@ impl ProjectEditorDocument {
         self.set_bar_selection(&source, selection)
     }
 
-    fn update_code_bar_selection(&mut self, input: &InputState) -> bool {
+    fn update_code_bar_selection(&mut self, input: &EditorState) -> bool {
         use gpui_component::RopeExt as _;
 
         let range = input.selected_range();
@@ -1572,7 +1572,6 @@ impl Render for ProjectEditorDocument {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .flush_search_panel(true)
                     .into_any_element()
             }
             ProjectEditorSurface::Markdown { editor, .. } => div()
