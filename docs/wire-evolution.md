@@ -36,6 +36,8 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   旧 Host 回复 `Unsupported`,Client 停止上报,所有 attachment 按可见处理。Host 不再保留原始 PTY 回放:
   `after_sequence` 字段保留但被忽略,`raw_replay_tail` 恒为空;Host 不再发送 `ResyncRequired`,
   Client 收到该事件时重建整条 session 连接。
+  v22 内追加(未升版本):事件 `ServerEvent::AgentStateCleared(AgentStateCleared { workspace_id, terminal_session_id })`,
+  Host 丢弃 pane 的 Agent 状态时发送;旧 Client 跳过该事件,在下次打开 workspace 时得到正确状态。
   v22 内追加(未升版本):`WorkspaceRequest::Apply { workspace_id, intent, expected_revision }`
   以 `WorkspaceResponse::Applied { workspace_id, revision }` 回复,不要求 profile 控制权;
   `WorkspaceResponse::Opened` 追加 `layout`(`#[serde(default)]`,旧 Host 解码为 `None`);

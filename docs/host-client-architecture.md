@@ -350,6 +350,11 @@ workspace 时、SSH 机器连接后，以及独立 Host 启动时执行同一个
   SSH 项目经项目描述的 `connection_id`。默认几何 120×40，首个 Interactive 附加按视口 resize。
 - Agent pane：Host 首次启动 Agent 前安装托管 hook 与 OMP 扩展；按 provider 计划 resume 参数，
   本机 OMP 会话缺失时启动新 OMP。resume 未确认前保留旧会话，resume 失败保持退出而非循环重启。
+  pane 的配置决定它是什么，保存的 Agent 快照只记录它运行过什么。Agent pane 只恢复属于自己 provider 的
+  会话，其他 provider 的会话被丢弃（看板保留），pane 启动自己的命令。Shell pane 只恢复 Host 停止时仍在
+  运行的 Agent，并在 shell 内恢复，Agent 退出后回到 shell；已自行结束、无法恢复或没有会话时起干净 shell。
+  恢复出的快照表示进程已不存在，新进程上报前不算活动 Agent。Agent 身份只由
+  `yttt_agent_providers::provider_for_command` / `provider_for_executable` 判定。
 - 运行状态：每次启动尝试后发布 `ResourceCatalogChanged`，Client 刷新 catalog 后附加新终端。
   启动成功记 `Running`、退出记 `Exited`，推进 revision 并广播。退出行为 `Close` 由
   Host 关闭 pane，`AutoRestart` 500 ms 后重启，`ManualRestart` 保持退出；用户重启发
@@ -357,8 +362,13 @@ workspace 时、SSH 机器连接后，以及独立 Host 启动时执行同一个
   结束的终端不记退出、不执行退出行为，pane 保持 `Running`，下次启动按恢复规则重建：shell pane 起干净
   shell，Agent pane 按会话 resume，command pane 不重跑而记为 `Exited`。
 - Agent hook 报告按终端 ID 写入 pane 的 Agent 快照（保留看板），不推进 revision、不广播，
-  持久化合并到每秒一次。已结束（`Exited`）的快照作为历史留在 pane 上：侧栏、标签页与面板状态
-  不把它算作活动 Agent，结束本身也不发通知。
+  持久化合并到每秒一次，`Open` 在返回前先写入。已结束（`Exited`）的快照作为历史留在 pane 上：侧栏、
+  标签页与面板状态不把它算作活动 Agent，结束本身也不发通知。Host 停止时自己结束的 Agent 不记为
+  `Exited`，因此保存的 `Exited` 表示 Agent 自行结束。
+- 进程扫描已观测到 Agent 时，其他 provider 的根 session 事件被忽略：hook 环境会被子进程继承，
+  由窗格内 Agent 启动的其他 Agent 不能替换窗格身份。
+- 进程状态归 Host：Client 采用布局中的 `process_state`，只保留布局不携带的 Agent 快照。Host 丢弃
+  pane 的 Agent 状态时向打开该 workspace 的 Client 发 `ServerEvent::AgentStateCleared`。
 
 ### 7.1 创建
 

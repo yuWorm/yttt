@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui-component = { path = "../../vendor/gpui-component/crates/ui" }
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-base.workspace = true
 serde = { version = "1", features = ["derive"] }

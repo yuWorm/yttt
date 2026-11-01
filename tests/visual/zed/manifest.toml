@@ -1,0 +1,31 @@
+# Fixed environment for comparing yttt with Zed. Change these together and recapture.
+
+[zed]
+version = "1.26.2"  # Latest stable tag on 2026-11-01; sources/zed has local edits and stays on v1.12.0.
+settings = "tests/visual/zed/settings.json"
+
+[environment]
+macos = "26.6"
+machine = "Mac16,10"
+chip = "Apple M4"
+scale_factor = 2
+
+[gallery]
+window_width = 960
+window_height = 800
+theme = "One Dark"
+rem_size_px = 16
+
+# Two captures of the same app, one second apart, measured on 2026-11-01.
+# The Zed scene was static with cursor blink off and a modal open.
+[noise]
+gallery_changed_pixels = 0
+zed_changed_pixels = 0
+zed_max_channel_delta = 0
+
+# Capture noise is zero, so these allow for rendering differences between apps,
+# not for noise. They stay at the design's estimate until the first component
+# comparison in P3 gives real cross-app data.
+[thresholds]
+channel_delta = 16
+changed_ratio = 0.01

@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     sync::Arc,
@@ -161,32 +160,10 @@ fn provider_for_executable(
     providers: &[Arc<dyn AgentProvider>],
     executable: &str,
 ) -> Option<ProviderId> {
-    let basename = executable.rsplit(['/', '\\']).next()?;
-    let basename = [".exe", ".cmd", ".bat", ".ps1"]
-        .into_iter()
-        .find(|suffix| {
-            basename
-                .get(basename.len().saturating_sub(suffix.len())..)
-                .is_some_and(|ending| ending.eq_ignore_ascii_case(suffix))
-        })
-        .map_or(basename, |suffix| {
-            &basename[..basename.len() - suffix.len()]
-        });
-    let normalized = if basename.bytes().any(|byte| byte.is_ascii_uppercase()) {
-        Cow::Owned(basename.to_ascii_lowercase())
-    } else {
-        Cow::Borrowed(basename)
-    };
-    providers
-        .iter()
-        .find(|provider| provider.matches_command(&normalized))
-        .map(|provider| provider.descriptor().id)
-        .or_else(|| {
-            normalized
-                .starts_with("codex-")
-                .then(|| provider_by_id(providers, CODEX_PROVIDER_ID))
-                .flatten()
-        })
+    provider_by_id(
+        providers,
+        yttt_agent_providers::provider_for_executable(executable)?,
+    )
 }
 
 fn provider_for_script_path(

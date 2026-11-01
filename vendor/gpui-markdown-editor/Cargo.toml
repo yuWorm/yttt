@@ -40,7 +40,7 @@ base64 = "0.22.1"
 cssparser = "0.37"
 directories = "6"
 futures = "0.3"
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui = { package = "gpui-pre", version = "=0.3.10" }
 mermaid-rs-renderer = { version = "0.3.0", default-features = false }
 ratex-layout = "0.1.9"
 ratex-parser = "0.1.9"
@@ -72,4 +72,4 @@ tree-sitter-yaml = { version = "0.7", optional = true }
 tree-sitter-toml = { package = "adot-tree-sitter-toml", version = "0.1", optional = true }
 
 [dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }

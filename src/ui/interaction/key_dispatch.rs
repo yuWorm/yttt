@@ -71,7 +71,7 @@ mod tests {
         } else {
             "ctrl-p"
         };
-        let keystroke = Keystroke::parse(keys).unwrap();
+        let keystroke = crate::config::keybindings::parse_keystroke(keys).unwrap();
 
         let command = workspace_command_for_keystroke(
             InputOwnerKind::Workspace,
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn windows_control_shortcuts_use_the_workspace_modifier() {
-        let keystroke = Keystroke::parse("ctrl-p").unwrap();
+        let keystroke = crate::config::keybindings::parse_keystroke("ctrl-p").unwrap();
 
         assert!(uses_workspace_shortcut_modifier_for_platform(
             &keystroke, false
@@ -100,7 +100,7 @@ mod tests {
             shared_editing_enabled: false,
             is_remote: true,
         };
-        let keystroke = Keystroke::parse("cmd-shift-t").unwrap();
+        let keystroke = crate::config::keybindings::parse_keystroke("cmd-shift-t").unwrap();
 
         assert_eq!(
             workspace_command_for_keystroke(

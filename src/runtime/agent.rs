@@ -1,4 +1,4 @@
-use crate::{config::default_layout::BuiltinAgent, model::layout::PaneKind};
+use crate::model::layout::PaneKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentClassification {
@@ -13,41 +13,11 @@ impl AgentClassification {
 }
 
 pub fn classify_agent(kind: Option<PaneKind>, command: &str) -> AgentClassification {
-    if kind == Some(PaneKind::Agent) {
-        return AgentClassification::Agent;
-    }
-
-    if command_basename(command)
-        .and_then(classify_agent_executable)
-        .is_some()
+    if kind == Some(PaneKind::Agent)
+        || yttt_agent_providers::provider_for_command(command).is_some()
     {
         AgentClassification::Agent
     } else {
         AgentClassification::Shell
     }
-}
-
-fn classify_agent_executable(executable: &str) -> Option<BuiltinAgent> {
-    let basename = executable.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
-    let basename = basename
-        .strip_suffix(".exe")
-        .or_else(|| basename.strip_suffix(".cmd"))
-        .or_else(|| basename.strip_suffix(".bat"))
-        .or_else(|| basename.strip_suffix(".ps1"))
-        .unwrap_or(&basename);
-    match basename {
-        "codex" => Some(BuiltinAgent::Codex),
-        "claude" => Some(BuiltinAgent::Claude),
-        "grok" | "groky" => Some(BuiltinAgent::Grok),
-        "opencode" => Some(BuiltinAgent::OpenCode),
-        "pi" => Some(BuiltinAgent::Pi),
-        "omp" => Some(BuiltinAgent::OhMyPi),
-        executable if executable.starts_with("codex-") => Some(BuiltinAgent::Codex),
-        _ => None,
-    }
-}
-
-fn command_basename(command: &str) -> Option<&str> {
-    let program = command.split_whitespace().next()?;
-    program.rsplit(['/', '\\']).next()
 }

@@ -187,7 +187,7 @@ fn editor_owner_dispatches_every_command_available_for_files() {
         let actual = workspace_command_for_keystroke(
             InputOwnerKind::Editor,
             file_context,
-            &Keystroke::parse("cmd-s").unwrap(),
+            &yttt::config::keybindings::parse_keystroke("cmd-s").unwrap(),
             |_| Some(command),
             |_| true,
         );
@@ -213,7 +213,7 @@ fn modal_input_owners_block_project_file_save() {
         let actual = workspace_command_for_keystroke(
             owner,
             CommandContext::local_controller(true, ActiveSurface::File),
-            &Keystroke::parse("cmd-s").unwrap(),
+            &yttt::config::keybindings::parse_keystroke("cmd-s").unwrap(),
             |_| Some(CommandId::FileSave),
             |_| false,
         );
@@ -822,11 +822,17 @@ fn runtime_keybinding_matcher_uses_current_config_specs_only() {
     );
 
     assert_eq!(
-        runtime_command_for_keystroke(&specs, &Keystroke::parse("cmd-l").unwrap()),
+        runtime_command_for_keystroke(
+            &specs,
+            &yttt::config::keybindings::parse_keystroke("cmd-l").unwrap()
+        ),
         Some(CommandId::TabPalette)
     );
     assert_eq!(
-        runtime_command_for_keystroke(&specs, &Keystroke::parse("cmd-j").unwrap()),
+        runtime_command_for_keystroke(
+            &specs,
+            &yttt::config::keybindings::parse_keystroke("cmd-j").unwrap()
+        ),
         None
     );
 }
@@ -1258,15 +1264,18 @@ fn keybindings_editor_localizes_every_non_command_action_presentation() {
 
 #[test]
 fn recorded_keybindings_preserve_shortcut_semantics_and_ignore_incomplete_input() {
-    let recorded = recorded_keybinding(&Keystroke::parse("cmd-shift-k").unwrap())
-        .expect("shortcut must be recorded");
-    let round_trip = Keystroke::parse(&recorded).expect("recorded shortcut must be parsable");
+    let recorded =
+        recorded_keybinding(&yttt::config::keybindings::parse_keystroke("cmd-shift-k").unwrap())
+            .expect("shortcut must be recorded");
+    let round_trip = yttt::config::keybindings::parse_keystroke(&recorded)
+        .expect("recorded shortcut must be parsable");
     assert_eq!(round_trip.key, "k");
     assert!(round_trip.modifiers.platform);
     assert!(round_trip.modifiers.shift);
     assert_eq!(recorded_keybinding(&round_trip), Some(recorded));
     assert_eq!(
-        recorded_keybinding(&Keystroke::parse("enter").unwrap()).as_deref(),
+        recorded_keybinding(&yttt::config::keybindings::parse_keystroke("enter").unwrap())
+            .as_deref(),
         Some("enter")
     );
     assert_eq!(
@@ -1278,8 +1287,13 @@ fn recorded_keybindings_preserve_shortcut_semantics_and_ignore_incomplete_input(
         .as_deref(),
         Some("k")
     );
-    assert!(recorded_keybinding(&Keystroke::parse("shift").unwrap()).is_none());
-    assert!(recorded_keybinding(&Keystroke::parse("k").unwrap()).is_none());
+    assert!(
+        recorded_keybinding(&yttt::config::keybindings::parse_keystroke("shift").unwrap())
+            .is_none()
+    );
+    assert!(
+        recorded_keybinding(&yttt::config::keybindings::parse_keystroke("k").unwrap()).is_none()
+    );
 }
 
 #[test]

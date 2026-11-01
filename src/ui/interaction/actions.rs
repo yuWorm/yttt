@@ -249,10 +249,10 @@ macro_rules! define_bindable_actions {
             ) -> KeyBinding {
                 match self {
                     Self::Command(command) => match command {
-                        $( $command => KeyBinding::new(keys, $command_action, context), )+
+                        $( $command => KeyBinding::new(crate::config::keybindings::intern_keys(keys), $command_action, context), )+
                     },
                     Self::EditorVim(action) => action.key_binding(keys, context),
-                    $( Self::$variant => KeyBinding::new(keys, $ui_action, context), )+
+                    $( Self::$variant => KeyBinding::new(crate::config::keybindings::intern_keys(keys), $ui_action, context), )+
                 }
             }
         }
@@ -844,11 +844,17 @@ impl CompiledKeybindingSpec {
             }
             CompiledKeybindingAction::Unbind(Some(action)) => {
                 let action_name = SharedString::from(action.build().name().to_string());
-                KeyBinding::new(&self.keys, Unbind(action_name), self.context.as_deref())
+                KeyBinding::new(
+                    crate::config::keybindings::intern_keys(&self.keys),
+                    Unbind(action_name),
+                    self.context.as_deref(),
+                )
             }
-            CompiledKeybindingAction::Unbind(None) => {
-                KeyBinding::new(&self.keys, NoAction, self.context.as_deref())
-            }
+            CompiledKeybindingAction::Unbind(None) => KeyBinding::new(
+                crate::config::keybindings::intern_keys(&self.keys),
+                NoAction,
+                self.context.as_deref(),
+            ),
         }
     }
 }
@@ -940,7 +946,7 @@ fn compile_keybinding_spec(
     if keys.is_empty()
         || keys
             .split_whitespace()
-            .any(|keystroke| Keystroke::parse(keystroke).is_err())
+            .any(|keystroke| crate::config::keybindings::parse_keystroke(keystroke).is_err())
     {
         return None;
     }
@@ -1151,7 +1157,7 @@ pub fn runtime_command_for_keystroke(
             )
         })
         .find(|spec| {
-            Keystroke::parse(spec.keys.as_ref())
+            crate::config::keybindings::parse_keystroke(spec.keys.as_ref())
                 .map(KeybindingKeystroke::from_keystroke)
                 .map(|target| keystroke.should_match(&target))
                 .unwrap_or(false)

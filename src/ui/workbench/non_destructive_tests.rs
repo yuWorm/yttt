@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{EntityId, Keystroke, TestAppContext};
+use gpui::{EntityId, TestAppContext};
 use tempfile::tempdir;
 
 use super::*;
@@ -83,7 +83,7 @@ fn remote_manager_connects_from_list_and_scrolls_modal_without_losing_list(
     let footer = cx.debug_bounds("ssh-form-footer").unwrap();
     assert!(viewport.bottom() <= footer.top());
     for _ in 0..4 {
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: viewport.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-100.0))),
             ..Default::default()
@@ -378,7 +378,7 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
         "directory content must fill the row instead of centering: row={row:?}, list={list:?}"
     );
     for _ in 0..4 {
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: row.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
             ..Default::default()
@@ -574,8 +574,8 @@ fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
             .expect("recorded shortcut must be retained");
         assert_eq!(keybindings.len(), 1);
         let keybinding = &keybindings[0];
-        let parsed =
-            Keystroke::parse(keybinding).expect("recording must produce a parsable keybinding");
+        let parsed = crate::config::keybindings::parse_keystroke(keybinding)
+            .expect("recording must produce a parsable keybinding");
         assert_eq!(parsed.key, "l");
         assert!(
             parsed.modifiers.platform,
@@ -1125,7 +1125,7 @@ fn git_diff_split_panes_share_vertical_scroll_but_keep_horizontal_scroll_indepen
 
     let left_pane = cx.debug_bounds("git-diff-split-left-pane").unwrap();
     for _ in 0..12 {
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: left_pane.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-20.0))),
             ..Default::default()
@@ -1168,7 +1168,7 @@ fn git_diff_split_panes_share_vertical_scroll_but_keep_horizontal_scroll_indepen
         left_pane.size.width
     );
 
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: left_pane.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(-160.0), px(0.0))),
         ..Default::default()
@@ -1905,7 +1905,7 @@ fn overflowing_agent_session_list_scrolls_within_the_project_panel(cx: &mut Test
         .debug_bounds("agent-session-row-0")
         .expect("first session row must render");
     for _ in 0..4 {
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: first_row.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
             ..Default::default()

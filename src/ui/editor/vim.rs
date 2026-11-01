@@ -4,7 +4,7 @@ use gpui::{
     Action, App, ClipboardItem, Context, Global, KeyBinding, KeyContext, KeystrokeEvent, Window,
     actions,
 };
-use gpui_component::input::{InputCursorShape, InputState, Rope, RopeExt as _, Search};
+use gpui_component::input::{EditorState, InputCursorShape, Rope, RopeExt as _, Search};
 
 pub const VIM_EDITOR_CONTEXT: &str = "VimEditor";
 pub const VIM_CONTROL_CONTEXT: &str = "VimControl";
@@ -188,7 +188,7 @@ macro_rules! define_editor_vim_actions {
 
             pub fn key_binding(self, keys: &str, context: Option<&str>) -> KeyBinding {
                 match self {
-                    $( Self::$variant => KeyBinding::new(keys, $action, context), )+
+                    $( Self::$variant => KeyBinding::new(crate::config::keybindings::intern_keys(keys), $action, context), )+
                 }
             }
         }
@@ -764,7 +764,7 @@ fn editor_binding(
 }
 
 impl VimState {
-    pub fn new(input: &mut InputState, cx: &mut Context<InputState>) -> Self {
+    pub fn new(input: &mut EditorState, cx: &mut Context<EditorState>) -> Self {
         let state = Self::default();
         state.sync_input_mode(input, cx);
         state
@@ -787,7 +787,7 @@ impl VimState {
     }
 
     pub fn key_context(&self) -> KeyContext {
-        let mut context = KeyContext::new_with_defaults();
+        let mut context = KeyContext::new_with_defaults(crate::config::keybindings::host_os());
         context.add(VIM_EDITOR_CONTEXT);
         let mode = if self.pending_character.is_some() {
             "waiting"
@@ -811,7 +811,7 @@ impl VimState {
         context
     }
 
-    pub fn disable(&mut self, input: &mut InputState, cx: &mut Context<InputState>) {
+    pub fn disable(&mut self, input: &mut EditorState, cx: &mut Context<EditorState>) {
         self.finish_history_group(input);
         self.clear_pending();
         self.visual_anchor = None;
@@ -823,9 +823,9 @@ impl VimState {
 
     pub fn escape(
         &mut self,
-        input: &mut InputState,
+        input: &mut EditorState,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         let prior_mode = self.mode;
         let head = self.visual_head.unwrap_or_else(|| input.selection_head());
@@ -847,7 +847,7 @@ impl VimState {
         self.sync_input_mode(input, cx);
     }
 
-    fn sync_input_mode(&self, input: &mut InputState, cx: &mut Context<InputState>) {
+    fn sync_input_mode(&self, input: &mut EditorState, cx: &mut Context<EditorState>) {
         let insert = self.mode == VimMode::Insert;
         input.set_text_input_enabled(insert, cx);
         input.set_cursor_shape(
@@ -891,9 +891,9 @@ impl VimState {
 
     pub fn zero(
         &mut self,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         let is_count_digit = if self.operator.is_some() {
             self.post_count.is_some()
@@ -916,9 +916,9 @@ impl VimState {
     pub fn motion(
         &mut self,
         motion: Motion,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         let explicit_count = self.active_count().is_some();
         let count = self.take_count();
@@ -975,7 +975,7 @@ impl VimState {
 
     fn motion_result(
         &mut self,
-        input: &InputState,
+        input: &EditorState,
         motion: Motion,
         count: usize,
         explicit_count: bool,
@@ -1059,7 +1059,7 @@ impl VimState {
 
     fn range_for_motion(
         &self,
-        input: &InputState,
+        input: &EditorState,
         start: usize,
         result: MotionResult,
     ) -> Range<usize> {
@@ -1085,9 +1085,9 @@ impl VimState {
     pub fn push_operator(
         &mut self,
         operator: Operator,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         if matches!(self.mode, VimMode::Visual | VimMode::VisualLine) {
             let range = if self.mode == VimMode::VisualLine {
@@ -1128,9 +1128,9 @@ impl VimState {
         operator: Operator,
         range: Range<usize>,
         linewise: bool,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         if range.start >= range.end || range.end > input.text().len() {
             self.clear_pending();
@@ -1179,7 +1179,7 @@ impl VimState {
         }
     }
 
-    fn write_register(&self, register: Register, cx: &mut Context<InputState>) {
+    fn write_register(&self, register: Register, cx: &mut Context<EditorState>) {
         cx.write_to_clipboard(ClipboardItem::new_string(register.text.clone()));
         cx.global_mut::<VimRegisters>().unnamed = Some(register);
     }
@@ -1187,8 +1187,8 @@ impl VimState {
     pub fn toggle_visual(
         &mut self,
         linewise: bool,
-        input: &mut InputState,
-        cx: &mut Context<InputState>,
+        input: &mut EditorState,
+        cx: &mut Context<EditorState>,
     ) {
         let requested = if linewise {
             VimMode::VisualLine
@@ -1218,8 +1218,8 @@ impl VimState {
     fn update_visual_selection(
         &mut self,
         target: usize,
-        input: &mut InputState,
-        cx: &mut Context<InputState>,
+        input: &mut EditorState,
+        cx: &mut Context<EditorState>,
     ) {
         self.visual_head = Some(target);
         let anchor = self.visual_anchor.unwrap_or(input.cursor());
@@ -1232,23 +1232,23 @@ impl VimState {
                 cmp::max(anchor_row, target_row),
             );
             if target_row < anchor_row {
-                input.set_selection(range.end, range.start, cx);
+                input.set_anchored_selection(range.end, range.start, cx);
             } else {
-                input.set_selection(range.start, range.end, cx);
+                input.set_anchored_selection(range.start, range.end, cx);
             }
         } else if target < anchor {
-            input.set_selection(input.next_grapheme_boundary(anchor), target, cx);
+            input.set_anchored_selection(input.next_grapheme_boundary(anchor), target, cx);
         } else {
-            input.set_selection(anchor, input.next_grapheme_boundary(target), cx);
+            input.set_anchored_selection(anchor, input.next_grapheme_boundary(target), cx);
         }
     }
 
     pub fn enter_insert(
         &mut self,
         placement: InsertPlacement,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         self.begin_history_group(input);
         let cursor = input.cursor();
@@ -1291,9 +1291,9 @@ impl VimState {
     pub fn delete_characters(
         &mut self,
         substitute: bool,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         let count = self.take_count();
         let start = input.cursor();
@@ -1329,9 +1329,9 @@ impl VimState {
     pub fn handle_pending_character(
         &mut self,
         event: &KeystrokeEvent,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) -> bool {
         let Some(PendingCharacter::Replace) = self.pending_character else {
             return false;
@@ -1384,9 +1384,9 @@ impl VimState {
     pub fn paste(
         &mut self,
         before: bool,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         let register = cx.global::<VimRegisters>().unnamed.clone().or_else(|| {
             cx.read_from_clipboard().and_then(|item| {
@@ -1456,9 +1456,9 @@ impl VimState {
 
     pub fn undo(
         &mut self,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         self.finish_history_group(input);
         if let Some(cursor) = input.undo_edit(window, cx) {
@@ -1471,9 +1471,9 @@ impl VimState {
 
     pub fn redo(
         &mut self,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         self.finish_history_group(input);
         if let Some(cursor) = input.redo_edit(window, cx) {
@@ -1486,9 +1486,9 @@ impl VimState {
 
     pub fn search(
         &mut self,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         self.clear_pending();
         input.focus(window, cx);
@@ -1498,9 +1498,9 @@ impl VimState {
     pub fn search_next(
         &mut self,
         backwards: bool,
-        input: &mut InputState,
+        input: &mut EditorState,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut Context<EditorState>,
     ) {
         let count = self.take_count();
         for _ in 0..count {
@@ -1508,14 +1508,14 @@ impl VimState {
         }
     }
 
-    fn begin_history_group(&mut self, input: &mut InputState) {
+    fn begin_history_group(&mut self, input: &mut EditorState) {
         if !self.history_group_open {
             input.begin_history_group();
             self.history_group_open = true;
         }
     }
 
-    fn finish_history_group(&mut self, input: &mut InputState) {
+    fn finish_history_group(&mut self, input: &mut EditorState) {
         if self.history_group_open {
             input.end_history_group();
             self.history_group_open = false;
@@ -1527,7 +1527,7 @@ fn line_start(text: &Rope, offset: usize) -> usize {
     text.line_start_offset(text.offset_to_point(offset).row)
 }
 
-fn line_last_character(input: &InputState, offset: usize) -> usize {
+fn line_last_character(input: &EditorState, offset: usize) -> usize {
     let text = input.text();
     let row = text.offset_to_point(offset).row;
     let start = text.line_start_offset(row);
@@ -1539,7 +1539,7 @@ fn line_last_character(input: &InputState, offset: usize) -> usize {
     }
 }
 
-fn document_last_character(input: &InputState) -> usize {
+fn document_last_character(input: &EditorState) -> usize {
     if input.text().len() == 0 {
         0
     } else {
@@ -1547,7 +1547,7 @@ fn document_last_character(input: &InputState) -> usize {
     }
 }
 
-fn left_target(input: &InputState, offset: usize) -> usize {
+fn left_target(input: &EditorState, offset: usize) -> usize {
     let start = line_start(input.text(), offset);
     if offset > start {
         input.previous_grapheme_boundary(offset)
@@ -1556,7 +1556,7 @@ fn left_target(input: &InputState, offset: usize) -> usize {
     }
 }
 
-fn right_target(input: &InputState, offset: usize) -> usize {
+fn right_target(input: &EditorState, offset: usize) -> usize {
     let last = line_last_character(input, offset);
     if offset < last {
         input.next_grapheme_boundary(offset)
@@ -1566,7 +1566,7 @@ fn right_target(input: &InputState, offset: usize) -> usize {
 }
 
 fn logical_vertical_target(
-    input: &InputState,
+    input: &EditorState,
     offset: usize,
     delta: isize,
     preferred_column: &mut Option<usize>,
@@ -1603,7 +1603,7 @@ fn character_class(ch: char) -> CharacterClass {
     }
 }
 
-fn next_word_start(input: &InputState, offset: usize) -> usize {
+fn next_word_start(input: &EditorState, offset: usize) -> usize {
     let len = input.text().len();
     if offset >= len {
         return document_last_character(input);
@@ -1638,7 +1638,7 @@ fn next_word_start(input: &InputState, offset: usize) -> usize {
     normal_cursor_offset(input, cursor)
 }
 
-fn next_word_end(input: &InputState, offset: usize) -> usize {
+fn next_word_end(input: &EditorState, offset: usize) -> usize {
     let len = input.text().len();
     if len == 0 {
         return 0;
@@ -1667,7 +1667,7 @@ fn next_word_end(input: &InputState, offset: usize) -> usize {
     normal_cursor_offset(input, cursor)
 }
 
-fn previous_word_start(input: &InputState, offset: usize) -> usize {
+fn previous_word_start(input: &EditorState, offset: usize) -> usize {
     if offset == 0 {
         return 0;
     }
@@ -1695,7 +1695,7 @@ fn previous_word_start(input: &InputState, offset: usize) -> usize {
     cursor
 }
 
-fn first_non_whitespace(input: &InputState, offset: usize) -> usize {
+fn first_non_whitespace(input: &EditorState, offset: usize) -> usize {
     let text = input.text();
     let row = text.offset_to_point(offset).row;
     let mut cursor = text.line_start_offset(row);
@@ -1738,7 +1738,7 @@ fn bounded_repeat_count(text_len: usize, requested: usize) -> usize {
     requested.min((MAX_REPEAT_BYTES / text_len).max(1))
 }
 
-fn normal_cursor_offset(input: &InputState, offset: usize) -> usize {
+fn normal_cursor_offset(input: &EditorState, offset: usize) -> usize {
     let len = input.text().len();
     if len == 0 {
         return 0;

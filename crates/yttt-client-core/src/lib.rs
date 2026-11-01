@@ -94,6 +94,8 @@ pub enum ClientEvent {
         host_epoch: u64,
     },
     AgentSnapshotUpdated(Box<AgentSnapshotUpdate>),
+    /// The Host dropped this pane's Agent state.
+    AgentStateCleared(TerminalSessionId),
     ProjectTokenUsageUpdated(Box<ProjectTokenUsage>),
     /// A workspace this Client opened has a newer Host layout.
     WorkspaceLayoutChanged(Box<WorkspaceLayoutUpdate>),
@@ -1210,6 +1212,15 @@ fn handle_state_event(event: HostEvent, context: &ClientSessionContext) -> Resul
             Ok(()) | Err(mpsc::error::TrySendError::Full(())) => {}
             Err(mpsc::error::TrySendError::Closed(())) => return Err(()),
         }
+    }
+    if let ServerEvent::AgentStateCleared(update) = &event.body {
+        context
+            .agent_snapshots
+            .write()
+            .retain(|_, snapshot| snapshot.terminal_session_id != update.terminal_session_id);
+        let _ = context.events.send(ClientEvent::AgentStateCleared(
+            update.terminal_session_id.clone(),
+        ));
     }
     if let ServerEvent::AgentSnapshot(update) = &event.body {
         apply_agent_snapshots(

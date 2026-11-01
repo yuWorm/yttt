@@ -5,6 +5,7 @@ use std::sync::Arc;
 use yttt_agent_core::AgentProvider;
 
 mod command;
+mod identity;
 pub mod installer;
 mod omp;
 pub mod session_management;
@@ -15,6 +16,7 @@ pub use command::{
     CLAUDE_PROVIDER_ID, CODEX_PROVIDER_ID, ClaudeProvider, CodexProvider, GROK_PROVIDER_ID,
     GrokProvider, OPENCODE_PROVIDER_ID, OpenCodeProvider, PI_PROVIDER_ID, PiProvider,
 };
+pub use identity::{command_program_name, provider_for_command, provider_for_executable};
 pub use omp::{OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID, OmpProvider};
 pub use sources::{OPENCODE_PLUGIN_SOURCE, PI_EXTENSION_SOURCE};
 

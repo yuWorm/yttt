@@ -63,7 +63,7 @@ pub fn capture_overlay_input_with_policy(mut layer: Div, policy: OverlayEventPol
         layer = layer.on_mouse_move(|_, _, cx| cx.stop_propagation());
     }
     if policy.scroll {
-        layer = layer.on_scroll_wheel(|_, _, cx| cx.stop_propagation());
+        layer = layer.on_scroll(|_, _, cx| cx.stop_propagation());
     }
     layer
 }

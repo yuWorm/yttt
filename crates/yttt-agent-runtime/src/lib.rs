@@ -421,7 +421,7 @@ pub fn completed_exit(code: Option<i32>) -> AgentProcessExit {
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
     use yttt_agent_core::{AgentProvider, AgentTurnState};
 

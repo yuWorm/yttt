@@ -17,7 +17,7 @@ use gpui::{
 use yttt_terminal::input::{KeyState, TerminalKeyEvent, encode_key};
 
 fn keystroke_with_platform_key(parse: &str, key: &str) -> Keystroke {
-    let mut keystroke = Keystroke::parse(parse).unwrap();
+    let mut keystroke = yttt::config::keybindings::parse_keystroke(parse).unwrap();
     keystroke.key = key.to_string();
     keystroke
 }

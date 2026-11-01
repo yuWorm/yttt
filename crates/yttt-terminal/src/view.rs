@@ -295,7 +295,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(bindings);
 }
 
-fn terminal_vi_motion_binding(keys: &str, motion: TerminalViMotion) -> KeyBinding {
+fn terminal_vi_motion_binding(keys: &'static str, motion: TerminalViMotion) -> KeyBinding {
     KeyBinding::new(
         keys,
         TerminalViMotionAction { motion },
@@ -2850,7 +2850,7 @@ impl TerminalView {
         let mode = self.mode();
         let modifiers = Self::terminal_modifiers(event.modifiers);
         if button == TerminalMouseButton::Left
-            && event.modifiers.secondary()
+            && event.modifiers.secondary(cx)
             && let Some(link) = self.hovered_link.clone()
         {
             self.held_mouse_button = None;
@@ -3034,12 +3034,7 @@ impl TerminalView {
     /// Handle scroll events.
     ///
     /// Currently a placeholder for future scrollback support.
-    fn on_scroll(
-        &mut self,
-        event: &ScrollWheelEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_scroll(&mut self, event: &ScrollEvent, _window: &mut Window, cx: &mut Context<Self>) {
         self.pointer_hidden = false;
         let Some(viewport) = *self.viewport.lock() else {
             return;
@@ -3912,7 +3907,7 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Right, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .on_scroll(cx.listener(Self::on_scroll))
             .child(
                 canvas(
                     move |bounds, window, cx| {
@@ -4235,7 +4230,7 @@ mod tests {
     use alacritty_terminal::term::{ClipboardType, TermMode};
     use gpui::{
         ClipboardItem, EntityInputHandler, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
-        MouseButton, MouseDownEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent, TestAppContext,
+        MouseButton, MouseDownEvent, MouseUpEvent, ScrollDelta, ScrollEvent, TestAppContext,
         TouchPhase, point, px,
     };
     use std::io;
@@ -5689,11 +5684,12 @@ mod tests {
             viewport.bounds.origin.y + viewport.padding.top + viewport.cell_height * 0.5,
         );
 
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position,
             delta: ScrollDelta::Pixels(point(px(0.0), viewport.cell_height)),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: Default::default(),
         });
         let deadline = Instant::now() + Duration::from_secs(1);
         while recorded.bytes() != b"\x1bOA" && Instant::now() < deadline {
@@ -5704,11 +5700,12 @@ mod tests {
         terminal.update(cx, |terminal, _| {
             terminal.state.process_bytes(b"\x1b[?1007l");
         });
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position,
             delta: ScrollDelta::Pixels(point(px(0.0), viewport.cell_height)),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: Default::default(),
         });
         std::thread::sleep(Duration::from_millis(20));
         assert_eq!(
@@ -5916,7 +5913,8 @@ mod tests {
 
         cx.simulate_click(link_position, Modifiers::none());
         assert_eq!(cx.opened_url(), None);
-        cx.simulate_click(link_position, Modifiers::secondary_key());
+        let secondary = cx.update(|_, cx| Modifiers::secondary_key(cx));
+        cx.simulate_click(link_position, secondary);
         assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/path"));
     }
 
@@ -5959,7 +5957,8 @@ mod tests {
                     Some(expected),
                 );
             });
-            cx.simulate_click(position, Modifiers::secondary_key());
+            let secondary = cx.update(|_, cx| Modifiers::secondary_key(cx));
+            cx.simulate_click(position, secondary);
             assert_eq!(cx.opened_url().as_deref(), Some(expected));
         }
     }
@@ -5988,7 +5987,8 @@ mod tests {
                 viewport.origin.y + viewport.cell_height * 1.5,
             )
         });
-        cx.simulate_click(position, Modifiers::secondary_key());
+        let secondary = cx.update(|_, cx| Modifiers::secondary_key(cx));
+        cx.simulate_click(position, secondary);
         assert_eq!(
             cx.opened_url().as_deref(),
             Some("https://example.test/path")

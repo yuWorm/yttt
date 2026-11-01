@@ -457,7 +457,7 @@ fn overflowing_tabs_scroll_without_shrinking_or_moving_toolbar(cx: &mut gpui::Te
             "{style:?}: tabs must overflow"
         );
 
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: first.center(),
             delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -100.0)),
             ..Default::default()
@@ -483,7 +483,7 @@ fn overflowing_tabs_scroll_without_shrinking_or_moving_toolbar(cx: &mut gpui::Te
             );
         });
 
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: gpui::point(first.center().x, first.center().y),
             delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(10000.0), gpui::px(0.0))),
             ..Default::default()
@@ -555,6 +555,41 @@ fn right_clicking_a_tab_selects_the_context_menu_target(cx: &mut gpui::TestAppCo
     });
 }
 
+#[test]
+fn scroll_areas_do_not_bounce_by_default() {
+    assert!(!gpui_base::ScrollBounce::enabled_by_default());
+}
+
+/// Shows a notification through the real window list, which drives its
+/// entrance and dismissal, and waits for the entrance animation to finish.
+fn show_notification(
+    cx: &mut gpui::TestAppContext,
+    notification: impl FnOnce() -> gpui_component::notification::Notification + 'static,
+) -> &mut gpui::VisualTestContext {
+    use gpui::AppContext as _;
+
+    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
+        let view = cx.new(|_| gpui::EmptyView);
+        gpui_component::Root::new(view, window, cx)
+    });
+    cx.update(|window, cx| {
+        gpui_component::WindowExt::push_notification(window, notification(), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    // Element animations read the real clock, not the test executor's.
+    std::thread::sleep(Duration::from_millis(450));
+    cx.background_executor
+        .advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx
+}
+
 #[gpui::test]
 fn agent_notification_close_is_visually_separate_from_action(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
@@ -562,7 +597,7 @@ fn agent_notification_close_is_visually_separate_from_action(cx: &mut gpui::Test
     let action_clicked = Rc::new(Cell::new(false));
     let closed_for_callback = closed.clone();
     let action_for_callback = action_clicked.clone();
-    let (_notification, cx) = cx.add_window_view(move |_, _| {
+    let cx = show_notification(cx, move || {
         workbench_agent_notification(
             ToastItem {
                 title: "Refine agent notifications".to_string(),
@@ -578,17 +613,11 @@ fn agent_notification_close_is_visually_separate_from_action(cx: &mut gpui::Test
         .autohide(false)
         .on_close(move |_, _| closed_for_callback.set(true))
     });
-    cx.background_executor
-        .advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        let _ = window.draw(cx);
-    });
 
     let close = cx.debug_bounds("notification-close").unwrap();
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     cx.background_executor
-        .advance_clock(Duration::from_millis(200));
+        .advance_clock(Duration::from_millis(250));
     cx.run_until_parked();
 
     assert!(
@@ -608,7 +637,7 @@ fn agent_notification_action_opens_target_and_dismisses(cx: &mut gpui::TestAppCo
     let action_clicked = Rc::new(Cell::new(false));
     let closed_for_callback = closed.clone();
     let action_for_callback = action_clicked.clone();
-    let (_notification, cx) = cx.add_window_view(move |_, _| {
+    let cx = show_notification(cx, move || {
         workbench_agent_notification(
             ToastItem {
                 title: "Refine agent notifications".to_string(),
@@ -624,17 +653,11 @@ fn agent_notification_action_opens_target_and_dismisses(cx: &mut gpui::TestAppCo
         .autohide(false)
         .on_close(move |_, _| closed_for_callback.set(true))
     });
-    cx.background_executor
-        .advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        let _ = window.draw(cx);
-    });
 
     let action = cx.debug_bounds("notification-action").unwrap();
     cx.simulate_click(action.center(), gpui::Modifiers::none());
     cx.background_executor
-        .advance_clock(Duration::from_millis(200));
+        .advance_clock(Duration::from_millis(250));
     cx.run_until_parked();
 
     assert!(action_clicked.get(), "action button should open the target");
@@ -646,7 +669,7 @@ fn error_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAp
     cx.update(gpui_component::init);
     let closed = Rc::new(Cell::new(false));
     let closed_for_callback = closed.clone();
-    let (_notification, cx) = cx.add_window_view(move |_, _| {
+    let cx = show_notification(cx, move || {
         workbench_error_notification(
             ToastItem {
                 title: "Error".to_string(),
@@ -660,12 +683,6 @@ fn error_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAp
         )
         .autohide(false)
         .on_close(move |_, _| closed_for_callback.set(true))
-    });
-    cx.background_executor
-        .advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        let _ = window.draw(cx);
     });
     let title = cx.debug_bounds("notification-title").unwrap();
     let icon = cx.debug_bounds("notification-icon").unwrap();
@@ -686,7 +703,7 @@ fn error_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAp
 
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     cx.background_executor
-        .advance_clock(Duration::from_millis(200));
+        .advance_clock(Duration::from_millis(250));
     cx.run_until_parked();
 
     assert!(

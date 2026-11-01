@@ -141,7 +141,7 @@ pub fn decode_preview(bytes: Vec<u8>, svg: bool) -> anyhow::Result<DecodedPrevie
         );
         let mut rgba = pixmap.take();
         // tiny-skia pixels are premultiplied; GPUI expects straight-alpha BGRA.
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             if pixel[3] != 0 {
                 for channel in 0..3 {
                     pixel[channel] =
@@ -186,7 +186,7 @@ pub fn decode_preview(bytes: Vec<u8>, svg: bool) -> anyhow::Result<DecodedPrevie
     let width = frames[0].buffer().width();
     let height = frames[0].buffer().height();
     for frame in &mut frames {
-        for pixel in frame.buffer_mut().chunks_exact_mut(4) {
+        for pixel in frame.buffer_mut().as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
     }
@@ -486,7 +486,7 @@ impl Render for FilePreview {
                             cx.notify();
                         }
                     }))
-                    .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
+                    .on_scroll(cx.listener(|this, event: &gpui::ScrollEvent, _, cx| {
                         this.change_zoom(
                             (f32::from(event.delta.pixel_delta(px(20.0)).y) * 0.005).exp(),
                             cx,

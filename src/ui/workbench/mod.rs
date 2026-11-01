@@ -3698,7 +3698,7 @@ impl WorkbenchView {
             self.refresh_login_startup(cx);
         }
         if is_active && self.queue_default_active_work_item_focus(cx) {
-            window.blur();
+            window.blur(cx);
             cx.notify();
         }
     }

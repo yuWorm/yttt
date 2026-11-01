@@ -380,7 +380,6 @@ impl ThemeRuntime {
         colors.input = Some(color_hex(theme.border_variant).into());
         colors.ring = Some(color_hex(theme.border_focused).into());
         colors.accordion = Some(color_hex(transparent).into());
-        colors.accordion_hover = Some(color_hex(theme.ghost_element_hover).into());
         colors.button = Some(color_hex(theme.element_background).into());
         colors.button_foreground = Some(color_hex(theme.text).into());
         colors.button_hover = Some(color_hex(hover_background).into());
@@ -502,7 +501,6 @@ impl ThemeRuntime {
         colors.title_bar_border = Some(color_hex(theme.border_variant).into());
         colors.status_bar = Some(color_hex(theme.statusbar_background).into());
         colors.status_bar_border = Some(color_hex(theme.border_variant).into());
-        colors.tiles = Some(color_hex(theme.element_background).into());
         colors.window_border = Some(color_hex(theme.border_variant).into());
 
         ThemeConfig {

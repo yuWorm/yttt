@@ -4,7 +4,7 @@ use yttt_protocol::agent::AgentSnapshotUpdate;
 
 use super::{UiTextKey, WorkbenchView, helpers::terminal_pane_key};
 use crate::{
-    model::ids::ProjectId,
+    model::ids::{ProjectId, TerminalSessionId},
     runtime::{agent_hooks::AgentSnapshotEvent, agent_manager::AgentPaneAddress},
 };
 
@@ -33,6 +33,9 @@ impl WorkbenchView {
                             let changed = match event {
                                 AgentSnapshotEvent::Update(update) => {
                                     view.apply_host_agent_snapshot(*update, window, cx)
+                                }
+                                AgentSnapshotEvent::Cleared(terminal_session_id) => {
+                                    view.clear_host_agent_state(&terminal_session_id, cx)
                                 }
                                 AgentSnapshotEvent::Reset { host_epoch } => {
                                     view.reset_host_agent_epoch(host_epoch)
@@ -79,6 +82,44 @@ impl WorkbenchView {
         self.terminal.pending_host_agent_snapshots.clear();
         self.agent_manager.reset_host_sequences();
         false
+    }
+
+    /// Forgets the pane's Agent state and the session title it gave the pane.
+    fn clear_host_agent_state(
+        &mut self,
+        terminal_session_id: &TerminalSessionId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.terminal
+            .pending_host_agent_snapshots
+            .remove(terminal_session_id);
+        let held = self.workspace.opened_projects().iter().find_map(|project| {
+            project.tab_states.iter().find_map(|tab| {
+                tab.pane_states.iter().find_map(|pane| {
+                    let snapshot = pane.agent_snapshot.as_ref()?;
+                    (terminal_pane_key(project.id.as_str(), &tab.tab_id, &pane.pane_id)
+                        == terminal_session_id.as_str())
+                    .then(|| {
+                        (
+                            AgentPaneAddress::new(project.id.as_str(), &tab.tab_id, &pane.pane_id),
+                            snapshot.provider_id.clone(),
+                        )
+                    })
+                })
+            })
+        });
+        let Some((address, provider_id)) = held else {
+            return false;
+        };
+        self.update_terminal_agent_title(&address, provider_id.as_str(), None, cx);
+        if let Err(error) = self.workspace.clear_agent_snapshot(
+            &ProjectId::new(&address.project_id),
+            &address.tab_id,
+            &address.pane_id,
+        ) {
+            self.load_error = Some(error.to_string());
+        }
+        true
     }
 
     fn expects_host_agent_snapshot(&self, terminal_session_id: &str) -> bool {
@@ -179,5 +220,59 @@ impl WorkbenchView {
             .find(|pane| pane.pane_id == address.pane_id)?
             .agent_snapshot
             .as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use super::*;
+    use yttt_agent_core::AgentReducer;
+
+    #[gpui::test]
+    fn a_cleared_agent_state_leaves_its_pane(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.skip_drawing();
+        let root_dir = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::new();
+        let project = workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::new("cleared-project"),
+                    ProjectLocation::local(root_dir.path().to_path_buf()),
+                ),
+                dev_fixture_layout(),
+            )
+            .unwrap();
+        let snapshot = AgentReducer::new(
+            AgentInstanceId::random(),
+            ProviderId::from_static("claude"),
+            1,
+        )
+        .snapshot()
+        .clone();
+        workspace
+            .record_agent_snapshot(&project, "dev", "shell", snapshot)
+            .unwrap();
+        let paths = AppConfigPaths::from_config_dir(root_dir.path().join("config"));
+        let (view, cx) = cx.add_window_view(|_, _| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths)
+        });
+        view.update(cx, |view, cx| {
+            let session =
+                TerminalSessionId::new(terminal_pane_key(project.as_str(), "dev", "shell"));
+            assert!(view.clear_host_agent_state(&session, cx));
+            assert!(!view.clear_host_agent_state(&session, cx));
+            let pane = view.workspace.opened_projects()[0]
+                .tab_states
+                .iter()
+                .find(|tab| tab.tab_id == "dev")
+                .unwrap()
+                .pane_states
+                .iter()
+                .find(|pane| pane.pane_id == "shell")
+                .unwrap();
+            assert!(pane.agent_snapshot.is_none());
+        });
     }
 }

@@ -115,10 +115,10 @@ impl Workspace {
         })
     }
 
-    /// Carries the pane runtime this Client observed — process state and
-    /// Agent snapshot — into a layout received from the Host, for every pane
-    /// both layouts contain. Panes only the Host knows keep the Host's values.
-    pub fn keep_pane_runtime_from(&mut self, previous: &Workspace) {
+    /// Carries the Agent snapshots this Client holds into a layout received
+    /// from the Host, which publishes none, for every pane both layouts contain.
+    /// Process states stay the Host's.
+    pub fn keep_agent_snapshots_from(&mut self, previous: &Workspace) {
         for project in &mut self.opened_projects {
             let Some(previous_project) = previous.project(&project.id) else {
                 continue;
@@ -133,7 +133,6 @@ impl Workspace {
                         .iter()
                         .find(|candidate| candidate.pane_id == pane.pane_id)
                     {
-                        pane.process_state = previous_pane.process_state;
                         pane.agent_snapshot = previous_pane.agent_snapshot.clone();
                     }
                 }

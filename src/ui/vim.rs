@@ -233,9 +233,9 @@ impl VimControllerState {
 
     pub fn key_context(&self, capture: VimCapture) -> KeyContext {
         let Some(mode) = self.effective_mode(capture) else {
-            return KeyContext::new_with_defaults();
+            return KeyContext::new_with_defaults(crate::config::keybindings::host_os());
         };
-        let mut context = KeyContext::new_with_defaults();
+        let mut context = KeyContext::new_with_defaults(crate::config::keybindings::host_os());
         context.add(VIM_CONTEXT);
         context.set(
             "yttt_vim_scope",

@@ -55,7 +55,7 @@ pub fn display_keybindings_for_platform(
 }
 
 pub fn parse_keybinding_for_display(keys: &str) -> Option<Keystroke> {
-    Keystroke::parse(keys).ok()
+    crate::config::keybindings::parse_keystroke(keys).ok()
 }
 
 pub fn recorded_keybinding(keystroke: &Keystroke) -> Option<String> {
@@ -67,7 +67,7 @@ pub fn recorded_keybinding(keystroke: &Keystroke) -> Option<String> {
         return None;
     }
 
-    Some(keystroke.unparse())
+    Some(keystroke.unparse(crate::config::keybindings::host_os()))
 }
 
 fn is_modifier_key(key: &str) -> bool {

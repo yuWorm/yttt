@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use gpui::{App, Context, Entity, Focusable as _, Keystroke, KeystrokeEvent, Window};
-use gpui_component::{input::InputState, kbd::Kbd};
+use gpui::{App, Context, Entity, Keystroke, KeystrokeEvent, Window};
+use gpui_component::kbd::Kbd;
 
 use crate::{
     config::settings::VimModeSetting,
@@ -279,7 +279,11 @@ impl WorkbenchView {
     }
 
     pub(super) fn settings_text_input_is_focused(&self, window: &Window, cx: &App) -> bool {
-        fn focused(input: &Entity<InputState>, window: &Window, cx: &App) -> bool {
+        fn focused(
+            input: &Entity<gpui_component::input::InputState>,
+            window: &Window,
+            cx: &App,
+        ) -> bool {
             input.read(cx).focus_handle(cx).is_focused(window)
         }
 

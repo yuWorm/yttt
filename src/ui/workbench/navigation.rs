@@ -55,7 +55,7 @@ impl WorkbenchView {
                 if let Err(error) = self.select_project(&project_id) {
                     self.load_error = Some(error.to_string());
                 }
-                window.blur();
+                window.blur(cx);
             }
         } else {
             self.select_command_center();

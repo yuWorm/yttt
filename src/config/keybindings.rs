@@ -1,9 +1,10 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
 };
 
-use gpui::{KeyBindingContextPredicate, Keystroke};
+use gpui::{InvalidKeystrokeError, KeyBindingContextPredicate, Keystroke, OperatingSystem};
 
 use crate::{commands::CommandRegistry, config::paths::AppConfigPaths};
 
@@ -12,6 +13,34 @@ use super::atomic_write;
 pub const KEYBINDINGS_SCHEMA_VERSION: u32 = 6;
 pub const DEFAULT_KEYBINDING_CONTEXT: &str = "Workspace";
 pub const DEFAULT_KEYBINDING_LEADER: &str = "space";
+
+/// The OS GPUI needs to resolve `secondary-` and the `os` key context.
+pub fn host_os() -> OperatingSystem {
+    if cfg!(target_os = "macos") {
+        OperatingSystem::Mac
+    } else if cfg!(target_os = "windows") {
+        OperatingSystem::Windows
+    } else {
+        OperatingSystem::Linux
+    }
+}
+
+pub fn parse_keystroke(source: &str) -> Result<Keystroke, InvalidKeystrokeError> {
+    Keystroke::parse_with_os(source, host_os())
+}
+
+/// `KeyBinding::new` takes `&'static str`. Keymaps reload at runtime, so each
+/// distinct sequence is interned once instead of leaking on every reload.
+pub fn intern_keys(keys: &str) -> &'static str {
+    static INTERNED: LazyLock<Mutex<HashSet<&'static str>>> = LazyLock::new(Default::default);
+    let mut interned = INTERNED.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(existing) = interned.get(keys) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(keys.to_owned().into_boxed_str());
+    interned.insert(leaked);
+    leaked
+}
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct Keybinding {
@@ -100,7 +129,7 @@ impl KeybindingsConfig {
         let leader = normalize_keys(&self.leader);
         if leader.split_whitespace().count() != 1
             || leader.eq_ignore_ascii_case("<leader>")
-            || Keystroke::parse(&leader).is_err()
+            || crate::config::keybindings::parse_keystroke(&leader).is_err()
         {
             invalid.push(format!("invalid leader key {:?}", self.leader));
         }
@@ -108,9 +137,9 @@ impl KeybindingsConfig {
         for binding in &self.bindings {
             let keys = resolve_keybinding_sequence(&binding.keys, &leader);
             if keys.is_empty()
-                || keys
-                    .split_whitespace()
-                    .any(|keystroke| Keystroke::parse(keystroke).is_err())
+                || keys.split_whitespace().any(|keystroke| {
+                    crate::config::keybindings::parse_keystroke(keystroke).is_err()
+                })
             {
                 invalid.push(format!("invalid key sequence {:?}", binding.keys));
             }

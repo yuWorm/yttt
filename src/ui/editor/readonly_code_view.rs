@@ -231,7 +231,7 @@ impl RenderOnce for ReadonlyCodeView {
                 div()
                     .absolute()
                     .inset_0()
-                    .on_scroll_wheel(move |event, window, cx| {
+                    .on_scroll(move |event, window, cx| {
                         let delta = event.delta.pixel_delta(window.line_height());
                         let (delta_x, delta_y) = if delta.x != px(0.0) && delta.y != px(0.0) {
                             if delta.x.abs() > delta.y.abs() {

@@ -91,6 +91,14 @@ jobs:
       - name: Test terminal performance acceptance rules
         run: python3 scripts/test_terminal_perf_summary.py
 
+      - name: Require a single GPUI
+        run: |
+          test "$(grep -c '^name = "gpui-pre"$' Cargo.lock)" = 1
+          ! grep -q 'zed-industries/zed' Cargo.lock
+
+      - name: Test UI visual diff tool
+        run: python3 scripts/test_ui_visual_diff.py
+
       - name: Test workspace
         env:
           DISPLAY: ""

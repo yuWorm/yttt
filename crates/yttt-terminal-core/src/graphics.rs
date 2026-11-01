@@ -132,7 +132,7 @@ fn terminal_image(graphic: GraphicData) -> Option<TerminalImage> {
         ColorType::Rgba if graphic.pixels.len() == rgba_bytes => graphic.pixels,
         ColorType::Rgb if graphic.pixels.len() == pixel_count.checked_mul(3)? => {
             let mut rgba = Vec::with_capacity(rgba_bytes);
-            for rgb in graphic.pixels.chunks_exact(3) {
+            for rgb in graphic.pixels.as_chunks::<3>().0 {
                 rgba.extend_from_slice(rgb);
                 rgba.push(255);
             }

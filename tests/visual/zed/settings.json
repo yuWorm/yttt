@@ -1,0 +1,10 @@
+{
+  "theme": { "mode": "dark", "dark": "One Dark", "light": "One Light" },
+  "ui_font_family": ".ZedSans",
+  "ui_font_size": 16,
+  "buffer_font_family": ".ZedMono",
+  "buffer_font_size": 15,
+  "cursor_blink": false,
+  "project_panel": { "dock": "left" },
+  "telemetry": { "diagnostics": false, "metrics": false }
+}

@@ -9,7 +9,7 @@ use std::{
 };
 
 use gpui::http_client::{AsyncBody, FakeHttpClient, Response};
-use gpui::{AppContext as _, Keystroke, Subscription, px, size};
+use gpui::{AppContext as _, Subscription, px, size};
 use tempfile::tempdir;
 use yttt::{
     commands::{ActiveSurface, CommandContext, CommandId},
@@ -1060,7 +1060,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
         first_keybinding_actions.size.height <= first_keybinding_row.size.height,
         "row actions should stay on one compact line"
     );
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: keybinding_list.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-640.0))),
         ..Default::default()
@@ -1308,11 +1308,19 @@ fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext
     let project = cx
         .debug_bounds("project-sidebar-initial-0")
         .expect("collapsed project sidebar should expose its project item");
+    cx.simulate_mouse_move(project.center(), None, gpui::Modifiers::none());
     cx.simulate_mouse_down(
         project.center(),
         gpui::MouseButton::Right,
         gpui::Modifiers::none(),
     );
+    cx.simulate_mouse_up(
+        project.center(),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.refresh().unwrap();
     cx.run_until_parked();
     cx.simulate_keystrokes("down enter");
     cx.run_until_parked();
@@ -1346,11 +1354,12 @@ fn root_view_error_notification_auto_dismisses(cx: &mut gpui::TestAppContext) {
     cx.refresh().unwrap();
     cx.run_until_parked();
 
-    cx.background_executor.advance_clock(Duration::from_secs(5));
-    cx.run_until_parked();
-    cx.background_executor
-        .advance_clock(Duration::from_millis(200));
-    cx.run_until_parked();
+    // The notification list polls its clock, so step instead of jumping past it.
+    for _ in 0..130 {
+        cx.background_executor
+            .advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+    }
 
     cx.read(|app| {
         let message = root.read(app).visible_error_message();
@@ -4658,8 +4667,9 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
     for keys in ["escape", "ctrl-["] {
         cx.read(|app| {
             assert!(
-                root.read(app)
-                    .terminal_should_receive_keystroke(&Keystroke::parse(keys).unwrap()),
+                root.read(app).terminal_should_receive_keystroke(
+                    &yttt::config::keybindings::parse_keystroke(keys).unwrap()
+                ),
                 "{keys} must remain terminal process input"
             );
         });
@@ -5122,7 +5132,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
         .expect("restore-last-session setting should expose a switch");
     cx.simulate_click(restore_toggle.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: restore_toggle.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-320.0))),
         ..Default::default()
@@ -5275,7 +5285,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
         .debug_bounds("settings-restore-last-session-row")
         .expect("general settings should render a visible row")
         .center();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: scroll_origin,
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-1600.0))),
         ..Default::default()
@@ -5693,7 +5703,7 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
         .debug_bounds("settings-window-effect-row")
         .unwrap()
         .center();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: scroll_origin,
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-1200.0))),
         ..Default::default()
@@ -6140,7 +6150,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     let first_before = cx
         .debug_bounds("settings-editor-font-family-row")
         .expect("first editor settings row");
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: first_before.origin + gpui::point(gpui::px(24.0), gpui::px(24.0)),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-240.0))),
         ..Default::default()
@@ -6852,8 +6862,10 @@ fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
     root.open_settings();
 
     assert!(
-        root.runtime_command_for_dispatch(&Keystroke::parse("cmd-t").unwrap())
-            .is_none()
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("cmd-t").unwrap()
+        )
+        .is_none()
     );
     assert_eq!(
         root.workspace()
@@ -6873,8 +6885,10 @@ fn root_view_layout_editor_blocks_project_file_save_binding() {
 
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
     assert!(
-        root.runtime_command_for_dispatch(&Keystroke::parse("cmd-s").unwrap())
-            .is_none()
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("cmd-s").unwrap()
+        )
+        .is_none()
     );
 }
 
@@ -6883,7 +6897,7 @@ fn key_dispatch_blocks_workspace_commands_for_foreground_owner() {
     let command = workspace_command_for_keystroke(
         InputOwnerKind::Settings,
         CommandContext::local_controller(true, ActiveSurface::Terminal),
-        &Keystroke::parse("cmd-t").unwrap(),
+        &yttt::config::keybindings::parse_keystroke("cmd-t").unwrap(),
         |_| Some(CommandId::TabNew),
         |_| false,
     );
@@ -6896,7 +6910,7 @@ fn key_dispatch_leaves_terminal_bytes_for_terminal_input() {
     let command = workspace_command_for_keystroke(
         InputOwnerKind::Workspace,
         CommandContext::local_controller(true, ActiveSurface::Terminal),
-        &Keystroke::parse("c").unwrap(),
+        &yttt::config::keybindings::parse_keystroke("c").unwrap(),
         |_| Some(CommandId::TabNew),
         |_| true,
     );
@@ -6909,7 +6923,7 @@ fn key_dispatch_allows_workspace_command_when_terminal_does_not_need_key() {
     let command = workspace_command_for_keystroke(
         InputOwnerKind::Workspace,
         CommandContext::local_controller(true, ActiveSurface::Terminal),
-        &Keystroke::parse("cmd-t").unwrap(),
+        &yttt::config::keybindings::parse_keystroke("cmd-t").unwrap(),
         |_| Some(CommandId::TabNew),
         |_| false,
     );
@@ -7057,7 +7071,9 @@ fn create_project_command_is_configurable_in_keybinding_settings() {
     root.set_keybinding_command_keys(CommandId::ProjectCreate, vec!["cmd-alt-n".to_string()])
         .unwrap();
     assert_eq!(
-        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-alt-n").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-alt-n").unwrap()
+        ),
         Some(CommandId::ProjectCreate)
     );
 
@@ -7080,11 +7096,15 @@ fn root_view_runtime_keybindings_follow_edited_settings() {
         .unwrap();
 
     assert_eq!(
-        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-l").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-l").unwrap()
+        ),
         Some(CommandId::TabPalette)
     );
     assert_eq!(
-        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-j").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-j").unwrap()
+        ),
         None
     );
 }
@@ -7118,17 +7138,21 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
 
     let platform_l = platform_keystroke("l");
     root.begin_keybinding_edit_replacement();
-    assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse(&platform_l).unwrap()));
+    assert!(root.record_keybinding_edit_keystroke(
+        &yttt::config::keybindings::parse_keystroke(&platform_l).unwrap()
+    ));
     root.finish_keybinding_edit_recording();
     root.begin_keybinding_edit_alternative();
-    assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("ctrl-l").unwrap()));
+    assert!(root.record_keybinding_edit_keystroke(
+        &yttt::config::keybindings::parse_keystroke("ctrl-l").unwrap()
+    ));
     root.finish_keybinding_edit_recording();
     root.confirm_keybinding_edit_dialog().unwrap();
 
     assert!(root.pending_keybinding_edit_keys().is_none());
     let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     for keys in [platform_l.as_str(), "ctrl-l"] {
-        let keystroke = Keystroke::parse(keys).unwrap();
+        let keystroke = yttt::config::keybindings::parse_keystroke(keys).unwrap();
         assert_eq!(
             root.runtime_command_for_keystroke(&keystroke),
             Some(CommandId::TabPalette)
@@ -7797,8 +7821,10 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert!(
-        root.runtime_command_for_dispatch(&Keystroke::parse("ctrl-t").unwrap())
-            .is_none()
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("ctrl-t").unwrap()
+        )
+        .is_none()
     );
     assert_eq!(
         root.workspace()
@@ -7820,7 +7846,9 @@ fn root_view_reserves_control_keybindings_when_terminal_is_focused() {
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert_eq!(
-        root.runtime_command_for_dispatch(&Keystroke::parse("ctrl-t").unwrap()),
+        root.runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("ctrl-t").unwrap()
+        ),
         Some(CommandId::TabNew)
     );
 }
@@ -7833,7 +7861,9 @@ fn root_view_routes_terminal_special_keys_to_focused_terminal() {
 
     for keys in ["ctrl-c", "tab", "enter", "escape", "up"] {
         assert!(
-            root.terminal_should_receive_keystroke(&Keystroke::parse(keys).unwrap()),
+            root.terminal_should_receive_keystroke(
+                &yttt::config::keybindings::parse_keystroke(keys).unwrap()
+            ),
             "{keys} should be routed to the focused terminal"
         );
     }
@@ -7854,7 +7884,7 @@ fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
     root.focus_visible_terminal_pane("shell").unwrap();
 
     let command = root
-        .runtime_command_for_dispatch(&Keystroke::parse("cmd-t").unwrap())
+        .runtime_command_for_dispatch(&yttt::config::keybindings::parse_keystroke("cmd-t").unwrap())
         .unwrap();
     root.run_command(command).unwrap();
     assert_eq!(
@@ -8760,10 +8790,10 @@ fn platform_keystroke(key: &str) -> String {
 }
 
 fn replace_editor_value(
-    input: &mut gpui_component::input::InputState,
+    input: &mut gpui_component::input::EditorState,
     value: &str,
     window: &mut gpui::Window,
-    cx: &mut gpui::Context<gpui_component::input::InputState>,
+    cx: &mut gpui::Context<gpui_component::input::EditorState>,
 ) {
     input.set_value("", window, cx);
     input.replace(value, window, cx);
@@ -8995,11 +9025,15 @@ fn configured_git_keybinding_dispatches_from_the_workbench() {
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
 
     assert_eq!(
-        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-shift-g").unwrap()),
+        root.runtime_command_for_keystroke(
+            &yttt::config::keybindings::parse_keystroke("cmd-shift-g").unwrap()
+        ),
         Some(CommandId::GitDiffOpen)
     );
     let command = root
-        .runtime_command_for_dispatch(&Keystroke::parse("cmd-shift-g").unwrap())
+        .runtime_command_for_dispatch(
+            &yttt::config::keybindings::parse_keystroke("cmd-shift-g").unwrap(),
+        )
         .unwrap();
     root.run_command(command).unwrap();
     assert!(root.git_diff_panel_is_open());

@@ -4,12 +4,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{
-    App, Context, Entity, Focusable as _, FontWeight, IntoElement as _, Subscription, Task, Window,
-    div, prelude::*, px, relative,
-};
+use gpui::{App, Context, Entity, FontWeight, Subscription, Task, Window, div, px, relative};
 use gpui_component::{
-    Disableable as _,
     input::{InputEvent, InputState},
     spinner::Spinner,
 };
@@ -2109,7 +2105,7 @@ impl WorkbenchView {
         match self.activate_agent_pane(&target.project_id, &target.tab_id, &target.pane_id) {
             Ok(()) => {
                 self.command_center.feedback.remove(&feedback_key);
-                window.blur();
+                window.blur(cx);
             }
             Err(error) => {
                 self.command_center.feedback.insert(
@@ -4537,6 +4533,7 @@ fn command_center_event_requires_refresh(event: &ClientEvent) -> bool {
         ClientEvent::Connection(_)
         | ClientEvent::AgentSnapshotsReset { .. }
         | ClientEvent::AgentSnapshotUpdated(_)
+        | ClientEvent::AgentStateCleared(_)
         | ClientEvent::ProjectTokenUsageUpdated(_)
         | ClientEvent::ResourceCatalogUpdated(_)
         | ClientEvent::TerminalUnavailable(_) => true,

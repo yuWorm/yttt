@@ -145,6 +145,8 @@ struct HookDeliveryMetadata {
 #[derive(Clone)]
 struct HookApplication {
     provider_id: ProviderId,
+    /// The Agent the process scan sees in this terminal when the hook arrived.
+    observed_provider: Option<ProviderId>,
     events: Vec<AgentEventKind>,
     session_id: Option<String>,
     parent_session_id: Option<String>,
@@ -1009,7 +1011,14 @@ fn ingest_request(
     let parent_session_id = (request.event != "token_usage")
         .then(|| payload_parent_session_id(&request.payload))
         .flatten();
+    let observed_provider = state
+        .process_observations
+        .lock()
+        .get(&terminal_session_id)
+        .filter(|observation| observation.scope == request.scope)
+        .map(|observation| observation.process.provider_id.clone());
     let application = HookApplication {
+        observed_provider,
         provider_id: provider.descriptor().id,
         session_id,
         explicit_child_session: parent_session_id.is_some()
@@ -1465,6 +1474,17 @@ fn apply_hook_application(
 
     let process_exited = record.reducer.snapshot().process_state == AgentProcessState::Exited;
     if !root_session_started && current_provider_id != application.provider_id {
+        return HookApplicationOutcome::Ignored;
+    }
+    // Hook environments are inherited, so an Agent started by the pane's Agent
+    // reports through the same scope; only the process scan can tell them apart.
+    if root_session_started
+        && !process_exited
+        && application
+            .observed_provider
+            .as_ref()
+            .is_some_and(|observed| *observed != application.provider_id)
+    {
         return HookApplicationOutcome::Ignored;
     }
     if incoming_provider_is_compatibility_duplicate(
@@ -2485,6 +2505,31 @@ mod tests {
         assert_eq!(restarted.snapshot.process_state, AgentProcessState::Running);
         assert_ne!(restarted.snapshot.instance_id, first.snapshot.instance_id);
         assert!(restarted.sequence > exited.sequence);
+    }
+
+    #[test]
+    fn child_agent_hook_cannot_take_over_a_running_agent_pane() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("omp-pane", "omp-pane");
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let roots = vec![(TerminalSessionId::new("omp-pane"), 100)];
+        runtime.reconcile_process_scan(
+            &roots,
+            &HashMap::from([(
+                TerminalSessionId::new("omp-pane"),
+                DetectedAgentProcess {
+                    pid: 200,
+                    provider_id: ProviderId::from_static("omp"),
+                },
+            )]),
+        );
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "grok", "SessionStart", session_payload("child")),
+        )
+        .unwrap();
+        let provider = runtime.snapshots_after(&[])[0].snapshot.provider_id.clone();
+        assert_eq!(provider.as_str(), "omp");
     }
 
     #[test]

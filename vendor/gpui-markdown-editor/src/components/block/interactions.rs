@@ -1375,7 +1375,7 @@ impl Block {
 
         // Cmd/Ctrl+click follows a rendered link instead of editing it, so the
         // block is neither focused nor selected; the link opens on mouse-up.
-        if event.modifiers.secondary() && self.pointer_link_hit(event.position).is_some() {
+        if event.modifiers.secondary(cx) && self.pointer_link_hit(event.position).is_some() {
             self.is_selecting = false;
             cx.stop_propagation();
             return;
@@ -1425,7 +1425,7 @@ impl Block {
     ) {
         // Only Cmd/Ctrl+click follows the link; a plain click falls through so
         // the block focuses for editing like any other inline text.
-        if event.modifiers.secondary() {
+        if event.modifiers.secondary(cx) {
             cx.stop_propagation();
         }
     }
@@ -1453,7 +1453,7 @@ impl Block {
 
         // Cmd/Ctrl+click follows a rendered link, using the same open-link
         // prompt as the double-click gesture below.
-        if event.modifiers.secondary()
+        if event.modifiers.secondary(cx)
             && let Some(link) = self.pointer_link_hit(event.position)
         {
             self.open_rendered_link(&link, cx);
