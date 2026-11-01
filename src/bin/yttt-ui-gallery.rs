@@ -27,7 +27,9 @@ use yttt_ui::{
     SelectableState,
     menu::{YtttMenu, YtttMenuItem, yttt_menu_preview},
     primitives::{
-        button::{YtttButtonVariant, yttt_button, yttt_button_style},
+        button::{
+            YtttButtonExt as _, YtttButtonSize, YtttButtonVariant, yttt_button, yttt_button_style,
+        },
         dialog::{yttt_dialog_style, yttt_dialog_surface},
         icon_button::{YtttIconButtonKind, yttt_icon_button},
         input::{YtttInputKind, yttt_input},
@@ -44,7 +46,7 @@ use yttt_ui::{
 };
 
 const WINDOW_WIDTH: f32 = 960.;
-const WINDOW_HEIGHT: f32 = 800.;
+const WINDOW_HEIGHT: f32 = 860.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
                      [--screenshot PATH] [--dump-layout PATH]";
@@ -320,6 +322,28 @@ impl Gallery {
         elements
     }
 
+    fn button_sizes(&self) -> Vec<AnyElement> {
+        [
+            ("compact", YtttButtonSize::Compact),
+            ("default", YtttButtonSize::Default),
+            ("medium", YtttButtonSize::Medium),
+            ("large", YtttButtonSize::Large),
+        ]
+        .into_iter()
+        .map(|(name, size)| {
+            let button = yttt_button(
+                SharedString::from(format!("button-size-{name}")),
+                name.to_string(),
+                YtttButtonVariant::Primary,
+                self.theme,
+                self.ui_style,
+            )
+            .sized(size, self.ui_style);
+            self.tracked(&format!("button.size.{name}"), button)
+        })
+        .collect()
+    }
+
     fn icon_buttons(&self) -> Vec<AnyElement> {
         [
             ("toolbar", YtttIconButtonKind::Toolbar),
@@ -401,6 +425,7 @@ impl Render for Gallery {
             .text_color(theme.text)
             .text_sm()
             .child(self.section("Button", self.buttons()))
+            .child(self.section("Button size", self.button_sizes()))
             .child(self.section("Icon button", self.icon_buttons()))
             .child(self.section(
                 "Input",

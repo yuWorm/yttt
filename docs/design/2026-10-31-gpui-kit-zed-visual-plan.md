@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：M1 已合入，P2 完成；P0 剩余项见下方进度
+- 状态：M1 已合入，P2 待合入（PR #2），P3 进行中；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -296,6 +296,8 @@ CI 已通过（提交 `a3d10d9`，Run 41287845986）：macOS 917 过，Linux 148
 **P2 退出门禁：** L0、L2 通过；除 `src/ui/theme`、`src/ui/editor` 的白名单外，业务文件不再引用 `gpui_component`；白名单写入 `clippy.toml` 注释。
 
 ## 5. P3：基础控件
+
+进度（2026-11-01）：3.1 的按钮部分完成。按钮改到 `gpui_base::Button` 后 L2 全窗口 0 差异，L1 覆盖 4 种高度。内边距、文字大小和颜色还没有按 Zed 对齐，要等 Zed 按组件的基线截图。`yttt_menu_icon_button` 留到 P4。展示页高度改为 860，基线要重新生成。
 
 每个任务的步骤相同，以下称**标准流程**：
 

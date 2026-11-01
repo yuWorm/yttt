@@ -81,6 +81,9 @@ pub struct UiBorderScale {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiControlMetrics {
     pub button_height: Rems,
+    pub button_compact_height: Rems,
+    pub button_medium_height: Rems,
+    pub button_large_height: Rems,
     pub button_padding_x: Rems,
     pub settings_height: Rems,
     pub settings_control_width: Pixels,
@@ -341,6 +344,9 @@ impl UiStyle {
             border,
             controls: UiControlMetrics {
                 button_height: rems(1.375),
+                button_compact_height: rems(1.125),
+                button_medium_height: rems(1.75),
+                button_large_height: rems(2.0),
                 button_padding_x: rems(0.25),
                 settings_height: rems(1.75),
                 settings_control_width: px(200.0),
@@ -507,6 +513,9 @@ impl UiStyle {
             border,
             controls: UiControlMetrics {
                 button_height: rems(1.75),
+                button_compact_height: rems(1.125),
+                button_medium_height: rems(1.75),
+                button_large_height: rems(2.0),
                 button_padding_x: rems(0.75),
                 settings_height: rems(2.25),
                 settings_control_width: px(220.0),

@@ -1,4 +1,4 @@
-# Zed values for L1. `aligned = false` lists a known gap until its phase closes it.
+# Zed values for L1. `aligned = true` lists a known gap until its phase closes it.
 
 [[metric]]
 name = "button_height_px"
@@ -28,14 +28,14 @@ aligned = true
 [[metric]]
 name = "button_compact_height_px"
 zed = 18.0
-aligned = false
+aligned = true
 
 [[metric]]
 name = "button_medium_height_px"
 zed = 28.0
-aligned = false
+aligned = true
 
 [[metric]]
 name = "button_large_height_px"
 zed = 32.0
-aligned = false
+aligned = true

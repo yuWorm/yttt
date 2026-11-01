@@ -1,4 +1,4 @@
-use gpui::{ElementId, Pixels, Rgba, SharedString, prelude::*};
+use gpui::{ElementId, Pixels, Rems, Rgba, SharedString, prelude::*};
 use gpui_base::Button;
 use gpui_component::{Icon, IconName, Sizable as _, spinner::Spinner, tooltip::Tooltip};
 
@@ -9,10 +9,29 @@ use crate::{
 
 pub type YtttButton = Button;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum YtttButtonSize {
+    Compact,
+    #[default]
+    Default,
+    Medium,
+    Large,
+}
+
+pub fn yttt_button_height(size: YtttButtonSize, ui_style: UiStyle) -> Rems {
+    match size {
+        YtttButtonSize::Compact => ui_style.controls.button_compact_height,
+        YtttButtonSize::Default => ui_style.controls.button_height,
+        YtttButtonSize::Medium => ui_style.controls.button_medium_height,
+        YtttButtonSize::Large => ui_style.controls.button_large_height,
+    }
+}
+
 pub trait YtttButtonExt: Sized {
     fn icon(self, icon: IconName) -> Self;
     fn tooltip_text(self, text: impl Into<SharedString>) -> Self;
     fn loading(self, loading: bool) -> Self;
+    fn sized(self, size: YtttButtonSize, ui_style: UiStyle) -> Self;
 }
 
 impl YtttButtonExt for Button {
@@ -27,6 +46,10 @@ impl YtttButtonExt for Button {
 
     fn loading(self, loading: bool) -> Self {
         self.when(loading, |button| button.child(Spinner::new().xsmall()))
+    }
+
+    fn sized(self, size: YtttButtonSize, ui_style: UiStyle) -> Self {
+        self.h(yttt_button_height(size, ui_style))
     }
 }
 
