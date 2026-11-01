@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 升级到 GPUI `gpui-pre` 0.3.10 和 gpui-kit 0.8.1，开发和构建需要 Rust 1.98；界面外观不变。终端高速输出的吞吐下降约 15%，帧时间和输入延迟没有变化。
+- Upgrade to GPUI `gpui-pre` 0.3.10 and gpui-kit 0.8.1, which requires Rust 1.98 to build, with no change in appearance. Terminal throughput under heavy output drops by about 15%; frame times and input latency are unchanged.
 - 修复恢复后普通标签被当作 Agent：窗格的配置决定它是什么，保存的 Agent 记录不再改变窗格身份。普通 shell 只恢复 Host 停止时仍在运行的 Agent，并在 shell 内恢复，退出后回到 shell；已自行结束的 Agent 不再被自动拉起，没有 Agent 的标签也不再显示 Agent 状态。
 - Fix plain tabs being treated as Agents after a restore: a pane's config decides what it is, and saved Agent records no longer change that. A shell pane resumes only an Agent that was still running when the Host stopped, inside the shell it returns to afterward; an Agent that ended on its own is not started again, and a tab without an Agent no longer shows Agent status.
 - 修复 Agent 标签恢复后一直停在“进程正在启动”：保存的会话属于其他 provider 时启动窗格自己的命令；Host 记录的退出状态现在会显示在客户端，可以从窗格上重新启动。

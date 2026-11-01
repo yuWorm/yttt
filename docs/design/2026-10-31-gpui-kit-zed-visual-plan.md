@@ -227,7 +227,7 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 
 ### 任务 1.7：全平台验证（M）
 
-CI 已通过（提交 `a3d10d9`，Run 41287845986）：macOS 917 过，Linux 1487 过，Windows 242 过，三平台构建成功。Windows 只跑 core contracts，不跑完整 UI 测试。剩余项：打包脚本、L2、手工清单、性能对比和 `burst` profile、`CHANGELOG.md`。
+CI 已通过（提交 `a3d10d9`，Run 41287845986）：macOS 917 过，Linux 1487 过，Windows 242 过，三平台构建成功。Windows 只跑 core contracts，不跑完整 UI 测试。L2 全窗口 0 差异，性能复测通过，见 `baselines/gpui-kit-spike.md`。剩余项：手工清单、Windows 标题栏。
 
 - [ ] macOS、Windows、Linux CI 全部通过。
 - [ ] 跑 L2：与 P0 截图比较，差异全部解释。
