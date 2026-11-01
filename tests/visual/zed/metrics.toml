@@ -20,10 +20,11 @@ name = "text_ui_px"
 zed = 14.0
 aligned = true
 
+# Zed 1.12's source says 34rem, but 1.26.2 measures about 607px.
 [[metric]]
 name = "palette_width_px"
-zed = 544.0
-aligned = true
+zed = 607.0
+aligned = false
 
 [[metric]]
 name = "button_compact_height_px"
@@ -50,3 +51,19 @@ aligned = true
 name = "button_text_px"
 zed = 14.0
 aligned = true
+
+# Measured from baseline-1.26.2/palette.png, tooltip.png and context_menu_hover.png.
+[[metric]]
+name = "palette_row_height_px"
+zed = 32.5
+aligned = false
+
+[[metric]]
+name = "menu_row_pitch_px"
+zed = 22.5
+aligned = false
+
+[[metric]]
+name = "tooltip_height_px"
+zed = 30.5
+aligned = false
