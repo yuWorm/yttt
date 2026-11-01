@@ -299,7 +299,7 @@ CI 已通过（提交 `a3d10d9`，Run 41287845986）：macOS 917 过，Linux 148
 
 进度（2026-11-01）：3.1 的按钮部分完成。按钮改到 `gpui_base::Button` 后 L2 全窗口 0 差异，L1 覆盖 4 种高度。文字大小已按 Zed 1.26.2 信任弹窗的实测对齐为 14px，内边距 4px 本来就一致；同一文案宽度 119 对 118。Zed 基线截图存于 `tests/visual/zed/baseline-1.26.2/`，由 `scripts/zed-input.swift` 驱动，需要终端的屏幕录制和辅助功能权限。命令面板实测约 607px，和 1.12 源码的 34rem 不同，以实测为准。
 
-3.3 Tooltip 的几何已与 Zed 一致（高 30.5px、圆角约 4px、文字 14px），差距在配色。默认 One Dark 已改用 Zed 配色，同一截图链路下面板、选中、文字三色和 Zed 基线逐字节相同。语法高亮颜色留到 P7。`screencapture` 带显示器色彩配置，基线 PNG 的颜色值不能当主题值用。`yttt_menu_icon_button` 留到 P4。展示页高度改为 900，L2 基线随视觉变化重新生成。
+3.3 Tooltip 的几何已与 Zed 一致（高 30.5px、圆角约 4px、文字 14px），差距在配色。默认 One Dark 已改用 Zed 配色，同一截图链路下面板、选中、文字三色和 Zed 基线逐字节相同。语法高亮颜色留到 P7。3.5 的开关已按 `settings_general.png` 改成单层 32×20，同一截图链路下关闭态和滑块颜色与 Zed 一致；Radio 未改。3.4 只把 Search 边框改为 `border`。`screencapture` 带显示器色彩配置，基线 PNG 的颜色值不能当主题值用。`yttt_menu_icon_button` 留到 P4。展示页高度改为 900，L2 基线随视觉变化重新生成。
 
 每个任务的步骤相同，以下称**标准流程**：
 

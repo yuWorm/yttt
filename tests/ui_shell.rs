@@ -1462,19 +1462,19 @@ fn yttt_switch_style_matches_settings_control_density() {
     let theme = WorkbenchTheme::one_dark();
     let switch = yttt_switch_style(theme, UiStyle::default());
 
-    assert_eq!(switch.width, gpui::rems(2.625));
-    assert_eq!(switch.height, gpui::rems(1.625));
-    assert_eq!(switch.track_width, gpui::rems(2.125));
+    assert_eq!(switch.width, gpui::rems(2.0));
+    assert_eq!(switch.height, gpui::rems(1.25));
+    assert_eq!(switch.track_width, gpui::rems(2.0));
     assert_eq!(switch.track_height, gpui::rems(1.25));
-    assert_eq!(switch.thumb_size, gpui::rems(0.875));
-    assert_eq!(switch.track_padding, gpui::rems(0.125));
+    assert_eq!(switch.thumb_size, gpui::rems(0.75));
+    assert_eq!(switch.track_padding, gpui::rems(0.1875));
     assert_eq!(switch.control_height, gpui::rems(2.0));
-    assert_eq!(switch.active_background, theme.accent);
+    assert_eq!(switch.active_background, theme.accent.alpha(0.4));
     assert_eq!(switch.inactive_background, theme.element_background);
-    assert_eq!(switch.active_border, theme.border_variant);
-    assert_eq!(switch.inactive_border, theme.border_variant);
+    assert_eq!(switch.active_border, theme.accent.alpha(0.2));
+    assert_eq!(switch.inactive_border, theme.border);
     assert_eq!(switch.active_thumb, theme.text);
-    assert_eq!(switch.inactive_thumb, theme.text_muted);
+    assert_eq!(switch.inactive_thumb, theme.icon_disabled);
 }
 
 #[test]

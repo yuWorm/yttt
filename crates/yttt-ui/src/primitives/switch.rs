@@ -1,6 +1,9 @@
-use gpui::{App, Div, ElementId, Pixels, Rems, Rgba, SharedString, Window, div, prelude::*};
+use gpui::{App, Div, ElementId, Pixels, Rems, Rgba, SharedString, Window, div, prelude::*, px};
 
-use crate::{style::UiStyle, theme::WorkbenchTheme};
+use crate::{
+    style::{UiStyle, UiStyleId},
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttSwitchStyle {
@@ -23,6 +26,7 @@ pub struct YtttSwitchStyle {
 }
 
 pub fn yttt_switch_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSwitchStyle {
+    let zed = ui_style.id == UiStyleId::Zed;
     YtttSwitchStyle {
         width: ui_style.switches.width,
         height: ui_style.switches.height,
@@ -31,15 +35,35 @@ pub fn yttt_switch_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSwitch
         track_padding: ui_style.switches.track_padding,
         thumb_size: ui_style.switches.thumb_size,
         control_height: ui_style.switches.control_height,
-        outer_border_width: ui_style.border.hairline,
+        outer_border_width: if zed {
+            px(0.0)
+        } else {
+            ui_style.border.hairline
+        },
         track_border_width: ui_style.border.hairline,
-        active_background: theme.accent,
+        active_background: if zed {
+            theme.accent.alpha(0.4)
+        } else {
+            theme.accent
+        },
         inactive_background: theme.element_background,
-        active_border: theme.border_variant,
-        inactive_border: theme.border_variant,
+        active_border: if zed {
+            theme.accent.alpha(0.2)
+        } else {
+            theme.border_variant
+        },
+        inactive_border: if zed {
+            theme.border
+        } else {
+            theme.border_variant
+        },
         hover_border: theme.border_focused,
         active_thumb: theme.text,
-        inactive_thumb: theme.text_muted,
+        inactive_thumb: if zed {
+            theme.icon_disabled
+        } else {
+            theme.text_muted
+        },
     }
 }
 

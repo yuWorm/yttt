@@ -67,3 +67,19 @@ aligned = false
 name = "tooltip_height_px"
 zed = 30.5
 aligned = false
+
+# Measured from baseline-1.26.2/settings_general.png.
+[[metric]]
+name = "switch_width_px"
+zed = 32.0
+aligned = true
+
+[[metric]]
+name = "switch_height_px"
+zed = 20.0
+aligned = true
+
+[[metric]]
+name = "switch_thumb_px"
+zed = 12.0
+aligned = true

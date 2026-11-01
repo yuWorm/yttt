@@ -50,7 +50,7 @@ pub fn yttt_input_style(
         ),
         YtttInputKind::Palette | YtttInputKind::Search => (
             theme.editor_background,
-            theme.border_variant,
+            theme.border,
             theme.border_focused,
             theme.text,
             theme.text_subtle,
