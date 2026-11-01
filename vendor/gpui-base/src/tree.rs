@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use crate::TestSupportExt as _;
 use gpui::StatefulInteractiveElement as _;
 use std::{cell::RefCell, ops::Range, rc::Rc};

@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 #[cfg(feature = "gpui-fast")]
 extern crate gpui_fast as gpui;
 

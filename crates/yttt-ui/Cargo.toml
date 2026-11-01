@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.10" }
-gpui-component = "=0.8.1"
-gpui-base = "=0.8.1"
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-base.workspace = true
 serde = { version = "1", features = ["derive"] }

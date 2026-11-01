@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use crate::input::InputModeKind;
 use gpui::{Context, Pixels, Point, Window};
 use sum_tree::Bias;

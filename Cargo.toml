@@ -21,6 +21,15 @@ members = [
 exclude = ["vendor/gpui-base", "vendor/gpui-component", "vendor/gpui-markdown-editor", "vendor/alacritty_terminal", "vendor/vte-graphics"]
 resolver = "3"
 
+[workspace.dependencies]
+# Every snapshot crate moves together: any gpui-pre release may change GPUI's API.
+gpui = { package = "gpui-pre", version = "=0.3.10" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10" }
+gpui-base = "=0.8.1"
+gpui-component = "=0.8.1"
+gpui-kit-assets = "=0.8.1"
+
 [workspace.package]
 version = "0.3.19"
 edition = "2024"
@@ -48,10 +57,10 @@ dunce = "1"
 fs2 = "0.4"
 parking_lot = "0.12"
 futures-lite = "2"
-gpui = { package = "gpui-pre", version = "=0.3.10" }
-gpui-component = { version = "=0.8.1", features = ["tree-sitter-languages"] }
-gpui-base = "=0.8.1"
-gpui-kit-assets = "=0.8.1"
+gpui.workspace = true
+gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
+gpui-base.workspace = true
+gpui-kit-assets.workspace = true
 gpui-markdown-editor = { path = "vendor/gpui-markdown-editor" }
 ignore = "0.4"
 image = "0.25.10"
@@ -64,7 +73,7 @@ yttt-transport-tls = { path = "crates/yttt-transport-tls" }
 notify = "7.0.0"
 notify-rust = "4.18"
 nucleo-matcher = "0.3.1"
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10" }
+reqwest_client = { workspace = true }
 tree-sitter = "0.26"
 tree-sitter-bash = "0.23.3"
 tree-sitter-c = "0.24.1"
@@ -120,8 +129,7 @@ objc = "0.2"
 tray-icon = { version = "0.24.2", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies.gpui_platform]
-package = "gpui-pre-platform"
-version = "=0.3.10"
+workspace = true
 features = ["font-kit", "runtime_shaders"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -130,19 +138,17 @@ winreg = "0.56"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [target.'cfg(target_os = "windows")'.dependencies.gpui_platform]
-package = "gpui-pre-platform"
-version = "=0.3.10"
+workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gpui_platform]
-package = "gpui-pre-platform"
-version = "=0.3.10"
+workspace = true
 features = ["wayland", "x11"]
 
 [build-dependencies]
 winresource = "0.1"
 
 [dev-dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }
 
 # Vendored Apache-2.0 Alacritty Terminal 0.25.1 with Sixel support from
 # https://github.com/alacritty/alacritty/pull/4763 at 3d658d2e280d3456ead5d73be9067ec587ddcc45.

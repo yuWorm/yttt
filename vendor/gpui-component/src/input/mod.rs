@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 mod clear_button;
 mod content_type;
 mod input;

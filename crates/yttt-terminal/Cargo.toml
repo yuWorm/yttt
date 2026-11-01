@@ -10,8 +10,8 @@ description = "YTTT terminal component for GPUI"
 perf-metrics = ["dep:hdrhistogram", "dep:serde_json"]
 
 [dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.10" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui.workspace = true
+gpui_platform = { workspace = true, features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 alacritty_terminal = "0.25.1"
 anyhow = "1"
 portable-pty = "0.9"
@@ -32,4 +32,4 @@ yttt-core = { path = "../yttt-core" }
 
 
 [dev-dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.10", features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }

@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 //! Text input: the shared editing engine and the three states built on it.
 //!
 //! Nothing here should be `pub` unless it is reachable from outside the crate.

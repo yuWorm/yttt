@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：P0 进行中，详见下方 P0 进度
+- 状态：任务 1.0 完成，任务 1.1 完成；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -154,7 +154,11 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 
 不满足时停止 P1，向用户报告，并讨论退回“在现有 vendored 组件上改样式”的路线。
 
+结论（2026-11-01）：继续。Host 的帧时间和输入延迟无退化；`burst` 吞吐低约 15%，超出 10%，用户已确认接受。其中约一半来自 `gpui-pre` 强制要求的 Rust 1.98。此后的基线改为“用 Rust 1.98 编译的旧版本”，差异约 -6%。P1 合入前再 profile 一次 `burst`。详见 `baselines/gpui-kit-spike.md`。
+
 ### 任务 1.1：建立 vendor 结构（M）
+
+已完成。两个 crate 的 vendor 目录、`[workspace.dependencies]`、`[patch.crates-io]`、`vendor/PATCHES.md`、修改标注和 CI 单一 GPUI 检查都已就绪。`gpui-markdown-editor` 不在 workspace 内，继续写明版本。
 
 - [ ] 从 crates.io 的 0.8.1 发布包解开 `vendor/gpui-base`、`vendor/gpui-component`。
 - [ ] 提交一次未修改的原始内容，便于审阅后续补丁。

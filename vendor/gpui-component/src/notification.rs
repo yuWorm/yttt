@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use std::{
     any::TypeId,
     borrow::Cow,

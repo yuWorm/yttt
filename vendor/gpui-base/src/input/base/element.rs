@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use crate::input::{InputExtras as _, InputModeKind};
 use gpui::Corners;
 use gpui::Half;

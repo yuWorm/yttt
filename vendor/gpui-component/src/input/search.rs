@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use ropey::Rope;
 use rust_i18n::t;
 use std::ops::Range;

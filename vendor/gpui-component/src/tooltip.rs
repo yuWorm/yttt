@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use crate::root::WindowState;
 use std::{
     cell::RefCell,
