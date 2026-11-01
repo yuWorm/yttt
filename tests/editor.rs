@@ -33,6 +33,7 @@ fn assert_token_color(
 
 #[test]
 fn tsx_highlighter_styles_typescript_and_jsx_tokens() {
+    register_builtin_editor_languages();
     let source = r#"type Props = { title: string };
 export function Card({ title }: Props) {
     return <section data-title={title}><Widget label={title} /></section>;
@@ -58,6 +59,7 @@ export function Card({ title }: Props) {
 
 #[test]
 fn jsx_highlighter_styles_dom_tags_and_components() {
+    register_builtin_editor_languages();
     let source = r#"const Card = () => <section data-title="hello"><Widget /></section>;"#;
     let theme = HighlightTheme::default_dark();
     let mut highlighter = SyntaxHighlighter::new("javascript");
@@ -76,6 +78,7 @@ fn jsx_highlighter_styles_dom_tags_and_components() {
 
 #[test]
 fn vue_highlighter_styles_template_and_embedded_tokens() {
+    register_builtin_editor_languages();
     let source = r#"<template>
   <Card v-if="ready" :title="message" @click.stop="handleClick">
     {{ message.toUpperCase() }}
@@ -117,6 +120,7 @@ const Panel = ({ message }: Props) => <section>{message}</section>;
 
 #[test]
 fn vue_directive_expressions_do_not_inherit_html_string_colors() {
+    register_builtin_editor_languages();
     let source =
         r#"<template><div title="tooltip" :title="ready ? 'yes' : 'no'"></div></template>"#;
     let theme = HighlightTheme::default_dark();
@@ -138,6 +142,7 @@ fn vue_directive_expressions_do_not_inherit_html_string_colors() {
 
 #[test]
 fn vue_highlighter_refreshes_script_injection_after_an_edit() {
+    register_builtin_editor_languages();
     let source = r#"<script lang="ts">const value = 1;</script>"#;
     let old_content = "const value = 1;";
     let replacement = "type Props = { title: string };";
@@ -183,6 +188,7 @@ fn vue_highlighter_refreshes_script_injection_after_an_edit() {
 
 #[test]
 fn added_language_highlighters_style_language_specific_tokens() {
+    register_builtin_editor_languages();
     let theme = HighlightTheme::default_dark();
     let cases = [
         (
