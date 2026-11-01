@@ -457,7 +457,7 @@ fn overflowing_tabs_scroll_without_shrinking_or_moving_toolbar(cx: &mut gpui::Te
             "{style:?}: tabs must overflow"
         );
 
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: first.center(),
             delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -100.0)),
             ..Default::default()
@@ -483,7 +483,7 @@ fn overflowing_tabs_scroll_without_shrinking_or_moving_toolbar(cx: &mut gpui::Te
             );
         });
 
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position: gpui::point(first.center().x, first.center().y),
             delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(10000.0), gpui::px(0.0))),
             ..Default::default()

@@ -975,7 +975,7 @@ fn non_empty(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use yttt_agent_core::{AgentProvider as _, AgentTurnState};
+    use yttt_agent_core::AgentTurnState;
 
     use super::*;
 

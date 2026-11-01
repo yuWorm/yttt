@@ -59,7 +59,11 @@ impl Caret {
 impl RenderOnce for Caret {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         Icon::new(IconName::ChevronDown)
-            .with_size(Size::XSmall)
+            .with_size(match self.size {
+                Size::XSmall => Size::XSmall,
+                Size::Small => Size::Small,
+                _ => Size::Medium,
+            })
             .when_some(self.color, |this, color| this.text_color(color))
     }
 }
@@ -624,7 +628,7 @@ where
                                             .xsmall()
                                             .text_color(cx.theme().muted_foreground)
                                             .into_any_element(),
-                                        None => Caret::new(self.state.size)
+                                        None => Caret::new(Size::XSmall)
                                             .text_color(cx.theme().muted_foreground)
                                             .into_any_element(),
                                     };

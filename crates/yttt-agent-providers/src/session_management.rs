@@ -1102,7 +1102,7 @@ fn append_json_line(path: &Path, value: &Value) -> Result<(), String> {
                 path.display()
             )
         })?;
-        if final_byte != [b'\n'] {
+        if final_byte != *b"\n" {
             file.write_all(b"\n").map_err(|error| {
                 format!(
                     "could not separate session history records in {}: {error}",

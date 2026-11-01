@@ -4,7 +4,7 @@ use rust_i18n::t;
 use std::ops::Range;
 
 use gpui::{
-    App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable, Half,
+    App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Styled, Subscription,
     WeakEntity, Window, actions, div, prelude::FluentBuilder as _,
 };

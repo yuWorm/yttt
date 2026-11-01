@@ -3,7 +3,7 @@ use std::ops::Range;
 use gpui::HighlightStyle;
 use gpui_component::{
     highlighter::{HighlightTheme, SyntaxHighlighter},
-    input::{DisplayMap, FoldRange, InputEdit, Point, Rope},
+    input::{DisplayMap, FoldRange, Rope},
 };
 use yttt::ui::editor::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,

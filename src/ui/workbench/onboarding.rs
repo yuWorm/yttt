@@ -1072,7 +1072,6 @@ fn command_palette_hint(
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use gpui::AppContext as _;
     use tempfile::tempdir;
 
     use super::*;

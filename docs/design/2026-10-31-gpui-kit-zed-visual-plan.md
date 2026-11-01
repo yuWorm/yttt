@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：任务 1.0 到 1.4 完成；P0 剩余项见下方进度
+- 状态：任务 1.0 到 1.5 完成；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -202,6 +202,12 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 退出：现有编辑器和 vim 测试全部通过。
 
 ### 任务 1.5：迁移主应用（L）
+
+已完成。`desktop_tray_lifecycle` 的 2 个失败在 `master` 上同样存在，Host 启动超时，沙箱内外结果相同，根因未查，L0 因此没有全绿。
+
+- 右键菜单：0.8.1 在鼠标事件里打开菜单，排队的终端聚焦会抢走焦点。右键不再排队聚焦，workbench 也会等一帧再判断焦点是否丢失。
+- 窗口不可见：新 GPUI 不出帧，桌面端要到窗口可见才 attach 终端。终端进程由 Host 启动，不受影响，所以接受这个行为。
+- Breaking Changes：0.6 到 0.8.1 的说明涉及 Plot、DatePicker、WebView，yttt 都没有使用，其余由编译器覆盖。
 
 - [ ] 迁移 `Root`、`TitleBar`、`ThemeConfig`、`set_locale`、`rebind_keybindings`。
 - [ ] 迁移 `to_gpui_component_theme_config` 等主题映射，核对 highlight theme。

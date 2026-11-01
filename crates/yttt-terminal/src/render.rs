@@ -259,8 +259,10 @@ fn render_terminal_image(
         let source = &image.rgba[y * width * 4..(y + 1) * width * 4];
         let row = &mut bgra[(y + 1) * stride..(y + 2) * stride];
         for (rgba, pixel) in source
-            .chunks_exact(4)
-            .zip(row[4..4 + width * 4].chunks_exact_mut(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(row[4..4 + width * 4].as_chunks_mut::<4>().0.iter_mut())
         {
             pixel.copy_from_slice(&[rgba[2], rgba[1], rgba[0], rgba[3]]);
         }

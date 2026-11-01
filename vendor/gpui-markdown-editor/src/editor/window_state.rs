@@ -3,8 +3,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use gpui::*;
-
 use super::*;
 use crate::api::{LinkRequest, MarkdownEditorEvent, MarkdownEditorMode, SourceSelection};
 use crate::environment::MarkdownEditorEnvironment;

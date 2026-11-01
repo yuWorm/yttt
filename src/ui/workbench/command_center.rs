@@ -4,12 +4,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{
-    App, Context, Entity, Focusable as _, FontWeight, IntoElement as _, Subscription, Task, Window,
-    div, prelude::*, px, relative,
-};
+use gpui::{App, Context, Entity, FontWeight, Subscription, Task, Window, div, px, relative};
 use gpui_component::{
-    Disableable as _,
     input::{InputEvent, InputState},
     spinner::Spinner,
 };

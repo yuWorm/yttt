@@ -3280,7 +3280,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 ),
             ),
         };
-        let (scroll_offset, cursor_row_y) = window.with_content_mask(Some(text_mask), |window| {
+        let cursor_row_y = window.with_content_mask(Some(text_mask), |window| {
             // Paint active line
             let mut offset_y = px(0.);
             if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
@@ -3476,7 +3476,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 }
             }
 
-            (scroll_offset, cursor_row_y)
+            cursor_row_y
         });
 
         // Paint line numbers

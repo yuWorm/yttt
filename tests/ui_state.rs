@@ -9,7 +9,7 @@ use std::{
 };
 
 use gpui::http_client::{AsyncBody, FakeHttpClient, Response};
-use gpui::{AppContext as _, Keystroke, Subscription, px, size};
+use gpui::{AppContext as _, Subscription, px, size};
 use tempfile::tempdir;
 use yttt::{
     commands::{ActiveSurface, CommandContext, CommandId},
@@ -1060,7 +1060,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
         first_keybinding_actions.size.height <= first_keybinding_row.size.height,
         "row actions should stay on one compact line"
     );
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: keybinding_list.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-640.0))),
         ..Default::default()
@@ -5132,7 +5132,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
         .expect("restore-last-session setting should expose a switch");
     cx.simulate_click(restore_toggle.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: restore_toggle.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-320.0))),
         ..Default::default()
@@ -5285,7 +5285,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
         .debug_bounds("settings-restore-last-session-row")
         .expect("general settings should render a visible row")
         .center();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: scroll_origin,
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-1600.0))),
         ..Default::default()
@@ -5703,7 +5703,7 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
         .debug_bounds("settings-window-effect-row")
         .unwrap()
         .center();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: scroll_origin,
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-1200.0))),
         ..Default::default()
@@ -6150,7 +6150,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     let first_before = cx
         .debug_bounds("settings-editor-font-family-row")
         .expect("first editor settings row");
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui::ScrollEvent {
         position: first_before.origin + gpui::point(gpui::px(24.0), gpui::px(24.0)),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-240.0))),
         ..Default::default()

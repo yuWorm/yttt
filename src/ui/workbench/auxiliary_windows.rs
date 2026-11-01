@@ -441,7 +441,6 @@ impl Render for AuxiliaryWindow {
                 .on_action(cx.listener(WorkbenchView::on_vim_enter_normal))
                 .on_action(cx.listener(WorkbenchView::on_vim_enter_insert))
         });
-        let mut content = content.track_focus(&self.focus_handle);
-        content
+        content.track_focus(&self.focus_handle)
     }
 }

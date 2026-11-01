@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use gpui::{App, Context, Entity, Focusable as _, Keystroke, KeystrokeEvent, Window};
-use gpui_component::{input::EditorState, kbd::Kbd};
+use gpui::{App, Context, Entity, Keystroke, KeystrokeEvent, Window};
+use gpui_component::kbd::Kbd;
 
 use crate::{
     config::settings::VimModeSetting,
