@@ -897,8 +897,6 @@ fn vim_search_reuses_the_query_for_next_and_previous_matches(cx: &mut gpui::Test
     cx.run_until_parked();
     cx.refresh().unwrap();
     cx.run_until_parked();
-    cx.refresh().unwrap();
-    cx.run_until_parked();
     cx.simulate_keystrokes("o n e");
     cx.run_until_parked();
     cx.simulate_keystrokes("escape n");

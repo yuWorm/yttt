@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -359,7 +360,6 @@ impl<M: OverlayMode> InputOverlayHost<M> {
                 && was.open
                 && (was.replace_mode == search_signature.replace_mode
                     || panel_replace_mode == search_signature.replace_mode)
-                && was.anchor_offset == search_signature.anchor_offset
                 && was.activation_revision == search_signature.activation_revision
                 && self.search.read(cx).query(cx) == search_session.query;
             self.search_signature = search_signature;
