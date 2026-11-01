@@ -892,7 +892,7 @@ fn yttt_row_style_uses_domain_specific_sidebar_and_tab_surfaces() {
     assert_eq!(sidebar.hover_background, theme.ghost_element_hover);
     assert_eq!(tab.height, gpui::rems(2.0));
     assert_eq!(tab.background, theme.tab_active_background);
-    assert_eq!(tab.border, theme.border_variant);
+    assert_eq!(tab.border, theme.border);
 }
 
 #[test]

@@ -49,6 +49,8 @@ pub struct WorkbenchTheme {
     pub focus_ring: Rgba,
     pub selection: Rgba,
     pub focused_pane_border: Rgba,
+    pub scrollbar_thumb: Rgba,
+    pub scrollbar_thumb_hover: Rgba,
     pub split_line_width: Pixels,
     pub split_hit_area_width: Pixels,
 }
@@ -103,6 +105,8 @@ impl WorkbenchTheme {
             focus_ring: rgb(0x47679e),
             selection: gpui::rgba(0x67769640),
             focused_pane_border: rgb(0x47679e),
+            scrollbar_thumb: gpui::rgba(0xc8ccd44c),
+            scrollbar_thumb_hover: rgb(0x363c46),
             split_line_width: px(1.0),
             split_hit_area_width: px(7.0),
         }
