@@ -183,7 +183,7 @@ fn focus_workbench_key_context(root: &gpui::Entity<WorkbenchView>, cx: &mut gpui
 fn settings_window_reuses_search_state_and_rebinds_after_native_close(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let slot = Rc::new(RefCell::new(None));
@@ -248,7 +248,7 @@ fn settings_window_reuses_search_state_and_rebinds_after_native_close(
 
 #[gpui::test]
 fn layout_editor_window_keeps_invalid_edits_and_outlives_settings(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let slot = Rc::new(RefCell::new(None));
@@ -519,7 +519,7 @@ fn root_view_starts_with_empty_workspace() {
 
 #[gpui::test]
 fn homepage_remote_services_keeps_the_local_workspace(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let slot = Rc::new(RefCell::new(None));
@@ -546,7 +546,7 @@ fn homepage_remote_services_keeps_the_local_workspace(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let root_slot = Rc::new(RefCell::new(None));
@@ -622,7 +622,7 @@ fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn dashboard_and_command_center_follow_open_project_lifecycle(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let project_path = temp.path().join("project");
@@ -904,7 +904,7 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
 
 #[gpui::test]
 fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
@@ -1087,7 +1087,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
 fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -1127,7 +1127,7 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
 
 #[gpui::test]
 fn double_clicking_project_row_toggles_agent_list(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut workspace = workspace_with_sample_project();
@@ -1192,7 +1192,7 @@ fn double_clicking_project_row_toggles_agent_list(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let project_path = temp.path().join("project");
@@ -1286,7 +1286,7 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
 
 #[gpui::test]
 fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let workspace = workspace_with_sample_project();
@@ -1332,7 +1332,7 @@ fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn root_view_error_notification_auto_dismisses(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let workspace = workspace_with_sample_project();
@@ -1647,7 +1647,7 @@ fn force_onboarding_overrides_the_persisted_completion_marker() {
 
 #[gpui::test]
 fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
@@ -2017,7 +2017,7 @@ fn pending_and_failed_project_file_loads_preserve_active_surface() {
 
 #[gpui::test]
 fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("tree-editor-project");
     fs::create_dir_all(project_dir.join("src")).unwrap();
@@ -2400,7 +2400,7 @@ fn root_view_active_file_owns_input_without_leaking_to_terminal() {
 
 #[gpui::test]
 fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut workspace = workspace_with_sample_project();
@@ -2470,7 +2470,7 @@ fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::Test
 
 #[gpui::test]
 fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("save-project");
     fs::create_dir(&project_dir).unwrap();
@@ -2625,7 +2625,7 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("conflict-project");
     fs::create_dir(&project_dir).unwrap();
@@ -2872,7 +2872,7 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
 
 #[gpui::test]
 fn root_view_delayed_autosave_discards_stale_generation(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) =
         project_file_autosave_fixture(cx, "after_delay", 50);
     let input = cx.read(|app| document.read(app).input().clone());
@@ -2934,7 +2934,7 @@ fn root_view_delayed_autosave_discards_stale_generation(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn root_view_focus_change_autosave_saves_dirty_file(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) =
         project_file_autosave_fixture(cx, "on_focus_change", 1000);
     let input = cx.read(|app| document.read(app).input().clone());
@@ -3003,7 +3003,7 @@ fn root_view_focus_change_autosave_saves_dirty_file(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn root_view_autosave_off_does_not_save_on_focus_change(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 5);
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
@@ -3064,7 +3064,7 @@ fn root_view_autosave_off_does_not_save_on_focus_change(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn focusing_a_real_editor_document_does_not_reenter_root_render(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let other_input = cx.update(|window, app| {
@@ -3097,7 +3097,7 @@ fn focusing_a_real_editor_document_does_not_reenter_root_render(cx: &mut gpui::T
 fn editor_display_settings_update_open_documents_without_replacing_state(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let document_entity_id = document.entity_id();
@@ -3153,7 +3153,7 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
 fn editor_tab_size_applies_only_to_files_opened_after_the_setting_changes(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
     fs::write(project_dir.join("next.txt"), "next").unwrap();
@@ -3199,7 +3199,7 @@ fn editor_tab_size_applies_only_to_files_opened_after_the_setting_changes(
 
 #[gpui::test]
 fn showing_hidden_files_refreshes_existing_project_trees(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
     let tree = cx
@@ -3253,7 +3253,7 @@ fn showing_hidden_files_refreshes_existing_project_trees(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn disabling_autosave_cancels_pending_delayed_tasks(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (temp, _project_dir, root, document, cx) =
         project_file_autosave_fixture(cx, "after_delay", 10_000);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
@@ -3357,7 +3357,7 @@ fn project_panel_settings_update_selected_and_future_sessions_only() {
 
 #[gpui::test]
 fn closing_dirty_file_requires_a_decision(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let input = cx.read(|app| document.read(app).input().clone());
@@ -3429,7 +3429,7 @@ fn closing_dirty_file_requires_a_decision(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn cancelling_bulk_close_keeps_clean_and_dirty_targets_open(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let anchor = WorkItemId::File(document_id.clone());
@@ -3521,7 +3521,7 @@ fn cancelling_bulk_close_keeps_clean_and_dirty_targets_open(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn scoped_bulk_tab_close_removes_terminal_and_file_groups(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let anchor = WorkItemId::File(document_id.clone());
@@ -3561,7 +3561,7 @@ fn scoped_bulk_tab_close_removes_terminal_and_file_groups(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn saving_a_dirty_file_continues_the_pending_close(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let input = cx.read(|app| document.read(app).input().clone());
@@ -3602,7 +3602,7 @@ fn saving_a_dirty_file_continues_the_pending_close(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn failed_save_keeps_dirty_file_and_pending_close_open(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let input = cx.read(|app| document.read(app).input().clone());
@@ -3640,7 +3640,7 @@ fn failed_save_keeps_dirty_file_and_pending_close_open(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn closing_project_combines_dirty_files_and_running_processes(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
     let input = cx.read(|app| document.read(app).input().clone());
@@ -3678,7 +3678,7 @@ fn closing_project_combines_dirty_files_and_running_processes(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn saving_dirty_project_files_continues_the_pending_project_close(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
     let input = cx.read(|app| document.read(app).input().clone());
@@ -3714,7 +3714,7 @@ fn saving_dirty_project_files_continues_the_pending_project_close(cx: &mut gpui:
 
 #[gpui::test]
 fn closing_window_with_dirty_file_is_blocked_by_the_workbench_guard(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
@@ -3746,7 +3746,7 @@ fn closing_window_with_dirty_file_is_blocked_by_the_workbench_guard(cx: &mut gpu
 fn closing_window_with_running_terminal_does_not_request_process_termination(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut workspace = workspace_with_sample_project();
@@ -3998,7 +3998,7 @@ fn root_view_layout_default_editor_opens_without_project() {
 fn layout_default_editor_uses_editor_settings_and_updates_appearance(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let confirmed = load_settings(&paths).unwrap().settings;
@@ -4406,7 +4406,7 @@ fn root_view_settings_can_select_and_close_group() {
 
 #[gpui::test]
 fn settings_vim_actions_navigate_groups_only_when_enabled(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let view_paths = paths.clone();
@@ -4471,7 +4471,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
     save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
     let app_bindings = load_app_keybindings(&paths, &bindable_registry());
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         cx.bind_keys(app_bindings);
         yttt_terminal::init(cx);
     });
@@ -4802,7 +4802,7 @@ fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::Te
     save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
     let app_bindings = load_app_keybindings(&paths, &bindable_registry());
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         cx.bind_keys(app_bindings);
     });
 
@@ -4849,7 +4849,7 @@ fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::Te
 
 #[gpui::test]
 fn external_keybindings_edits_reload_without_restart(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let view_paths = paths.clone();
@@ -5060,7 +5060,7 @@ fn new_tab_toolbar_defaults_to_creating_a_shell_tab() {
 fn settings_search_finds_shell_and_keeps_terminal_preferences_together(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let root_slot = Rc::new(RefCell::new(None));
@@ -5102,7 +5102,7 @@ fn settings_search_finds_shell_and_keeps_terminal_preferences_together(
 
 #[gpui::test]
 fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let view_paths = paths.clone();
@@ -5163,7 +5163,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn agent_settings_readonly_controls_display_values_without_mutation(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut settings = AppSettings::default();
@@ -5228,7 +5228,7 @@ fn agent_settings_readonly_controls_display_values_without_mutation(cx: &mut gpu
 
 #[gpui::test]
 fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let manifest = r#"{
         "schema": 1,
         "version": "99.0.0",
@@ -5331,7 +5331,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
 fn enabled_new_tab_toolbar_click_runs_the_selected_configured_command(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut settings = load_settings(&paths).unwrap().settings;
@@ -5399,7 +5399,7 @@ fn enabled_new_tab_toolbar_click_runs_the_selected_configured_command(
 
 #[gpui::test]
 fn dragging_tab_to_group_edge_splits_and_resizes_work_area(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let workspace = workspace_with_sample_project();
@@ -5520,7 +5520,7 @@ fn dragging_tab_to_group_edge_splits_and_resizes_work_area(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -5610,7 +5610,7 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
 fn status_bar_keeps_text_and_actions_inside_vertical_insets(cx: &mut gpui::TestAppContext) {
     use yttt::config::bars::{ShellBarModule, ShellBarsSettings, save_bars};
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut settings = load_settings(&paths).unwrap().settings;
@@ -5657,7 +5657,7 @@ fn status_bar_keeps_text_and_actions_inside_vertical_insets(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let view_paths = paths.clone();
@@ -5785,7 +5785,7 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
 fn bars_agent_components_follow_active_pane_and_attention_transitions(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut bars = yttt::config::bars::ShellBarsSettings::default();
@@ -5856,7 +5856,7 @@ fn bars_agent_components_follow_active_pane_and_attention_transitions(
 
 #[gpui::test]
 fn bars_editor_presets_remain_drafts_until_saved(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let bars_path = paths.bars_file();
@@ -5970,7 +5970,7 @@ fn bars_editor_presets_remain_drafts_until_saved(cx: &mut gpui::TestAppContext) 
 fn bars_editor_preview_cache_drops_invalid_drafts_and_recovers_with_defaults(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let view_paths = paths.clone();
@@ -6010,7 +6010,7 @@ fn bars_editor_preview_cache_drops_invalid_drafts_and_recovers_with_defaults(
 
 #[gpui::test]
 fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let extension = DetectedZedExtension {
@@ -6115,7 +6115,7 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -6169,7 +6169,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
 fn terminal_settings_group_renders_protocol_and_interaction_controls(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -6202,7 +6202,7 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
 fn permissions_settings_group_renders_cross_platform_access_controls(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -6244,7 +6244,7 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
 fn enabling_login_startup_requires_confirmation_before_backend_registration(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let profile = AppProfile::scoped(
@@ -6415,7 +6415,7 @@ fn root_view_file_find_command_opens_file_palette() {
 fn file_finder_action_indexes_gitignored_workspace_and_renders_results(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("search-project");
     fs::create_dir_all(project_dir.join("src")).unwrap();
@@ -6544,7 +6544,7 @@ fn root_view_ui_font_settings_persist_and_family_can_reset() {
 
 #[gpui::test]
 fn window_background_settings_persist_from_live_window(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let root_slot = Rc::new(RefCell::new(None));
@@ -6573,7 +6573,7 @@ fn window_background_settings_persist_from_live_window(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn ui_font_size_updates_window_scale(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let root_slot = Rc::new(RefCell::new(None));
@@ -7901,7 +7901,7 @@ fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
 
 #[gpui::test]
 fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("new-project");
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
@@ -7946,7 +7946,7 @@ fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let workspace = workspace_with_sample_project();
@@ -7989,7 +7989,7 @@ fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::Te
 #[gpui::test]
 fn global_vim_navigation_and_leader_work_while_editor_is_focused(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt::ui::editor::init_vim_mode(cx);
         cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
     });
@@ -8115,7 +8115,7 @@ fn global_vim_navigation_and_leader_work_while_editor_is_focused(cx: &mut gpui::
 #[gpui::test]
 fn ctrl_w_moves_focus_between_terminal_and_project_tree(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt::ui::editor::init_vim_mode(cx);
         cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
     });
@@ -8214,7 +8214,7 @@ fn ctrl_w_moves_focus_between_terminal_and_project_tree(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn ctrl_w_crosses_the_projects_list_at_the_left_workspace_edge(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt::ui::editor::init_vim_mode(cx);
         cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
     });
@@ -8269,7 +8269,7 @@ fn ctrl_w_crosses_the_projects_list_at_the_left_workspace_edge(cx: &mut gpui::Te
 #[gpui::test]
 fn projects_vim_navigation_selects_opened_projects(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt::ui::editor::init_vim_mode(cx);
         cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
     });
@@ -8383,7 +8383,7 @@ fn projects_vim_navigation_selects_opened_projects(cx: &mut gpui::TestAppContext
 #[gpui::test]
 fn global_vim_survives_editor_relocation_between_code_and_markdown(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt::ui::editor::init_vim_mode(cx);
     });
     let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
@@ -8421,7 +8421,7 @@ fn global_vim_survives_editor_relocation_between_code_and_markdown(cx: &mut gpui
 
 #[gpui::test]
 fn focused_editor_global_settings_shortcut_opens_settings(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
 
     document.update_in(cx, |document, window, document_cx| {

@@ -48,7 +48,7 @@ fn focus_surface_window(cx: &mut gpui::VisualTestContext, selector: &'static str
 fn performance_metrics_are_cached_independently_of_bar_configuration(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     let mut bars_without_metrics = ShellBarsSettings::default();

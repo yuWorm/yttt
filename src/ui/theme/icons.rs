@@ -6,8 +6,8 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use gpui::{AnyElement, ImageSource, IntoElement, Resource, Rgba, SharedString, Styled as _, img};
-use gpui_component::{Icon, IconName};
 use serde::Deserialize;
+use yttt_ui::{Icon, IconName};
 
 use crate::config::storage as fs;
 use crate::{config::paths::AppConfigPaths, ui::app::assets::external_icon_asset_path};

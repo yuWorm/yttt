@@ -4589,7 +4589,7 @@ mod tests {
     fn completed_shell_agents_remain_selectable_outside_collapsed_history(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let (_temp, mut view, target) = session_jump_fixture();
         let mut snapshot = view.command_center_sources().pop().unwrap().snapshot;
         snapshot.process_state = AgentProcessState::Running;
@@ -4681,7 +4681,7 @@ mod tests {
     }
     #[gpui::test]
     fn root_plan_keeps_child_usage_visible_in_project_card(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let (_temp, mut view, target) = session_jump_fixture();
         let source = view.command_center_sources().pop().unwrap();
         let mut snapshot = source.snapshot;
@@ -4822,7 +4822,7 @@ mod tests {
 
     #[gpui::test]
     fn task_rows_keep_active_and_pending_before_completed(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let (_temp, mut view, target) = session_jump_fixture();
         let source = view.command_center_sources().pop().unwrap();
         let mut snapshot = source.snapshot;
@@ -5121,7 +5121,7 @@ mod tests {
     fn input_focus_selects_its_question_without_disabling_typing_or_keyboard_text_safety(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let (_temp, mut view, placement) = session_jump_fixture();
         let source = view.command_center_sources().pop().unwrap();
         let session_id = source.terminal_session_id;
@@ -5203,7 +5203,7 @@ mod tests {
 
     #[gpui::test]
     fn explicit_question_navigation_moves_numeric_shortcut_focus(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let (_temp, mut view, target) = session_jump_fixture();
         let source = view.command_center_sources().pop().unwrap();
         let session_id = source.terminal_session_id;
@@ -5372,7 +5372,7 @@ mod tests {
     fn execution_history_stays_available_without_displacing_current_activity(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let (_temp, mut view, target) = session_jump_fixture();
         let source = view.command_center_sources().pop().unwrap();
         let session_id = source.terminal_session_id.clone();
@@ -5460,7 +5460,7 @@ mod tests {
     fn explicit_session_link_focuses_exact_hosting_pane_and_preserves_drafts(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let (_temp, view, scope) = session_jump_fixture();
         let slot = Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();
@@ -5537,7 +5537,7 @@ mod tests {
     fn closed_session_targets_do_not_activate_another_project_tab_or_pane(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         for removed in ["project", "tab", "pane"] {
             let (_temp, mut view, scope) = session_jump_fixture();
             let session_id = view
@@ -5591,7 +5591,7 @@ mod tests {
 
     #[gpui::test]
     fn language_and_target_switches_preserve_unsent_board_drafts(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temp = tempfile::tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
         let slot = Rc::new(std::cell::RefCell::new(None));

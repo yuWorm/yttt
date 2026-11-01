@@ -3,8 +3,8 @@ use gpui::{
     MouseDownEvent, Rems, Render, SharedString, Stateful, StatefulInteractiveElement as _, Window,
     div, prelude::*, rgba,
 };
-use gpui_component::{Icon, IconName};
 use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
+use yttt_ui::{Icon, IconName};
 
 use crate::{
     model::{

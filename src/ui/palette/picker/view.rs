@@ -2,7 +2,8 @@ use gpui::{
     AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement, ScrollHandle,
     StatefulInteractiveElement as _, Window, div, prelude::*, px, relative,
 };
-use gpui_component::{IconName, input::InputState};
+use gpui_component::input::InputState;
+use yttt_ui::IconName;
 
 use crate::palette::PaletteKind;
 

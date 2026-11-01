@@ -5,7 +5,7 @@ use gpui::{
     Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, IndexPath,
+    ActiveTheme as _, IndexPath,
     input::InputState,
     list::{ListDelegate, ListItem, ListState},
 };
@@ -14,6 +14,7 @@ use yttt_core::model::{
     project::RemotePathBuf,
 };
 pub(in super::super) use yttt_protocol::ssh::SshConnectionState as ConnectionState;
+use yttt_ui::{Icon, IconName};
 
 use crate::{
     config::{

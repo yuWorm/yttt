@@ -4,8 +4,9 @@ use gpui::{
     AnyElement, App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, SharedString, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
-use gpui_component::{Icon, IconName, Sizable as _, spinner::Spinner};
+use gpui_component::{Sizable as _, spinner::Spinner};
 use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
+use yttt_ui::{Icon, IconName};
 
 use crate::commands::CommandId;
 use crate::config::default_layout::BuiltinAgent;

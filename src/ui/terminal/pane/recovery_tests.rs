@@ -238,7 +238,7 @@ fn open_pane_with_command<'a>(
     cx.background_executor.allow_parking();
     cx.skip_drawing();
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt_terminal::init(cx);
         cx.set_global(HostRuntimeGlobal::ready(runtime));
     });

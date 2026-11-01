@@ -1,4 +1,5 @@
-use gpui_component::{Icon, tooltip::Tooltip};
+use gpui_component::tooltip::Tooltip;
+use yttt_ui::Icon;
 use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
 
 #[derive(Clone, Copy)]

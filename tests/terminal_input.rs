@@ -110,7 +110,7 @@ impl Render for TerminalTabTestHost {
 #[gpui::test]
 fn terminal_tab_bindings_override_component_root_focus_navigation(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt_terminal::init(cx);
     });
 

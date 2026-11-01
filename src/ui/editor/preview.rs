@@ -542,7 +542,7 @@ mod tests {
 
     #[gpui::test]
     fn image_is_sized_on_the_first_layout(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let image = image::RgbaImage::new(120, 80);
         let decoded = DecodedPreview {
             image: Arc::new(RenderImage::new(vec![image::Frame::new(image)])),

@@ -236,7 +236,7 @@ impl gpui::Render for EmptyProjectTabs {
 
 #[gpui::test]
 fn empty_tabs_keep_project_tree_toggle_visible(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_view, cx) = cx.add_window_view(|_, _| EmptyProjectTabs);
 
     assert!(cx.debug_bounds("project-tree-toggle").is_some());
@@ -308,7 +308,7 @@ impl gpui::Render for TerminalAndFileTabs {
 
 #[gpui::test]
 fn file_close_button_uses_terminal_trailing_position(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (_view, cx) = cx.add_window_view(|_, _| TerminalAndFileTabs);
     assert!(cx.debug_bounds("project-tabbar-border-1").is_some());
 
@@ -432,7 +432,7 @@ impl gpui::Render for ReorderableTabs {
 
 #[gpui::test]
 fn overflowing_tabs_scroll_without_shrinking_or_moving_toolbar(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     for style in [UiStyleId::Zed, UiStyleId::Rounded] {
         let (view, cx) = cx.add_window_view(|_, _| {
             let mut tabs = ReorderableTabs::new();
@@ -495,7 +495,7 @@ fn overflowing_tabs_scroll_without_shrinking_or_moving_toolbar(cx: &mut gpui::Te
 
 #[gpui::test]
 fn dragging_a_tab_reorders_the_rendered_tab_model(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (view, cx) = cx.add_window_view(|_, _| ReorderableTabs::new());
     let first = cx.debug_bounds("project-tab-1-0").unwrap();
     let third = cx.debug_bounds("project-tab-1-2").unwrap();
@@ -535,7 +535,7 @@ fn dragging_a_tab_reorders_the_rendered_tab_model(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn right_clicking_a_tab_selects_the_context_menu_target(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (view, cx) = cx.add_window_view(|_, _| ReorderableTabs::new());
     let first = cx.debug_bounds("project-tab-1-0").unwrap();
 
@@ -592,7 +592,7 @@ fn show_notification(
 
 #[gpui::test]
 fn agent_notification_close_is_visually_separate_from_action(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let closed = Rc::new(Cell::new(false));
     let action_clicked = Rc::new(Cell::new(false));
     let closed_for_callback = closed.clone();
@@ -632,7 +632,7 @@ fn agent_notification_close_is_visually_separate_from_action(cx: &mut gpui::Test
 
 #[gpui::test]
 fn agent_notification_action_opens_target_and_dismisses(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let closed = Rc::new(Cell::new(false));
     let action_clicked = Rc::new(Cell::new(false));
     let closed_for_callback = closed.clone();
@@ -666,7 +666,7 @@ fn agent_notification_action_opens_target_and_dismisses(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn error_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let closed = Rc::new(Cell::new(false));
     let closed_for_callback = closed.clone();
     let cx = show_notification(cx, move || {
@@ -1404,7 +1404,7 @@ impl gpui::Render for RemScaledControls {
 
 #[gpui::test]
 fn shared_control_density_tracks_ui_font_size(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (view, cx) = cx.add_window_view(|_, _| RemScaledControls {
         rem_size: gpui::px(12.0),
     });

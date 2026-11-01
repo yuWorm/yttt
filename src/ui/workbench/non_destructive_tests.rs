@@ -37,7 +37,7 @@ fn remote_manager_connects_from_list_and_scrolls_modal_without_losing_list(
     use crate::config::profile::{
         AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
     };
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let profile = AppProfile::scoped(
         yttt_core::model::ids::ProfileId::new("remote-manager-test"),
@@ -165,7 +165,7 @@ fn remote_project_open_fails_closed_without_the_host_runtime(cx: &mut TestAppCon
         model::{ids::ConnectionId, project::RemotePathBuf},
     };
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let connection_id = ConnectionId::new("remote-dev");
@@ -196,7 +196,7 @@ fn remote_project_open_fails_closed_without_the_host_runtime(cx: &mut TestAppCon
 
 #[gpui::test]
 fn open_ssh_project_starts_in_connection_picker_without_configuration(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
@@ -230,7 +230,7 @@ fn ssh_project_password_connection_without_a_saved_secret_opens_a_focused_prompt
     };
     use crate::model::ids::ConnectionId;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let connection_id = ConnectionId::new("password-prompt");
@@ -288,7 +288,7 @@ fn ssh_project_password_connection_without_a_saved_secret_opens_a_focused_prompt
 fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppContext) {
     use crate::model::project::RemotePathBuf;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let root_slot = Rc::new(RefCell::new(None));
@@ -469,7 +469,7 @@ fn assert_runtime_unchanged(root: &WorkbenchView, expected: &RuntimeSnapshot) {
 
 #[gpui::test]
 fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -507,7 +507,7 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn eager_tab_starts_terminal_before_selection(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("eager-project");
     fs::create_dir(&project_path).unwrap();
@@ -547,7 +547,7 @@ fn eager_tab_starts_terminal_before_selection(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
 
@@ -597,7 +597,7 @@ fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn window_reactivation_restores_previously_focused_terminal_pane(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -657,7 +657,7 @@ fn window_reactivation_restores_previously_focused_terminal_pane(cx: &mut TestAp
 
 #[gpui::test]
 fn project_tree_edit_blocks_active_file_focus_restore(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -710,7 +710,7 @@ fn project_tree_edit_blocks_active_file_focus_restore(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -766,7 +766,7 @@ fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppCon
 fn window_bar_identity_can_be_hidden_and_moved_by_configuration(cx: &mut TestAppContext) {
     use crate::config::bars::ShellBarModule;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -808,7 +808,7 @@ fn window_bar_identity_can_be_hidden_and_moved_by_configuration(cx: &mut TestApp
 #[gpui::test]
 fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings());
     });
     let temp = tempdir().unwrap();
@@ -996,7 +996,7 @@ fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext
 #[gpui::test]
 fn git_diff_panel_virtualizes_many_files_and_large_file_rows(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings());
     });
     let temp = tempdir().unwrap();
@@ -1084,7 +1084,7 @@ fn git_diff_panel_virtualizes_many_files_and_large_file_rows(cx: &mut TestAppCon
 fn git_diff_split_panes_share_vertical_scroll_but_keep_horizontal_scroll_independent(
     cx: &mut TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -1186,7 +1186,7 @@ fn git_diff_split_panes_share_vertical_scroll_but_keep_horizontal_scroll_indepen
 
 #[gpui::test]
 fn layout_default_does_not_drop_terminal_entities(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -1234,7 +1234,7 @@ fn closing_and_reopening_a_reused_tab_id_drops_stale_agent_state(cx: &mut TestAp
     use yttt_agent_core::{AgentInstanceId, AgentReducer, ProviderId};
     use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -1326,7 +1326,7 @@ fn session_end_removes_the_agent_from_the_live_sidebar(cx: &mut TestAppContext) 
     use yttt_agent_core::{AgentEventKind, AgentInstanceId, AgentReducer, ProviderId};
     use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -1422,7 +1422,7 @@ fn session_end_removes_the_agent_from_the_live_sidebar(cx: &mut TestAppContext) 
 
 #[gpui::test]
 fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -1497,7 +1497,7 @@ impl SystemNotifier for CountingSystemNotifier {
 fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &mut TestAppContext) {
     use yttt_agent_core::{AgentInstanceId, AgentProcessState, AgentTurnState, ProviderId};
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
@@ -1583,7 +1583,7 @@ fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &m
 
 #[gpui::test]
 fn local_agent_sessions_are_preloaded_before_the_tab_is_selected(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
@@ -1639,7 +1639,7 @@ fn local_agent_sessions_are_preloaded_before_the_tab_is_selected(cx: &mut TestAp
 fn multiple_agent_providers_expand_primary_group_by_default(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
@@ -1731,7 +1731,7 @@ fn multiple_agent_providers_expand_primary_group_by_default(cx: &mut TestAppCont
 fn agent_session_search_filters_visible_rows(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
@@ -1840,7 +1840,7 @@ fn agent_session_search_filters_visible_rows(cx: &mut TestAppContext) {
 fn overflowing_agent_session_list_scrolls_within_the_project_panel(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
@@ -1927,7 +1927,7 @@ fn overflowing_agent_session_list_scrolls_within_the_project_panel(cx: &mut Test
 fn long_agent_session_tooltip_content_stays_within_its_layout(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
@@ -2024,7 +2024,7 @@ fn long_agent_session_tooltip_content_stays_within_its_layout(cx: &mut TestAppCo
 fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();

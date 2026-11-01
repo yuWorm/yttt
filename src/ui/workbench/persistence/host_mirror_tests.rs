@@ -70,7 +70,7 @@ pub(super) fn open_window(
 #[gpui::test]
 fn a_host_layout_change_made_elsewhere_replaces_the_local_layout(cx: &mut gpui::TestAppContext) {
     use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     cx.background_executor.allow_parking();
     cx.skip_drawing();
     let host = RecoveryHost::start();

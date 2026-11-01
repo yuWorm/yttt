@@ -1078,7 +1078,7 @@ mod tests {
 
     #[gpui::test]
     fn detected_font_is_selected_persisted_and_not_reapplied(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temp = tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
         let saved_paths = paths.clone();

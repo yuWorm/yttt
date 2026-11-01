@@ -1288,7 +1288,7 @@ mod tests {
             EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
         };
         use std::{cell::RefCell, rc::Rc};
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temporary = tempfile::tempdir().unwrap();
         let profile = AppProfile::scoped(
             yttt_core::model::ids::ProfileId::new("paste-test"),

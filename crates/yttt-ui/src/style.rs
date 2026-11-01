@@ -42,6 +42,14 @@ pub struct UiComponentThemeStyle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiTextScale {
+    pub xsmall: Rems,
+    pub small: Rems,
+    pub default: Rems,
+    pub large: Rems,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiSpacingScale {
     pub xxs: Rems,
     pub xs: Rems,
@@ -211,6 +219,7 @@ pub struct UiSwitchMetrics {
 pub struct UiStyle {
     pub id: UiStyleId,
     pub component: UiComponentThemeStyle,
+    pub text: UiTextScale,
     pub spacing: UiSpacingScale,
     pub radius: UiRadiusScale,
     pub border: UiBorderScale,
@@ -306,6 +315,12 @@ impl UiStyle {
 
         Self {
             id: UiStyleId::Zed,
+            text: UiTextScale {
+                xsmall: rems(0.625),
+                small: rems(0.75),
+                default: rems(0.875),
+                large: rems(1.0),
+            },
             component: UiComponentThemeStyle {
                 radius: 6,
                 radius_lg: 8,
@@ -466,6 +481,12 @@ impl UiStyle {
 
         Self {
             id: UiStyleId::Rounded,
+            text: UiTextScale {
+                xsmall: rems(0.625),
+                small: rems(0.75),
+                default: rems(0.875),
+                large: rems(1.0),
+            },
             component: UiComponentThemeStyle {
                 radius: 10,
                 radius_lg: 16,

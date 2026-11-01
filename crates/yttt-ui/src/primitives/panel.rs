@@ -1,6 +1,10 @@
 use gpui::{Div, IntoElement, MouseButton, Pixels, Rgba, div, prelude::*, px, relative};
 
-use crate::{style::UiStyle, theme::WorkbenchTheme};
+use crate::{
+    style::UiStyle,
+    surface::{UiElevation, YtttSurface as _},
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttPanelKind {
@@ -209,7 +213,7 @@ pub fn yttt_panel(kind: YtttPanelKind, theme: WorkbenchTheme, ui_style: UiStyle)
         .bg(style.background)
         .text_color(theme.text)
         .p(style.padding)
-        .when(style.shadow, |this| this.shadow_lg())
+        .when(style.shadow, |this| this.yttt_elevation(UiElevation::Modal))
 }
 
 pub fn yttt_fullscreen_panel(theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
@@ -225,7 +229,7 @@ pub fn yttt_fullscreen_panel(theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
         .border_color(style.border)
         .bg(style.background)
         .text_color(theme.text)
-        .when(style.shadow, |this| this.shadow_lg())
+        .when(style.shadow, |this| this.yttt_elevation(UiElevation::Modal))
 }
 
 pub fn yttt_panel_overlay(

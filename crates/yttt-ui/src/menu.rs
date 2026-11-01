@@ -1,17 +1,17 @@
 use std::rc::Rc;
 
 use gpui::{
-    Action, App, ClickEvent, Context, Entity, FocusHandle, IntoElement, SharedString, Window, hsla,
-    px, rems,
+    Action, App, ClickEvent, Context, Entity, FocusHandle, IntoElement, SharedString, Window, px,
+    rems,
 };
 use gpui_component::{
-    box_shadow,
     button::Button,
     menu::{ContextMenu, ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem, PopupMenuStyle},
 };
 
 use crate::{
     style::{UiStyle, UiStyleId},
+    surface::floating_shadows,
     theme::WorkbenchTheme,
 };
 
@@ -88,6 +88,7 @@ impl YtttMenuItem {
         self.disabled
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn into_popup_item(self) -> PopupMenuItem {
         let Some(label) = self.label else {
             return PopupMenuItem::separator();
@@ -224,10 +225,7 @@ fn styled_popup_menu(menu: PopupMenu, theme: WorkbenchTheme, ui_style: UiStyle) 
             .hover(ui_style.hover_background(theme), theme.text)
             .selected(ui_style.active_background(theme), theme.text)
             .disabled_foreground(theme.text_disabled)
-            .shadows([
-                box_shadow(px(0.), px(2.), px(3.), px(0.), hsla(0., 0., 0., 0.12)),
-                box_shadow(px(0.), px(1.), px(0.), px(0.), hsla(0., 0., 0., 0.06)),
-            ])
+            .shadows(floating_shadows())
             .radius(ui_style.radius.compact)
             .min_width(px(200.))
             .padding(rems(0.25))
@@ -236,7 +234,7 @@ fn styled_popup_menu(menu: PopupMenu, theme: WorkbenchTheme, ui_style: UiStyle) 
             .item_padding_x(rems(0.375))
             .item_gap(rems(0.375))
             .end_slot_gap(rems(1.0))
-            .text_size(rems(0.875))
+            .text_size(ui_style.text.default)
             .separator(rems(0.25), ui_style.border.hairline, theme.border)
             .reserve_icon_column(false),
     )

@@ -29,7 +29,7 @@ fn held_draft(root: &WorkbenchView, document_id: &DocumentId, cx: &App) -> Optio
 fn one_client_edits_a_document_while_the_other_reads_its_draft_until_taking_over(
     cx: &mut gpui::TestAppContext,
 ) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     cx.background_executor.allow_parking();
     cx.skip_drawing();
     let host = RecoveryHost::start();

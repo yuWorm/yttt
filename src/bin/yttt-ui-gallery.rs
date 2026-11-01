@@ -15,8 +15,7 @@ use gpui::{
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
 use gpui_component::{
-    Disableable as _, IconName, IndexPath, Theme, input::InputState, menu::PopupMenu,
-    select::SelectState,
+    Disableable as _, IndexPath, Theme, input::InputState, menu::PopupMenu, select::SelectState,
 };
 use yttt::{
     config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore},
@@ -25,6 +24,7 @@ use yttt::{
         theme::{AppearanceState, ThemeRuntime},
     },
 };
+use yttt_ui::IconName;
 use yttt_ui::{
     SelectableState,
     menu::{YtttMenu, YtttMenuItem, yttt_menu_preview},
@@ -105,7 +105,7 @@ fn run(options: Options) {
     gpui_platform::application()
         .with_assets(assets::app_assets(&config_paths))
         .run(move |cx: &mut App| {
-            gpui_component::init(cx);
+            yttt_ui::init(cx);
             assets::load_ui_fonts(cx);
             let appearance = AppearanceState::new(runtime);
             Theme::global_mut(cx).apply_config(&Rc::new(

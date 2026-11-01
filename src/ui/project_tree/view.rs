@@ -1669,7 +1669,7 @@ mod tests {
     }
     #[gpui::test]
     fn create_and_rename_inputs_submit_with_enter(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         cx.update(|cx| cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings()));
         let mut model = ProjectFileTree::new("/project");
         let request = model.request_expand(Path::new("")).unwrap();
@@ -1769,7 +1769,7 @@ mod tests {
 
     #[gpui::test]
     fn tree_settings_and_project_layout_requests_emit_events(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let snapshot =
             ProjectTreeRenderSnapshot::from_tree(&ProjectFileTree::new("/project"), None);
         let view_slot = Rc::new(RefCell::new(None));
@@ -1812,7 +1812,7 @@ mod tests {
     fn global_vim_tree_navigation_opens_and_operates_on_keyboard_selection(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         cx.update(|cx| cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings()));
         let mut model = ProjectFileTree::new("/project");
         let request = model.request_expand(Path::new("")).unwrap();
@@ -1903,7 +1903,7 @@ mod tests {
 
     #[gpui::test]
     fn global_vim_h_and_l_traverse_project_tree_directories(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         cx.update(|cx| cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings()));
         let mut model = ProjectFileTree::new("/project");
         let root_request = model.request_expand(Path::new("")).unwrap();

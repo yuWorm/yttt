@@ -224,7 +224,7 @@ mod tests {
 
     #[gpui::test]
     fn font_family_select_filters_and_confirms_without_rebuilding_items(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let select_slot = Rc::new(RefCell::new(None));
         let select_slot_for_window = select_slot.clone();
         let (_root, cx) = cx.add_window_view(move |window, cx| {

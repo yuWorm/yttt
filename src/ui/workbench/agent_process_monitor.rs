@@ -231,7 +231,7 @@ mod tests {
 
     #[gpui::test]
     fn a_cleared_agent_state_leaves_its_pane(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         cx.skip_drawing();
         let root_dir = tempfile::tempdir().unwrap();
         let mut workspace = Workspace::new();
