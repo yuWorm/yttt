@@ -1308,11 +1308,19 @@ fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext
     let project = cx
         .debug_bounds("project-sidebar-initial-0")
         .expect("collapsed project sidebar should expose its project item");
+    cx.simulate_mouse_move(project.center(), None, gpui::Modifiers::none());
     cx.simulate_mouse_down(
         project.center(),
         gpui::MouseButton::Right,
         gpui::Modifiers::none(),
     );
+    cx.simulate_mouse_up(
+        project.center(),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.refresh().unwrap();
     cx.run_until_parked();
     cx.simulate_keystrokes("down enter");
     cx.run_until_parked();
@@ -1346,11 +1354,12 @@ fn root_view_error_notification_auto_dismisses(cx: &mut gpui::TestAppContext) {
     cx.refresh().unwrap();
     cx.run_until_parked();
 
-    cx.background_executor.advance_clock(Duration::from_secs(5));
-    cx.run_until_parked();
-    cx.background_executor
-        .advance_clock(Duration::from_millis(200));
-    cx.run_until_parked();
+    // The notification list polls its clock, so step instead of jumping past it.
+    for _ in 0..130 {
+        cx.background_executor
+            .advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+    }
 
     cx.read(|app| {
         let message = root.read(app).visible_error_message();

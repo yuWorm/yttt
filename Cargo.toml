@@ -44,6 +44,10 @@ default-run = "yttt"
 perf-metrics = ["yttt-terminal/perf-metrics"]
 ui-gallery = ["gpui/test-support", "gpui_platform/test-support"]
 
+[[test]]
+name = "platform_fonts"
+harness = false
+
 [[bin]]
 name = "yttt-ui-gallery"
 path = "src/bin/yttt-ui-gallery.rs"

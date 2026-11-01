@@ -6,6 +6,30 @@ use super::{
 
 use super::*;
 
+impl WorkbenchView {
+    /// Whether focus left the workspace for good. A surface such as a context
+    /// menu takes focus one frame before it joins the rendered tree, so focus
+    /// on a new handle outside the tree gets a frame to settle.
+    fn workspace_focus_is_lost(
+        &mut self,
+        workspace_focus: &FocusHandle,
+        window: &mut Window,
+        cx: &App,
+    ) -> bool {
+        if workspace_focus.contains_focused(window, cx) {
+            self.overlays.settling_focus = None;
+            return false;
+        }
+        let focused = window.focused(cx);
+        let settling = focused.is_some() && focused != self.overlays.settling_focus;
+        self.overlays.settling_focus = focused;
+        if settling {
+            window.request_animation_frame();
+        }
+        !settling
+    }
+}
+
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.performance.attach(window, cx);
@@ -53,8 +77,9 @@ impl Render for WorkbenchView {
         self.ensure_vim_key_feedback_observers(window, cx);
         self.sync_vim_controller(window, cx);
         let focus_handle = self.workbench_focus_handle(cx);
+        let focus_is_lost = self.workspace_focus_is_lost(&focus_handle, window, cx);
         let default_active_content_focus_requested = self.onboarding.is_none()
-            && !focus_handle.contains_focused(window, cx)
+            && focus_is_lost
             && self.queue_default_active_work_item_focus(cx);
 
         let onboarding_needs_font_detection = self.onboarding.as_ref().is_some_and(|state| {
@@ -248,6 +273,9 @@ impl Render for WorkbenchView {
                             let project_id = ProjectId::new(project_id);
                             cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
                                 let _ = this.select_project(&project_id);
+                                // The context menu opening now takes focus.
+                                this.terminal.pending_terminal_focus = None;
+                                this.project.pending_editor_focus_document_id = None;
                                 cx.notify();
                             })
                         },
@@ -439,7 +467,7 @@ impl Render for WorkbenchView {
 
         if self.onboarding.is_none()
             && self.should_auto_focus_workspace()
-            && !focus_handle.contains_focused(window, cx)
+            && focus_is_lost
             && !default_active_content_focus_scheduled
         {
             focus_handle.focus(window, cx);

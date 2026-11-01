@@ -416,7 +416,7 @@ impl Render for Notification {
         let action = self
             .action_builder
             .clone()
-            .map(|builder| builder(self, window, cx).small().mr_3p5());
+            .map(|builder| builder(self, window, cx).small());
 
         let transition_status = self.transition_status;
         let closing = transition_status == ToastTransitionStatus::Ending;
@@ -424,12 +424,12 @@ impl Render for Notification {
             None => self.icon.clone(),
             Some(type_) => Some(type_.icon(cx)),
         };
-        let has_icon = icon.is_some();
         let placement = self.placement.unwrap_or(cx.theme().notification.placement);
 
         BaseToast::new("notification")
             .transition_status(transition_status)
             .h_flex()
+            .items_start()
             .group("")
             .occlude()
             .relative()
@@ -444,32 +444,38 @@ impl Render for Notification {
             .gap_3()
             .refine_style(&self.style)
             .when_some(icon, |this, icon| {
-                this.child(div().absolute().top(px(18.)).left_4().child(icon))
+                this.child(crate::h_flex().flex_none().h_5().child(icon))
             })
             .child(
                 v_flex()
                     .flex_1()
                     .overflow_hidden()
-                    .when(has_icon, |this| this.pl_6())
                     .when_some(self.title.clone(), |this, title| {
-                        this.child(div().text_sm().font_semibold().child(title))
+                        this.child(div().text_sm().line_height(gpui::rems(1.25)).child(title))
                     })
                     .when_some(self.message.clone(), |this, message| {
-                        this.child(div().text_sm().child(message))
+                        this.child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(message),
+                        )
                     })
                     .when_some(content, |this, content| this.child(content)),
             )
             .when_some(action, |this, action| this.child(action))
             .child(
                 div()
-                    .absolute()
-                    .top_1()
-                    .right_1()
+                    .flex_none()
+                    .h_5()
+                    .flex()
+                    .items_center()
                     .when(!self.always_show_close_button, |this| {
                         this.invisible().group_hover("", |this| this.visible())
                     })
                     .child(
                         Button::new("close")
+                            .debug_selector(|| "notification-close".into())
                             .icon(IconName::Close)
                             .ghost()
                             .xsmall()
