@@ -14,9 +14,7 @@ use gpui::{
     AnyElement, App, Bounds, Div, Entity, Pixels, Render, SharedString, Window, WindowBounds,
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
-use gpui_component::{
-    Disableable as _, IndexPath, Theme, input::InputState, menu::PopupMenu, select::SelectState,
-};
+use gpui_component::{IndexPath, Theme, input::InputState, menu::PopupMenu, select::SelectState};
 use yttt::{
     config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore},
     ui::{
@@ -292,7 +290,7 @@ impl Gallery {
             )
     }
 
-    fn buttons(&self, cx: &App) -> Vec<AnyElement> {
+    fn buttons(&self) -> Vec<AnyElement> {
         let (theme, ui_style) = (self.theme, self.ui_style);
         let mut elements = Vec::new();
         for (name, variant) in [
@@ -303,9 +301,8 @@ impl Gallery {
         ] {
             let style = yttt_button_style(variant, theme, ui_style);
             let id = |state: &str| SharedString::from(format!("button-{name}-{state}"));
-            let base = |state: &str| {
-                yttt_button(id(state), state.to_string(), variant, theme, ui_style, cx)
-            };
+            let base =
+                |state: &str| yttt_button(id(state), state.to_string(), variant, theme, ui_style);
             elements.push(self.tracked(&format!("button.{name}.default"), base("Default")));
             elements.push(self.tracked(
                 &format!("button.{name}.hover"),
@@ -392,7 +389,7 @@ impl Gallery {
 }
 
 impl Render for Gallery {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (theme, ui_style) = (self.theme, self.ui_style);
         div()
             .size_full()
@@ -403,7 +400,7 @@ impl Render for Gallery {
             .bg(theme.surface)
             .text_color(theme.text)
             .text_sm()
-            .child(self.section("Button", self.buttons(cx)))
+            .child(self.section("Button", self.buttons()))
             .child(self.section("Icon button", self.icon_buttons()))
             .child(self.section(
                 "Input",

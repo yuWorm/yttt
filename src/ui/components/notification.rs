@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::primitives::button::{YtttButtonVariant, yttt_button};
+use yttt_ui::primitives::button::YtttButtonExt as _;
 
 pub fn notification_tone_for_toast(tone: ToastTone) -> YtttNotificationTone {
     match tone {
@@ -84,7 +85,6 @@ fn workbench_notification(
                     ..theme
                 },
                 ui_style,
-                cx,
             )
             .debug_selector(|| "notification-action".into())
             .icon(IconName::ArrowRight)
@@ -120,7 +120,7 @@ fn notification_content(
     status: Option<SharedString>,
     title: SharedString,
     context: SharedString,
-    action: Option<Button>,
+    action: Option<YtttButton>,
     icon: IconName,
     style: crate::ui::primitives::notification::YtttNotificationStyle,
 ) -> Div {

@@ -1032,7 +1032,7 @@ impl WorkbenchView {
         let ui_style = appearance.style;
         let display_path = relative_path.display().to_string();
         let workbench = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, cx| {
+        window.open_alert_dialog(cx, move |alert, _, _| {
             let workbench = workbench.clone();
             let project_id = project_id.clone();
             let relative_path = relative_path.clone();
@@ -1057,7 +1057,6 @@ impl WorkbenchView {
                                 YtttButtonVariant::Secondary,
                                 theme,
                                 ui_style,
-                                cx,
                             )
                             .debug_selector(|| "project-entry-delete-cancel".to_string())
                             .on_click(|_, window, cx| {
@@ -1071,7 +1070,6 @@ impl WorkbenchView {
                                 YtttButtonVariant::Danger,
                                 theme,
                                 ui_style,
-                                cx,
                             )
                             .debug_selector(|| "project-entry-delete-confirm".to_string())
                             .on_click(move |_, window, cx| {

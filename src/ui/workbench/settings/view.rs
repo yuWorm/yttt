@@ -1,4 +1,5 @@
 use crate::config::scope::{SettingApply, SettingsScope, setting_apply};
+use yttt_ui::primitives::button::YtttButtonExt as _;
 
 use super::super::*;
 
@@ -349,7 +350,6 @@ fn settings_context(
                         root.config_paths.settings_file().display().to_string(),
                         theme,
                         style.ui_style,
-                        cx,
                     ))
                     .when_some(
                         root.device_preferences_config_paths().ok(),
@@ -360,7 +360,6 @@ fn settings_context(
                                 paths.settings_file().display().to_string(),
                                 theme,
                                 style.ui_style,
-                                cx,
                             ))
                         },
                     )
@@ -371,7 +370,6 @@ fn settings_context(
                             path.display().to_string(),
                             theme,
                             style.ui_style,
-                            cx,
                         ))
                     }),
             )
@@ -396,7 +394,6 @@ fn settings_config_path(
     path: String,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
-    cx: &App,
 ) -> Div {
     div()
         .flex()
@@ -417,10 +414,9 @@ fn settings_config_path(
                 YtttButtonVariant::Ghost,
                 theme,
                 ui_style,
-                cx,
             )
             .icon(IconName::Copy)
-            .tooltip(path.clone())
+            .tooltip_text(path.clone())
             .on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(path.clone()))
             }),
@@ -3212,7 +3208,6 @@ fn settings_keybinding_row(
                 YtttButtonVariant::Primary,
                 theme,
                 style.ui_style,
-                cx,
             )
             .on_click(cx.listener(move |this, _, _window, cx| {
                 let _ = this.open_keybinding_action_edit_dialog(command);
@@ -3535,7 +3530,7 @@ fn settings_command_button(
     theme: WorkbenchTheme,
     command: CommandId,
     cx: &mut Context<WorkbenchView>,
-) -> Button {
+) -> yttt_ui::primitives::button::YtttButton {
     settings_button(
         id,
         label,
@@ -3580,7 +3575,7 @@ pub(in super::super) fn settings_button<H>(
     theme: WorkbenchTheme,
     cx: &mut Context<WorkbenchView>,
     on_click: H,
-) -> Button
+) -> yttt_ui::primitives::button::YtttButton
 where
     H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
@@ -3596,7 +3591,6 @@ where
         variant,
         theme,
         ui_style,
-        cx,
     )
     .on_click(on_click)
 }

@@ -1419,7 +1419,6 @@ impl Render for ProjectEditorDocument {
                             yttt_ui::primitives::button::YtttButtonVariant::Secondary,
                             current_workbench_theme(cx),
                             ui_style,
-                            cx,
                         )
                         .on_click(cx.listener(|_, _, _, cx| {
                             cx.emit(ProjectEditorDocumentEvent::TakeOver);

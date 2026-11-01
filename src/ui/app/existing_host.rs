@@ -23,7 +23,6 @@ use gpui::{
     Subscription, Window, div, px,
 };
 use gpui_component::{
-    Disableable as _,
     input::{InputEvent, InputState},
     scroll::ScrollableElement as _,
 };
@@ -1079,7 +1078,6 @@ impl ExistingHostForm {
                             YtttButtonVariant::Secondary,
                             theme,
                             style,
-                            cx,
                         )
                         .disabled(self.busy)
                         .on_click(cx.listener(|view, _, _, cx| {
@@ -1099,7 +1097,6 @@ impl ExistingHostForm {
                                     YtttButtonVariant::Secondary,
                                     theme,
                                     style,
-                                    cx,
                                 )
                                 .disabled(self.busy)
                                 .on_click(cx.listener(
@@ -1113,7 +1110,6 @@ impl ExistingHostForm {
                                     YtttButtonVariant::Secondary,
                                     theme,
                                     style,
-                                    cx,
                                 )
                                 .disabled(self.busy)
                                 .on_click(cx.listener(
@@ -1127,7 +1123,6 @@ impl ExistingHostForm {
                                     YtttButtonVariant::Primary,
                                     theme,
                                     style,
-                                    cx,
                                 )
                                 .disabled(self.busy)
                                 .on_click(cx.listener(
@@ -1202,7 +1197,6 @@ impl ExistingHostForm {
                             YtttButtonVariant::Secondary,
                             theme,
                             style,
-                            cx,
                         )
                         .disabled(self.busy)
                         .on_click(cx.listener(|view, _, _, cx| {
@@ -1229,7 +1223,6 @@ impl ExistingHostForm {
                             YtttButtonVariant::Secondary,
                             theme,
                             style,
-                            cx,
                         )
                         .disabled(self.busy)
                         .on_click(
@@ -1243,7 +1236,6 @@ impl ExistingHostForm {
                             YtttButtonVariant::Primary,
                             theme,
                             style,
-                            cx,
                         )
                         .disabled(self.busy)
                         .on_click(cx.listener(|view, _, window, cx| {

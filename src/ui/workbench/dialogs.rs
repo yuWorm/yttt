@@ -136,7 +136,6 @@ pub(super) fn keybinding_edit_dialog(
                                     YtttButtonVariant::Ghost,
                                     theme,
                                     ui_style,
-                                    cx,
                                 )
                                 .on_click(cx.listener(
                                     move |this, _, _window, cx| {
@@ -1039,12 +1038,12 @@ pub(super) fn yttt_dialog_button<H>(
     variant: YtttButtonVariant,
     theme: WorkbenchTheme,
     on_click: H,
-) -> Button
+) -> yttt_ui::primitives::button::YtttButton
 where
     H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
     let ui_style = current_ui_style(cx);
-    yttt_button(id, label, variant, theme, ui_style, cx).on_click(on_click)
+    yttt_button(id, label, variant, theme, ui_style).on_click(on_click)
 }
 
 #[derive(Clone, Copy)]
@@ -1092,8 +1091,7 @@ fn empty_workspace_action(
     theme: &WorkbenchTheme,
     ui_style: UiStyle,
     scale: EmptyWorkspaceScale,
-    cx: &gpui::App,
-) -> Button {
+) -> yttt_ui::primitives::button::YtttButton {
     let content = div()
         .flex()
         .items_center()
@@ -1129,14 +1127,14 @@ fn empty_workspace_action(
             .text_size(scale.text_rems(0.75))
         }));
 
-    yttt_button_base(id, YtttButtonVariant::Ghost, *theme, ui_style, cx)
+    yttt_button_base(id, YtttButtonVariant::Ghost, *theme, ui_style)
         .w_full()
         .h(scale.spacing(rems(2.5)))
         .px(scale.spacing(ui_style.spacing.lg))
         .rounded(ui_style.radius.action)
         .child(content)
         .debug_selector(move || id.to_string())
-        .when(featured, |this| this.outline())
+        .when(featured, |this| this.border_1())
 }
 
 pub(super) fn empty_workspace(
@@ -1224,7 +1222,6 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
-                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -1242,7 +1239,6 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
-                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, _window, cx| {
@@ -1261,7 +1257,6 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
-                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -1279,7 +1274,6 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
-                                cx,
                             )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.restore_last_session(window, cx);
@@ -1298,7 +1292,6 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
-                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -1355,7 +1348,6 @@ pub(super) fn project_empty_terminal_state(
                 YtttButtonVariant::Primary,
                 *theme,
                 ui_style,
-                cx,
             )
             .child(Kbd::new(
                 crate::config::keybindings::parse_keystroke("secondary-t")

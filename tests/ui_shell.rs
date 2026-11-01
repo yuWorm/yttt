@@ -1350,7 +1350,7 @@ impl gpui::Render for RemScaledControls {
     fn render(
         &mut self,
         window: &mut gpui::Window,
-        cx: &mut gpui::Context<Self>,
+        _cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         window.set_rem_size(self.rem_size);
         let theme = WorkbenchTheme::one_dark();
@@ -1374,7 +1374,6 @@ impl gpui::Render for RemScaledControls {
                     YtttButtonVariant::Ghost,
                     theme,
                     UiStyle::default(),
-                    cx,
                 )
                 .debug_selector(|| "rem-scaled-button".to_string()),
             )

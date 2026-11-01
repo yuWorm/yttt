@@ -380,7 +380,6 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
         YtttButtonVariant::Primary,
         theme,
         style,
-        cx,
     )
     .yttt_dropdown_menu(crate::ui::theme::menu_appearance, move |menu, _, _| {
         let ssh_owner = owner.clone();
@@ -510,7 +509,6 @@ fn connection_row(
         YtttButtonVariant::Ghost,
         theme,
         style,
-        cx,
     )
     .disabled(busy)
     .yttt_dropdown_menu(crate::ui::theme::menu_appearance, move |menu, _, _| {
@@ -548,7 +546,6 @@ fn connection_row(
                 YtttButtonVariant::Ghost,
                 theme,
                 style,
-                cx,
             )
             .on_click(cx.listener(move |root, _, window, cx| {
                 root.connect_remote_record(target.clone(), window, cx)

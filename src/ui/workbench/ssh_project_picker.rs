@@ -2142,7 +2142,6 @@ fn ssh_project_browser(
                         YtttButtonVariant::Ghost,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.back_ssh_project_picker(cx);
@@ -2156,7 +2155,6 @@ fn ssh_project_browser(
                         YtttButtonVariant::Ghost,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close_ssh_project_picker(cx);
@@ -2300,7 +2298,6 @@ fn ssh_project_back_header(
                 YtttButtonVariant::Ghost,
                 theme,
                 ui_style,
-                cx,
             )
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.back_ssh_project_picker(cx);
@@ -2314,7 +2311,6 @@ fn ssh_project_back_header(
                 YtttButtonVariant::Ghost,
                 theme,
                 ui_style,
-                cx,
             )
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.close_ssh_project_picker(cx);

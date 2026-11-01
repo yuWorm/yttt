@@ -1,15 +1,34 @@
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
-
-use gpui::{App, ElementId, Pixels, Rgba, SharedString, prelude::*};
-use gpui_component::{
-    Sizable as _,
-    button::{Button, ButtonCustomVariant, ButtonVariants},
-};
+use gpui::{ElementId, Pixels, Rgba, SharedString, prelude::*};
+use gpui_base::Button;
+use gpui_component::{Icon, IconName, Sizable as _, spinner::Spinner, tooltip::Tooltip};
 
 use crate::{
     style::{UiStyle, UiStyleId},
     theme::WorkbenchTheme,
 };
+
+pub type YtttButton = Button;
+
+pub trait YtttButtonExt: Sized {
+    fn icon(self, icon: IconName) -> Self;
+    fn tooltip_text(self, text: impl Into<SharedString>) -> Self;
+    fn loading(self, loading: bool) -> Self;
+}
+
+impl YtttButtonExt for Button {
+    fn icon(self, icon: IconName) -> Self {
+        self.child(Icon::new(icon).small())
+    }
+
+    fn tooltip_text(self, text: impl Into<SharedString>) -> Self {
+        let text = text.into();
+        self.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+    }
+
+    fn loading(self, loading: bool) -> Self {
+        self.when(loading, |button| button.child(Spinner::new().xsmall()))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttButtonVariant {
@@ -75,45 +94,30 @@ pub fn yttt_button_style(
     }
 }
 
-pub fn yttt_button_variant(
-    variant: YtttButtonVariant,
-    theme: WorkbenchTheme,
-    ui_style: UiStyle,
-    cx: &App,
-) -> ButtonCustomVariant {
-    let style = yttt_button_style(variant, theme, ui_style);
-    ButtonCustomVariant::new(cx)
-        .color(style.background.into())
-        .foreground(style.text.into())
-        .hover(style.hover_background.into())
-        .active(style.active_background.into())
-        .shadow(ui_style.component.shadow)
-}
-
 pub fn yttt_button_base(
     id: impl Into<ElementId>,
     variant: YtttButtonVariant,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
-    cx: &App,
 ) -> Button {
     let style = yttt_button_style(variant, theme, ui_style);
+    let outlined = ui_style.id != UiStyleId::Zed
+        || variant == YtttButtonVariant::Secondary
+        || variant == YtttButtonVariant::Danger;
     Button::new(id)
-        .xsmall()
-        .compact()
         .h(ui_style.controls.button_height)
         .px(ui_style.controls.button_padding_x)
+        .gap_1()
+        .text_xs()
+        .cursor_pointer()
         .rounded(style.radius)
-        .when(
-            ui_style.id != UiStyleId::Zed
-                || variant == YtttButtonVariant::Secondary
-                || variant == YtttButtonVariant::Danger,
-            |button| button.outline(),
-        )
+        .when(outlined, |button| button.border_1())
         .border_color(style.border)
-        .custom(yttt_button_variant(variant, theme, ui_style, cx))
         .bg(style.background)
         .text_color(style.text)
+        .enabled_hover(move |this| this.bg(style.hover_background))
+        .enabled_active(move |this| this.bg(style.active_background))
+        .styles(|styles| styles.disabled(|disabled| disabled.cursor_default()))
 }
 
 pub fn yttt_button(
@@ -122,7 +126,6 @@ pub fn yttt_button(
     variant: YtttButtonVariant,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
-    cx: &App,
 ) -> Button {
-    yttt_button_base(id, variant, theme, ui_style, cx).label(label)
+    yttt_button_base(id, variant, theme, ui_style).child(label.into())
 }

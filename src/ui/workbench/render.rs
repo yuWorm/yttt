@@ -143,7 +143,6 @@ impl Render for WorkbenchView {
                         YtttButtonVariant::Secondary,
                         appearance.ui,
                         appearance.style,
-                        cx,
                     )
                     .on_click(cx.listener(|root, _, window, cx| {
                         root.retry_failed_workspace_restore(window, cx)

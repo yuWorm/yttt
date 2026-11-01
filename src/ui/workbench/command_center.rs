@@ -3,6 +3,7 @@ use std::{
     fmt::Write as _,
     time::{SystemTime, UNIX_EPOCH},
 };
+use yttt_ui::primitives::button::YtttButtonExt as _;
 
 use gpui::{App, Context, Entity, FontWeight, Subscription, Task, Window, div, px, relative};
 use gpui_component::{
@@ -1405,7 +1406,6 @@ impl WorkbenchView {
                         YtttButtonVariant::Secondary,
                         theme,
                         style,
-                        cx,
                     )
                     .on_click(cx.listener(|root, _, _, cx| {
                         root.command_center.question_history_expanded =
@@ -1463,10 +1463,9 @@ impl WorkbenchView {
                         YtttButtonVariant::Secondary,
                         theme,
                         style,
-                        cx,
                     )
                     .disabled(!has_pending)
-                    .tooltip(
+                    .tooltip_text(
                         self.ui_text
                             .get(UiTextKey::CommandCenterQuestionShortcutsHint),
                     )
@@ -1481,10 +1480,9 @@ impl WorkbenchView {
                         YtttButtonVariant::Secondary,
                         theme,
                         style,
-                        cx,
                     )
                     .disabled(!has_pending)
-                    .tooltip(
+                    .tooltip_text(
                         self.ui_text
                             .get(UiTextKey::CommandCenterQuestionShortcutsHint),
                     )
@@ -1720,7 +1718,6 @@ impl WorkbenchView {
                         },
                         theme,
                         style,
-                        cx,
                     )
                     .disabled(!capability.can_answer)
                     .on_click(cx.listener(move |root, _, window, cx| {
@@ -1778,7 +1775,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Primary,
                             theme,
                             style,
-                            cx,
                         )
                         .on_click(cx.listener(
                             move |root, _, window, cx| {
@@ -2046,11 +2042,10 @@ impl WorkbenchView {
                     YtttButtonVariant::Secondary,
                     theme,
                     style,
-                    cx,
                 )
                 .debug_selector(|| "command-center-open-session".to_string())
                 .disabled(!can_open)
-                .tooltip(hint)
+                .tooltip_text(hint)
                 .on_click(cx.listener(move |root, _, window, cx| {
                     if let Some(target) = &target {
                         root.command_center_open_session(target, &session_id, window, cx);
@@ -2171,7 +2166,6 @@ impl WorkbenchView {
                                 YtttButtonVariant::Primary,
                                 theme,
                                 style,
-                                cx,
                             )
                             .on_click(cx.listener(
                                 move |root, _, window, cx| {
@@ -2222,7 +2216,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Secondary,
                             theme,
                             style,
-                            cx,
                         )
                         .disabled(!can_accept)
                         .on_click(cx.listener(
@@ -2314,7 +2307,6 @@ impl WorkbenchView {
                                 YtttButtonVariant::Danger,
                                 theme,
                                 style,
-                                cx,
                             )
                             .disabled(!can_terminate)
                             .on_click(cx.listener(
