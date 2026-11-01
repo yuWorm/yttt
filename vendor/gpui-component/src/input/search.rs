@@ -345,8 +345,12 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
             .gap_1()
             .bg(cx.theme().tokens.popover)
             .border_b_1()
-            .rounded(cx.theme().radius.half())
             .border_color(cx.theme().border)
+            .py_1()
+            .px_2()
+            .bg(cx.theme().background)
+            .text_sm()
+            .line_height(gpui::relative(1.3))
             .child(
                 h_flex()
                     .w_full()
@@ -375,6 +379,9 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                                             })),
                                     )
                                     .small()
+                                    .h_8()
+                                    .text_sm()
+                                    .line_height(gpui::relative(1.3))
                                     .w_full()
                                     .shadow_none(),
                             )

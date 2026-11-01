@@ -12,6 +12,7 @@
 
 | 补丁 | 文件 | 分类 | 原因 | 删除条件 |
 |---|---|---|---|---|
+| 编辑器 gutter 裁剪滚动内容 | `src/input/base/element.rs` | B | yttt 的 gutter 背景透明，上游靠不透明 gutter 盖住文字，文字会透出 | 上游提供裁剪 |
 | 编程式编辑接口：`selection_anchor`、`selection_head`、`set_cursor_offset`、`set_anchored_selection`、`replace_range`、`previous_grapheme_boundary`、`next_grapheme_boundary`、`undo_edit`、`redo_edit`、`move_display_lines`、`move_to_search_match`、`search_panel_is_open` | `src/input/base/yttt_ext.rs`、`src/input/mod.rs`、`src/input/base/movement.rs` | A | vim 层用这些接口驱动编辑器 | 上游提供等价公开接口 |
 | 撤销分组：`begin_history_group`、`end_history_group` | `src/input/base/yttt_ext.rs` | A | vim 复合命令要合成一次撤销 | 上游公开事务接口 |
 | `replay_history` 返回改动起点 | `src/input/base/state.rs` | A | vim 撤销后光标要落在改动处，而不是恢复旧选区 | 上游提供撤销位置 |
@@ -26,6 +27,8 @@
 | 重新导出 `InputCursorShape` | `src/input/mod.rs` | A | 业务代码经 component 使用 | 随 gpui-base 的光标补丁删除 |
 | `rebind_keybindings` | `src/lib.rs` | B | `cx.clear_key_bindings()` 之后恢复组件快捷键，用户改键时需要 | 上游提供重绑接口 |
 | 搜索面板 debug selector | `src/input/search.rs` | E | 测试定位面板 | 测试不再依赖该 selector |
+| 搜索面板紧凑样式 | `src/input/search.rs` | C | 替代旧的 `flush_search_panel`。0.8.1 面板已贴边，只需还原样式 | P7 对齐编辑器时重做 |
+| 搜索框回显判断去掉 anchor 条件 | `src/input/overlay.rs` | E | 上游 bug：输入首字符后面板重新全选，下一键覆盖它 | 上游修复。适合提 PR |
 | `TooltipAppearance` | `src/tooltip.rs` | C | Zed 风格的快捷键提示颜色 | P3 用 `gpui-base` 重做 tooltip |
 | `Notification::always_show_close_button` | `src/notification.rs` | C | 错误通知要始终显示关闭按钮 | P4 重做通知 |
 | `PopupMenuStyle`、`MenuItemAppearance`，带样式时恢复 1px 边框 | `src/menu/*` | C | 0.8.1 的 `popover_style` 去掉了边框，改用阴影环 | P4 自有 context menu |
@@ -42,10 +45,11 @@
 
 | 补丁 | 旧文件 | 分类 | 现状 | 任务 |
 |---|---|---|---|---|
-| 编辑器 gutter 裁剪滚动内容 | `input/element.rs` | B | 0.8.1 没有内容遮罩，半透明 gutter 下文字会透出 | 1.4 |
-| `flush_search_panel` | `input/input.rs`、`input/search.rs`、`input/state.rs` | A | 调用已删除 | 1.4 |
-| dockerfile、hcl、tsx、vue 语言 | `highlighter/languages.rs`、`highlighter/languages/*` | D | 8 个测试失败；tsx 优先用上游 feature，其余优先走 `LanguageRegistry` | 1.4 |
 | 主题字段 `accordion_hover`、`tiles` | 无 | C | 上游改名或移除，赋值已删除，要找对应字段 | 1.5 |
+
+## yttt 侧替代
+
+dockerfile、hcl、nix、scss、vue 和 JSX 高亮由 `src/ui/editor/language.rs` 通过 `LanguageRegistry` 注册，查询文件在 `src/ui/editor/queries/`，不再需要 vendor 补丁。
 
 ## 不重放
 

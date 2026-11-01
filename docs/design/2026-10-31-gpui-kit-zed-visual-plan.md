@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：任务 1.0 到 1.3 的呈现补丁完成；P0 剩余项见下方进度
+- 状态：任务 1.0 到 1.4 完成；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -191,6 +191,8 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 退出：三个 crate 各自 `cargo check` 通过，测试通过。
 
 ### 任务 1.4：迁移代码编辑器（L）
+
+已完成。语言支持全部移到 yttt 侧，不需要 vendor 补丁。vim 搜索丢字符的根因是上游搜索面板把自身回显当成新激活。
 
 - [ ] 重放 A、B 类补丁到 `vendor/gpui-base`，每个 API 带测试。
 - [ ] 修改 `src/ui/editor/view.rs`，改用 `EditorState`。
