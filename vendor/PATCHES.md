@@ -29,16 +29,37 @@
 | `TooltipAppearance` | `src/tooltip.rs` | C | Zed 风格的快捷键提示颜色 | P3 用 `gpui-base` 重做 tooltip |
 | `Notification::always_show_close_button` | `src/notification.rs` | C | 错误通知要始终显示关闭按钮 | P4 重做通知 |
 
-## 尚未重放
+## 待重放
 
-| 补丁 | 现状 | 处理 |
-|---|---|---|
-| `PopupMenuStyle`、`MenuItemAppearance` | `yttt_popup_menu` 暂时原样返回菜单，当前是上游外观 | 任务 1.3 重放 |
-| `hover_matches_selected` | 调用已删除 | 任务 1.5 判断 |
-| `flush_search_panel` | 调用已删除 | 任务 1.4 判断 |
-| 主题字段 `accordion_hover`、`placeholder_foreground`、`tiles` | 赋值已删除 | 任务 1.5 找到 0.8.1 的对应字段 |
-| D 类语言支持 | 未重放，8 个测试失败 | 任务 1.4 |
-| 其余差异文件 | 未逐项分类 | 任务 1.2 |
+旧 vendor 里的下列补丁在 0.8.1 没有等价实现，M1 要保留。
+
+| 补丁 | 旧文件 | 分类 | 现状 | 任务 |
+|---|---|---|---|---|
+| `PopupMenuStyle`、`MenuItemAppearance` | `menu/popup_menu.rs`、`menu/menu_item.rs`、`menu/mod.rs` | C | `yttt_popup_menu` 暂时原样返回菜单 | 1.3 |
+| `ButtonCustomVariant` 使用配置的 hover、active、前景色 | `button/button.rs` | C | 0.8.1 仍按 `color` 混色并忽略配置，影响 `yttt_button`、`yttt_icon_button` | 1.3 |
+| `ListItem::hover_matches_selected`，选中背景回退 | `list/list_item.rs` | C | 调用已删除 | 1.3 |
+| `Select` 触发器 hover、弹层用 popover 背景 | `select.rs` | C | 未重放 | 1.3 |
+| 主题 `placeholder_foreground` | `theme/schema.rs`、`theme/theme_color.rs` | C | 赋值已删除 | 1.5 |
+| 列表各分区标题独立测量 | `list/list.rs`、`list/cache.rs`、`list/delegate.rs` | C | 0.8.1 仍只量第 0 个，SSH 列表有多个分区 | 1.3 |
+| 编辑器 gutter 裁剪滚动内容 | `input/element.rs` | B | 0.8.1 没有内容遮罩，半透明 gutter 下文字会透出 | 1.4 |
+| `flush_search_panel` | `input/input.rs`、`input/search.rs`、`input/state.rs` | A | 调用已删除 | 1.4 |
+| dockerfile、hcl、tsx、vue 语言 | `highlighter/languages.rs`、`highlighter/languages/*` | D | 8 个测试失败；tsx 优先用上游 feature，其余优先走 `LanguageRegistry` | 1.4 |
+| 主题字段 `accordion_hover`、`tiles` | 无 | C | 上游改名或移除，赋值已删除，要找对应字段 | 1.5 |
+
+## 不重放
+
+基线是上游 `a9a7341c`。旧 `crates/ui/src` 与它共有 56 个文件存在差异，外加 4 个语言目录。两边用 rustfmt 规范化后，只有 24 个文件有真实改动。
+
+| 文件 | 原因 |
+|---|---|
+| `input/clear_button.rs` | 0.8.1 已改用 `IconName::Close` |
+| `lib.rs` 的 `pub mod actions` | `gpui_base::actions` 已公开，yttt 没有直接使用 |
+| `title_bar.rs` | 只有一行注释。Windows 标题栏行为在任务 1.7 验证 |
+| `history.rs` 的 `start_grouping_new_version` | 改由 `undo_manager` 事务承接 |
+| `theme/schema.rs` 的 Aurora 测试夹具 | 只改了测试 |
+| 其余 32 个文件 | 仅格式差异：`dock/tiles.rs`、`dock/state.rs`、`window_border.rs`、`actions.rs`、`element_ext.rs`、`dialog/*`、`resizable/resize_handle.rs`、`popover.rs`、`breadcrumb.rs`、`clipboard.rs`、`link.rs`、`collapsible.rs`、`searchable_list/adapter.rs`、`button/dropdown_button.rs`、`list/separator_item.rs`、`input/display_map/*`、`input/lsp/*`、`input/popovers/diagnostic_popover.rs`、`input/blink_cursor.rs`、`highlighter/diagnostics.rs`、`setting/fields/*`、`plot/*`、`time/utils.rs`、`text/text_view.rs` |
+
+`crates/assets`、`crates/macros` 没有需要保留的 yttt 改动，由 `gpui-kit-assets` 和 0.8.1 的宏 crate 取代。
 
 ## 许可证
 
