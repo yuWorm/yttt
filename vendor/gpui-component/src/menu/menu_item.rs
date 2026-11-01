@@ -1,6 +1,7 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use crate::{ActiveTheme, Disableable, StyledExt, h_flex};
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, MouseButton,
+    AnyElement, App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
 };
@@ -17,6 +18,17 @@ pub(crate) struct MenuItemElement {
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
+    appearance: Option<MenuItemAppearance>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct MenuItemAppearance {
+    pub foreground: Hsla,
+    pub hover_background: Hsla,
+    pub hover_foreground: Hsla,
+    pub selected_background: Hsla,
+    pub selected_foreground: Hsla,
+    pub disabled_foreground: Hsla,
 }
 
 impl MenuItemElement {
@@ -32,6 +44,7 @@ impl MenuItemElement {
             on_click: None,
             on_hover: None,
             children: SmallVec::new(),
+            appearance: None,
         }
     }
 
@@ -68,6 +81,11 @@ impl MenuItemElement {
         self.on_hover = Some(Box::new(handler));
         self
     }
+
+    pub(crate) fn appearance(mut self, appearance: MenuItemAppearance) -> Self {
+        self.appearance = Some(appearance);
+        self
+    }
 }
 
 impl Disableable for MenuItemElement {
@@ -91,6 +109,15 @@ impl ParentElement for MenuItemElement {
 
 impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let appearance = self.appearance.unwrap_or_else(|| MenuItemAppearance {
+            foreground: cx.theme().foreground,
+            hover_background: *cx.theme().tokens.accent,
+            hover_foreground: cx.theme().accent_foreground,
+            selected_background: *cx.theme().tokens.accent,
+            selected_foreground: cx.theme().accent_foreground,
+            disabled_foreground: cx.theme().muted_foreground,
+        });
+
         h_flex()
             .id(self.id)
             .test_support()
@@ -101,7 +128,7 @@ impl RenderOnce for MenuItemElement {
             .py_1()
             .px_2()
             .text_base()
-            .text_color(cx.theme().foreground)
+            .text_color(appearance.foreground)
             .relative()
             .items_center()
             .justify_between()
@@ -114,12 +141,12 @@ impl RenderOnce for MenuItemElement {
                 // element before registering its group, and that fallback keeps
                 // the pointer's item lit after a key moves the highlight away.
                 this.hover(|this| {
-                    this.bg(cx.theme().tokens.accent)
-                        .text_color(cx.theme().accent_foreground)
+                    this.bg(appearance.hover_background)
+                        .text_color(appearance.hover_foreground)
                 })
                 .when(self.selected, |this| {
-                    this.bg(cx.theme().tokens.accent)
-                        .text_color(cx.theme().accent_foreground)
+                    this.bg(appearance.selected_background)
+                        .text_color(appearance.selected_foreground)
                 })
                 .when_some(self.on_click, |this, on_click| {
                     this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -129,7 +156,7 @@ impl RenderOnce for MenuItemElement {
                 })
             })
             .when(self.disabled, |this| {
-                this.text_color(cx.theme().muted_foreground)
+                this.text_color(appearance.disabled_foreground)
             })
             .children(self.children)
     }

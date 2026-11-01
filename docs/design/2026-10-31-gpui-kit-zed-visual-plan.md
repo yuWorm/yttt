@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：任务 1.0 到 1.2 完成；P0 剩余项见下方进度
+- 状态：任务 1.0 到 1.3 的呈现补丁完成；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -180,6 +180,8 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 退出：所有差异文件和 4 个语言目录全部有归类。
 
 ### 任务 1.3：迁移底层 crate（L）
+
+已完成。展示页 L2 对比基线：全窗口 307 万像素差异为 0，42 个组件区域和布局全部一致。比对之外，0.8.1 的 `sizing`、`radio`、`popover_style` 和 `Select` 箭头也有默认值变化，都已还原并记入 `PATCHES.md`。
 
 - [ ] `vendor/gpui-markdown-editor`：切到 `gpui-pre`。
 - [ ] `crates/yttt-terminal`：切到 `gpui-pre`，迁移滚动事件和文字 API。

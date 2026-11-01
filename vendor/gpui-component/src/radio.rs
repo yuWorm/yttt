@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use std::{rc::Rc, time::Duration};
 
 use crate::{
@@ -234,7 +235,6 @@ impl RenderOnce for Radio {
                     .relative()
                     .size(indicator_size)
                     // Center on the first 1.25em line, including when the label wraps.
-                    .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .rounded_full_style(cx)
                     .border_1()
@@ -252,7 +252,7 @@ impl RenderOnce for Radio {
                 this.child(
                     v_flex()
                         .w_full()
-                        .line_height(relative(1.25))
+                        .line_height(relative(1.))
                         .gap_1()
                         .when_some(self.label, |this, label| {
                             this.child(

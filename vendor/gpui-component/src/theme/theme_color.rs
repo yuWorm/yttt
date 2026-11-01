@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use std::{ops::Deref, sync::Arc};
 
 use crate::{ThemeMode, theme::DEFAULT_THEME_COLORS};
@@ -195,6 +196,9 @@ pub struct ThemeColor {
     pub muted: Hsla,
     /// Muted text color, as used in disabled text.
     pub muted_foreground: Hsla,
+    /// Placeholder text in empty inputs.
+    #[serde(default)]
+    pub placeholder_foreground: Hsla,
     /// Background color for Popover.
     pub popover: Hsla,
     /// Text color for Popover.
@@ -472,6 +476,7 @@ define_theme_tokens! {
     list_hover,
     muted,
     muted_foreground,
+    placeholder_foreground,
     popover,
     popover_foreground,
     primary,

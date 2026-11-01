@@ -28,6 +28,14 @@
 | 搜索面板 debug selector | `src/input/search.rs` | E | 测试定位面板 | 测试不再依赖该 selector |
 | `TooltipAppearance` | `src/tooltip.rs` | C | Zed 风格的快捷键提示颜色 | P3 用 `gpui-base` 重做 tooltip |
 | `Notification::always_show_close_button` | `src/notification.rs` | C | 错误通知要始终显示关闭按钮 | P4 重做通知 |
+| `PopupMenuStyle`、`MenuItemAppearance`，带样式时恢复 1px 边框 | `src/menu/*` | C | 0.8.1 的 `popover_style` 去掉了边框，改用阴影环 | P4 自有 context menu |
+| `ButtonCustomVariant` 的 hover、active、前景色 | `src/button/button.rs` | C | 0.8.1 按 `color` 混色，忽略配置 | P3 用 `gpui-base` 重做按钮 |
+| `ListItem::hover_matches_selected`，选中背景 | `src/list/list_item.rs` | C | 文件树和列表的选中外观 | P5、P6 自有行外观 |
+| 各分区标题独立测量 | `src/list/list.rs`、`src/list/cache.rs`、`src/list/delegate.rs` | C | SSH 列表有多个分区 | 上游支持，或 P5 不再使用 `List` |
+| `Select` 触发器 hover，箭头固定 XSmall | `src/select.rs` | C | 保持现有下拉外观 | P5 自有 select |
+| 中号和大号输入框内边距 12、16 | `src/sizing.rs` | C | 0.8.1 改成 10、12，文字左移 2px | P3 用 token 定义 |
+| Radio 行高 1，去掉指示器上边距 | `src/radio.rs` | C | 0.8.1 的 Radio 变高 | P3 自有 radio |
+| 主题 `placeholder_foreground` | `src/theme/schema.rs`、`src/theme/theme_color.rs`、`src/input/input.rs` | C | 占位符颜色独立于 muted 文本 | P3 自有 input |
 
 ## 待重放
 
@@ -35,12 +43,6 @@
 
 | 补丁 | 旧文件 | 分类 | 现状 | 任务 |
 |---|---|---|---|---|
-| `PopupMenuStyle`、`MenuItemAppearance` | `menu/popup_menu.rs`、`menu/menu_item.rs`、`menu/mod.rs` | C | `yttt_popup_menu` 暂时原样返回菜单 | 1.3 |
-| `ButtonCustomVariant` 使用配置的 hover、active、前景色 | `button/button.rs` | C | 0.8.1 仍按 `color` 混色并忽略配置，影响 `yttt_button`、`yttt_icon_button` | 1.3 |
-| `ListItem::hover_matches_selected`，选中背景回退 | `list/list_item.rs` | C | 调用已删除 | 1.3 |
-| `Select` 触发器 hover、弹层用 popover 背景 | `select.rs` | C | 未重放 | 1.3 |
-| 主题 `placeholder_foreground` | `theme/schema.rs`、`theme/theme_color.rs` | C | 赋值已删除 | 1.5 |
-| 列表各分区标题独立测量 | `list/list.rs`、`list/cache.rs`、`list/delegate.rs` | C | 0.8.1 仍只量第 0 个，SSH 列表有多个分区 | 1.3 |
 | 编辑器 gutter 裁剪滚动内容 | `input/element.rs` | B | 0.8.1 没有内容遮罩，半透明 gutter 下文字会透出 | 1.4 |
 | `flush_search_panel` | `input/input.rs`、`input/search.rs`、`input/state.rs` | A | 调用已删除 | 1.4 |
 | dockerfile、hcl、tsx、vue 语言 | `highlighter/languages.rs`、`highlighter/languages/*` | D | 8 个测试失败；tsx 优先用上游 feature，其余优先走 `LanguageRegistry` | 1.4 |

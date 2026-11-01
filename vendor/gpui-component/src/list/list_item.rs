@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use crate::{ActiveTheme, Disableable, Icon, Selectable, Sizable as _, StyledExt, h_flex};
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
@@ -31,6 +32,7 @@ pub struct ListItem {
     selected: bool,
     secondary_selected: bool,
     confirmed: bool,
+    hover_matches_selected: bool,
     check_icon: Option<Icon>,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_mouse_down:
@@ -52,6 +54,7 @@ impl ListItem {
             selected: false,
             secondary_selected: false,
             confirmed: false,
+            hover_matches_selected: false,
             on_click: None,
             on_mouse_down: HashMap::new(),
             on_mouse_enter: None,
@@ -77,6 +80,12 @@ impl ListItem {
     /// Set ListItem as the selected item style.
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Use the selected-item background for hover instead of the default hover background.
+    pub fn hover_matches_selected(mut self, enabled: bool) -> Self {
+        self.hover_matches_selected = enabled;
         self
     }
 
@@ -188,6 +197,16 @@ impl RenderOnce for ListItem {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let accessibility_label = self.accessibility_label;
         let is_active = self.confirmed || self.selected || self.secondary_selected;
+        let selected_background = if cx.theme().list.active_highlight {
+            cx.theme().list_active
+        } else {
+            cx.theme().accent
+        };
+        let hover_background = if self.hover_matches_selected {
+            selected_background
+        } else {
+            *cx.theme().tokens.list_hover
+        };
 
         let is_selectable = !(self.disabled || self.mode.is_separator());
 
@@ -228,7 +247,7 @@ impl RenderOnce for ListItem {
                         if is_active {
                             this
                         } else {
-                            this.bg(cx.theme().tokens.list_hover)
+                            this.bg(hover_background)
                         }
                     })
             })
@@ -255,13 +274,7 @@ impl RenderOnce for ListItem {
             )
             .when_some(self.suffix, |this, suffix| this.child(suffix(window, cx)))
             .when(is_selectable && self.selected, |this| {
-                let bg = if cx.theme().list.active_highlight {
-                    cx.theme().list_active
-                } else {
-                    cx.theme().accent
-                };
-
-                this.bg(bg)
+                this.bg(selected_background)
             })
             .when(is_selectable && self.secondary_selected, |this| {
                 this.child(

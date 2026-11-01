@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -538,7 +539,7 @@ impl RenderOnce for Input {
         state.set_editor_style(
             gpui_base::input::InputEditorStyle {
                 foreground: cx.theme().foreground,
-                muted_foreground: cx.theme().muted_foreground,
+                muted_foreground: cx.theme().placeholder_foreground,
                 background: cx.theme().editor_background(),
                 border: cx.theme().border,
                 selection: cx.theme().selection,

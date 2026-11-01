@@ -410,6 +410,7 @@ impl ThemeRuntime {
         colors.button_warning_active = Some(color_hex(theme.warning).into());
         colors.muted = Some(color_hex(theme.element_background).into());
         colors.muted_foreground = Some(color_hex(theme.text_muted).into());
+        colors.placeholder_foreground = Some(color_hex(theme.text_subtle).into());
         colors.overlay = Some(color_hex(self.window_material.scrim).into());
         colors.primary = Some(color_hex(theme.element_selected).into());
         colors.primary_foreground = Some(color_hex(theme.text).into());

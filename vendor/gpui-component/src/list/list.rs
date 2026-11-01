@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use instant::Duration;
 use std::ops::Range;
 
@@ -462,13 +463,17 @@ where
                 .layout_as_root(available_space, window, cx);
         }
 
-        if let Some(mut el) = self
-            .delegate
-            .render_section_header(0, window, cx)
-            .map(|r| r.into_any_element())
-        {
-            measured_size.section_header_size = el.layout_as_root(available_space, window, cx);
-        }
+        measured_size.section_header_sizes = (0..sections_count)
+            .map(|section| {
+                let header = self
+                    .delegate
+                    .render_section_header(section, window, cx)
+                    .map(|header| header.into_any_element());
+                header
+                    .map(|mut header| header.layout_as_root(available_space, window, cx))
+                    .unwrap_or_default()
+            })
+            .collect();
         if let Some(mut el) = self
             .delegate
             .render_section_footer(0, window, cx)

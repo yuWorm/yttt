@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use gpui::{AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Task, Window};
 
 use crate::{
@@ -48,7 +49,7 @@ pub trait ListDelegate: Sized + 'static {
 
     /// Render the section header at the given index, default is None.
     ///
-    /// NOTE: Every header should have same height.
+    /// Each section is measured independently; absent headers occupy no space.
     fn render_section_header(
         &mut self,
         section: usize,

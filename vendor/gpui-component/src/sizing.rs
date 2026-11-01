@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use gpui::{Edges, Pixels, Styled, px};
 use serde::{Deserialize, Serialize};
 
@@ -146,8 +147,8 @@ impl Size {
     /// Returns the horizontal input padding.
     pub fn input_px(&self) -> Pixels {
         match self {
-            Self::Large => px(12.),
-            Self::Medium => px(10.),
+            Self::Large => px(16.),
+            Self::Medium => px(12.),
             Self::Small => px(8.),
             Self::XSmall => px(4.),
             _ => px(8.),

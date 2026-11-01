@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use gpui::{
     AnyElement, App, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length, ParentElement, Render,
@@ -58,11 +59,7 @@ impl Caret {
 impl RenderOnce for Caret {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         Icon::new(IconName::ChevronDown)
-            .with_size(match self.size {
-                Size::XSmall => Size::XSmall,
-                Size::Small => Size::Small,
-                _ => Size::Medium,
-            })
+            .with_size(Size::XSmall)
             .when_some(self.color, |this, color| this.text_color(color))
     }
 }
@@ -578,6 +575,10 @@ where
                         .input_size(self.state.size)
                         .input_text_size(self.state.size)
                         .refine_style(&self.state.style)
+                        .when(allow_open, |this| {
+                            let hover_background = cx.theme().accent;
+                            this.hover(move |this| this.bg(hover_background))
+                        })
                         .when(outline_visible && self.state.appearance, |this| {
                             this.border_1().border_color(cx.theme().ring)
                         })
