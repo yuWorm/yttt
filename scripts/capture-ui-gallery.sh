@@ -8,7 +8,9 @@ Usage: scripts/capture-ui-gallery.sh [--output-dir PATH] [--no-build] [--zed]
 Renders the gallery offscreen twice and reports the renderer's self-noise.
 With --zed, also captures the frontmost Zed window twice with screencapture,
 which needs Screen Recording permission for the terminal running this script.
-Set up Zed from tests/visual/zed/settings.json before capturing.
+Set up Zed from tests/visual/zed/settings.json before capturing. To leave a
+running Zed alone, start a second one with ZED_STATELESS=1 and --user-data-dir,
+then bring it to the front: Stage Manager shrinks windows that are not.
 EOF
 }
 

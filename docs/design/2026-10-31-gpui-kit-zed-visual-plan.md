@@ -68,7 +68,7 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 - 0.2：每组 3 次、无 trace 的开发基线，见 `baselines/terminal-perf-a2160c8.md`。
 - 0.4：hover、active 在展示页内用样式数据强制，没有给 primitives 加参数；focus 状态尚未展示。
 - 0.4：截图用离屏 `render_to_image`，macOS 上在当前 GPUI 版本已可用，无需屏幕录制权限。
-- 0.5：yttt 噪声已测为 0。Zed 截图需要用户授予屏幕录制权限后运行 `scripts/capture-ui-gallery.sh --zed`，阈值尚未校准。
+- 0.5：yttt 和 Zed 的截图噪声都测为 0，写入 `manifest.toml`。噪声不能决定跨应用阈值，所以阈值保留初始估计，在 P3 首个组件对比时校准。按组件的 Zed 基线截图尚未采集。
 - 0.6：清单已写，需要真人跑一遍。
 
 ### 任务 0.1：选定 Zed 基线（S）

@@ -16,8 +16,16 @@ window_height = 800
 theme = "One Dark"
 rem_size_px = 16
 
-# Initial estimate from the design. Self-noise for the gallery renderer is zero;
-# the Zed window capture is measured by capture-ui-gallery.sh --zed.
+# Two captures of the same app, one second apart, measured on 2026-11-01.
+# The Zed scene was static with cursor blink off and a modal open.
+[noise]
+gallery_changed_pixels = 0
+zed_changed_pixels = 0
+zed_max_channel_delta = 0
+
+# Capture noise is zero, so these allow for rendering differences between apps,
+# not for noise. They stay at the design's estimate until the first component
+# comparison in P3 gives real cross-app data.
 [thresholds]
 channel_delta = 16
 changed_ratio = 0.01
