@@ -1,10 +1,10 @@
 use super::*;
 use chrono::{DateTime, Datelike as _, Local, TimeZone};
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use yttt_core::model::workspace::WorkspaceState;
 use yttt_protocol::workspace::{
     WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary,
 };
+use yttt_ui::menu::{YtttDropdownMenu as _, YtttMenuItem};
 
 use crate::ui::{
     components::workbench_palette_item,
@@ -390,23 +390,25 @@ impl WorkbenchView {
                     .w(px(28.0))
                     .flex_none()
                     .tooltip(text.get(UiTextKey::WorkspaceHistoryMore))
-                    .dropdown_menu(move |menu, _, cx| {
-                        let summary = summary.clone();
-                        let owner = owner.clone();
-                        yttt_ui::primitives::menu::yttt_popup_menu(
-                            menu,
-                            current_workbench_theme(cx),
-                            current_ui_style(cx),
-                        )
-                        .item(
-                            PopupMenuItem::new(text.get(UiTextKey::WorkspaceHistoryRemove))
-                                .on_click(move |_, window, cx| {
-                                    let _ = owner.update(cx, |root, cx| {
-                                        root.forget_workspace_history(summary.clone(), window, cx)
-                                    });
-                                }),
-                        )
-                    }),
+                    .yttt_dropdown_menu(
+                        crate::ui::theme::menu_appearance,
+                        move |menu, _, _| {
+                            let summary = summary.clone();
+                            let owner = owner.clone();
+                            menu.item(
+                                YtttMenuItem::new(text.get(UiTextKey::WorkspaceHistoryRemove))
+                                    .on_click(move |_, window, cx| {
+                                        let _ = owner.update(cx, |root, cx| {
+                                            root.forget_workspace_history(
+                                                summary.clone(),
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    }),
+                            )
+                        },
+                    ),
                 );
             } else {
                 row = row.child(div().w(px(28.0)).flex_none());

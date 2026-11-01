@@ -3,10 +3,8 @@ use gpui::{
     MouseDownEvent, Rems, Render, SharedString, Stateful, StatefulInteractiveElement as _, Window,
     div, prelude::*, rgba,
 };
-use gpui_component::{
-    Icon, IconName,
-    menu::{ContextMenuExt as _, PopupMenuItem},
-};
+use gpui_component::{Icon, IconName};
+use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
 
 use crate::{
     model::{
@@ -562,39 +560,37 @@ where
         )),
     };
 
-    tab.context_menu(move |menu, _window, cx| {
-        let menu = yttt_ui::primitives::menu::yttt_popup_menu(
-            menu,
-            crate::ui::theme::current_workbench_theme(cx),
-            crate::ui::theme::current_ui_style(cx),
-        );
-        menu.item(
-            PopupMenuItem::new(text.get(UiTextKey::TabCloseCurrent)).action(Box::new(TabClose)),
-        )
-        .item(PopupMenuItem::new(text.get(UiTextKey::TabCloseAll)).action(Box::new(TabCloseAll)))
-        .item(PopupMenuItem::separator())
-        .item(
-            PopupMenuItem::new(text.get(UiTextKey::TabCloseBefore))
-                .action(Box::new(TabCloseBefore))
-                .disabled(index == 0),
-        )
-        .item(
-            PopupMenuItem::new(text.get(UiTextKey::TabCloseAfter))
-                .action(Box::new(TabCloseAfter))
-                .disabled(index + 1 >= tab_count),
-        )
-        .item(PopupMenuItem::separator())
-        .item(
-            PopupMenuItem::new(text.get(UiTextKey::TabCloseAllFiles))
-                .action(Box::new(TabCloseAllFiles))
-                .disabled(!has_files),
-        )
-        .item(
-            PopupMenuItem::new(text.get(UiTextKey::TabCloseAllTerminals))
-                .action(Box::new(TabCloseAllTerminals))
-                .disabled(!has_terminals),
-        )
-    })
+    tab.yttt_context_menu(
+        crate::ui::theme::menu_appearance,
+        move |menu, _window, _| {
+            menu.item(
+                YtttMenuItem::new(text.get(UiTextKey::TabCloseCurrent)).action(Box::new(TabClose)),
+            )
+            .item(YtttMenuItem::new(text.get(UiTextKey::TabCloseAll)).action(Box::new(TabCloseAll)))
+            .item(YtttMenuItem::separator())
+            .item(
+                YtttMenuItem::new(text.get(UiTextKey::TabCloseBefore))
+                    .action(Box::new(TabCloseBefore))
+                    .disabled(index == 0),
+            )
+            .item(
+                YtttMenuItem::new(text.get(UiTextKey::TabCloseAfter))
+                    .action(Box::new(TabCloseAfter))
+                    .disabled(index + 1 >= tab_count),
+            )
+            .item(YtttMenuItem::separator())
+            .item(
+                YtttMenuItem::new(text.get(UiTextKey::TabCloseAllFiles))
+                    .action(Box::new(TabCloseAllFiles))
+                    .disabled(!has_files),
+            )
+            .item(
+                YtttMenuItem::new(text.get(UiTextKey::TabCloseAllTerminals))
+                    .action(Box::new(TabCloseAllTerminals))
+                    .disabled(!has_terminals),
+            )
+        },
+    )
 }
 
 fn tab_status_dot(

@@ -1,11 +1,8 @@
 use super::auxiliary_windows::RemoteServicesPage;
 use super::*;
-use crate::ui::theme::current_workbench_theme;
-use gpui_component::{
-    FocusTrapElement as _,
-    menu::{DropdownMenu as _, PopupMenuItem},
-};
+use gpui_component::FocusTrapElement as _;
 use yttt_core::model::ids::{ConnectionId, CredentialId};
+use yttt_ui::menu::{YtttDropdownMenu as _, YtttMenuItem};
 use yttt_ui::primitives::button::{yttt_button, yttt_button_base};
 
 #[derive(Clone)]
@@ -385,27 +382,20 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
         style,
         cx,
     )
-    .dropdown_menu(move |menu, _, cx| {
+    .yttt_dropdown_menu(crate::ui::theme::menu_appearance, move |menu, _, _| {
         let ssh_owner = owner.clone();
         let host_owner = owner.clone();
-        yttt_ui::primitives::menu::yttt_popup_menu(
-            menu,
-            current_workbench_theme(cx),
-            current_ui_style(cx),
-        )
-        .item(
-            PopupMenuItem::new(text.get(UiTextKey::RemoteAddSsh)).on_click(move |_, window, cx| {
+        menu.item(
+            YtttMenuItem::new(text.get(UiTextKey::RemoteAddSsh)).on_click(move |_, window, cx| {
                 let _ = ssh_owner.update(cx, |root, cx| {
                     root.open_ssh_connection_editor(None, window, cx)
                 });
             }),
         )
         .item(
-            PopupMenuItem::new(text.get(UiTextKey::RemoteAddHost)).on_click(
-                move |_, window, cx| {
-                    let _ = host_owner.update(cx, |root, cx| root.new_remote_host(window, cx));
-                },
-            ),
+            YtttMenuItem::new(text.get(UiTextKey::RemoteAddHost)).on_click(move |_, window, cx| {
+                let _ = host_owner.update(cx, |root, cx| root.new_remote_host(window, cx));
+            }),
         )
     });
     let mut rows = Vec::new();
@@ -523,25 +513,20 @@ fn connection_row(
         cx,
     )
     .disabled(busy)
-    .dropdown_menu(move |menu, _, cx| {
+    .yttt_dropdown_menu(crate::ui::theme::menu_appearance, move |menu, _, _| {
         let edit_owner = menu_owner.clone();
         let delete_owner = menu_owner.clone();
         let edit_target = menu_target.clone();
         let delete_target = menu_target.clone();
-        yttt_ui::primitives::menu::yttt_popup_menu(
-            menu,
-            current_workbench_theme(cx),
-            current_ui_style(cx),
-        )
-        .item(
-            PopupMenuItem::new(text.get(UiTextKey::RemoteEdit)).on_click(move |_, window, cx| {
+        menu.item(YtttMenuItem::new(text.get(UiTextKey::RemoteEdit)).on_click(
+            move |_, window, cx| {
                 let _ = edit_owner.update(cx, |root, cx| {
                     root.edit_remote_record(edit_target.clone(), window, cx)
                 });
-            }),
-        )
+            },
+        ))
         .item(
-            PopupMenuItem::new(text.get(UiTextKey::SshDeleteConnection)).on_click(
+            YtttMenuItem::new(text.get(UiTextKey::SshDeleteConnection)).on_click(
                 move |_, window, cx| {
                     let _ = delete_owner.update(cx, |root, cx| {
                         root.delete_remote_record(delete_target.clone(), window, cx)

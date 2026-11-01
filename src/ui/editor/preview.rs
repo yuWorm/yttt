@@ -6,15 +6,13 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
 
 use gpui::{
     App, Bounds, Context, EventEmitter, FocusHandle, Focusable, MouseButton, Pixels, Point,
     RenderImage, Window, canvas, div, img, prelude::*, px,
 };
-use gpui_component::{
-    Sizable,
-    menu::{ContextMenuExt, PopupMenuItem},
-};
+use gpui_component::Sizable;
 use image::{AnimationDecoder, ImageDecoder};
 
 use crate::ui::{
@@ -506,18 +504,11 @@ impl Render for FilePreview {
                         footer.child(self.text.get(UiTextKey::FileDownloadedCopy))
                     }),
             )
-            .context_menu(move |menu, _, cx| {
+            .yttt_context_menu(crate::ui::theme::menu_appearance, move |menu, _, _| {
                 let view = external_view.clone();
-                yttt_ui::primitives::menu::yttt_popup_menu(
-                    menu,
-                    current_workbench_theme(cx),
-                    current_ui_style(cx),
-                )
-                .item(PopupMenuItem::new(external_text).on_click(
-                    move |_, _, cx| {
-                        let _ = view.update(cx, |_, cx| cx.emit(FilePreviewEvent::OpenExternal));
-                    },
-                ))
+                menu.item(YtttMenuItem::new(external_text).on_click(move |_, _, cx| {
+                    let _ = view.update(cx, |_, cx| cx.emit(FilePreviewEvent::OpenExternal));
+                }))
             })
     }
 }

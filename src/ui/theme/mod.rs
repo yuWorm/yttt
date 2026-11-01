@@ -144,6 +144,10 @@ pub fn current_workbench_theme(cx: &App) -> WorkbenchTheme {
         .unwrap_or_else(WorkbenchTheme::one_dark)
 }
 
+pub fn menu_appearance(cx: &App) -> (WorkbenchTheme, UiStyle) {
+    (current_workbench_theme(cx), current_ui_style(cx))
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct UiTypography {
     pub font_family: String,

@@ -1,3 +1,4 @@
+pub mod menu;
 pub mod primitives;
 pub mod style;
 pub mod theme;

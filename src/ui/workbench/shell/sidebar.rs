@@ -4,11 +4,8 @@ use gpui::{
     AnyElement, App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, SharedString, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
-use gpui_component::{
-    Icon, IconName, Sizable as _,
-    menu::{ContextMenuExt as _, PopupMenuItem},
-    spinner::Spinner,
-};
+use gpui_component::{Icon, IconName, Sizable as _, spinner::Spinner};
+use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
 
 use crate::commands::CommandId;
 use crate::config::default_layout::BuiltinAgent;
@@ -915,45 +912,47 @@ where
                     )
                 }))
         }))
-        .context_menu(move |menu, _window, cx| {
-            let menu = yttt_ui::primitives::menu::yttt_popup_menu(
-                menu,
-                crate::ui::theme::current_workbench_theme(cx),
-                crate::ui::theme::current_ui_style(cx),
-            );
-            menu.action_context(action_context.clone())
-                .item(
-                    PopupMenuItem::new(text.get(UiTextKey::CommandProjectCreateTitle))
-                        .action(Box::new(CreateProject)),
-                )
-                .item(PopupMenuItem::separator())
-                .item(
-                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutProjectEditTitle))
-                        .action(Box::new(LayoutProjectEdit)),
-                )
-                .item(
-                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutSaveCurrentTitle))
-                        .action(Box::new(LayoutSaveCurrent)),
-                )
-                .item(
-                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutExportProjectConfigTitle))
+        .yttt_context_menu(
+            crate::ui::theme::menu_appearance,
+            move |menu, _window, _| {
+                menu.action_context(action_context.clone())
+                    .item(
+                        YtttMenuItem::new(text.get(UiTextKey::CommandProjectCreateTitle))
+                            .action(Box::new(CreateProject)),
+                    )
+                    .item(YtttMenuItem::separator())
+                    .item(
+                        YtttMenuItem::new(text.get(UiTextKey::CommandLayoutProjectEditTitle))
+                            .action(Box::new(LayoutProjectEdit)),
+                    )
+                    .item(
+                        YtttMenuItem::new(text.get(UiTextKey::CommandLayoutSaveCurrentTitle))
+                            .action(Box::new(LayoutSaveCurrent)),
+                    )
+                    .item(
+                        YtttMenuItem::new(
+                            text.get(UiTextKey::CommandLayoutExportProjectConfigTitle),
+                        )
                         .action(Box::new(LayoutExportProjectConfig)),
-                )
-                .item(PopupMenuItem::separator())
-                .item(
-                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutResetLocalOverrideTitle))
+                    )
+                    .item(YtttMenuItem::separator())
+                    .item(
+                        YtttMenuItem::new(
+                            text.get(UiTextKey::CommandLayoutResetLocalOverrideTitle),
+                        )
                         .action(Box::new(LayoutResetLocalOverride)),
-                )
-                .item(
-                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutOpenFileTitle))
-                        .action(Box::new(LayoutOpenFile)),
-                )
-                .item(PopupMenuItem::separator())
-                .item(
-                    PopupMenuItem::new(text.get(UiTextKey::CommandProjectCloseTitle))
-                        .action(Box::new(ProjectClose)),
-                )
-        })
+                    )
+                    .item(
+                        YtttMenuItem::new(text.get(UiTextKey::CommandLayoutOpenFileTitle))
+                            .action(Box::new(LayoutOpenFile)),
+                    )
+                    .item(YtttMenuItem::separator())
+                    .item(
+                        YtttMenuItem::new(text.get(UiTextKey::CommandProjectCloseTitle))
+                            .action(Box::new(ProjectClose)),
+                    )
+            },
+        )
 }
 
 #[cfg(test)]

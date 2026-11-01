@@ -15,9 +15,7 @@ use gpui::{
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
 use gpui_component::{
-    Disableable as _, IconName, IndexPath, Root, Theme,
-    input::InputState,
-    menu::{PopupMenu, PopupMenuItem},
+    Disableable as _, IconName, IndexPath, Theme, input::InputState, menu::PopupMenu,
     select::SelectState,
 };
 use yttt::{
@@ -29,12 +27,12 @@ use yttt::{
 };
 use yttt_ui::{
     SelectableState,
+    menu::{YtttMenu, YtttMenuItem, yttt_menu_preview},
     primitives::{
         button::{YtttButtonVariant, yttt_button, yttt_button_style},
         dialog::{yttt_dialog_style, yttt_dialog_surface},
         icon_button::{YtttIconButtonKind, yttt_icon_button},
         input::{YtttInputKind, yttt_input},
-        menu::yttt_popup_menu,
         notification::{YtttNotificationTone, yttt_notification_surface},
         radio::yttt_radio,
         row::{YtttRowKind, yttt_row},
@@ -226,16 +224,17 @@ impl Gallery {
                 cx,
             )
         });
-        let menu = PopupMenu::build(window, cx, move |menu, _, _| {
-            yttt_popup_menu(
-                menu.item(PopupMenuItem::new("Rename"))
-                    .item(PopupMenuItem::new("Duplicate"))
-                    .separator()
-                    .item(PopupMenuItem::new("Delete").disabled(true)),
-                theme,
-                ui_style,
-            )
-        });
+        let menu = yttt_menu_preview(
+            YtttMenu::default()
+                .item(YtttMenuItem::new("Rename"))
+                .item(YtttMenuItem::new("Duplicate"))
+                .item(YtttMenuItem::separator())
+                .item(YtttMenuItem::new("Delete").disabled(true)),
+            theme,
+            ui_style,
+            window,
+            cx,
+        );
         let tooltip = cx
             .new(|_| yttt_tooltip("Toggle Terminal", theme, ui_style))
             .into();
