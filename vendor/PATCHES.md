@@ -18,6 +18,7 @@
 | `replay_history` 返回改动起点 | `src/input/base/state.rs` | A | vim 撤销后光标要落在改动处，而不是恢复旧选区 | 上游提供撤销位置 |
 | 文本输入开关：`set_text_input_enabled`、`text_input_enabled` | `src/input/base/yttt_ext.rs`、`src/input/base/state.rs` | A | vim 普通模式要拦截输入法和编辑动作 | 上游提供输入开关 |
 | 光标形状：`InputCursorShape` | `src/input/base/yttt_ext.rs`、`src/input/base/state.rs`、`src/input/base/element.rs` | B | vim 普通模式显示块状光标 | 上游支持光标形状 |
+| `ScrollBounce::enabled_by_default` 恒为 false | `src/scroll_bounce.rs` | C | 0.8 起 macOS 默认回弹，Zed 不回弹。各组件默认值都经过这里，`Sidebar`、设置页、`TextView` 没有单独开关 | 有全局配置，或 yttt 决定采用回弹 |
 | `TreeState::focus_handle` | `src/tree.rs` | B | 判断焦点是否在文件树内 | P6 改用 `gpui_base::TreeState` 的公开焦点接口 |
 
 ## gpui-component

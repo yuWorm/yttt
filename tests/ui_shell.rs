@@ -555,6 +555,11 @@ fn right_clicking_a_tab_selects_the_context_menu_target(cx: &mut gpui::TestAppCo
     });
 }
 
+#[test]
+fn scroll_areas_do_not_bounce_by_default() {
+    assert!(!gpui_base::ScrollBounce::enabled_by_default());
+}
+
 /// Shows a notification through the real window list, which drives its
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(

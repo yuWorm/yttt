@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 //! Boundary displacement only: the list keeps its clamped logical position.
 
 use crate::overscroll::Overscroll;
@@ -170,11 +171,8 @@ impl ScrollBounce {
     /// Whether scroll areas bounce on this platform unless told otherwise:
     /// on iOS, Android and macOS, whose own scroll views do.
     pub const fn enabled_by_default() -> bool {
-        cfg!(any(
-            target_os = "ios",
-            target_os = "android",
-            target_os = "macos"
-        ))
+        // yttt patch: match Zed, which does not bounce. See vendor/PATCHES.md.
+        false
     }
 
     /// Turn the bounce on or off. Defaults to [`Self::enabled_by_default`].

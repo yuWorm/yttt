@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：任务 1.0 到 1.5 完成；P0 剩余项见下方进度
+- 状态：任务 1.0 到 1.6 完成；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -218,6 +218,8 @@ P3 之后的 PR 都能单独发布，界面只会逐步更接近 Zed。
 退出：L0 通过。
 
 ### 任务 1.6：抑制默认行为变化（S）
+
+已完成，方式和下方清单不同：没有逐个调用 `.scroll_bounce(false)`，而是把 `ScrollBounce::enabled_by_default` 改为 false，没有开关的组件也一并覆盖。Tooltip、Dialog、Tabs 的动画在迁移前就已存在，不算新行为。
 
 - [ ] 所有使用到的 `List`、`Tree`、`Select`、`Scrollable`、`Command` 设置 `.scroll_bounce(false)`。
 - [ ] 找出没有开关的组件，记录到 P2、P3 的替换清单。
