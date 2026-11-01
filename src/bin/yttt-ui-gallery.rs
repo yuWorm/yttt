@@ -46,7 +46,7 @@ use yttt_ui::{
 };
 
 const WINDOW_WIDTH: f32 = 960.;
-const WINDOW_HEIGHT: f32 = 860.;
+const WINDOW_HEIGHT: f32 = 900.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
                      [--screenshot PATH] [--dump-layout PATH]";
@@ -328,6 +328,7 @@ impl Gallery {
             ("default", YtttButtonSize::Default),
             ("medium", YtttButtonSize::Medium),
             ("large", YtttButtonSize::Large),
+            ("Trust and Continue", YtttButtonSize::Compact),
         ]
         .into_iter()
         .map(|(name, size)| {

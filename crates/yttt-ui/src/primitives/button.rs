@@ -131,7 +131,7 @@ pub fn yttt_button_base(
         .h(ui_style.controls.button_height)
         .px(ui_style.controls.button_padding_x)
         .gap_1()
-        .text_xs()
+        .text_size(ui_style.controls.button_text_size)
         .cursor_pointer()
         .rounded(style.radius)
         .when(outlined, |button| button.border_1())

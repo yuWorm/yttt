@@ -34,6 +34,8 @@ fn yttt_value(name: &str, style: UiStyle) -> Option<f32> {
         "button_compact_height_px" => Some(rems_px(style.controls.button_compact_height)),
         "button_medium_height_px" => Some(rems_px(style.controls.button_medium_height)),
         "button_large_height_px" => Some(rems_px(style.controls.button_large_height)),
+        "button_padding_px" => Some(rems_px(style.controls.button_padding_x)),
+        "button_text_px" => Some(rems_px(style.controls.button_text_size)),
         "tab_height_px" => Some(rems_px(tabs.height)),
         "tab_radius_px" => pixels(style.rows.tab_radius),
         "text_ui_px" => Some(rems_px(style.text.default)),

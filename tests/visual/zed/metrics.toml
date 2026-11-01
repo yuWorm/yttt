@@ -39,3 +39,14 @@ aligned = true
 name = "button_large_height_px"
 zed = 32.0
 aligned = true
+
+# Measured on Zed 1.26.2 from the trust modal's footer buttons.
+[[metric]]
+name = "button_padding_px"
+zed = 4.0
+aligned = true
+
+[[metric]]
+name = "button_text_px"
+zed = 14.0
+aligned = true
