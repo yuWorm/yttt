@@ -1188,22 +1188,26 @@ impl Render for ProjectTreeView {
                 let cut_path = path.clone();
                 let paste_view = menu_view.clone();
 
-                menu.item(YtttMenuItem::new(text.new_file.clone()).on_click(
-                    move |_, window, cx| {
-                        let row = new_file_row.clone();
-                        let _ = new_file_view.update(cx, |view, view_cx| {
-                            view.begin_create(Some(row), false, window, view_cx);
-                        });
-                    },
-                ))
-                .item(YtttMenuItem::new(text.new_directory.clone()).on_click(
-                    move |_, window, cx| {
-                        let row = new_directory_row.clone();
-                        let _ = new_directory_view.update(cx, |view, view_cx| {
-                            view.begin_create(Some(row), true, window, view_cx);
-                        });
-                    },
-                ))
+                menu.item(
+                    YtttMenuItem::new(text.new_file.clone())
+                        .shortcut(Box::new(ProjectTreeNewFile))
+                        .on_click(move |_, window, cx| {
+                            let row = new_file_row.clone();
+                            let _ = new_file_view.update(cx, |view, view_cx| {
+                                view.begin_create(Some(row), false, window, view_cx);
+                            });
+                        }),
+                )
+                .item(
+                    YtttMenuItem::new(text.new_directory.clone())
+                        .shortcut(Box::new(ProjectTreeNewDirectory))
+                        .on_click(move |_, window, cx| {
+                            let row = new_directory_row.clone();
+                            let _ = new_directory_view.update(cx, |view, view_cx| {
+                                view.begin_create(Some(row), true, window, view_cx);
+                            });
+                        }),
+                )
                 .item(
                     YtttMenuItem::new(text.create_project_layout.clone()).on_click(
                         move |_, _, cx| {
@@ -1236,53 +1240,64 @@ impl Render for ProjectTreeView {
                 )
                 .item(YtttMenuItem::separator())
                 .item(
-                    YtttMenuItem::new(text.cut.clone()).on_click(move |_, _, cx| {
-                        if !shared_mutation_allowed {
-                            return;
-                        }
-                        let _ = cut_view.update(cx, |_, view_cx| {
-                            view_cx.emit(ProjectTreeViewEvent::CutEntry(cut_path.clone()));
-                        });
-                    }),
-                )
-                .item(
-                    YtttMenuItem::new(text.copy.clone()).on_click(move |_, _, cx| {
-                        let _ = copy_view.update(cx, |_, view_cx| {
-                            view_cx.emit(ProjectTreeViewEvent::CopyEntry(copy_path.clone()));
-                        });
-                    }),
-                )
-                .item(
-                    YtttMenuItem::new(text.paste.clone()).on_click(move |_, _, cx| {
-                        if !shared_mutation_allowed {
-                            return;
-                        }
-                        let destination_directory = destination_directory.clone();
-                        let _ = paste_view.update(cx, |_, view_cx| {
-                            view_cx.emit(ProjectTreeViewEvent::PasteEntry {
-                                destination_directory,
+                    YtttMenuItem::new(text.cut.clone())
+                        .shortcut(Box::new(ProjectTreeCut))
+                        .on_click(move |_, _, cx| {
+                            if !shared_mutation_allowed {
+                                return;
+                            }
+                            let _ = cut_view.update(cx, |_, view_cx| {
+                                view_cx.emit(ProjectTreeViewEvent::CutEntry(cut_path.clone()));
                             });
-                        });
-                    }),
+                        }),
+                )
+                .item(
+                    YtttMenuItem::new(text.copy.clone())
+                        .shortcut(Box::new(ProjectTreeCopy))
+                        .on_click(move |_, _, cx| {
+                            let _ = copy_view.update(cx, |_, view_cx| {
+                                view_cx.emit(ProjectTreeViewEvent::CopyEntry(copy_path.clone()));
+                            });
+                        }),
+                )
+                .item(
+                    YtttMenuItem::new(text.paste.clone())
+                        .shortcut(Box::new(ProjectTreePaste))
+                        .on_click(move |_, _, cx| {
+                            if !shared_mutation_allowed {
+                                return;
+                            }
+                            let destination_directory = destination_directory.clone();
+                            let _ = paste_view.update(cx, |_, view_cx| {
+                                view_cx.emit(ProjectTreeViewEvent::PasteEntry {
+                                    destination_directory,
+                                });
+                            });
+                        }),
                 )
                 .item(YtttMenuItem::separator())
                 .item(
-                    YtttMenuItem::new(text.rename.clone()).on_click(move |_, window, cx| {
-                        let row = rename_row.clone();
-                        let _ = rename_view.update(cx, |view, view_cx| {
-                            view.begin_rename(row, window, view_cx);
-                        });
-                    }),
+                    YtttMenuItem::new(text.rename.clone())
+                        .shortcut(Box::new(ProjectTreeRename))
+                        .on_click(move |_, window, cx| {
+                            let row = rename_row.clone();
+                            let _ = rename_view.update(cx, |view, view_cx| {
+                                view.begin_rename(row, window, view_cx);
+                            });
+                        }),
                 )
                 .item(
-                    YtttMenuItem::new(text.delete.clone()).on_click(move |_, _, cx| {
-                        if !shared_mutation_allowed {
-                            return;
-                        }
-                        let _ = delete_view.update(cx, |_, view_cx| {
-                            view_cx.emit(ProjectTreeViewEvent::RequestDelete(delete_path.clone()));
-                        });
-                    }),
+                    YtttMenuItem::new(text.delete.clone())
+                        .shortcut(Box::new(ProjectTreeDelete))
+                        .on_click(move |_, _, cx| {
+                            if !shared_mutation_allowed {
+                                return;
+                            }
+                            let _ = delete_view.update(cx, |_, view_cx| {
+                                view_cx
+                                    .emit(ProjectTreeViewEvent::RequestDelete(delete_path.clone()));
+                            });
+                        }),
                 )
             };
             menu.into_popup_menu(popup, theme, ui_style)

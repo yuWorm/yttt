@@ -623,6 +623,8 @@ fn switch_toggles_with_pointer_and_keyboard(cx: &mut gpui::TestAppContext) {
     assert_eq!(changes.get(), 2, "keyboard should toggle");
 }
 
+gpui::actions!(menu_harness, [MenuBoundAction, MenuUnboundAction]);
+
 struct MenuHarness {
     activated: Rc<Cell<usize>>,
     focus: gpui::FocusHandle,
@@ -651,10 +653,18 @@ impl gpui::Render for MenuHarness {
                 appearance,
                 move |menu, _, _| {
                     let activated = activated.clone();
-                    menu.item(YtttMenuItem::new("Off").disabled(true)).item(
-                        YtttMenuItem::new("Run")
-                            .on_click(move |_, _, _| activated.set(activated.get() + 1)),
-                    )
+                    menu.item(YtttMenuItem::new("Off").disabled(true))
+                        .item(
+                            YtttMenuItem::new("Run")
+                                .on_click(move |_, _, _| activated.set(activated.get() + 1)),
+                        )
+                        .item(YtttMenuItem::new("Bound").action(Box::new(MenuBoundAction)))
+                        .item(
+                            YtttMenuItem::new("Marked")
+                                .on_click(|_, _, _| {})
+                                .shortcut(Box::new(MenuBoundAction)),
+                        )
+                        .item(YtttMenuItem::new("Unbound").action(Box::new(MenuUnboundAction)))
                 },
             ))
     }
@@ -763,6 +773,19 @@ fn menu_stays_inside_the_window_near_its_edge(cx: &mut gpui::TestAppContext) {
 
     assert!(menu.right() <= window.width, "{menu:?} in {window:?}");
     assert!(menu.bottom() <= window.height, "{menu:?} in {window:?}");
+}
+
+#[gpui::test]
+fn menu_rows_show_the_bindings_of_their_actions(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        cx.bind_keys([gpui::KeyBinding::new("cmd-k cmd-j", MenuBoundAction, None)]);
+    });
+    let (cx, _, _) = open_harness_menu(cx);
+
+    assert!(cx.debug_bounds("yttt-menu-shortcut-2").is_some());
+    assert!(cx.debug_bounds("yttt-menu-shortcut-3").is_some());
+    assert!(cx.debug_bounds("yttt-menu-shortcut-1").is_none());
+    assert!(cx.debug_bounds("yttt-menu-shortcut-4").is_none());
 }
 
 #[gpui::test]

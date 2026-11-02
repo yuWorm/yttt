@@ -1,9 +1,9 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Action, Anchor, AnyElement, App, Bounds, ClickEvent, Context, Div, FocusHandle, IntoElement,
-    MouseButton, MouseDownEvent, Pixels, Point, Render, SharedString, Window, canvas, deferred,
-    div, point, prelude::*, px, rems,
+    Action, Anchor, AnyElement, App, AsKeystroke as _, Bounds, ClickEvent, Context, Div,
+    FocusHandle, IntoElement, Keystroke, MouseButton, MouseDownEvent, Pixels, Point, Render,
+    SharedString, Window, canvas, deferred, div, point, prelude::*, px, rems,
 };
 use gpui_base::{
     Button, Positioner, Root, RootPlugin,
@@ -15,6 +15,7 @@ use gpui_component::{
 };
 
 use crate::{
+    primitives::kbd::yttt_kbd,
     style::{UiStyle, UiStyleId},
     surface::{UiElevation, YtttSurface as _, floating_shadows},
     theme::WorkbenchTheme,
@@ -38,6 +39,7 @@ pub struct YtttMenuItem {
     disabled: bool,
     checked: bool,
     target: MenuTarget,
+    shortcut: Option<Box<dyn Action>>,
 }
 
 impl YtttMenuItem {
@@ -47,6 +49,7 @@ impl YtttMenuItem {
             disabled: false,
             checked: false,
             target: MenuTarget::None,
+            shortcut: None,
         }
     }
 
@@ -56,6 +59,7 @@ impl YtttMenuItem {
             disabled: false,
             checked: false,
             target: MenuTarget::None,
+            shortcut: None,
         }
     }
 
@@ -72,6 +76,19 @@ impl YtttMenuItem {
     pub fn action(mut self, action: Box<dyn Action>) -> Self {
         self.target = MenuTarget::Action(action);
         self
+    }
+
+    /// Shows the binding of `action` on a row that runs a handler.
+    pub fn shortcut(mut self, action: Box<dyn Action>) -> Self {
+        self.shortcut = Some(action);
+        self
+    }
+
+    fn shortcut_action(&self) -> Option<&dyn Action> {
+        match &self.target {
+            MenuTarget::Action(action) => Some(action.as_ref()),
+            _ => self.shortcut.as_deref(),
+        }
     }
 
     pub fn on_click(
@@ -102,12 +119,18 @@ impl YtttMenuItem {
         let item = PopupMenuItem::new(label)
             .disabled(self.disabled)
             .checked(self.checked);
-        match self.target {
+        let item = match self.target {
             MenuTarget::None => item,
             MenuTarget::Action(action) => item.action(action),
             MenuTarget::Handler(handler) => {
                 item.on_click(move |event, window, cx| handler(event, window, cx))
             }
+        };
+        // gpui-component runs a handler in preference to the action, so this
+        // only adds the binding to the row.
+        match self.shortcut {
+            Some(action) => item.action(action),
+            None => item,
         }
     }
 }
@@ -166,7 +189,12 @@ fn menu_row_height() -> gpui::Rems {
     rems(1.40625)
 }
 
-fn menu_row(item: &YtttMenuItem, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
+fn menu_row(
+    item: &YtttMenuItem,
+    shortcut: &[Keystroke],
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
     let Some(label) = item.label.clone() else {
         return div()
             .my(rems(0.375))
@@ -187,9 +215,21 @@ fn menu_row(item: &YtttMenuItem, theme: WorkbenchTheme, ui_style: UiStyle) -> Di
             theme.text
         })
         .child(label)
-        .when(item.checked, |row| {
-            row.child(Icon::new(IconName::Check).xsmall())
-        })
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(rems(0.25))
+                .when(item.checked, |row| {
+                    row.child(Icon::new(IconName::Check).xsmall())
+                })
+                .children(
+                    shortcut
+                        .iter()
+                        .map(|stroke| yttt_kbd(stroke.clone(), theme, ui_style)),
+                ),
+        )
 }
 
 fn menu_surface(theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
@@ -210,6 +250,7 @@ struct OpenMenu {
     position: Point<Pixels>,
     action_context: Option<FocusHandle>,
     items: Vec<YtttMenuItem>,
+    shortcuts: Vec<Vec<Keystroke>>,
     highlighted: Option<usize>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
@@ -300,8 +341,11 @@ impl Render for MenuLayer {
         let selected = ui_style.active_background(theme);
         let rows = open.items.iter().enumerate().map(|(index, item)| {
             let enabled = !item.is_separator() && !item.disabled;
-            menu_row(item, theme, ui_style)
+            menu_row(item, &open.shortcuts[index], theme, ui_style)
                 .id(index)
+                .when(!open.shortcuts[index].is_empty(), |row| {
+                    row.debug_selector(move || format!("yttt-menu-shortcut-{index}"))
+                })
                 .when(open.highlighted == Some(index) && enabled, |row| {
                     row.bg(selected)
                 })
@@ -350,6 +394,28 @@ impl Render for MenuLayer {
     }
 }
 
+/// The keys bound to `action` where the menu's action would run, falling back
+/// to bindings that apply everywhere.
+fn shortcut_keys(
+    action: &dyn Action,
+    contexts: &[Option<&FocusHandle>],
+    window: &Window,
+) -> Vec<Keystroke> {
+    contexts
+        .iter()
+        .flatten()
+        .find_map(|handle| window.highest_precedence_binding_for_action_in(action, handle))
+        .or_else(|| window.highest_precedence_binding_for_action(action))
+        .map(|binding| {
+            binding
+                .keystrokes()
+                .iter()
+                .map(|stroke| stroke.as_keystroke().clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn menu_layer(window: &Window, cx: &App) -> Option<gpui::Entity<MenuLayer>> {
     window
         .root::<Root>()
@@ -381,12 +447,23 @@ fn open_menu(
     let (theme, ui_style) = appearance(cx);
     let focus_handle = cx.focus_handle();
     let previous_focus = window.focused(cx);
+    let contexts = [menu.action_context.as_ref(), previous_focus.as_ref()];
+    let shortcuts = menu
+        .items
+        .iter()
+        .map(|item| {
+            item.shortcut_action()
+                .map(|action| shortcut_keys(action, &contexts, window))
+                .unwrap_or_default()
+        })
+        .collect();
     focus_handle.focus(window, cx);
     layer.update(cx, |layer, cx| {
         layer.open = Some(OpenMenu {
             position,
             action_context: menu.action_context,
             items: menu.items,
+            shortcuts,
             highlighted: None,
             theme,
             ui_style,
@@ -488,7 +565,7 @@ pub fn yttt_menu_preview(menu: &YtttMenu, theme: WorkbenchTheme, ui_style: UiSty
         .children(
             menu.items
                 .iter()
-                .map(|item| menu_row(item, theme, ui_style)),
+                .map(|item| menu_row(item, &[], theme, ui_style)),
         )
         .into_any_element()
 }
