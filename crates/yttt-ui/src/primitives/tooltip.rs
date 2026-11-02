@@ -1,8 +1,5 @@
 use gpui::{Styled as _, px, rems};
-use gpui_component::{
-    text::Text,
-    tooltip::{Tooltip, TooltipAppearance},
-};
+use gpui_component::{text::Text, tooltip::Tooltip};
 
 use crate::{
     style::{UiStyle, UiStyleId},
@@ -21,7 +18,6 @@ pub fn yttt_tooltip(text: impl Into<Text>, theme: WorkbenchTheme, ui_style: UiSt
     }
 
     Tooltip::new(text)
-        .appearance(TooltipAppearance::new().key_binding_foreground(theme.text_muted))
         .m(px(0.))
         .ml(rems(0.5))
         .mt(rems(0.625))

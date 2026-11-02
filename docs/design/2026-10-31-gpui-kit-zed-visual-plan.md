@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：M1、P2 已合入，P3 完成，待开 PR；P0 剩余项见下方进度
+- 状态：M1、P2 已合入，P3 和 P3.5 完成，待开 PR；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -320,6 +320,18 @@ CI 已通过（提交 `a3d10d9`，Run 41287845986）：macOS 917 过，Linux 148
 | 3.7 | Scrollbar | S | 与编辑器共享外观 |
 
 **P3 退出门禁：** 所列组件的 L1、L3 通过或进入例外清单；Compact、Medium、Large 三种按钮均已覆盖。
+
+## 5.5 P3.5：控件换到 `gpui-base`
+
+P3 只对齐外观时，开关和标签仍是自绘 `div`，缺少键盘和无障碍语义，所以补做这一阶段。结果（2026-11-02）：
+
+- 开关：改用 `gpui_base::Switch`，支持键盘、焦点样式和 Switch 角色，有行为测试。
+- 标签：改用 `gpui_base::Tab`，获得 Tab 角色。`gpui_base` 的注释说明它还没有键盘导航，所以这一项没有键盘收益。项目标签文字改为 14px。
+- Radio：`gpui_component::Radio` 内部已经是 `gpui_base::Radio`，`RadioGroup` 也依赖它，不重写，只删本地补丁。
+- Tooltip：`TooltipAppearance` 补丁多余，已删除。延迟沿用上游 500ms，未接入新的 token。
+- Input：底层已是 `gpui-base`，不动。Select 在 P5，菜单在 P4。
+
+gpui-shell 是 JavaScript 插件运行时，不是主题系统，不在本计划范围内。主题 token 在 `gpui-base`，不依赖 shell。
 
 ## 6. P4：浮层与菜单
 
