@@ -3,14 +3,20 @@ pub mod surface;
 
 use gpui::{AnyElement, App, ClickEvent, Entity, IntoElement, ScrollHandle, Window};
 use gpui_component::input::InputState;
+use yttt_ui::{
+    IconName,
+    picker::{PickerFooterAction, PickerText},
+};
 
 use crate::palette::{ActivePalette, PaletteItem, PaletteKind};
 use crate::ui::components::SelectableState;
+use crate::ui::components::workbench_keybinding_badge;
 use crate::ui::i18n::{UiText, UiTextKey};
 use crate::ui::palette::picker::{
     PalettePickerDelegate, PickerDelegate, PickerItem, PickerOverlayRow, PickerState,
     picker_overlay, picker_overlay_with_preview,
 };
+use crate::ui::palette::surface::palette_footer_actions;
 use crate::ui::theme::{UiStyle, WorkbenchTheme};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,10 +35,7 @@ pub fn visible_palette_rows(
     active_palette: &ActivePalette,
     items: &[PaletteItem],
 ) -> Vec<PaletteRow> {
-    let picker_items = items
-        .iter()
-        .map(PickerItem::from_palette_item)
-        .collect::<Vec<_>>();
+    let picker_items = items.iter().map(PickerItem::from).collect::<Vec<_>>();
     let picker_state = PickerState {
         query: active_palette.query.clone(),
         selected_index: active_palette.selected_index,
@@ -92,20 +95,19 @@ where
     let rows = visible_items
         .into_iter()
         .enumerate()
-        .map(|(index, item)| PickerOverlayRow {
-            item: item.clone(),
-            state: if Some(index) == selected_index {
+        .map(|(index, item)| {
+            let state = if Some(index) == selected_index {
                 SelectableState::Active
             } else {
                 SelectableState::Inactive
-            },
+            };
+            palette_row(active_palette.kind, item, state, theme, ui_style)
         })
         .collect::<Vec<_>>();
 
     picker_overlay(
         rows,
-        active_palette.kind,
-        ui_text,
+        palette_text(ui_text, theme, ui_style),
         query_input,
         scroll_handle,
         theme,
@@ -139,20 +141,19 @@ where
         .items()
         .iter()
         .enumerate()
-        .map(|(index, item)| PickerOverlayRow {
-            item: item.clone(),
-            state: if Some(index) == selected_index {
+        .map(|(index, item)| {
+            let state = if Some(index) == selected_index {
                 SelectableState::Active
             } else {
                 SelectableState::Inactive
-            },
+            };
+            palette_row(active_palette.kind, item, state, theme, ui_style)
         })
         .collect();
 
     picker_overlay_with_preview(
         rows,
-        active_palette.kind,
-        ui_text,
+        palette_text(ui_text, theme, ui_style),
         query_input,
         scroll_handle,
         preview,
@@ -160,6 +161,62 @@ where
         ui_style,
         on_confirm_item,
     )
+}
+
+fn palette_row(
+    kind: PaletteKind,
+    item: &PickerItem,
+    state: SelectableState,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> PickerOverlayRow {
+    let status = if !item.enabled {
+        item.disabled_reason.clone().unwrap_or_default()
+    } else if matches!(kind, PaletteKind::Project | PaletteKind::RecentProject) {
+        String::new()
+    } else {
+        item.status.clone().unwrap_or_default()
+    };
+    PickerOverlayRow {
+        state,
+        status,
+        show_subtitle: kind != PaletteKind::Command || ui_style.palette.show_command_subtitles,
+        icon: picker_item_icon(kind, &item.id),
+        keybinding: item
+            .keybinding
+            .clone()
+            .filter(|keybinding| !keybinding.trim().is_empty())
+            .map(|keybinding| workbench_keybinding_badge(keybinding, theme, ui_style)),
+        item: item.clone(),
+    }
+}
+
+fn picker_item_icon(kind: PaletteKind, item_id: &str) -> Option<IconName> {
+    match kind {
+        PaletteKind::Command => None,
+        PaletteKind::NewTabCommand | PaletteKind::Pane => Some(IconName::SquareTerminal),
+        PaletteKind::File => Some(IconName::File),
+        PaletteKind::Project | PaletteKind::OpenedProject | PaletteKind::RecentProject => {
+            Some(IconName::FolderClosed)
+        }
+        PaletteKind::Tab if item_id.starts_with("file:") => Some(IconName::File),
+        PaletteKind::Tab => Some(IconName::SquareTerminal),
+        PaletteKind::GitBranch => Some(IconName::Network),
+        PaletteKind::WorkspaceHistory => Some(IconName::FolderClosed),
+    }
+}
+
+fn palette_text(ui_text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> PickerText {
+    PickerText {
+        no_results: palette_empty_label(ui_text).into(),
+        footer: palette_footer_actions(ui_text)
+            .into_iter()
+            .map(|action| PickerFooterAction {
+                label: action.label.into(),
+                key: workbench_keybinding_badge(action.key, theme, ui_style),
+            })
+            .collect(),
+    }
 }
 
 fn visible_picker_items<'a>(

@@ -9,9 +9,7 @@ pub struct PaletteFooterAction {
     pub key: &'static str,
 }
 
-pub fn palette_scroll_anchor_index(selected_index: usize) -> Option<usize> {
-    (selected_index > 0).then(|| selected_index.saturating_sub(4))
-}
+pub use yttt_ui::picker::picker_scroll_anchor_index as palette_scroll_anchor_index;
 
 pub fn palette_footer_actions(ui_text: &UiText) -> Vec<PaletteFooterAction> {
     vec![

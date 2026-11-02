@@ -1,37 +1,53 @@
 use gpui::{
-    AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement, ScrollHandle,
-    StatefulInteractiveElement as _, Window, div, prelude::*, px, relative,
+    AnyElement, App, ClickEvent, Div, ElementId, Entity, InteractiveElement as _, IntoElement,
+    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, Window, div, prelude::*,
+    px, relative,
 };
 use gpui_component::input::InputState;
-use yttt_ui::IconName;
 
-use crate::palette::PaletteKind;
-
-use crate::ui::{
-    components::{SelectableState, workbench_palette_item},
-    i18n::{UiText, UiTextKey},
-    palette::picker::PickerItem,
-    palette::surface::{PaletteFooterAction, palette_footer_actions, palette_scroll_anchor_index},
+use super::PickerItem;
+use crate::{
+    Icon, IconName, SelectableState,
     primitives::{
         input::{YtttInputKind, yttt_input},
         panel::{
             YtttOverlayPlacement, YtttPanelKind, yttt_panel, yttt_panel_overlay, yttt_panel_style,
         },
-        row::{YtttRowKind, yttt_row_style},
+        row::{YtttRowKind, yttt_row, yttt_row_style},
     },
-    theme::{UiStyle, WorkbenchTheme},
+    style::UiStyle,
+    theme::WorkbenchTheme,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One row, with its presentation already decided by the caller.
 pub struct PickerOverlayRow {
     pub item: PickerItem,
     pub state: SelectableState,
+    pub status: String,
+    pub show_subtitle: bool,
+    pub icon: Option<IconName>,
+    pub keybinding: Option<AnyElement>,
+}
+
+pub struct PickerFooterAction {
+    pub label: SharedString,
+    pub key: AnyElement,
+}
+
+/// Localized text a picker shows around its rows.
+pub struct PickerText {
+    pub no_results: SharedString,
+    pub footer: Vec<PickerFooterAction>,
+}
+
+/// Keeps the selection a few rows below the top of the list.
+pub fn picker_scroll_anchor_index(selected_index: usize) -> Option<usize> {
+    (selected_index > 0).then(|| selected_index.saturating_sub(4))
 }
 
 pub fn picker_overlay<H, F>(
     rows: Vec<PickerOverlayRow>,
-    kind: PaletteKind,
-    ui_text: &UiText,
+    text: PickerText,
     query_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
@@ -42,6 +58,7 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
+    let PickerText { no_results, footer } = text;
     yttt_panel_overlay(
         yttt_panel(YtttPanelKind::Palette, theme, ui_style)
             .p_0()
@@ -49,14 +66,13 @@ where
             .child(picker_header(query_input, theme, ui_style))
             .child(picker_items(
                 rows,
-                kind,
-                ui_text,
+                no_results,
                 scroll_handle,
                 theme,
                 ui_style,
                 on_confirm_item,
             ))
-            .child(picker_footer(ui_text, theme, ui_style)),
+            .child(picker_footer(footer, theme, ui_style)),
         YtttPanelKind::Palette,
         YtttOverlayPlacement::Top,
         theme,
@@ -64,10 +80,10 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn picker_overlay_with_preview<H, F>(
     rows: Vec<PickerOverlayRow>,
-    kind: PaletteKind,
-    ui_text: &UiText,
+    text: PickerText,
     query_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
     preview: AnyElement,
@@ -79,6 +95,7 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
+    let PickerText { no_results, footer } = text;
     yttt_panel_overlay(
         yttt_panel(YtttPanelKind::Palette, theme, ui_style)
             .w(relative(0.88))
@@ -102,8 +119,7 @@ where
                             .overflow_hidden()
                             .child(picker_items(
                                 rows,
-                                kind,
-                                ui_text,
+                                no_results,
                                 scroll_handle,
                                 theme,
                                 ui_style,
@@ -123,7 +139,7 @@ where
                             .child(preview),
                     ),
             )
-            .child(picker_footer(ui_text, theme, ui_style)),
+            .child(picker_footer(footer, theme, ui_style)),
         YtttPanelKind::Palette,
         YtttOverlayPlacement::Top,
         theme,
@@ -131,7 +147,7 @@ where
     )
 }
 
-pub(crate) fn picker_header(
+pub fn picker_header(
     query_input: &Entity<InputState>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
@@ -154,8 +170,7 @@ pub(crate) fn picker_header(
 
 fn picker_items<H, F>(
     rows: Vec<PickerOverlayRow>,
-    kind: PaletteKind,
-    ui_text: &UiText,
+    no_results: SharedString,
     scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
@@ -181,7 +196,7 @@ where
             .p(ui_style.spacing.xl)
             .text_sm()
             .text_color(theme.text_subtle)
-            .child(ui_text.get(UiTextKey::NoResults))
+            .child(no_results)
             .into_any_element();
     }
 
@@ -189,7 +204,7 @@ where
         .iter()
         .position(|row| row.state == SelectableState::Active)
         .unwrap_or(0);
-    if let Some(index) = palette_scroll_anchor_index(selected_index) {
+    if let Some(index) = picker_scroll_anchor_index(selected_index) {
         scroll_handle.scroll_to_top_of_item(index);
     }
 
@@ -211,7 +226,6 @@ where
                 list.child(picker_item(
                     row,
                     index,
-                    kind,
                     theme,
                     ui_style,
                     on_confirm_item(index),
@@ -224,63 +238,118 @@ where
 fn picker_item<H>(
     row: PickerOverlayRow,
     index: usize,
-    kind: PaletteKind,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     on_click: H,
-) -> impl IntoElement
+) -> Stateful<Div>
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let status = if !row.item.enabled {
-        row.item.disabled_reason.clone().unwrap_or_default()
-    } else if matches!(kind, PaletteKind::Project | PaletteKind::RecentProject) {
-        String::new()
-    } else {
-        row.item.status.clone().unwrap_or_default()
-    };
-    let subtitle = row.item.subtitle.unwrap_or_default();
-    let show_subtitle = !subtitle.trim().is_empty()
-        && (kind != PaletteKind::Command || ui_style.palette.show_command_subtitles);
+    picker_row(("palette-item", index), row, theme, ui_style, on_click)
+}
+
+/// A picker row for lists that manage their own layout.
+pub fn picker_row<H>(
+    id: impl Into<ElementId>,
+    row: PickerOverlayRow,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    on_click: H,
+) -> Stateful<Div>
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let PickerOverlayRow {
+        item,
+        state,
+        status,
+        show_subtitle,
+        icon,
+        keybinding,
+    } = row;
+    let subtitle = item.subtitle.unwrap_or_default();
+    let show_subtitle = show_subtitle && !subtitle.trim().is_empty();
     let row_kind = if show_subtitle {
         YtttRowKind::Palette
     } else {
         YtttRowKind::PaletteCompact
     };
-    let leading_icon = picker_item_icon(kind, &row.item.id);
+    let style = yttt_row_style(row_kind, state, item.enabled, theme, ui_style);
 
-    workbench_palette_item(
-        ("palette-item", index),
-        row.item.title,
-        subtitle,
-        status,
-        row.item.keybinding,
-        leading_icon,
-        row_kind,
-        row.state,
-        row.item.enabled,
-        theme,
-        ui_style,
-        on_click,
-    )
+    yttt_row(row_kind, state, item.enabled, theme, ui_style)
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(ui_style.palette.item_content_gap)
+        .on_click(on_click)
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap(ui_style.palette.item_content_gap)
+                .children(icon.map(|icon| {
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .w(ui_style.palette.icon_column_width)
+                        .child(
+                            Icon::new(icon)
+                                .size(ui_style.palette.icon_size)
+                                .text_color(style.subtitle),
+                        )
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .gap(ui_style.spacing.xs)
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(style.title)
+                                .truncate()
+                                .child(item.title),
+                        )
+                        .children(show_subtitle.then(|| {
+                            div()
+                                .text_xs()
+                                .text_color(style.subtitle)
+                                .truncate()
+                                .child(subtitle)
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(ui_style.spacing.md)
+                .when(!status.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(style.status)
+                            .truncate()
+                            .child(status),
+                    )
+                })
+                .children(keybinding),
+        )
 }
 
-fn picker_item_icon(kind: PaletteKind, item_id: &str) -> Option<IconName> {
-    match kind {
-        PaletteKind::Command => None,
-        PaletteKind::NewTabCommand | PaletteKind::Pane => Some(IconName::SquareTerminal),
-        PaletteKind::File => Some(IconName::File),
-        PaletteKind::Project | PaletteKind::OpenedProject | PaletteKind::RecentProject => {
-            Some(IconName::FolderClosed)
-        }
-        PaletteKind::Tab if item_id.starts_with("file:") => Some(IconName::File),
-        PaletteKind::Tab => Some(IconName::SquareTerminal),
-        PaletteKind::GitBranch => Some(IconName::Network),
-        PaletteKind::WorkspaceHistory => Some(IconName::FolderClosed),
-    }
-}
-
-fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
+fn picker_footer(
+    actions: Vec<PickerFooterAction>,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
     div()
         .flex()
         .items_center()
@@ -292,33 +361,12 @@ fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> 
         .px(ui_style.spacing.lg)
         .text_sm()
         .text_color(theme.text_muted)
-        .children(
-            palette_footer_actions(ui_text)
-                .into_iter()
-                .map(|action| picker_footer_action(action, theme, ui_style)),
-        )
-}
-
-fn picker_footer_action(
-    action: PaletteFooterAction,
-    theme: WorkbenchTheme,
-    ui_style: UiStyle,
-) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(ui_style.palette.footer_action_gap)
-        .child(div().text_color(theme.text).child(action.label))
-        .child(
+        .children(actions.into_iter().map(|action| {
             div()
-                .text_color(theme.text_muted)
-                .when(ui_style.palette.bordered_shortcuts, |this| {
-                    this.rounded(ui_style.radius.compact)
-                        .border(ui_style.border.hairline)
-                        .border_color(theme.border)
-                        .bg(theme.surface_elevated)
-                        .px(ui_style.spacing.xs)
-                })
-                .child(action.key),
-        )
+                .flex()
+                .items_center()
+                .gap(ui_style.palette.footer_action_gap)
+                .child(div().text_color(theme.text).child(action.label))
+                .child(action.key)
+        }))
 }

@@ -1193,7 +1193,7 @@ fn palette_profiles_centralize_row_density_and_surface_treatment() {
     );
 
     assert_eq!(active.height, gpui::rems(3.0));
-    assert_eq!(compact.height, gpui::rems(2.25));
+    assert_eq!(compact.height, gpui::rems(2.03125));
     assert_eq!(active.radius, gpui::px(4.0));
     assert_eq!(active.background, theme.ghost_element_selected);
     assert_eq!(active.title, theme.text);
@@ -1782,8 +1782,8 @@ fn shared_control_density_tracks_ui_font_size(cx: &mut gpui::TestAppContext) {
     assert_eq!(enlarged_icon.size.height, gpui::px(35.0));
     assert_eq!(compact_switch.size.height, gpui::px(24.0));
     assert_eq!(enlarged_switch.size.height, gpui::px(40.0));
-    assert_eq!(compact_palette.size.width, gpui::px(34.0 * 12.0));
-    assert_eq!(enlarged_palette.size.width, gpui::px(34.0 * 20.0));
+    assert_eq!(compact_palette.size.width, gpui::px(455.0));
+    assert_eq!(enlarged_palette.size.width, gpui::px(758.5));
 }
 
 #[test]

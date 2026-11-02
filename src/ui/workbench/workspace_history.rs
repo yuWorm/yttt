@@ -5,14 +5,13 @@ use yttt_protocol::workspace::{
     WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary,
 };
 use yttt_ui::menu::{YtttDropdownMenu as _, YtttMenuItem};
+use yttt_ui::picker::picker_row;
 use yttt_ui::primitives::button::YtttButtonExt as _;
 
 use crate::ui::{
-    components::workbench_palette_item,
     i18n::Locale,
-    palette::picker::picker_header,
+    palette::picker::{PickerItem, PickerOverlayRow, picker_header},
     primitives::panel::{YtttOverlayPlacement, YtttPanelKind, yttt_panel, yttt_panel_overlay},
-    primitives::row::YtttRowKind,
     theme::current_workbench_theme,
 };
 
@@ -344,16 +343,19 @@ impl WorkbenchView {
                 SelectableState::Inactive
             };
             let mut row = div().flex().items_center().min_w_0().child(
-                workbench_palette_item(
+                picker_row(
                     ("workspace-history-item", index),
-                    item.title.clone(),
-                    item.subtitle.clone().unwrap_or_default(),
-                    item.status.clone().unwrap_or_default(),
-                    None,
-                    Some(IconName::FolderClosed),
-                    YtttRowKind::Palette,
-                    row_state,
-                    true,
+                    PickerOverlayRow {
+                        item: PickerItem {
+                            subtitle: item.subtitle.clone(),
+                            ..PickerItem::new(id.clone(), item.title.clone())
+                        },
+                        state: row_state,
+                        status: item.status.clone().unwrap_or_default(),
+                        show_subtitle: true,
+                        icon: Some(IconName::FolderClosed),
+                        keybinding: None,
+                    },
                     theme,
                     style,
                     cx.listener(move |root, _, _, cx| root.confirm_workspace_history(&id, cx)),

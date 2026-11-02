@@ -371,13 +371,13 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 5.1：下沉 Picker（M）
 
-- [ ] 把 `src/ui/palette/picker` 移到 `crates/yttt-ui/src/picker`。
-- [ ] 将 `palette_item` 的 row 外观合并进去。
-- [ ] 去掉 picker 对业务类型的依赖。
+- [x] 把 `src/ui/palette/picker` 移到 `crates/yttt-ui/src/picker`。
+- [x] 将 `palette_item` 的 row 外观合并进去。
+- [x] 去掉 picker 对业务类型的依赖。`PalettePickerDelegate` 和按 `PaletteKind` 决定的图标、状态留在应用侧。
 
 ### 任务 5.2：Command palette 对齐（M）
 
-- [ ] 用 rem 表示 34rem 宽度。
+- [x] 宽度按实测 607px，随 UI 字号缩放（37.9375rem）。
 - [ ] 对齐行高、匹配高亮、keybinding 显示、footer。
 - [ ] 用虚拟列表验证大列表性能。
 

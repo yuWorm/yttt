@@ -540,7 +540,7 @@ fn picker_item_preserves_disabled_reason_from_palette_item() {
         disabled_reason: Some("Open a project first".to_string()),
     };
 
-    let picker = PickerItem::from_palette_item(&item);
+    let picker = PickerItem::from(&item);
 
     assert_eq!(
         picker.disabled_reason.as_deref(),
