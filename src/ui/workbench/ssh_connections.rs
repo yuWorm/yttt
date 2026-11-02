@@ -1783,10 +1783,11 @@ pub(super) fn ssh_connection_editor(
         )
 }
 
-pub(super) fn ssh_host_key_overlay(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
-    let Some(challenge) = root.ssh.pending_host_keys.front() else {
-        return div();
-    };
+pub(super) fn ssh_host_key_overlay(
+    root: &WorkbenchView,
+    cx: &mut Context<WorkbenchView>,
+) -> Option<yttt_ui::primitives::dialog::YtttDialogOverlay> {
+    let challenge = root.ssh.pending_host_keys.front()?;
     let theme = root.theme_runtime().ui;
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
@@ -1806,7 +1807,7 @@ pub(super) fn ssh_host_key_overlay(root: &WorkbenchView, cx: &mut Context<Workbe
     } else {
         UiTextKey::SshHostKeyTrustAndSave
     });
-    yttt_dialog_overlay(
+    Some(yttt_dialog_overlay(
         yttt_dialog_surface(theme, ui_style)
             .gap(ui_style.spacing.lg)
             .child(
@@ -1920,7 +1921,7 @@ pub(super) fn ssh_host_key_overlay(root: &WorkbenchView, cx: &mut Context<Workbe
         YtttDialogPlacement::Top,
         theme,
         ui_style,
-    )
+    ))
 }
 
 pub(super) fn ssh_form_field(

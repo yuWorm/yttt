@@ -354,7 +354,7 @@ impl Render for AuxiliaryWindow {
             }
             if kind == AuxiliaryWindowKind::RemoteServices && !root.ssh.pending_host_keys.is_empty()
             {
-                content = content.child(ssh_host_key_overlay(root, cx));
+                content = content.children(ssh_host_key_overlay(root, cx));
             }
             let mut key_context = if root.overlays.pending_keybinding_edit.is_some() {
                 gpui::KeyContext::new_with_defaults(crate::config::keybindings::host_os())

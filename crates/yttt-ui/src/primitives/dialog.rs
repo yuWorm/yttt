@@ -1,4 +1,5 @@
-use gpui::{Div, IntoElement, Pixels, Rgba};
+use gpui::{App, Div, IntoElement, Pixels, RenderOnce, Rgba, Window};
+use gpui_base::FocusTrapElement as _;
 
 use crate::{
     primitives::panel::{
@@ -50,15 +51,33 @@ pub fn yttt_dialog_surface(theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
     yttt_panel(YtttPanelKind::Dialog, theme, ui_style)
 }
 
+/// A modal layer that keeps Tab navigation inside its content.
+#[derive(IntoElement)]
+pub struct YtttDialogOverlay {
+    layer: Div,
+}
+
+impl RenderOnce for YtttDialogOverlay {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let focus = window
+            .use_keyed_state("yttt-dialog-focus", cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        self.layer.focus_trap("yttt-dialog-trap", &focus)
+    }
+}
+
 pub fn yttt_dialog_overlay(
     content: impl IntoElement,
     placement: YtttDialogPlacement,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
-) -> Div {
+) -> YtttDialogOverlay {
     let placement = match placement {
         YtttDialogPlacement::Top => YtttOverlayPlacement::Top,
         YtttDialogPlacement::Center => YtttOverlayPlacement::Center,
     };
-    yttt_panel_overlay(content, YtttPanelKind::Dialog, placement, theme, ui_style)
+    YtttDialogOverlay {
+        layer: yttt_panel_overlay(content, YtttPanelKind::Dialog, placement, theme, ui_style),
+    }
 }

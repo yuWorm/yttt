@@ -737,6 +737,117 @@ fn menu_escape_restores_focus(cx: &mut gpui::TestAppContext) {
     assert!(cx.debug_bounds("yttt-menu").is_none());
 }
 
+struct DialogTrapHarness {
+    focus: gpui::FocusHandle,
+}
+
+impl gpui::Render for DialogTrapHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use yttt_ui::primitives::dialog::{
+            YtttDialogPlacement, yttt_dialog_overlay, yttt_dialog_surface,
+        };
+
+        let (theme, ui_style) = (WorkbenchTheme::one_dark(), UiStyle::default());
+        let button = |id: &'static str| {
+            gpui_base::Button::new(id)
+                .size(gpui::px(40.0))
+                .debug_selector(move || id.to_string())
+        };
+        gpui::div()
+            .relative()
+            .size_full()
+            .child(button("behind"))
+            .child(yttt_dialog_overlay(
+                yttt_dialog_surface(theme, ui_style)
+                    .child(
+                        gpui_base::Button::new("inside-first")
+                            .track_focus(&self.focus)
+                            .size(gpui::px(40.0)),
+                    )
+                    .child(button("inside-second")),
+                YtttDialogPlacement::Center,
+                theme,
+                ui_style,
+            ))
+    }
+}
+
+#[gpui::test]
+fn tab_stays_inside_a_dialog_overlay(cx: &mut gpui::TestAppContext) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let focus = Rc::new(std::cell::RefCell::new(None));
+    let view_focus = focus.clone();
+    let (_root, cx) = cx.add_window_view(
+        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
+            let view = cx.new(|cx| {
+                let focus = cx.focus_handle();
+                view_focus.replace(Some(focus.clone()));
+                DialogTrapHarness { focus }
+            });
+            yttt_ui::window::yttt_root(view, window, cx)
+        },
+    );
+    let focus = focus.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        focus.focus(window, cx);
+    });
+    cx.run_until_parked();
+
+    for _ in 0..3 {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+    }
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        let trap = gpui_base::active_focus_trap(window, cx);
+        assert!(trap.is_some(), "focus should stay inside the dialog");
+    });
+}
+
+#[gpui::test]
+fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let focus = Rc::new(std::cell::RefCell::new(None));
+    let view_focus = focus.clone();
+    let (_root, cx) = cx.add_window_view(
+        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
+            let view = cx.new(|cx| {
+                let focus = cx.focus_handle();
+                view_focus.replace(Some(focus.clone()));
+                DialogTrapHarness { focus }
+            });
+            yttt_ui::window::yttt_root(view, window, cx)
+        },
+    );
+    let focus = focus.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        focus.focus(window, cx);
+    });
+    cx.run_until_parked();
+
+    cx.simulate_click(
+        gpui::point(gpui::px(2.0), gpui::px(2.0)),
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window), "the backdrop must not take focus");
+    });
+}
+
 /// Shows a notification through the real window list, which drives its
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(

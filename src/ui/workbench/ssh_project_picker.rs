@@ -1429,7 +1429,7 @@ pub(super) fn ssh_project_picker_overlay(
     root: &mut WorkbenchView,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
-) -> Div {
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
     let theme = root.theme_runtime().ui;
     let ui_style = current_ui_style(cx);
     let content = match root.ssh.project_picker.view {

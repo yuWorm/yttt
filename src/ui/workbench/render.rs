@@ -460,7 +460,7 @@ impl Render for WorkbenchView {
             ));
         }
         if !self.ssh.pending_host_keys.is_empty() && !self.ssh.manager_open {
-            root = root.child(ssh_host_key_overlay(self, cx));
+            root = root.children(ssh_host_key_overlay(self, cx));
         }
 
         if self.onboarding.is_none()
