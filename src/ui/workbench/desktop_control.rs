@@ -685,7 +685,7 @@ mod tests {
     fn cli_control_creates_splits_renames_and_closes_the_explicit_target(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temp = tempfile::tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
         let (root, cx) =
@@ -795,7 +795,7 @@ mod tests {
 
     #[gpui::test]
     fn cli_control_rejects_missing_target_before_changing_selection(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temp = tempfile::tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
         let (root, cx) =
@@ -823,7 +823,7 @@ mod tests {
     }
     #[gpui::test]
     fn cli_control_preserves_a_pending_rename_dialog(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temp = tempfile::tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
         let (root, cx) =

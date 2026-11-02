@@ -1998,7 +1998,7 @@ impl WorkbenchView {
         }
     }
 
-    pub(super) fn apply_appearance_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn apply_appearance_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.invalidate_appearance_caches();
         self.sync_gpui_component_theme(cx);
         self.sync_terminal_pane_configs(cx);

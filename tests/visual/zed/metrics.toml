@@ -1,0 +1,41 @@
+# Zed values for L1. `aligned = false` lists a known gap until its phase closes it.
+
+[[metric]]
+name = "button_height_px"
+zed = 22.0
+aligned = true
+
+[[metric]]
+name = "tab_height_px"
+zed = 32.0
+aligned = true
+
+[[metric]]
+name = "tab_radius_px"
+zed = 0.0
+aligned = true
+
+[[metric]]
+name = "text_ui_px"
+zed = 14.0
+aligned = true
+
+[[metric]]
+name = "palette_width_px"
+zed = 544.0
+aligned = true
+
+[[metric]]
+name = "button_compact_height_px"
+zed = 18.0
+aligned = false
+
+[[metric]]
+name = "button_medium_height_px"
+zed = 28.0
+aligned = false
+
+[[metric]]
+name = "button_large_height_px"
+zed = 32.0
+aligned = false

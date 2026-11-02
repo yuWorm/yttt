@@ -1,6 +1,6 @@
 use super::*;
 use gpui::{ImageSource, Resource, img};
-use gpui_component::{Icon, kbd::Kbd};
+use yttt_ui::{Icon, Kbd};
 
 pub(super) fn tab_rename_dialog(
     cx: &mut Context<WorkbenchView>,

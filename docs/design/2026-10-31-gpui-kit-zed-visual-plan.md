@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：任务 1.0 到 1.6 完成，1.7 进行中；P0 剩余项见下方进度
+- 状态：M1 已合入，P2 完成；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -249,6 +249,13 @@ CI 已通过（提交 `a3d10d9`，Run 41287845986）：macOS 917 过，Linux 148
 ## 4. P2：收拢 seam 与 token
 
 目标：所有 UI 入口经过 `yttt-ui`。业务代码基本不再感知 `gpui_component`，视觉基本不变。
+
+结果（2026-11-01）：已完成，和下方清单有四处偏差。
+
+- 2.1：没有写 `YtttRootPlugin`。0.8.1 的根已经从主题同步 rem，手动同步全部删除，`yttt_root` 只是唯一入口。
+- 2.2：只加了文字阶梯和两级 elevation。motion token 没有使用方，等 P3 的 tooltip。`metrics.toml` 用 `tests/ui_metrics.rs` 校验，未对齐项显式标记。
+- 2.4：`YtttMenuItem` 保留 builder 写法，内部是纯数据。`YtttMenu::into_popup_menu` 给文件树用，P6 换掉 `tree` 后收回。
+- 2.5：只收口 `init`、`Icon`、`IconName`、`Kbd`。**P2 退出门禁没有完全达到**：业务代码还有 71 处 `gpui_component`，主要是 `input`、`select`、`list`、`tab`、`highlighter`。不加全量重导出，因为那只是改名，这些类型在 P3 到 P8 被替换时自然消失。
 
 ### 任务 2.1：窗口入口（M）
 

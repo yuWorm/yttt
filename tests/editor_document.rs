@@ -102,7 +102,7 @@ fn canceling_a_conflicted_save_returns_to_idle_without_changing_text() {
 
 #[gpui::test]
 fn bar_selection_counts_unicode_and_refreshes_after_same_range_edit(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let (document, cx) = cx.add_window_view(|window, cx| {
         ProjectEditorDocument::new(
             project_model("中🙂\nA\n", fingerprint(10, 1)),
@@ -132,7 +132,7 @@ fn bar_selection_counts_unicode_and_refreshes_after_same_range_edit(cx: &mut gpu
 
 #[gpui::test]
 fn markdown_bar_selection_tracks_source_mode_edits(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let mut model = project_model("中🙂\nA\n", fingerprint(10, 1));
     model.relocate(
         DocumentId {
@@ -168,7 +168,7 @@ fn markdown_bar_selection_tracks_source_mode_edits(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let model = project_model("old", fingerprint(3, 1));
     let appearance = EditorAppearance {
         font_family: String::new(),
@@ -229,7 +229,7 @@ fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::
 
 #[gpui::test]
 fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let model = project_model("mod app {\n    fn render() {}\n}\n", fingerprint(3, 1));
     let document_slot = Rc::new(RefCell::new(None));
     let document_slot_for_window = document_slot.clone();
@@ -239,7 +239,7 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
                 .with_breadcrumb_header("src/app.rs")
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -282,7 +282,7 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn breadcrumb_parsing_debounces_edits_and_uses_the_latest_cursor(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let document_slot = Rc::new(RefCell::new(None));
     let slot = document_slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -298,7 +298,7 @@ fn breadcrumb_parsing_debounces_edits_and_uses_the_latest_cursor(cx: &mut gpui::
             )
         });
         *slot.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, cx)
+        yttt_ui::window::yttt_root(document, window, cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -359,7 +359,7 @@ fn breadcrumb_parsing_debounces_edits_and_uses_the_latest_cursor(cx: &mut gpui::
 
 #[gpui::test]
 fn breadcrumb_parsing_ignores_stale_language_and_disk_results(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(yttt_ui::init);
     let document_slot = Rc::new(RefCell::new(None));
     let slot = document_slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -372,7 +372,7 @@ fn breadcrumb_parsing_ignores_stale_language_and_disk_results(cx: &mut gpui::Tes
             )
         });
         *slot.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, cx)
+        yttt_ui::window::yttt_root(document, window, cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -434,7 +434,7 @@ fn breadcrumb_parsing_ignores_stale_language_and_disk_results(cx: &mut gpui::Tes
 #[gpui::test]
 fn vim_mode_blocks_normal_input_and_handles_unicode_edits(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let model = project_model("a界b", fingerprint(5, 1));
@@ -446,7 +446,7 @@ fn vim_mode_blocks_normal_input_and_handles_unicode_edits(cx: &mut gpui::TestApp
                 .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -500,7 +500,7 @@ fn vim_mode_blocks_normal_input_and_handles_unicode_edits(cx: &mut gpui::TestApp
 #[gpui::test]
 fn vim_operator_count_undo_redo_and_register_paste_are_composable(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let model = project_model("one two three four", fingerprint(18, 1));
@@ -512,7 +512,7 @@ fn vim_operator_count_undo_redo_and_register_paste_are_composable(cx: &mut gpui:
                 .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -553,7 +553,7 @@ fn vim_operator_count_undo_redo_and_register_paste_are_composable(cx: &mut gpui:
 #[gpui::test]
 fn vim_visual_and_linewise_operators_preserve_register_shape(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let model = project_model("one two\nthree\nfour\n", fingerprint(19, 1));
@@ -565,7 +565,7 @@ fn vim_visual_and_linewise_operators_preserve_register_shape(cx: &mut gpui::Test
                 .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -595,7 +595,7 @@ fn vim_visual_and_linewise_operators_preserve_register_shape(cx: &mut gpui::Test
 #[gpui::test]
 fn vim_distinguishes_logical_and_soft_wrapped_display_lines(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let source = format!("{}\nshort", "x".repeat(300));
@@ -614,7 +614,7 @@ fn vim_distinguishes_logical_and_soft_wrapped_display_lines(cx: &mut gpui::TestA
                         .with_vim_mode(true, window, document_cx)
                 });
             *document_slot_for_window.borrow_mut() = Some(document.clone());
-            gpui_component::Root::new(document, window, entity_cx)
+            yttt_ui::window::yttt_root(document, window, entity_cx)
         });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -638,7 +638,7 @@ fn vim_distinguishes_logical_and_soft_wrapped_display_lines(cx: &mut gpui::TestA
 #[gpui::test]
 fn vim_modes_are_per_document_and_registers_are_shared(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let first_slot = Rc::new(RefCell::new(None));
@@ -667,7 +667,7 @@ fn vim_modes_are_per_document_and_registers_are_shared(cx: &mut gpui::TestAppCon
         *first_slot_for_window.borrow_mut() = Some(first.clone());
         *second_slot_for_window.borrow_mut() = Some(second.clone());
         let pair = entity_cx.new(|_| VimDocumentPair { first, second });
-        gpui_component::Root::new(pair, window, entity_cx)
+        yttt_ui::window::yttt_root(pair, window, entity_cx)
     });
     let first = first_slot.borrow_mut().take().unwrap();
     let second = second_slot.borrow_mut().take().unwrap();
@@ -729,7 +729,7 @@ impl Render for VimShortcutHost {
 #[gpui::test]
 fn vim_change_is_one_undo_transaction(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let model = project_model("alpha beta", fingerprint(10, 1));
@@ -741,7 +741,7 @@ fn vim_change_is_one_undo_transaction(cx: &mut gpui::TestAppContext) {
                 .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     document.update_in(cx, |document, window, document_cx| {
@@ -764,7 +764,7 @@ fn vim_change_is_one_undo_transaction(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn vim_bindings_do_not_capture_search_panel_input(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let model = project_model("one two", fingerprint(7, 1));
@@ -776,7 +776,7 @@ fn vim_bindings_do_not_capture_search_panel_input(cx: &mut gpui::TestAppContext)
                 .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     document.update_in(cx, |document, window, document_cx| {
@@ -802,7 +802,7 @@ fn vim_bindings_do_not_capture_search_panel_input(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn vim_bindings_are_inert_outside_editor_context(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let input_slot = Rc::new(RefCell::new(None));
@@ -811,7 +811,7 @@ fn vim_bindings_are_inert_outside_editor_context(cx: &mut gpui::TestAppContext) 
         let input =
             entity_cx.new(|input_cx| gpui_component::input::InputState::new(window, input_cx));
         *input_slot_for_window.borrow_mut() = Some(input.clone());
-        gpui_component::Root::new(input, window, entity_cx)
+        yttt_ui::window::yttt_root(input, window, entity_cx)
     });
     let input = input_slot.borrow_mut().take().unwrap();
     input.update_in(cx, |input, window, input_cx| {
@@ -826,7 +826,7 @@ fn vim_bindings_are_inert_outside_editor_context(cx: &mut gpui::TestAppContext) 
 #[gpui::test]
 fn vim_normal_mode_allows_workspace_shortcuts(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
         cx.bind_keys([KeyBinding::new("cmd-s", TestSave, Some("VimTestWorkspace"))]);
     });
@@ -849,7 +849,7 @@ fn vim_normal_mode_allows_workspace_shortcuts(cx: &mut gpui::TestAppContext) {
             document,
             save_count: save_count_for_window,
         });
-        gpui_component::Root::new(host, window, entity_cx)
+        yttt_ui::window::yttt_root(host, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     document.update_in(cx, |document, window, document_cx| {
@@ -868,7 +868,7 @@ fn vim_normal_mode_allows_workspace_shortcuts(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn vim_search_reuses_the_query_for_next_and_previous_matches(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let document_slot = Rc::new(RefCell::new(None));
@@ -884,7 +884,7 @@ fn vim_search_reuses_the_query_for_next_and_previous_matches(cx: &mut gpui::Test
             .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -923,7 +923,7 @@ fn vim_search_reuses_the_query_for_next_and_previous_matches(cx: &mut gpui::Test
 #[gpui::test]
 fn vim_reviewed_motion_counts_and_graphemes_stay_bounded(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let document_slot = Rc::new(RefCell::new(None));
@@ -939,7 +939,7 @@ fn vim_reviewed_motion_counts_and_graphemes_stay_bounded(cx: &mut gpui::TestAppC
             .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -1003,7 +1003,7 @@ fn vim_reviewed_motion_counts_and_graphemes_stay_bounded(cx: &mut gpui::TestAppC
 #[gpui::test]
 fn vim_reviewed_operator_edges_preserve_lines_and_registers(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let document_slot = Rc::new(RefCell::new(None));
@@ -1019,7 +1019,7 @@ fn vim_reviewed_operator_edges_preserve_lines_and_registers(cx: &mut gpui::TestA
             .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
@@ -1070,7 +1070,7 @@ fn vim_reviewed_operator_edges_preserve_lines_and_registers(cx: &mut gpui::TestA
 #[gpui::test]
 fn vim_normal_mode_native_undo_cannot_consume_history(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         init_vim_mode(cx);
     });
     let document_slot = Rc::new(RefCell::new(None));
@@ -1086,7 +1086,7 @@ fn vim_normal_mode_native_undo_cannot_consume_history(cx: &mut gpui::TestAppCont
             .with_vim_mode(true, window, document_cx)
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
-        gpui_component::Root::new(document, window, entity_cx)
+        yttt_ui::window::yttt_root(document, window, entity_cx)
     });
     let document = document_slot.borrow_mut().take().unwrap();
     let input = cx.read(|app| document.read(app).input().clone());

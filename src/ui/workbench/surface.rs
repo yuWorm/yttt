@@ -1,8 +1,6 @@
-use gpui_component::{
-    Icon,
-    menu::{ContextMenuExt as _, PopupMenuItem},
-    tooltip::Tooltip,
-};
+use gpui_component::tooltip::Tooltip;
+use yttt_ui::Icon;
+use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
 
 #[derive(Clone, Copy)]
 struct AgentSessionTooltipText {
@@ -640,46 +638,47 @@ impl WorkbenchView {
                     .text_sm()
                     .text_color(theme.text_subtle)
                     .child(self.ui_text.get(UiTextKey::ProjectFilesEmptyDirectory))
-                    .context_menu(move |menu, _window, cx| {
-                        let menu = yttt_ui::primitives::menu::yttt_popup_menu(
-                            menu,
-                            crate::ui::theme::current_workbench_theme(cx),
-                            crate::ui::theme::current_ui_style(cx),
-                        );
-                        let new_file_tree = empty_tree.clone();
-                        let new_directory_tree = empty_tree.clone();
-                        let refresh_tree = empty_tree.clone();
-                        let new_file_workbench = empty_workbench.clone();
-                        let new_directory_workbench = empty_workbench.clone();
-                        menu.item(PopupMenuItem::new(new_file_label.clone()).on_click(
-                            move |_, window, cx| {
-                                new_file_tree.update(cx, |tree, tree_cx| {
-                                    tree.begin_create_selected(false, window, tree_cx);
-                                });
-                                let _ = new_file_workbench.update(cx, |_, workbench_cx| {
-                                    workbench_cx.notify();
-                                });
-                            },
-                        ))
-                        .item(PopupMenuItem::new(new_directory_label.clone()).on_click(
-                            move |_, window, cx| {
-                                new_directory_tree.update(cx, |tree, tree_cx| {
-                                    tree.begin_create_selected(true, window, tree_cx);
-                                });
-                                let _ = new_directory_workbench.update(cx, |_, workbench_cx| {
-                                    workbench_cx.notify();
-                                });
-                            },
-                        ))
-                        .item(PopupMenuItem::separator())
-                        .item(
-                            PopupMenuItem::new(refresh_label.clone()).on_click(move |_, _, cx| {
-                                refresh_tree.update(cx, |tree, tree_cx| {
-                                    tree.request_refresh(tree_cx);
-                                });
-                            }),
-                        )
-                    })
+                    .yttt_context_menu(
+                        crate::ui::theme::menu_appearance,
+                        move |menu, _window, _| {
+                            let new_file_tree = empty_tree.clone();
+                            let new_directory_tree = empty_tree.clone();
+                            let refresh_tree = empty_tree.clone();
+                            let new_file_workbench = empty_workbench.clone();
+                            let new_directory_workbench = empty_workbench.clone();
+                            menu.item(YtttMenuItem::new(new_file_label.clone()).on_click(
+                                move |_, window, cx| {
+                                    new_file_tree.update(cx, |tree, tree_cx| {
+                                        tree.begin_create_selected(false, window, tree_cx);
+                                    });
+                                    let _ = new_file_workbench.update(cx, |_, workbench_cx| {
+                                        workbench_cx.notify();
+                                    });
+                                },
+                            ))
+                            .item(YtttMenuItem::new(new_directory_label.clone()).on_click(
+                                move |_, window, cx| {
+                                    new_directory_tree.update(cx, |tree, tree_cx| {
+                                        tree.begin_create_selected(true, window, tree_cx);
+                                    });
+                                    let _ =
+                                        new_directory_workbench.update(cx, |_, workbench_cx| {
+                                            workbench_cx.notify();
+                                        });
+                                },
+                            ))
+                            .item(YtttMenuItem::separator())
+                            .item(
+                                YtttMenuItem::new(refresh_label.clone()).on_click(
+                                    move |_, _, cx| {
+                                        refresh_tree.update(cx, |tree, tree_cx| {
+                                            tree.request_refresh(tree_cx);
+                                        });
+                                    },
+                                ),
+                            )
+                        },
+                    )
                     .into_any_element()
             }
             _ => div()
@@ -745,14 +744,14 @@ impl WorkbenchView {
             )
             .build(window, cx)
         })
-        .context_menu(move |menu, _window, cx| {
-            let menu = yttt_ui::primitives::menu::yttt_popup_menu(
-                menu,
-                crate::ui::theme::current_workbench_theme(cx),
-                crate::ui::theme::current_ui_style(cx),
-            );
-            menu.item(PopupMenuItem::new(files_refresh_label).action(Box::new(ProjectPanelRefresh)))
-        });
+        .yttt_context_menu(
+            crate::ui::theme::menu_appearance,
+            move |menu, _window, _| {
+                menu.item(
+                    YtttMenuItem::new(files_refresh_label).action(Box::new(ProjectPanelRefresh)),
+                )
+            },
+        );
         let agent_sessions_tab = self.agent_sessions_enabled().then(|| {
             let sessions_tab_workbench = cx.weak_entity();
             let sessions_refresh_workbench = sessions_tab_workbench.clone();
@@ -789,22 +788,21 @@ impl WorkbenchView {
                 )
                 .build(window, cx)
             })
-            .context_menu(move |menu, _window, cx| {
-                let menu = yttt_ui::primitives::menu::yttt_popup_menu(
-                    menu,
-                    crate::ui::theme::current_workbench_theme(cx),
-                    crate::ui::theme::current_ui_style(cx),
-                );
-                let sessions_refresh_workbench = sessions_refresh_workbench.clone();
-                menu.item(
-                    PopupMenuItem::new(sessions_refresh_label).on_click(move |_, _, cx| {
-                        let _ = sessions_refresh_workbench.update(cx, |workbench, workbench_cx| {
-                            workbench.refresh_agent_sessions();
-                            workbench_cx.notify();
-                        });
-                    }),
-                )
-            })
+            .yttt_context_menu(
+                crate::ui::theme::menu_appearance,
+                move |menu, _window, _| {
+                    let sessions_refresh_workbench = sessions_refresh_workbench.clone();
+                    menu.item(YtttMenuItem::new(sessions_refresh_label).on_click(
+                        move |_, _, cx| {
+                            let _ =
+                                sessions_refresh_workbench.update(cx, |workbench, workbench_cx| {
+                                    workbench.refresh_agent_sessions();
+                                    workbench_cx.notify();
+                                });
+                        },
+                    ))
+                },
+            )
         });
         let placeholder_tab = |id: &'static str, icon: IconName| {
             div()
@@ -1379,18 +1377,13 @@ impl WorkbenchView {
                         .child(age),
                 )
             })
-            .context_menu(move |menu, _, cx| {
+            .yttt_context_menu(crate::ui::theme::menu_appearance, move |menu, _, _| {
                 let rename_workbench = menu_workbench.clone();
                 let delete_workbench = menu_workbench.clone();
                 let rename_id = menu_id.clone();
                 let delete_id = menu_id.clone();
-                yttt_ui::primitives::menu::yttt_popup_menu(
-                    menu,
-                    crate::ui::theme::current_workbench_theme(cx),
-                    crate::ui::theme::current_ui_style(cx),
-                )
-                .item(
-                    PopupMenuItem::new(rename_label)
+                menu.item(
+                    YtttMenuItem::new(rename_label)
                         .disabled(menu_disabled)
                         .on_click(move |_, window, cx| {
                             let _ = rename_workbench.update(cx, |root, cx| {
@@ -1404,9 +1397,9 @@ impl WorkbenchView {
                             });
                         }),
                 )
-                .item(PopupMenuItem::separator())
+                .item(YtttMenuItem::separator())
                 .item(
-                    PopupMenuItem::new(delete_label)
+                    YtttMenuItem::new(delete_label)
                         .disabled(menu_disabled)
                         .on_click(move |_, window, cx| {
                             let _ = delete_workbench.update(cx, |root, cx| {

@@ -15,10 +15,7 @@ use gpui::{
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
 use gpui_component::{
-    Disableable as _, IconName, IndexPath, Root, Theme,
-    input::InputState,
-    menu::{PopupMenu, PopupMenuItem},
-    select::SelectState,
+    Disableable as _, IndexPath, Theme, input::InputState, menu::PopupMenu, select::SelectState,
 };
 use yttt::{
     config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore},
@@ -27,14 +24,15 @@ use yttt::{
         theme::{AppearanceState, ThemeRuntime},
     },
 };
+use yttt_ui::IconName;
 use yttt_ui::{
     SelectableState,
+    menu::{YtttMenu, YtttMenuItem, yttt_menu_preview},
     primitives::{
         button::{YtttButtonVariant, yttt_button, yttt_button_style},
         dialog::{yttt_dialog_style, yttt_dialog_surface},
         icon_button::{YtttIconButtonKind, yttt_icon_button},
         input::{YtttInputKind, yttt_input},
-        menu::yttt_popup_menu,
         notification::{YtttNotificationTone, yttt_notification_surface},
         radio::yttt_radio,
         row::{YtttRowKind, yttt_row},
@@ -107,7 +105,7 @@ fn run(options: Options) {
     gpui_platform::application()
         .with_assets(assets::app_assets(&config_paths))
         .run(move |cx: &mut App| {
-            gpui_component::init(cx);
+            yttt_ui::init(cx);
             assets::load_ui_fonts(cx);
             let appearance = AppearanceState::new(runtime);
             Theme::global_mut(cx).apply_config(&Rc::new(
@@ -128,9 +126,8 @@ fn run(options: Options) {
             };
             let handle = cx
                 .open_window(window_options, move |window, cx| {
-                    window.set_rem_size(px(16.));
                     let view = cx.new(|cx| Gallery::new(theme, ui_style, view_layout, window, cx));
-                    cx.new(|cx| Root::new(view, window, cx))
+                    cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx))
                 })
                 .expect("gallery window opens");
             cx.activate(true);
@@ -227,16 +224,17 @@ impl Gallery {
                 cx,
             )
         });
-        let menu = PopupMenu::build(window, cx, move |menu, _, _| {
-            yttt_popup_menu(
-                menu.item(PopupMenuItem::new("Rename"))
-                    .item(PopupMenuItem::new("Duplicate"))
-                    .separator()
-                    .item(PopupMenuItem::new("Delete").disabled(true)),
-                theme,
-                ui_style,
-            )
-        });
+        let menu = yttt_menu_preview(
+            YtttMenu::default()
+                .item(YtttMenuItem::new("Rename"))
+                .item(YtttMenuItem::new("Duplicate"))
+                .item(YtttMenuItem::separator())
+                .item(YtttMenuItem::new("Delete").disabled(true)),
+            theme,
+            ui_style,
+            window,
+            cx,
+        );
         let tooltip = cx
             .new(|_| yttt_tooltip("Toggle Terminal", theme, ui_style))
             .into();

@@ -1,12 +1,12 @@
-use gpui::{Styled as _, hsla, px, rems};
+use gpui::{Styled as _, px, rems};
 use gpui_component::{
-    box_shadow,
     text::Text,
     tooltip::{Tooltip, TooltipAppearance},
 };
 
 use crate::{
     style::{UiStyle, UiStyleId},
+    surface::{UiElevation, YtttSurface as _},
     theme::WorkbenchTheme,
 };
 
@@ -30,12 +30,9 @@ pub fn yttt_tooltip(text: impl Into<Text>, theme: WorkbenchTheme, ui_style: UiSt
         .border(ui_style.border.hairline)
         .border_color(theme.border)
         .rounded(ui_style.radius.compact)
-        .shadow(vec![
-            box_shadow(px(0.), px(2.), px(3.), px(0.), hsla(0., 0., 0., 0.12)),
-            box_shadow(px(0.), px(1.), px(0.), px(0.), hsla(0., 0., 0., 0.06)),
-        ])
+        .yttt_elevation(UiElevation::Floating)
         .px(rems(0.5))
         .py(rems(0.25))
         .gap(rems(1.0))
-        .text_size(rems(0.875))
+        .text_size(ui_style.text.default)
 }

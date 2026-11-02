@@ -110,7 +110,7 @@ impl Render for TerminalTabTestHost {
 #[gpui::test]
 fn terminal_tab_bindings_override_component_root_focus_navigation(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         yttt_terminal::init(cx);
     });
 
@@ -140,7 +140,7 @@ fn terminal_tab_bindings_override_component_root_focus_navigation(cx: &mut TestA
             terminal,
             next_focus: cx.focus_handle(),
         });
-        gpui_component::Root::new(host, window, cx)
+        yttt_ui::window::yttt_root(host, window, cx)
     });
     let terminal = terminal_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();

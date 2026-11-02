@@ -124,7 +124,7 @@ pub fn run(
             return;
         }
 
-        gpui_component::init(cx);
+        yttt_ui::init(cx);
         UiText::from_language(app_settings.general.language).activate(cx);
         assets::load_ui_fonts(cx);
         cx.bind_keys(gpui_markdown_editor::default_key_bindings());
@@ -227,7 +227,7 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
         .run(move |cx| {
             #[cfg(target_os = "macos")]
             platform::macos::prepare_macos_app_runtime();
-            gpui_component::init(cx);
+            yttt_ui::init(cx);
             UiText::new(launch.appearance.locale).activate(cx);
             assets::load_ui_fonts(cx);
             yttt_terminal::init(cx);
@@ -609,7 +609,7 @@ fn open_workbench_window(
         register_workbench_close_guard(window, cx, &view);
         cx.activate(true);
         window.activate_window();
-        cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
+        cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx).bg(transparent_black()))
     })?;
     Ok(())
 }
@@ -1290,7 +1290,7 @@ mod tests {
         cx.background_executor.allow_parking();
         cx.skip_drawing();
         cx.update(|cx| {
-            gpui_component::init(cx);
+            yttt_ui::init(cx);
             yttt_terminal::init(cx);
             cx.set_global(appearance);
             cx.set_global(HostRuntimeGlobal::ready(remote));

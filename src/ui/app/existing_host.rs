@@ -1288,7 +1288,7 @@ mod tests {
             EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
         };
         use std::{cell::RefCell, rc::Rc};
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temporary = tempfile::tempdir().unwrap();
         let profile = AppProfile::scoped(
             yttt_core::model::ids::ProfileId::new("paste-test"),
@@ -1303,7 +1303,7 @@ mod tests {
         let (_root, cx) = cx.add_window_view(|window, cx| {
             let form = create(profile, crate::ui::i18n::UiText::english(), window, cx);
             *window_slot.borrow_mut() = Some(form.clone());
-            gpui_component::Root::new(form, window, cx)
+            yttt_ui::window::yttt_root(form, window, cx)
         });
         let form = slot.borrow_mut().take().unwrap();
         cx.run_until_parked();

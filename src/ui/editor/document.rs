@@ -6,13 +6,14 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, IconName,
+    ActiveTheme as _,
     input::{EditorState, InputEvent, Position, Rope, Search},
 };
 use gpui_markdown_editor::{
     MarkdownEditor, MarkdownEditorEnvironment, MarkdownEditorEvent, MarkdownEditorMode,
     MarkdownEditorOptions, MarkdownEditorStrings, MarkdownEditorTheme,
 };
+use yttt_ui::IconName;
 
 use crate::{
     config::settings::EditorSettings,
@@ -1633,7 +1634,7 @@ mod tests {
 
     #[gpui::test]
     fn markdown_document_remeasures_initial_render_when_tab_gets_width(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let path = PathBuf::from("/tmp/yttt/AGENTS.md");
         let markdown = "## Rules\n\n\
             - Execute Superpowers plans inline; do not delegate plan execution to subagents.\n\
@@ -1711,7 +1712,7 @@ mod tests {
 
     #[gpui::test]
     fn markdown_document_renders_toggles_edits_and_serializes(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let path = PathBuf::from("/tmp/yttt/README.md");
         let document_id = DocumentId {
             project_id: ProjectId::new("project"),

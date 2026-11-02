@@ -6,8 +6,8 @@ use gpui::{
     Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rems, rgba,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Root as ComponentRoot,
-    Sizable as _, Theme as ComponentTheme, WindowExt as _,
+    ActiveTheme as _, Disableable as _, IndexPath, Sizable as _, Theme as ComponentTheme,
+    WindowExt as _,
     button::Button,
     dialog::DialogFooter,
     highlighter::SyntaxHighlighter,
@@ -26,6 +26,7 @@ use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{ServerEvent, project::ProjectChange};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
+use yttt_ui::{Icon, IconName};
 
 mod action_handlers;
 mod agent_process_monitor;

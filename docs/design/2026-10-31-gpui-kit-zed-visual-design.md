@@ -276,6 +276,8 @@ pub struct UiMotion {
 
 ### 10.1 `window`：窗口入口
 
+> 实施时简化：0.8.1 的根已从主题同步 rem，所以没有 `YtttRootPlugin` 和 `open_yttt_window`，入口是 `yttt_ui::window::yttt_root`。
+
 问题：`Root` 构造分散在至少 12 处，rem、窗口边框、背景、overlay 规则都由调用方自行保证。
 
 ```rust

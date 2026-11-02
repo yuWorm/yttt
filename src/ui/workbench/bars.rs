@@ -7,9 +7,10 @@ use gpui::{
     AnyElement, Context, Font, FontFeatures, FontStyle, FontWeight, IntoElement as _, TextRun,
     Window, black, div, prelude::*, px,
 };
-use gpui_component::{Icon, IconName, StyledExt};
+use gpui_component::StyledExt;
 use yttt_agent_core::{AgentSnapshot, AgentTurnState, AgentViewState, WaitingReason};
 use yttt_protocol::ssh::SshConnectionState as ConnectionState;
+use yttt_ui::{Icon, IconName};
 
 use super::{WorkbenchView, performance::PerformanceInfo, state::update::UpdateStatus};
 use crate::{

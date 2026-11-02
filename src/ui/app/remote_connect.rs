@@ -11,14 +11,12 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
     relative, size,
 };
-use gpui_component::{
-    Icon, IconName, Root as ComponentRoot, Sizable as _, scroll::ScrollableElement as _,
-    spinner::Spinner,
-};
+use gpui_component::{Sizable as _, scroll::ScrollableElement as _, spinner::Spinner};
 use yttt_ui::primitives::{
     button::{YtttButtonVariant, yttt_button},
     input::{YtttInputKind, yttt_input},
 };
+use yttt_ui::{Icon, IconName};
 
 use crate::{
     remote_host::{
@@ -53,7 +51,7 @@ pub(super) fn open(
             true
         });
 
-        cx.new(|cx| ComponentRoot::new(view, window, cx))
+        cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx))
     })?;
     Ok(())
 }
@@ -672,7 +670,6 @@ impl Render for RemoteConnectView {
         let appearance = cx.global::<AppearanceState>().runtime();
         let theme = appearance.ui;
         let style = appearance.style;
-        window.set_rem_size(px(appearance.typography.font_size));
         let title = self.text.get(UiTextKey::RemoteConnectTitle);
         window.set_window_title(&format!("{title} — yttt"));
         let heading = match self.prompts.front() {
@@ -822,7 +819,7 @@ mod tests {
         cx.background_executor.allow_parking();
         let text = UiText::english();
         let launch = cx.update(|cx| {
-            gpui_component::init(cx);
+            yttt_ui::init(cx);
             let (_, theme) = super::super::load_app_runtime(&profile.config_paths());
             cx.set_global(AppearanceState::new(theme));
             RemoteLaunch {

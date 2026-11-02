@@ -1078,7 +1078,7 @@ mod tests {
 
     #[gpui::test]
     fn detected_font_is_selected_persisted_and_not_reapplied(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(yttt_ui::init);
         let temp = tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
         let saved_paths = paths.clone();
@@ -1087,7 +1087,7 @@ mod tests {
         let (_component_root, cx) = cx.add_window_view(move |window, cx| {
             let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
             *root_slot_for_window.borrow_mut() = Some(root.clone());
-            gpui_component::Root::new(root, window, cx)
+            yttt_ui::window::yttt_root(root, window, cx)
         });
         let root = root_slot.borrow_mut().take().unwrap();
 

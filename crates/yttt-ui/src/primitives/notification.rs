@@ -3,7 +3,11 @@
 use gpui::{Div, ElementId, Pixels, Rems, Rgba, div, prelude::*};
 use gpui_component::{alert::Alert, notification::Notification};
 
-use crate::{style::UiStyle, theme::WorkbenchTheme};
+use crate::{
+    style::UiStyle,
+    surface::{UiElevation, YtttSurface as _},
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttNotificationTone {
@@ -89,7 +93,7 @@ pub fn yttt_notification_surface(
         .border_color(style.border)
         .bg(style.background)
         .text_color(style.title)
-        .when(style.shadow, |this| this.shadow_lg())
+        .when(style.shadow, |this| this.yttt_elevation(UiElevation::Modal))
 }
 
 pub fn yttt_toast_notification(
@@ -106,7 +110,7 @@ pub fn yttt_toast_notification(
         .border_color(style.border)
         .bg(style.background)
         .rounded(style.radius)
-        .when(style.shadow, |this| this.shadow_lg())
+        .when(style.shadow, |this| this.yttt_elevation(UiElevation::Modal))
         .px(style.padding_x)
         .py(style.padding_y)
 }

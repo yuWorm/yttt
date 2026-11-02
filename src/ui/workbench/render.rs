@@ -41,7 +41,6 @@ impl Render for WorkbenchView {
         self.ensure_settings_project_target_loaded(window, cx);
         let appearance = self.appearance.runtime();
         self.app_settings.theme.ui_style = appearance.style_id;
-        window.set_rem_size(px(appearance.typography.font_size));
         self.sync_auxiliary_windows(cx);
         self.sync_error_notification(window, cx);
         self.ensure_active_project_file_watcher(window, cx);
