@@ -16,7 +16,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &App,
     ) -> bool {
-        if workspace_focus.contains_focused(window, cx) {
+        if workspace_focus.contains_focused(window, cx) || yttt_ui::menu::menu_is_open(window, cx) {
             self.overlays.settling_focus = None;
             return false;
         }

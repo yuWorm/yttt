@@ -11,6 +11,7 @@ pub use gpui_component::{Icon, IconName};
 #[allow(clippy::disallowed_methods)]
 pub fn init(cx: &mut gpui::App) {
     gpui_component::init(cx);
+    gpui_base::Root::register_plugin::<menu::MenuLayer>(cx, |_, _| menu::MenuLayer::default());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

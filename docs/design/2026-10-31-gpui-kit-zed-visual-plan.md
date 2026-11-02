@@ -335,6 +335,9 @@ gpui-shell 是 JavaScript 插件运行时，不是主题系统，不在本计划
 
 ## 6. P4：浮层与菜单
 
+进度（2026-11-02）：右键和下拉菜单改由 `yttt_ui::menu::MenuLayer` 渲染，基于 `gpui_base::Positioner`，每个窗口一个。文件树仍用 Tree 自带的 `PopupMenu`，P6 替换后才能删除 `PopupMenuStyle` 补丁。子菜单未实现，当前菜单都不需要。
+
+
 ### 任务 4.1：Popover、Dialog、Alert（M）
 
 - [ ] 替换为 `gpui-base` 的 Popover、Dialog、AlertDialog。

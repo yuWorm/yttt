@@ -33,7 +33,7 @@
 | 搜索框回显判断去掉 anchor 条件 | `src/input/overlay.rs` | E | 上游 bug：输入首字符后面板重新全选，下一键覆盖它 | 上游修复。适合提 PR |
 | `DropdownMenu` 接受 `gpui_base::Button` | `src/menu/dropdown_menu.rs` | C | yttt 按钮已改用 `gpui_base::Button` | P4 自有菜单 |
 | `Notification::always_show_close_button`，图标和关闭按钮内联布局，正文 muted 色，关闭按钮 selector | `src/notification.rs` | C | 错误通知要始终显示关闭按钮，长文本换行不与按钮重叠 | P4 重做通知 |
-| `PopupMenuStyle`、`MenuItemAppearance`，带样式时恢复 1px 边框 | `src/menu/*` | C | 0.8.1 的 `popover_style` 去掉了边框，改用阴影环 | P4 自有 context menu |
+| `PopupMenuStyle`、`MenuItemAppearance`，带样式时恢复 1px 边框 | `src/menu/*` | C | 0.8.1 的 `popover_style` 去掉了边框，改用阴影环 | P6 换掉 Tree 后删除。右键和下拉菜单已改走 `yttt_ui::menu::MenuLayer`，只有文件树还经过 `PopupMenu` |
 | `ListItem::hover_matches_selected`，选中背景 | `src/list/list_item.rs` | C | 文件树和列表的选中外观 | P5、P6 自有行外观 |
 | 各分区标题独立测量 | `src/list/list.rs`、`src/list/cache.rs`、`src/list/delegate.rs` | C | SSH 列表有多个分区 | 上游支持，或 P5 不再使用 `List` |
 | `Select` 触发器 hover，自身箭头用 XSmall | `src/select.rs` | C | 保持现有下拉外观 | P5 自有 select |

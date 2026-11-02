@@ -623,6 +623,120 @@ fn switch_toggles_with_pointer_and_keyboard(cx: &mut gpui::TestAppContext) {
     assert_eq!(changes.get(), 2, "keyboard should toggle");
 }
 
+struct MenuHarness {
+    activated: Rc<Cell<usize>>,
+    focus: gpui::FocusHandle,
+}
+
+impl gpui::Render for MenuHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
+
+        let activated = self.activated.clone();
+        let appearance: yttt_ui::menu::MenuAppearance =
+            |_| (WorkbenchTheme::one_dark(), UiStyle::default());
+        gpui::div()
+            .id("menu-target")
+            .debug_selector(|| "menu-target".to_string())
+            .track_focus(&self.focus)
+            .size(gpui::px(200.0))
+            .yttt_context_menu(appearance, |menu, _, _| {
+                menu.item(YtttMenuItem::new("Outer").disabled(true))
+            })
+            .child(gpui::div().id("menu-inner").size_full().yttt_context_menu(
+                appearance,
+                move |menu, _, _| {
+                    let activated = activated.clone();
+                    menu.item(YtttMenuItem::new("Off").disabled(true)).item(
+                        YtttMenuItem::new("Run")
+                            .on_click(move |_, _, _| activated.set(activated.get() + 1)),
+                    )
+                },
+            ))
+    }
+}
+
+fn open_harness_menu(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    &mut gpui::VisualTestContext,
+    Rc<Cell<usize>>,
+    gpui::FocusHandle,
+) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let activated = Rc::new(Cell::new(0));
+    let view_activated = activated.clone();
+    let focus = Rc::new(std::cell::RefCell::new(None));
+    let view_focus = focus.clone();
+    let (_root, cx) = cx.add_window_view(
+        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
+            let view = cx.new(|cx| {
+                let focus = cx.focus_handle();
+                view_focus.replace(Some(focus.clone()));
+                MenuHarness {
+                    activated: view_activated,
+                    focus,
+                }
+            });
+            yttt_ui::window::yttt_root(view, window, cx)
+        },
+    );
+    let focus = focus.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        focus.focus(window, cx);
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("menu-target").unwrap();
+    cx.simulate_mouse_down(
+        bounds.center(),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    (cx, activated, focus)
+}
+
+#[gpui::test]
+fn menu_keyboard_skips_disabled_rows_and_activates(cx: &mut gpui::TestAppContext) {
+    let (cx, activated, focus) = open_harness_menu(cx);
+    assert!(cx.debug_bounds("yttt-menu").is_some(), "menu should open");
+
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    assert_eq!(activated.get(), 1);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window));
+    });
+    assert!(cx.debug_bounds("yttt-menu").is_none());
+}
+
+#[gpui::test]
+fn menu_escape_restores_focus(cx: &mut gpui::TestAppContext) {
+    let (cx, activated, focus) = open_harness_menu(cx);
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    assert_eq!(activated.get(), 0);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window));
+    });
+    assert!(cx.debug_bounds("yttt-menu").is_none());
+}
+
 /// Shows a notification through the real window list, which drives its
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(
