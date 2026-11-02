@@ -643,7 +643,7 @@ impl gpui::Render for MenuHarness {
             .id("menu-target")
             .debug_selector(|| "menu-target".to_string())
             .track_focus(&self.focus)
-            .size(gpui::px(200.0))
+            .size_full()
             .yttt_context_menu(appearance, |menu, _, _| {
                 menu.item(YtttMenuItem::new("Outer").disabled(true))
             })
@@ -662,6 +662,17 @@ impl gpui::Render for MenuHarness {
 
 fn open_harness_menu(
     cx: &mut gpui::TestAppContext,
+) -> (
+    &mut gpui::VisualTestContext,
+    Rc<Cell<usize>>,
+    gpui::FocusHandle,
+) {
+    open_harness_menu_at(cx, gpui::Bounds::center)
+}
+
+fn open_harness_menu_at(
+    cx: &mut gpui::TestAppContext,
+    position: impl FnOnce(&gpui::Bounds<gpui::Pixels>) -> gpui::Point<gpui::Pixels>,
 ) -> (
     &mut gpui::VisualTestContext,
     Rc<Cell<usize>>,
@@ -695,7 +706,7 @@ fn open_harness_menu(
     cx.run_until_parked();
     let bounds = cx.debug_bounds("menu-target").unwrap();
     cx.simulate_mouse_down(
-        bounds.center(),
+        position(&bounds),
         gpui::MouseButton::Right,
         gpui::Modifiers::none(),
     );
@@ -720,6 +731,38 @@ fn menu_keyboard_skips_disabled_rows_and_activates(cx: &mut gpui::TestAppContext
         assert!(focus.is_focused(window));
     });
     assert!(cx.debug_bounds("yttt-menu").is_none());
+}
+
+#[gpui::test]
+fn menu_closes_on_an_outside_click_and_restores_focus(cx: &mut gpui::TestAppContext) {
+    let (cx, activated, focus) = open_harness_menu(cx);
+    let menu = cx.debug_bounds("yttt-menu").unwrap();
+    let outside = gpui::point(
+        menu.right() + gpui::px(40.0),
+        menu.bottom() + gpui::px(40.0),
+    );
+
+    cx.simulate_click(outside, gpui::Modifiers::none());
+    cx.run_until_parked();
+
+    assert_eq!(activated.get(), 0);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window));
+    });
+    assert!(cx.debug_bounds("yttt-menu").is_none());
+}
+
+#[gpui::test]
+fn menu_stays_inside_the_window_near_its_edge(cx: &mut gpui::TestAppContext) {
+    let (cx, _, _) = open_harness_menu_at(cx, |bounds| {
+        bounds.bottom_right() - gpui::point(gpui::px(4.0), gpui::px(4.0))
+    });
+    let menu = cx.debug_bounds("yttt-menu").expect("menu should open");
+    let window = cx.update(|window, _| window.viewport_size());
+
+    assert!(menu.right() <= window.width, "{menu:?} in {window:?}");
+    assert!(menu.bottom() <= window.height, "{menu:?} in {window:?}");
 }
 
 #[gpui::test]
