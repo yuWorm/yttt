@@ -185,7 +185,7 @@ const MENU_WINDOW_MARGIN: Pixels = px(8.);
 const MENU_PRIORITY: usize = 100;
 
 /// Measured from Zed 1.26.2's project panel menu.
-fn menu_row_height() -> gpui::Rems {
+pub fn menu_row_height() -> gpui::Rems {
     rems(1.40625)
 }
 

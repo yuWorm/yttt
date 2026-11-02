@@ -24,7 +24,7 @@ aligned = true
 [[metric]]
 name = "palette_width_px"
 zed = 607.0
-aligned = false
+aligned = true
 
 [[metric]]
 name = "button_compact_height_px"
@@ -56,12 +56,12 @@ aligned = true
 [[metric]]
 name = "palette_row_height_px"
 zed = 32.5
-aligned = false
+aligned = true
 
 [[metric]]
 name = "menu_row_pitch_px"
 zed = 22.5
-aligned = false
+aligned = true
 
 [[metric]]
 name = "tooltip_height_px"
