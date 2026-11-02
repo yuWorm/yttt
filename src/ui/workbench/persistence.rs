@@ -183,7 +183,6 @@ impl WorkbenchView {
                     YtttButtonVariant::Ghost,
                     appearance.ui,
                     appearance.style,
-                    cx,
                 )
                 .on_click(
                     cx.listener(|root, _, window, cx| root.open_workspace_history(window, cx)),

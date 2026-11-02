@@ -13,8 +13,8 @@ pub(super) fn theme() -> AppTheme {
         metadata: ThemeMetadata::default(),
         ui: WorkbenchTheme::one_dark(),
         editor: EditorTheme {
-            background: rgb(0x23272e),
-            foreground: rgb(0xabb2bf),
+            background: rgb(0x282c33),
+            foreground: rgb(0xacb2be),
             active_line: rgb(0x2c313c),
             line_number: rgb(0x495162),
             active_line_number: rgb(0xabb2bf),
@@ -38,7 +38,7 @@ pub(super) fn theme() -> AppTheme {
             },
         },
         terminal: TerminalTheme {
-            background: rgb(0x23272e),
+            background: rgb(0x282c33),
             foreground: rgb(0xabb2bf),
             cursor: Some(rgb(0xabb2bf)),
             selection_background: Some(rgba(0x67769640)),

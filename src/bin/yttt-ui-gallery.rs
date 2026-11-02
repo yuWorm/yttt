@@ -14,9 +14,7 @@ use gpui::{
     AnyElement, App, Bounds, Div, Entity, Pixels, Render, SharedString, Window, WindowBounds,
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
-use gpui_component::{
-    Disableable as _, IndexPath, Theme, input::InputState, menu::PopupMenu, select::SelectState,
-};
+use gpui_component::{IndexPath, Theme, input::InputState, menu::PopupMenu, select::SelectState};
 use yttt::{
     config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore},
     ui::{
@@ -29,10 +27,13 @@ use yttt_ui::{
     SelectableState,
     menu::{YtttMenu, YtttMenuItem, yttt_menu_preview},
     primitives::{
-        button::{YtttButtonVariant, yttt_button, yttt_button_style},
+        button::{
+            YtttButtonExt as _, YtttButtonSize, YtttButtonVariant, yttt_button, yttt_button_style,
+        },
         dialog::{yttt_dialog_style, yttt_dialog_surface},
         icon_button::{YtttIconButtonKind, yttt_icon_button},
         input::{YtttInputKind, yttt_input},
+        kbd::yttt_kbd,
         notification::{YtttNotificationTone, yttt_notification_surface},
         radio::yttt_radio,
         row::{YtttRowKind, yttt_row},
@@ -46,7 +47,7 @@ use yttt_ui::{
 };
 
 const WINDOW_WIDTH: f32 = 960.;
-const WINDOW_HEIGHT: f32 = 800.;
+const WINDOW_HEIGHT: f32 = 900.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
                      [--screenshot PATH] [--dump-layout PATH]";
@@ -292,7 +293,7 @@ impl Gallery {
             )
     }
 
-    fn buttons(&self, cx: &App) -> Vec<AnyElement> {
+    fn buttons(&self) -> Vec<AnyElement> {
         let (theme, ui_style) = (self.theme, self.ui_style);
         let mut elements = Vec::new();
         for (name, variant) in [
@@ -303,9 +304,8 @@ impl Gallery {
         ] {
             let style = yttt_button_style(variant, theme, ui_style);
             let id = |state: &str| SharedString::from(format!("button-{name}-{state}"));
-            let base = |state: &str| {
-                yttt_button(id(state), state.to_string(), variant, theme, ui_style, cx)
-            };
+            let base =
+                |state: &str| yttt_button(id(state), state.to_string(), variant, theme, ui_style);
             elements.push(self.tracked(&format!("button.{name}.default"), base("Default")));
             elements.push(self.tracked(
                 &format!("button.{name}.hover"),
@@ -321,6 +321,29 @@ impl Gallery {
             ));
         }
         elements
+    }
+
+    fn button_sizes(&self) -> Vec<AnyElement> {
+        [
+            ("compact", YtttButtonSize::Compact),
+            ("default", YtttButtonSize::Default),
+            ("medium", YtttButtonSize::Medium),
+            ("large", YtttButtonSize::Large),
+            ("Trust and Continue", YtttButtonSize::Compact),
+        ]
+        .into_iter()
+        .map(|(name, size)| {
+            let button = yttt_button(
+                SharedString::from(format!("button-size-{name}")),
+                name.to_string(),
+                YtttButtonVariant::Primary,
+                self.theme,
+                self.ui_style,
+            )
+            .sized(size, self.ui_style);
+            self.tracked(&format!("button.size.{name}"), button)
+        })
+        .collect()
     }
 
     fn icon_buttons(&self) -> Vec<AnyElement> {
@@ -392,7 +415,7 @@ impl Gallery {
 }
 
 impl Render for Gallery {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (theme, ui_style) = (self.theme, self.ui_style);
         div()
             .size_full()
@@ -403,7 +426,8 @@ impl Render for Gallery {
             .bg(theme.surface)
             .text_color(theme.text)
             .text_sm()
-            .child(self.section("Button", self.buttons(cx)))
+            .child(self.section("Button", self.buttons()))
+            .child(self.section("Button size", self.button_sizes()))
             .child(self.section("Icon button", self.icon_buttons()))
             .child(self.section(
                 "Input",
@@ -438,15 +462,17 @@ impl Render for Gallery {
             .child(self.section(
                 "Tabs",
                 vec![
-                    self.tracked(
-                        "tab.active",
-                        yttt_tab(SelectableState::Active, theme, ui_style).child("main.rs"),
-                    ),
-                    self.tracked(
-                        "tab.inactive",
-                        yttt_tab(SelectableState::Inactive, theme, ui_style).child("lib.rs"),
-                    ),
-                ],
+                        self.tracked(
+                            "tab.active",
+                            yttt_tab("tab-active", SelectableState::Active, theme, ui_style)
+                                .child("main.rs"),
+                        ),
+                        self.tracked(
+                            "tab.inactive",
+                            yttt_tab("tab-inactive", SelectableState::Inactive, theme, ui_style)
+                                .child("lib.rs"),
+                        ),
+                    ],
             ))
             .child(self.section("Rows", self.rows()))
             .child(self.section("Tree", vec![self.tree()]))
@@ -454,6 +480,15 @@ impl Render for Gallery {
                 "Overlays",
                 vec![
                     self.tracked("tooltip", self.tooltip.clone()),
+                    self.tracked(
+                        "kbd",
+                        yttt_kbd(
+                            yttt::config::keybindings::parse_keystroke("cmd-shift-p")
+                                .expect("gallery keystroke parses"),
+                            theme,
+                            ui_style,
+                        ),
+                    ),
                     self.tracked("menu", self.menu.clone()),
                     self.tracked(
                         "dialog",

@@ -558,7 +558,7 @@ impl RemoteConnectView {
                             if replacement_is_password(connection)), |body| {
                         body.child(yttt_button("remember-replacement", text.get(if self.remember_replacement {
                             UiTextKey::ConnectionRemembered
-                        } else { UiTextKey::ConnectionRemember }), YtttButtonVariant::Secondary, theme, style, cx)
+                        } else { UiTextKey::ConnectionRemember }), YtttButtonVariant::Secondary, theme, style)
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.remember_replacement = !view.remember_replacement;
                                 cx.notify();
@@ -583,7 +583,6 @@ impl RemoteConnectView {
             YtttButtonVariant::Ghost,
             theme,
             style,
-            cx,
         )
         .on_click(cx.listener(Self::cancel_window));
         let actions = div().flex().flex_wrap().justify_end().gap(style.spacing.sm);
@@ -596,7 +595,6 @@ impl RemoteConnectView {
                         YtttButtonVariant::Secondary,
                         theme,
                         style,
-                        cx,
                     )
                     .on_click(cx.listener(Self::reject_host_key)),
                 )
@@ -607,7 +605,6 @@ impl RemoteConnectView {
                         YtttButtonVariant::Secondary,
                         theme,
                         style,
-                        cx,
                     )
                     .on_click(cx.listener(Self::trust_host_key_once)),
                 )
@@ -626,7 +623,6 @@ impl RemoteConnectView {
                         },
                         theme,
                         style,
-                        cx,
                     )
                     .on_click(cx.listener(Self::trust_host_key_and_remember)),
                 ),
@@ -638,7 +634,6 @@ impl RemoteConnectView {
                         YtttButtonVariant::Primary,
                         theme,
                         style,
-                        cx,
                     )
                     .on_click(cx.listener(Self::retry)),
                 )

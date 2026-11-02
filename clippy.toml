@@ -1,4 +1,5 @@
 disallowed-methods = [
+    { path = "gpui_component::kbd::Kbd::new", reason = "Use yttt_ui::primitives::kbd::yttt_kbd." },
     { path = "gpui_component::init", reason = "Use yttt_ui::init." },
     { path = "gpui_component::menu::PopupMenuItem::new", reason = "Use yttt_ui::menu::YtttMenuItem." },
     { path = "gpui_component::Root::new", reason = "Use yttt_ui::window::yttt_root so every window has one entry point" },

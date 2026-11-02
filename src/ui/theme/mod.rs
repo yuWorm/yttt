@@ -463,8 +463,8 @@ impl ThemeRuntime {
         colors.popover = Some(color_hex(elevated).into());
         colors.popover_foreground = Some(color_hex(theme.text).into());
         colors.scrollbar = Some(color_hex(transparent).into());
-        colors.scrollbar_thumb = Some(color_hex(theme.border_variant).into());
-        colors.scrollbar_thumb_hover = Some(color_hex(theme.element_hover).into());
+        colors.scrollbar_thumb = Some(color_hex(theme.scrollbar_thumb).into());
+        colors.scrollbar_thumb_hover = Some(color_hex(theme.scrollbar_thumb_hover).into());
         colors.selection = Some(color_hex(theme.selection).into());
         colors.sidebar = Some(color_hex(transparent).into());
         colors.sidebar_accent = Some(color_hex(theme.ghost_element_hover).into());

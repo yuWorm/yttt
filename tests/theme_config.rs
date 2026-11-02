@@ -232,11 +232,11 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
 
     assert_eq!(
         highlight.editor_background,
-        Some(gpui::Hsla::from(rgb(0x23272e).alpha(0.04)))
+        Some(gpui::Hsla::from(rgb(0x282c33).alpha(0.04)))
     );
     assert_eq!(
         highlight.editor_foreground,
-        Some(gpui::Hsla::from(rgb(0xabb2bf)))
+        Some(gpui::Hsla::from(rgb(0xacb2be)))
     );
     assert_eq!(
         highlight.editor_active_line,
@@ -279,7 +279,7 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
         );
     }
 
-    assert_eq!(runtime.terminal.background, rgb(0x23272e).alpha(0.04));
+    assert_eq!(runtime.terminal.background, rgb(0x282c33).alpha(0.04));
     assert_eq!(runtime.terminal.foreground, rgb(0xabb2bf));
     assert_eq!(runtime.terminal.cursor, Some(rgb(0xabb2bf)));
     assert_eq!(

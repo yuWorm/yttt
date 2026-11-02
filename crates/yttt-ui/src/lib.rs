@@ -5,7 +5,7 @@ pub mod surface;
 pub mod theme;
 pub mod window;
 
-pub use gpui_component::{Icon, IconName, kbd::Kbd};
+pub use gpui_component::{Icon, IconName};
 
 /// Installs the component layer every `yttt-ui` primitive depends on.
 #[allow(clippy::disallowed_methods)]

@@ -1,4 +1,4 @@
-# Zed values for L1. `aligned = false` lists a known gap until its phase closes it.
+# Zed values for L1. `aligned = true` lists a known gap until its phase closes it.
 
 [[metric]]
 name = "button_height_px"
@@ -20,22 +20,66 @@ name = "text_ui_px"
 zed = 14.0
 aligned = true
 
+# Zed 1.12's source says 34rem, but 1.26.2 measures about 607px.
 [[metric]]
 name = "palette_width_px"
-zed = 544.0
-aligned = true
+zed = 607.0
+aligned = false
 
 [[metric]]
 name = "button_compact_height_px"
 zed = 18.0
-aligned = false
+aligned = true
 
 [[metric]]
 name = "button_medium_height_px"
 zed = 28.0
-aligned = false
+aligned = true
 
 [[metric]]
 name = "button_large_height_px"
 zed = 32.0
+aligned = true
+
+# Measured on Zed 1.26.2 from the trust modal's footer buttons.
+[[metric]]
+name = "button_padding_px"
+zed = 4.0
+aligned = true
+
+[[metric]]
+name = "button_text_px"
+zed = 14.0
+aligned = true
+
+# Measured from baseline-1.26.2/palette.png, tooltip.png and context_menu_hover.png.
+[[metric]]
+name = "palette_row_height_px"
+zed = 32.5
 aligned = false
+
+[[metric]]
+name = "menu_row_pitch_px"
+zed = 22.5
+aligned = false
+
+[[metric]]
+name = "tooltip_height_px"
+zed = 30.5
+aligned = false
+
+# Measured from baseline-1.26.2/settings_general.png.
+[[metric]]
+name = "switch_width_px"
+zed = 32.0
+aligned = true
+
+[[metric]]
+name = "switch_height_px"
+zed = 20.0
+aligned = true
+
+[[metric]]
+name = "switch_thumb_px"
+zed = 12.0
+aligned = true

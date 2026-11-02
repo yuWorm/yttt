@@ -11,6 +11,8 @@ const GDSCRIPT_HIGHLIGHTS: &str = r#"
 (class_definition name: (name) @type)
 "#;
 
+use std::sync::Once;
+
 use gpui::SharedString;
 use gpui_component::highlighter::{LanguageConfig, LanguageRegistry};
 
@@ -21,6 +23,13 @@ const VUE_HIGHLIGHTS: &str = include_str!("queries/vue.scm");
 const VUE_INJECTIONS: &str = include_str!("queries/vue-injections.scm");
 
 pub fn register_builtin_editor_languages() {
+    // Registration extends existing grammars, so it must run exactly once, and
+    // concurrent callers must wait for it to finish.
+    static REGISTERED: Once = Once::new();
+    REGISTERED.call_once(register_languages);
+}
+
+fn register_languages() {
     let registry = LanguageRegistry::singleton();
     registry.register(
         "toml",

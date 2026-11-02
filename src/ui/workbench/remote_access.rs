@@ -62,7 +62,6 @@ impl WorkbenchView {
                     YtttButtonVariant::Secondary,
                     theme,
                     style,
-                    cx,
                 )
                 .disabled(busy || !enabled)
                 .on_click(cx.listener(move |root, _, window, cx| {
@@ -116,7 +115,6 @@ impl WorkbenchView {
                                     },
                                     theme,
                                     style,
-                                    cx,
                                 )
                                 .disabled(busy)
                                 .on_click(cx.listener(
@@ -171,7 +169,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Ghost,
                             theme,
                             style,
-                            cx,
                         )
                         .disabled(busy)
                         .on_click(cx.listener(|root, _, _, cx| {
@@ -210,7 +207,6 @@ impl WorkbenchView {
                                     YtttButtonVariant::Secondary,
                                     theme,
                                     style,
-                                    cx,
                                 )
                                 .disabled(busy || !enabled)
                                 .on_click(cx.listener(
@@ -277,7 +273,6 @@ impl WorkbenchView {
                                 YtttButtonVariant::Secondary,
                                 theme,
                                 style,
-                                cx,
                             )
                             .disabled(busy || clients.is_empty())
                             .on_click(cx.listener(
@@ -371,7 +366,7 @@ impl WorkbenchView {
         let appearance = self.theme_runtime();
         let text = self.ui_text;
         let root = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, cx| {
+        window.open_alert_dialog(cx, move |alert, _, _| {
             let root = root.clone();
             let request = request.clone();
             alert
@@ -386,7 +381,6 @@ impl WorkbenchView {
                                 YtttButtonVariant::Secondary,
                                 appearance.ui,
                                 appearance.style,
-                                cx,
                             )
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
@@ -397,7 +391,6 @@ impl WorkbenchView {
                                 YtttButtonVariant::Primary,
                                 appearance.ui,
                                 appearance.style,
-                                cx,
                             )
                             .on_click(move |_, window, cx| {
                                 let _ = root.update(cx, |root, cx| {

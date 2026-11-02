@@ -1628,7 +1628,7 @@ impl WorkbenchView {
             .get(UiTextKey::SettingsLoginStartupConfirmAction);
         let cancel_label = self.ui_text.get(UiTextKey::Cancel);
         let workbench = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, cx| {
+        window.open_alert_dialog(cx, move |alert, _, _| {
             let workbench = workbench.clone();
             alert.title(title).description(description).footer(
                 DialogFooter::new()
@@ -1639,7 +1639,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Secondary,
                             theme,
                             ui_style,
-                            cx,
                         )
                         .debug_selector(|| "login-startup-cancel".to_string())
                         .on_click(|_, window, cx| window.close_dialog(cx)),
@@ -1651,7 +1650,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Primary,
                             theme,
                             ui_style,
-                            cx,
                         )
                         .debug_selector(|| "login-startup-confirm".to_string())
                         .on_click(move |_, window, cx| {

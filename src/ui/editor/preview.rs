@@ -12,7 +12,6 @@ use gpui::{
     App, Bounds, Context, EventEmitter, FocusHandle, Focusable, MouseButton, Pixels, Point,
     RenderImage, Window, canvas, div, img, prelude::*, px,
 };
-use gpui_component::Sizable;
 use image::{AnimationDecoder, ImageDecoder};
 
 use crate::ui::{
@@ -297,8 +296,8 @@ impl Render for FilePreview {
         let theme = current_workbench_theme(cx);
         let style = current_ui_style(cx);
         let button = |id: &'static str, label: &'static str| {
-            yttt_button(id, label, YtttButtonVariant::Secondary, theme, style, cx)
-                .small()
+            yttt_button(id, label, YtttButtonVariant::Secondary, theme, style)
+                .text_sm()
                 .debug_selector(move || format!("file-preview-{id}"))
         };
         let external_text = self.text.get(if self.download {

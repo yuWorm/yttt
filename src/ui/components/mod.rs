@@ -15,8 +15,9 @@ use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement as _, ParentElement as _,
     SharedString, Stateful, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
-use gpui_component::{button::Button, notification::Notification};
-use yttt_ui::{Icon, IconName, Kbd};
+use gpui_component::notification::Notification;
+use yttt_ui::primitives::button::YtttButton;
+use yttt_ui::{Icon, IconName};
 
 use crate::ui::{
     notifications::{ToastItem, ToastTone},

@@ -5,6 +5,7 @@ use yttt_protocol::workspace::{
     WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary,
 };
 use yttt_ui::menu::{YtttDropdownMenu as _, YtttMenuItem};
+use yttt_ui::primitives::button::YtttButtonExt as _;
 
 use crate::ui::{
     components::workbench_palette_item,
@@ -385,11 +386,10 @@ impl WorkbenchView {
                         YtttButtonVariant::Ghost,
                         theme,
                         style,
-                        cx,
                     )
                     .w(px(28.0))
                     .flex_none()
-                    .tooltip(text.get(UiTextKey::WorkspaceHistoryMore))
+                    .tooltip_text(text.get(UiTextKey::WorkspaceHistoryMore))
                     .yttt_dropdown_menu(
                         crate::ui::theme::menu_appearance,
                         move |menu, _, _| {

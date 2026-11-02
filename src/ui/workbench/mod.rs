@@ -6,9 +6,7 @@ use gpui::{
     Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rems, rgba,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IndexPath, Sizable as _, Theme as ComponentTheme,
-    WindowExt as _,
-    button::Button,
+    ActiveTheme as _, IndexPath, Sizable as _, Theme as ComponentTheme, WindowExt as _,
     dialog::DialogFooter,
     highlighter::SyntaxHighlighter,
     input::{Input, InputEvent, InputState, NumberInputEvent, Rope, StepAction},

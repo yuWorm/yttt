@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use std::rc::Rc;
 
 use gpui::{
@@ -21,6 +22,8 @@ type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 /// GPUI's [`Styled`] API.
 #[derive(IntoElement)]
 pub struct Button {
+    enabled_hover: Option<Box<dyn FnOnce(StyleRefinement) -> StyleRefinement>>,
+    enabled_active: Option<Box<dyn FnOnce(StyleRefinement) -> StyleRefinement>>,
     id: ElementId,
     base: crate::ObservedElement<Stateful<Div>>,
     style: StyleRefinement,
@@ -41,6 +44,8 @@ impl Button {
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id = id.into();
         Self {
+            enabled_hover: None,
+            enabled_active: None,
             base: div().id(id.clone()).test_support(),
             id,
             style: StyleRefinement::default(),
@@ -63,6 +68,24 @@ impl Button {
     /// Disabled buttons are skipped during Tab traversal. If this button already
     /// owns focus when it becomes disabled, it retains the focus binding until
     /// focus moves away, so keyboard traversal can continue in either direction.
+    /// yttt patch: a hover style that only applies while enabled.
+    pub fn enabled_hover(
+        mut self,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement + 'static,
+    ) -> Self {
+        self.enabled_hover = Some(Box::new(style));
+        self
+    }
+
+    /// yttt patch: a pressed style that only applies while enabled.
+    pub fn enabled_active(
+        mut self,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement + 'static,
+    ) -> Self {
+        self.enabled_active = Some(Box::new(style));
+        self
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -218,7 +241,18 @@ impl RenderOnce for Button {
         let style = self.resolved_style();
         let on_click = self.on_click;
 
-        self.base
+        let mut base = self.base;
+        // yttt patch: a disabled button shows no pointer feedback.
+        if !disabled {
+            if let Some(hover) = self.enabled_hover {
+                base = base.hover(hover);
+            }
+            if let Some(active) = self.enabled_active {
+                base = base.active(active);
+            }
+        }
+
+        base
             // Centering is part of Button's control geometry. Without a flex
             // formatting context an ordinary child starts at the root's
             // leading edge, so a fixed-height unstyled Button cannot align its

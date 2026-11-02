@@ -1,6 +1,11 @@
-use gpui::{App, Div, ElementId, Pixels, Rems, Rgba, SharedString, Window, div, prelude::*};
+use gpui::{App, Div, ElementId, Pixels, Rems, Rgba, SharedString, Window, div, prelude::*, px};
 
-use crate::{style::UiStyle, theme::WorkbenchTheme};
+use gpui_base::Switch;
+
+use crate::{
+    style::{UiStyle, UiStyleId},
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttSwitchStyle {
@@ -23,6 +28,7 @@ pub struct YtttSwitchStyle {
 }
 
 pub fn yttt_switch_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSwitchStyle {
+    let zed = ui_style.id == UiStyleId::Zed;
     YtttSwitchStyle {
         width: ui_style.switches.width,
         height: ui_style.switches.height,
@@ -31,15 +37,35 @@ pub fn yttt_switch_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSwitch
         track_padding: ui_style.switches.track_padding,
         thumb_size: ui_style.switches.thumb_size,
         control_height: ui_style.switches.control_height,
-        outer_border_width: ui_style.border.hairline,
+        outer_border_width: if zed {
+            px(0.0)
+        } else {
+            ui_style.border.hairline
+        },
         track_border_width: ui_style.border.hairline,
-        active_background: theme.accent,
+        active_background: if zed {
+            theme.accent.alpha(0.4)
+        } else {
+            theme.accent
+        },
         inactive_background: theme.element_background,
-        active_border: theme.border_variant,
-        inactive_border: theme.border_variant,
+        active_border: if zed {
+            theme.accent.alpha(0.2)
+        } else {
+            theme.border_variant
+        },
+        inactive_border: if zed {
+            theme.border
+        } else {
+            theme.border_variant
+        },
         hover_border: theme.border_focused,
         active_thumb: theme.text,
-        inactive_thumb: theme.text_muted,
+        inactive_thumb: if zed {
+            theme.icon_disabled
+        } else {
+            theme.text_muted
+        },
     }
 }
 
@@ -54,7 +80,6 @@ where
     H: Fn(&bool, &mut Window, &mut App) + 'static,
 {
     let style = yttt_switch_style(theme, ui_style);
-    let next_checked = !checked;
     let track_background = if checked {
         style.active_background
     } else {
@@ -71,47 +96,67 @@ where
         style.inactive_thumb
     };
 
+    let switch = Switch::new(id)
+        .checked(checked)
+        .on_change(move |next, _, window, cx| on_change(&next, window, cx))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .rounded_full();
+    let thumb = div()
+        .size(style.thumb_size)
+        .rounded_full()
+        .bg(thumb)
+        .shadow_xs();
+    let align = move |track: Div| {
+        track
+            .flex()
+            .items_center()
+            .when(checked, |this| this.justify_end())
+            .when(!checked, |this| this.justify_start())
+    };
+    // Zed's switch is a single track, so the track itself shows focus and hover.
+    let control = if ui_style.id == UiStyleId::Zed {
+        switch
+            .when(checked, |this| this.justify_end())
+            .when(!checked, |this| this.justify_start())
+            .w(style.track_width)
+            .h(style.track_height)
+            .px(style.track_padding)
+            .border(style.track_border_width)
+            .border_color(border)
+            .bg(track_background)
+            .hover(move |this| this.border_color(style.hover_border))
+            .focus_visible(move |this| this.border_color(style.hover_border))
+            .child(thumb)
+    } else {
+        switch
+            .justify_center()
+            .w(style.width)
+            .h(style.height)
+            .border(style.outer_border_width)
+            .border_color(border)
+            .hover(move |this| this.border_color(style.hover_border))
+            .focus_visible(move |this| this.border_color(style.hover_border))
+            .child(
+                align(div())
+                    .w(style.track_width)
+                    .h(style.track_height)
+                    .px(style.track_padding)
+                    .rounded_full()
+                    .border(style.track_border_width)
+                    .border_color(border)
+                    .bg(track_background)
+                    .child(thumb),
+            )
+    };
+
     div()
         .h(style.control_height)
         .flex()
         .items_center()
         .justify_end()
-        .child(
-            div()
-                .id(id)
-                .cursor_pointer()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(style.width)
-                .h(style.height)
-                .rounded_full()
-                .border(style.outer_border_width)
-                .border_color(border)
-                .hover(move |this| this.border_color(style.hover_border))
-                .on_click(move |_, window, cx| on_change(&next_checked, window, cx))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .when(checked, |this| this.justify_end())
-                        .when(!checked, |this| this.justify_start())
-                        .w(style.track_width)
-                        .h(style.track_height)
-                        .px(style.track_padding)
-                        .rounded_full()
-                        .border(style.track_border_width)
-                        .border_color(border)
-                        .bg(track_background)
-                        .child(
-                            div()
-                                .size(style.thumb_size)
-                                .rounded_full()
-                                .bg(thumb)
-                                .shadow_xs(),
-                        ),
-                ),
-        )
+        .child(control)
 }
 
 pub fn yttt_labeled_switch<H>(

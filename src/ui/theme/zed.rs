@@ -386,6 +386,16 @@ fn convert_theme(
         style.scrollbar_thumb_border.as_deref(),
         ui.border_strong,
     )?;
+    ui.scrollbar_thumb = color(
+        "scrollbar.thumb.background",
+        style.scrollbar_thumb_background.as_deref(),
+        ui.scrollbar_thumb,
+    )?;
+    ui.scrollbar_thumb_hover = color(
+        "scrollbar.thumb.hover_background",
+        style.scrollbar_thumb_hover_background.as_deref(),
+        ui.scrollbar_thumb_hover,
+    )?;
     ui.split_line = ui.border_variant;
     ui.split_line_active = ui.border_focused;
     ui.text = color("text", style.text.as_deref(), ui.text)?;
@@ -924,6 +934,8 @@ struct ZedStyle {
     panel_background: Option<String>,
     #[serde(rename = "panel.focused_border")]
     panel_focused_border: Option<String>,
+    #[serde(rename = "scrollbar.thumb.background")]
+    scrollbar_thumb_background: Option<String>,
     #[serde(rename = "scrollbar.thumb.border")]
     scrollbar_thumb_border: Option<String>,
     #[serde(rename = "scrollbar.thumb.hover_background")]

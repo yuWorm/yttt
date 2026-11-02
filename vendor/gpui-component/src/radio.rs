@@ -1,4 +1,3 @@
-// Modified for yttt; see vendor/PATCHES.md.
 use std::{rc::Rc, time::Duration};
 
 use crate::{
@@ -173,6 +172,7 @@ impl ParentElement for Radio {
 impl RenderOnce for Radio {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let checked = self.checked;
+        let has_content = self.label.is_some() || !self.children.is_empty();
         let indicator_size = rems(match self.size {
             Size::XSmall => 0.75,
             Size::Small => 0.875,
@@ -234,6 +234,7 @@ impl RenderOnce for Radio {
                     .relative()
                     .size(indicator_size)
                     // Center on the first 1.25em line, including when the label wraps.
+                    .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .rounded_full_style(cx)
                     .border_1()
@@ -251,7 +252,7 @@ impl RenderOnce for Radio {
                 this.child(
                     v_flex()
                         .w_full()
-                        .line_height(relative(1.))
+                        .line_height(relative(1.25))
                         .gap_1()
                         .when_some(self.label, |this, label| {
                             this.child(

@@ -19,6 +19,7 @@
 | 文本输入开关：`set_text_input_enabled`、`text_input_enabled` | `src/input/base/yttt_ext.rs`、`src/input/base/state.rs` | A | vim 普通模式要拦截输入法和编辑动作 | 上游提供输入开关 |
 | 光标形状：`InputCursorShape` | `src/input/base/yttt_ext.rs`、`src/input/base/state.rs`、`src/input/base/element.rs` | B | vim 普通模式显示块状光标 | 上游支持光标形状 |
 | `ScrollBounce::enabled_by_default` 恒为 false | `src/scroll_bounce.rs` | C | 0.8 起 macOS 默认回弹，Zed 不回弹。各组件默认值都经过这里，`Sidebar`、设置页、`TextView` 没有单独开关 | 有全局配置，或 yttt 决定采用回弹 |
+| `Button` disabled 时清除 hover、active 样式 | `src/button.rs` | B | disabled 按钮不应有指针反馈 | 上游提供，或 `ButtonStyles` 支持 |
 | `TreeState::focus_handle` | `src/tree.rs` | B | 判断焦点是否在文件树内 | P6 改用 `gpui_base::TreeState` 的公开焦点接口 |
 
 ## gpui-component
@@ -30,14 +31,13 @@
 | 搜索面板 debug selector | `src/input/search.rs` | E | 测试定位面板 | 测试不再依赖该 selector |
 | 搜索面板紧凑样式 | `src/input/search.rs` | C | 替代旧的 `flush_search_panel`。0.8.1 面板已贴边，只需还原样式 | P7 对齐编辑器时重做 |
 | 搜索框回显判断去掉 anchor 条件 | `src/input/overlay.rs` | E | 上游 bug：输入首字符后面板重新全选，下一键覆盖它 | 上游修复。适合提 PR |
-| `TooltipAppearance` | `src/tooltip.rs` | C | Zed 风格的快捷键提示颜色 | P3 用 `gpui-base` 重做 tooltip |
+| `DropdownMenu` 接受 `gpui_base::Button` | `src/menu/dropdown_menu.rs` | C | yttt 按钮已改用 `gpui_base::Button` | P4 自有菜单 |
 | `Notification::always_show_close_button`，图标和关闭按钮内联布局，正文 muted 色，关闭按钮 selector | `src/notification.rs` | C | 错误通知要始终显示关闭按钮，长文本换行不与按钮重叠 | P4 重做通知 |
 | `PopupMenuStyle`、`MenuItemAppearance`，带样式时恢复 1px 边框 | `src/menu/*` | C | 0.8.1 的 `popover_style` 去掉了边框，改用阴影环 | P4 自有 context menu |
 | `ListItem::hover_matches_selected`，选中背景 | `src/list/list_item.rs` | C | 文件树和列表的选中外观 | P5、P6 自有行外观 |
 | 各分区标题独立测量 | `src/list/list.rs`、`src/list/cache.rs`、`src/list/delegate.rs` | C | SSH 列表有多个分区 | 上游支持，或 P5 不再使用 `List` |
 | `Select` 触发器 hover，自身箭头用 XSmall | `src/select.rs` | C | 保持现有下拉外观 | P5 自有 select |
 | 中号和大号输入框内边距 12、16 | `src/sizing.rs` | C | 0.8.1 改成 10、12，文字左移 2px | P3 用 token 定义 |
-| Radio 行高 1，去掉指示器上边距 | `src/radio.rs` | C | 0.8.1 的 Radio 变高 | P3 自有 radio |
 | 主题 `placeholder_foreground` | `src/theme/schema.rs`、`src/theme/theme_color.rs`、`src/input/input.rs` | C | 占位符颜色独立于 muted 文本 | P3 自有 input |
 
 ## 待重放
@@ -47,6 +47,13 @@
 ## yttt 侧替代
 
 dockerfile、hcl、nix、scss、vue 和 JSX 高亮由 `src/ui/editor/language.rs` 通过 `LanguageRegistry` 注册，查询文件在 `src/ui/editor/queries/`，不再需要 vendor 补丁。
+
+## 已删除
+
+| 补丁 | 原因 |
+|---|---|
+| `TooltipAppearance` | 主题的 `muted_foreground` 已是同一颜色 |
+| Radio 行高和上边距 | Zed 没有对应控件，改用上游默认值 |
 
 ## 不重放
 

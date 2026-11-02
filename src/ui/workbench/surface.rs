@@ -152,7 +152,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Secondary,
                             self.theme_runtime().ui,
                             self.theme_runtime().style,
-                            cx,
                         )
                         .on_click(cx.listener(
                             move |root, _, window, cx| {
@@ -608,7 +607,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Secondary,
                             theme,
                             ui_style,
-                            cx,
                         )
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
@@ -1006,7 +1004,6 @@ impl WorkbenchView {
                         YtttButtonVariant::Secondary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.refresh_agent_sessions();

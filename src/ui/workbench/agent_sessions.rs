@@ -336,7 +336,7 @@ impl WorkbenchView {
         let theme = appearance.ui;
         let style = appearance.style;
         let workbench = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, cx| {
+        window.open_alert_dialog(cx, move |alert, _, _| {
             let input = input.clone();
             let workbench = workbench.clone();
             let key = key.clone();
@@ -360,7 +360,6 @@ impl WorkbenchView {
                             YtttButtonVariant::Secondary,
                             theme,
                             style,
-                            cx,
                         )
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
@@ -375,7 +374,6 @@ impl WorkbenchView {
                             },
                             theme,
                             style,
-                            cx,
                         )
                         .debug_selector(|| "agent-session-mutation-confirm".to_string())
                         .on_click(move |_, window, cx| {

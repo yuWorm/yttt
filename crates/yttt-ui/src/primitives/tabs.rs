@@ -1,4 +1,5 @@
-use gpui::{Div, Pixels, Rems, Rgba, div, prelude::*, px};
+use gpui::{ElementId, Pixels, Rems, Rgba, prelude::*, px};
+use gpui_base::Tab;
 
 use crate::{
     SelectableState,
@@ -38,10 +39,16 @@ pub fn yttt_tabbar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttTabBar
     }
 }
 
-pub fn yttt_tab(state: SelectableState, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
+pub fn yttt_tab(
+    id: impl Into<ElementId>,
+    state: SelectableState,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Tab {
     let row = yttt_row_style(YtttRowKind::Tab, state, true, theme, ui_style);
     let tabbar = yttt_tabbar_style(theme, ui_style);
-    div()
+    Tab::new(id)
+        .selected(state == SelectableState::Active)
         .h(row.height)
         .min_w(tabbar.min_width)
         .max_w(tabbar.max_width)
@@ -57,5 +64,6 @@ pub fn yttt_tab(state: SelectableState, theme: WorkbenchTheme, ui_style: UiStyle
         .bg(row.background)
         .px(row.padding_x)
         .text_color(row.title)
+        .text_size(ui_style.text.default)
         .hover(move |this| this.bg(row.hover_background))
 }

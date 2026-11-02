@@ -253,7 +253,6 @@ fn language_step(
                     YtttButtonVariant::Primary,
                     theme,
                     ui_style,
-                    cx,
                 )
                 .debug_selector(|| "onboarding-language-next".to_string())
                 .on_click(cx.listener(|this, _, _window, cx| {
@@ -416,7 +415,6 @@ fn terminal_font_step(
                         YtttButtonVariant::Secondary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .debug_selector(|| "onboarding-font-back".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -431,7 +429,6 @@ fn terminal_font_step(
                         YtttButtonVariant::Primary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .debug_selector(|| "onboarding-font-next".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -533,7 +530,6 @@ fn layout_step(
                         YtttButtonVariant::Secondary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .debug_selector(|| "onboarding-layout-back".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -548,7 +544,6 @@ fn layout_step(
                         YtttButtonVariant::Primary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .debug_selector(|| "onboarding-next".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -675,7 +670,6 @@ fn agent_step(
                         YtttButtonVariant::Secondary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .debug_selector(|| "onboarding-back".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -690,7 +684,6 @@ fn agent_step(
                         YtttButtonVariant::Primary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .debug_selector(|| "onboarding-agent-next".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -720,7 +713,6 @@ fn zed_import_step(
                     YtttButtonVariant::Secondary,
                     theme,
                     ui_style,
-                    cx,
                 )
                 .debug_selector(|| "onboarding-zed-skip".to_string())
                 .on_click(cx.listener(|this, _, _window, cx| {
@@ -737,7 +729,6 @@ fn zed_import_step(
                     YtttButtonVariant::Primary,
                     theme,
                     ui_style,
-                    cx,
                 )
                 .debug_selector(|| "onboarding-zed-import".to_string())
                 .on_click(cx.listener(|this, _, _window, cx| {
@@ -755,7 +746,6 @@ fn zed_import_step(
                 YtttButtonVariant::Primary,
                 theme,
                 ui_style,
-                cx,
             )
             .debug_selector(|| "onboarding-zed-continue".to_string())
             .on_click(cx.listener(|this, _, _window, cx| {
@@ -851,7 +841,6 @@ fn zed_import_step(
                         YtttButtonVariant::Secondary,
                         theme,
                         ui_style,
-                        cx,
                     )
                     .debug_selector(|| "onboarding-zed-back".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -1059,7 +1048,6 @@ fn command_palette_hint(
             YtttButtonVariant::Ghost,
             theme,
             ui_style,
-            cx,
         )
         .debug_selector(|| "onboarding-open-command-palette".to_string())
         .on_click(cx.listener(|this, _, window, cx| {

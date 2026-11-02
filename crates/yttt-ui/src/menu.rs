@@ -4,9 +4,8 @@ use gpui::{
     Action, App, ClickEvent, Context, Entity, FocusHandle, IntoElement, SharedString, Window, px,
     rems,
 };
-use gpui_component::{
-    button::Button,
-    menu::{ContextMenu, ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem, PopupMenuStyle},
+use gpui_component::menu::{
+    ContextMenu, ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem, PopupMenuStyle,
 };
 
 use crate::{
@@ -182,7 +181,7 @@ pub trait YtttDropdownMenu: Sized {
     ) -> impl IntoElement;
 }
 
-impl YtttDropdownMenu for Button {
+impl<T: DropdownMenu> YtttDropdownMenu for T {
     fn yttt_dropdown_menu(
         self,
         appearance: MenuAppearance,
