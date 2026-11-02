@@ -335,30 +335,37 @@ gpui-shell 是 JavaScript 插件运行时，不是主题系统，不在本计划
 
 ## 6. P4：浮层与菜单
 
+进度（2026-11-02）：右键和下拉菜单改由 `yttt_ui::menu::MenuLayer` 渲染，基于 `gpui_base::Positioner`，每个窗口一个。文件树仍用 Tree 自带的 `PopupMenu`，P6 替换后才能删除 `PopupMenuStyle` 补丁。子菜单未实现，当前菜单都不需要。
+
+L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22.5、文字缩进 10、分组间距约 35 一致。差异：Zed 菜单项右侧显示快捷键，`YtttMenuItem` 没有这一列。菜单宽度随内容变化，未比较。Dialog 和通知没有 Zed 基线，未比对。
+
+`gpui_component` 的 Dialog 和通知本来就建在 `gpui_base::Dialog` 与 `ToastManager` 上，不重写。`yttt_dialog_overlay` 的 9 处自绘遮罩加了 `gpui_base` 焦点陷阱。通知补丁保留，原因见 `vendor/PATCHES.md`。
+
+
 ### 任务 4.1：Popover、Dialog、Alert（M）
 
-- [ ] 替换为 `gpui-base` 的 Popover、Dialog、AlertDialog。
+- [x] Dialog、AlertDialog 已基于 `gpui-base`，自绘遮罩加焦点陷阱。yttt 没有使用 Popover。
 - [ ] 按基线 Zed 配置入场动画和遮罩。
-- [ ] 验证焦点转移、Esc、遮罩点击。
+- [x] 验证焦点转移、遮罩点击。
 
 ### 任务 4.2：Notification（S）
 
-- [ ] 基于 `ToastManager`、`ToastStackState` 重做，或保留现有实现但接入 surface。
-- [ ] 判断 `always_show_close_button` 补丁能否删除。
+- [x] 保留现有实现。
+- [x] `always_show_close_button` 补丁保留。
 
 ### 任务 4.3：Context menu（L）
 
-- [ ] 先写纯数据和交互测试：导航、禁用项跳过、子菜单、Esc、点击外部、窗口边缘避让、从父项移向子菜单时不误关闭。
-- [ ] 用 `Popup`、`Positioner`、`FocusTrapElement` 实现。
-- [ ] 替换 P2 的过渡实现，调用方不改。
-- [ ] 删除 `PopupMenuStyle`、`MenuItemAppearance` 补丁。
+- [x] 交互测试：导航、禁用项跳过、Esc、点击外部、窗口边缘避让。子菜单未实现，当前菜单不需要。
+- [x] 用 `Positioner` 实现。
+- [x] 替换 P2 的过渡实现，调用方不改。
+- [ ] 删除 `PopupMenuStyle`、`MenuItemAppearance` 补丁（移到 P6）。
 
 ### 任务 4.4：Dropdown menu 与标题栏菜单（S）
 
-- [ ] 复用 4.3。
-- [ ] 确认原生菜单不受影响。
+- [x] 复用 4.3。
+- [x] 确认原生菜单不受影响：yttt 没有调用 `set_menus`。
 
-**P4 退出门禁：** L1、L3 通过；`PATCHES.md` 中 C 类菜单补丁已删除。
+**P4 退出门禁：** L1、L3 通过。C 类菜单补丁的删除移到 P6，因为文件树要到换掉 Tree 才脱离 `PopupMenu`（2026-11-02 确认）。
 
 ## 7. P5：Picker 与 Select
 

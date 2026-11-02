@@ -16,7 +16,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &App,
     ) -> bool {
-        if workspace_focus.contains_focused(window, cx) {
+        if workspace_focus.contains_focused(window, cx) || yttt_ui::menu::menu_is_open(window, cx) {
             self.overlays.settling_focus = None;
             return false;
         }
@@ -460,7 +460,7 @@ impl Render for WorkbenchView {
             ));
         }
         if !self.ssh.pending_host_keys.is_empty() && !self.ssh.manager_open {
-            root = root.child(ssh_host_key_overlay(self, cx));
+            root = root.children(ssh_host_key_overlay(self, cx));
         }
 
         if self.onboarding.is_none()

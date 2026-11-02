@@ -623,6 +623,274 @@ fn switch_toggles_with_pointer_and_keyboard(cx: &mut gpui::TestAppContext) {
     assert_eq!(changes.get(), 2, "keyboard should toggle");
 }
 
+struct MenuHarness {
+    activated: Rc<Cell<usize>>,
+    focus: gpui::FocusHandle,
+}
+
+impl gpui::Render for MenuHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
+
+        let activated = self.activated.clone();
+        let appearance: yttt_ui::menu::MenuAppearance =
+            |_| (WorkbenchTheme::one_dark(), UiStyle::default());
+        gpui::div()
+            .id("menu-target")
+            .debug_selector(|| "menu-target".to_string())
+            .track_focus(&self.focus)
+            .size_full()
+            .yttt_context_menu(appearance, |menu, _, _| {
+                menu.item(YtttMenuItem::new("Outer").disabled(true))
+            })
+            .child(gpui::div().id("menu-inner").size_full().yttt_context_menu(
+                appearance,
+                move |menu, _, _| {
+                    let activated = activated.clone();
+                    menu.item(YtttMenuItem::new("Off").disabled(true)).item(
+                        YtttMenuItem::new("Run")
+                            .on_click(move |_, _, _| activated.set(activated.get() + 1)),
+                    )
+                },
+            ))
+    }
+}
+
+fn open_harness_menu(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    &mut gpui::VisualTestContext,
+    Rc<Cell<usize>>,
+    gpui::FocusHandle,
+) {
+    open_harness_menu_at(cx, gpui::Bounds::center)
+}
+
+fn open_harness_menu_at(
+    cx: &mut gpui::TestAppContext,
+    position: impl FnOnce(&gpui::Bounds<gpui::Pixels>) -> gpui::Point<gpui::Pixels>,
+) -> (
+    &mut gpui::VisualTestContext,
+    Rc<Cell<usize>>,
+    gpui::FocusHandle,
+) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let activated = Rc::new(Cell::new(0));
+    let view_activated = activated.clone();
+    let focus = Rc::new(std::cell::RefCell::new(None));
+    let view_focus = focus.clone();
+    let (_root, cx) = cx.add_window_view(
+        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
+            let view = cx.new(|cx| {
+                let focus = cx.focus_handle();
+                view_focus.replace(Some(focus.clone()));
+                MenuHarness {
+                    activated: view_activated,
+                    focus,
+                }
+            });
+            yttt_ui::window::yttt_root(view, window, cx)
+        },
+    );
+    let focus = focus.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        focus.focus(window, cx);
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("menu-target").unwrap();
+    cx.simulate_mouse_down(
+        position(&bounds),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    (cx, activated, focus)
+}
+
+#[gpui::test]
+fn menu_keyboard_skips_disabled_rows_and_activates(cx: &mut gpui::TestAppContext) {
+    let (cx, activated, focus) = open_harness_menu(cx);
+    assert!(cx.debug_bounds("yttt-menu").is_some(), "menu should open");
+
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    assert_eq!(activated.get(), 1);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window));
+    });
+    assert!(cx.debug_bounds("yttt-menu").is_none());
+}
+
+#[gpui::test]
+fn menu_closes_on_an_outside_click_and_restores_focus(cx: &mut gpui::TestAppContext) {
+    let (cx, activated, focus) = open_harness_menu(cx);
+    let menu = cx.debug_bounds("yttt-menu").unwrap();
+    let outside = gpui::point(
+        menu.right() + gpui::px(40.0),
+        menu.bottom() + gpui::px(40.0),
+    );
+
+    cx.simulate_click(outside, gpui::Modifiers::none());
+    cx.run_until_parked();
+
+    assert_eq!(activated.get(), 0);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window));
+    });
+    assert!(cx.debug_bounds("yttt-menu").is_none());
+}
+
+#[gpui::test]
+fn menu_stays_inside_the_window_near_its_edge(cx: &mut gpui::TestAppContext) {
+    let (cx, _, _) = open_harness_menu_at(cx, |bounds| {
+        bounds.bottom_right() - gpui::point(gpui::px(4.0), gpui::px(4.0))
+    });
+    let menu = cx.debug_bounds("yttt-menu").expect("menu should open");
+    let window = cx.update(|window, _| window.viewport_size());
+
+    assert!(menu.right() <= window.width, "{menu:?} in {window:?}");
+    assert!(menu.bottom() <= window.height, "{menu:?} in {window:?}");
+}
+
+#[gpui::test]
+fn menu_escape_restores_focus(cx: &mut gpui::TestAppContext) {
+    let (cx, activated, focus) = open_harness_menu(cx);
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    assert_eq!(activated.get(), 0);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window));
+    });
+    assert!(cx.debug_bounds("yttt-menu").is_none());
+}
+
+struct DialogTrapHarness {
+    focus: gpui::FocusHandle,
+}
+
+impl gpui::Render for DialogTrapHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use yttt_ui::primitives::dialog::{
+            YtttDialogPlacement, yttt_dialog_overlay, yttt_dialog_surface,
+        };
+
+        let (theme, ui_style) = (WorkbenchTheme::one_dark(), UiStyle::default());
+        let button = |id: &'static str| {
+            gpui_base::Button::new(id)
+                .size(gpui::px(40.0))
+                .debug_selector(move || id.to_string())
+        };
+        gpui::div()
+            .relative()
+            .size_full()
+            .child(button("behind"))
+            .child(yttt_dialog_overlay(
+                yttt_dialog_surface(theme, ui_style)
+                    .child(
+                        gpui_base::Button::new("inside-first")
+                            .track_focus(&self.focus)
+                            .size(gpui::px(40.0)),
+                    )
+                    .child(button("inside-second")),
+                YtttDialogPlacement::Center,
+                theme,
+                ui_style,
+            ))
+    }
+}
+
+#[gpui::test]
+fn tab_stays_inside_a_dialog_overlay(cx: &mut gpui::TestAppContext) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let focus = Rc::new(std::cell::RefCell::new(None));
+    let view_focus = focus.clone();
+    let (_root, cx) = cx.add_window_view(
+        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
+            let view = cx.new(|cx| {
+                let focus = cx.focus_handle();
+                view_focus.replace(Some(focus.clone()));
+                DialogTrapHarness { focus }
+            });
+            yttt_ui::window::yttt_root(view, window, cx)
+        },
+    );
+    let focus = focus.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        focus.focus(window, cx);
+    });
+    cx.run_until_parked();
+
+    for _ in 0..3 {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+    }
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        let trap = gpui_base::active_focus_trap(window, cx);
+        assert!(trap.is_some(), "focus should stay inside the dialog");
+    });
+}
+
+#[gpui::test]
+fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let focus = Rc::new(std::cell::RefCell::new(None));
+    let view_focus = focus.clone();
+    let (_root, cx) = cx.add_window_view(
+        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
+            let view = cx.new(|cx| {
+                let focus = cx.focus_handle();
+                view_focus.replace(Some(focus.clone()));
+                DialogTrapHarness { focus }
+            });
+            yttt_ui::window::yttt_root(view, window, cx)
+        },
+    );
+    let focus = focus.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        focus.focus(window, cx);
+    });
+    cx.run_until_parked();
+
+    cx.simulate_click(
+        gpui::point(gpui::px(2.0), gpui::px(2.0)),
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert!(focus.is_focused(window), "the backdrop must not take focus");
+    });
+}
+
 /// Shows a notification through the real window list, which drives its
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(

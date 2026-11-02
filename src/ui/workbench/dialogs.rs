@@ -7,7 +7,7 @@ pub(super) fn tab_rename_dialog(
     ui_text: &UiText,
     input: &Entity<InputState>,
     theme: WorkbenchTheme,
-) -> Div {
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
     yttt_dialog_overlay(
@@ -75,7 +75,7 @@ pub(super) fn keybinding_edit_dialog(
     recording_index: Option<usize>,
     error: Option<&str>,
     theme: WorkbenchTheme,
-) -> Div {
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
     let (action_title, _) = bindable_action_text_with_text(action, ui_text);
@@ -416,7 +416,7 @@ pub(super) fn zed_theme_import_dialog(
     conflict_policy: ZedThemeImportConflictPolicy,
     config_paths: &AppConfigPaths,
     theme: WorkbenchTheme,
-) -> Div {
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
     let device_paths = crate::config::scope::device_preferences_config_paths()
@@ -750,7 +750,7 @@ pub(super) fn file_conflict_dialog(
     ui_text: &UiText,
     theme: WorkbenchTheme,
     path: String,
-) -> Div {
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
     let ui_style = current_ui_style(cx);
     let title = ui_text.get(UiTextKey::FileChangedOnDisk);
     let actions = div()
@@ -828,7 +828,7 @@ pub(super) fn dirty_close_dialog(
     details: Vec<String>,
     file_intent: bool,
     has_save_error: bool,
-) -> Div {
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
     let save_label = ui_text.get(if file_intent {
@@ -924,7 +924,7 @@ pub(super) fn close_project_dialog(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     theme: WorkbenchTheme,
-) -> Div {
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
     yttt_dialog_overlay(

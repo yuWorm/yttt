@@ -1220,7 +1220,7 @@ impl WorkbenchView {
         ui_style: UiStyle,
         tooltip_text: AgentSessionTooltipText,
         cx: &mut Context<Self>,
-    ) -> gpui_component::menu::ContextMenu<gpui::Stateful<Div>> {
+    ) -> gpui::Stateful<Div> {
         let title = self.agent_session_title(session);
         let tooltip_title = title.clone();
         let age = self.agent_session_age_label(session.updated_at_ms);

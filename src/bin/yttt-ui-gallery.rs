@@ -14,7 +14,7 @@ use gpui::{
     AnyElement, App, Bounds, Div, Entity, Pixels, Render, SharedString, Window, WindowBounds,
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
-use gpui_component::{IndexPath, Theme, input::InputState, menu::PopupMenu, select::SelectState};
+use gpui_component::{IndexPath, Theme, input::InputState, select::SelectState};
 use yttt::{
     config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore},
     ui::{
@@ -200,7 +200,7 @@ struct Gallery {
     input: Entity<InputState>,
     filled_input: Entity<InputState>,
     select: Entity<SelectState<Vec<SharedString>>>,
-    menu: Entity<PopupMenu>,
+    menu: YtttMenu,
     tooltip: gpui::AnyView,
 }
 
@@ -225,17 +225,11 @@ impl Gallery {
                 cx,
             )
         });
-        let menu = yttt_menu_preview(
-            YtttMenu::default()
-                .item(YtttMenuItem::new("Rename"))
-                .item(YtttMenuItem::new("Duplicate"))
-                .item(YtttMenuItem::separator())
-                .item(YtttMenuItem::new("Delete").disabled(true)),
-            theme,
-            ui_style,
-            window,
-            cx,
-        );
+        let menu = YtttMenu::default()
+            .item(YtttMenuItem::new("Rename"))
+            .item(YtttMenuItem::new("Duplicate"))
+            .item(YtttMenuItem::separator())
+            .item(YtttMenuItem::new("Delete").disabled(true));
         let tooltip = cx
             .new(|_| yttt_tooltip("Toggle Terminal", theme, ui_style))
             .into();
@@ -489,7 +483,7 @@ impl Render for Gallery {
                             ui_style,
                         ),
                     ),
-                    self.tracked("menu", self.menu.clone()),
+                    self.tracked("menu", yttt_menu_preview(&self.menu, theme, ui_style)),
                     self.tracked(
                         "dialog",
                         yttt_dialog_surface(theme, ui_style)
