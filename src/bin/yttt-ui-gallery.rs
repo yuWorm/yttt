@@ -459,19 +459,23 @@ impl Render for Gallery {
                     self.tracked("radio.off", yttt_radio("radio-off", "Unselected", false)),
                 ],
             ))
-            .child(self.section(
-                "Tabs",
-                vec![
-                    self.tracked(
-                        "tab.active",
-                        yttt_tab(SelectableState::Active, theme, ui_style).child("main.rs"),
-                    ),
-                    self.tracked(
-                        "tab.inactive",
-                        yttt_tab(SelectableState::Inactive, theme, ui_style).child("lib.rs"),
-                    ),
-                ],
-            ))
+            .child(
+                self.section(
+                    "Tabs",
+                    vec![
+                        self.tracked(
+                            "tab.active",
+                            yttt_tab("tab-active", SelectableState::Active, theme, ui_style)
+                                .child("main.rs"),
+                        ),
+                        self.tracked(
+                            "tab.inactive",
+                            yttt_tab("tab-inactive", SelectableState::Inactive, theme, ui_style)
+                                .child("lib.rs"),
+                        ),
+                    ],
+                ),
+            )
             .child(self.section("Rows", self.rows()))
             .child(self.section("Tree", vec![self.tree()]))
             .child(self.section(

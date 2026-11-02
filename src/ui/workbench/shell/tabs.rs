@@ -488,8 +488,7 @@ where
     let missing_on_disk = item.missing_on_disk;
     let status_tone = item.status_tone;
 
-    let mut tab = yttt_tab(item.state, theme, ui_style)
-        .id(element_id)
+    let mut tab = yttt_tab(element_id, item.state, theme, ui_style)
         .debug_selector(move || format!("project-tab-{}-{index}", tab_group_id.raw()))
         .group(group_name.clone())
         .relative()
@@ -497,7 +496,6 @@ where
         .flex_shrink_0()
         .items_center()
         .gap(ui_style.spacing.md)
-        .text_xs()
         .on_click(on_select_tab)
         .on_mouse_down(MouseButton::Right, on_context_select_tab)
         .on_drag(
