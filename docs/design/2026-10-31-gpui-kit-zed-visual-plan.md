@@ -337,6 +337,8 @@ gpui-shell 是 JavaScript 插件运行时，不是主题系统，不在本计划
 
 进度（2026-11-02）：右键和下拉菜单改由 `yttt_ui::menu::MenuLayer` 渲染，基于 `gpui_base::Positioner`，每个窗口一个。文件树仍用 Tree 自带的 `PopupMenu`，P6 替换后才能删除 `PopupMenuStyle` 补丁。子菜单未实现，当前菜单都不需要。
 
+L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22.5、文字缩进 10、分组间距约 35 一致。差异：Zed 菜单项右侧显示快捷键，`YtttMenuItem` 没有这一列。菜单宽度随内容变化，未比较。Dialog 和通知没有 Zed 基线，未比对。
+
 `gpui_component` 的 Dialog 和通知本来就建在 `gpui_base::Dialog` 与 `ToastManager` 上，不重写。`yttt_dialog_overlay` 的 9 处自绘遮罩加了 `gpui_base` 焦点陷阱。通知补丁保留，原因见 `vendor/PATCHES.md`。
 
 
