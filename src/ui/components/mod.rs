@@ -17,7 +17,7 @@ use gpui::{
 };
 use gpui_component::notification::Notification;
 use yttt_ui::primitives::button::YtttButton;
-use yttt_ui::{Icon, IconName, Kbd};
+use yttt_ui::{Icon, IconName};
 
 use crate::ui::{
     notifications::{ToastItem, ToastTone},

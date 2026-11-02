@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 设计文档：[2026-10-31-gpui-kit-zed-visual-design.md](2026-10-31-gpui-kit-zed-visual-design.md)
-- 状态：M1 已合入，P2 待合入（PR #2），P3 进行中；P0 剩余项见下方进度
+- 状态：M1、P2 已合入，P3 完成，待开 PR；P0 剩余项见下方进度
 
 ## 0. 执行规则
 
@@ -299,7 +299,7 @@ CI 已通过（提交 `a3d10d9`，Run 41287845986）：macOS 917 过，Linux 148
 
 进度（2026-11-01）：3.1 的按钮部分完成。按钮改到 `gpui_base::Button` 后 L2 全窗口 0 差异，L1 覆盖 4 种高度。文字大小已按 Zed 1.26.2 信任弹窗的实测对齐为 14px，内边距 4px 本来就一致；同一文案宽度 119 对 118。Zed 基线截图存于 `tests/visual/zed/baseline-1.26.2/`，由 `scripts/zed-input.swift` 驱动，需要终端的屏幕录制和辅助功能权限。命令面板实测约 607px，和 1.12 源码的 34rem 不同，以实测为准。
 
-3.3 Tooltip 的几何已与 Zed 一致（高 30.5px、圆角约 4px、文字 14px），差距在配色。默认 One Dark 已改用 Zed 配色，同一截图链路下面板、选中、文字三色和 Zed 基线逐字节相同。语法高亮颜色留到 P7。3.5 的开关已按 `settings_general.png` 改成单层 32×20，同一截图链路下关闭态和滑块颜色与 Zed 一致；Radio 未改。3.4 只把 Search 边框改为 `border`。3.6 的标签结构本来就和 Zed 一致，只改了边框色。3.7 只对齐滑块颜色；Zed 编辑器滑块约 14px 宽、无圆角，几何留到 P7 的 `set_scrollbar_renderer`。`screencapture` 带显示器色彩配置，基线 PNG 的颜色值不能当主题值用。`yttt_menu_icon_button` 留到 P4。展示页高度改为 900，L2 基线随视觉变化重新生成。
+3.3 Tooltip 的几何已与 Zed 一致（高 30.5px、圆角约 4px、文字 14px），差距在配色。默认 One Dark 已改用 Zed 配色，同一截图链路下面板、选中、文字三色和 Zed 基线逐字节相同。语法高亮颜色留到 P7。3.5 的开关已按 `settings_general.png` 改成单层 32×20，同一截图链路下关闭态和滑块颜色与 Zed 一致；Radio 未改。3.4 只把 Search 边框改为 `border`。3.6 的标签结构本来就和 Zed 一致，只改了边框色。3.7 只对齐滑块颜色；Zed 编辑器滑块约 14px 宽、无圆角，几何留到 P7 的 `set_scrollbar_renderer`。3.2 的快捷键走 `yttt_kbd`，Zed 风格为无底框的 muted 文字。3.1 的 hover 只有一个样本：Zed `#2b3039`、yttt 约 `#2f353d`，在阈值内，不调整。Radio 没有 Zed 对应控件，只继承配色。`screencapture` 带显示器色彩配置，基线 PNG 的颜色值不能当主题值用。`yttt_menu_icon_button` 留到 P4。展示页高度改为 900，L2 基线随视觉变化重新生成。
 
 每个任务的步骤相同，以下称**标准流程**：
 

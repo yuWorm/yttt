@@ -1,6 +1,6 @@
 use super::*;
 use gpui::{ImageSource, Resource, img};
-use yttt_ui::{Icon, Kbd};
+use yttt_ui::{Icon, primitives::kbd::yttt_kbd};
 
 pub(super) fn tab_rename_dialog(
     cx: &mut Context<WorkbenchView>,
@@ -1120,9 +1120,11 @@ fn empty_workspace_action(
                 ),
         )
         .children(shortcut.map(|shortcut| {
-            Kbd::new(
+            yttt_kbd(
                 crate::config::keybindings::parse_keystroke(shortcut)
                     .expect("empty workspace shortcut should be a valid GPUI keystroke"),
+                *theme,
+                ui_style,
             )
             .text_size(scale.text_rems(0.75))
         }));
@@ -1349,9 +1351,11 @@ pub(super) fn project_empty_terminal_state(
                 *theme,
                 ui_style,
             )
-            .child(Kbd::new(
+            .child(yttt_kbd(
                 crate::config::keybindings::parse_keystroke("secondary-t")
                     .expect("new terminal shortcut should be a valid GPUI keystroke"),
+                *theme,
+                ui_style,
             ))
             .on_click(cx.listener(|this, _, _window, cx| {
                 let _ = this.run_command(CommandId::TabNew);

@@ -33,6 +33,7 @@ use yttt_ui::{
         dialog::{yttt_dialog_style, yttt_dialog_surface},
         icon_button::{YtttIconButtonKind, yttt_icon_button},
         input::{YtttInputKind, yttt_input},
+        kbd::yttt_kbd,
         notification::{YtttNotificationTone, yttt_notification_surface},
         radio::yttt_radio,
         row::{YtttRowKind, yttt_row},
@@ -477,6 +478,15 @@ impl Render for Gallery {
                 "Overlays",
                 vec![
                     self.tracked("tooltip", self.tooltip.clone()),
+                    self.tracked(
+                        "kbd",
+                        yttt_kbd(
+                            yttt::config::keybindings::parse_keystroke("cmd-shift-p")
+                                .expect("gallery keystroke parses"),
+                            theme,
+                            ui_style,
+                        ),
+                    ),
                     self.tracked("menu", self.menu.clone()),
                     self.tracked(
                         "dialog",

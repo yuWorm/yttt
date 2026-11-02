@@ -6,6 +6,8 @@
 - The default One Dark theme now uses Zed's palette and button text is 14px, with new Compact, Medium, and Large button sizes.
 - 开关改为 Zed 的单层样式。
 - Switches now use Zed's single-track style.
+- 快捷键提示改为无底框的文字，标签边框和滚动条滑块颜色与 Zed 一致。
+- Shortcut hints are now plain text, and tab borders and scrollbar thumbs use Zed's colors.
 - 升级到 GPUI `gpui-pre` 0.3.10 和 gpui-kit 0.8.1，开发和构建需要 Rust 1.98；界面外观不变。终端高速输出的吞吐下降约 15%，帧时间和输入延迟没有变化。
 - Upgrade to GPUI `gpui-pre` 0.3.10 and gpui-kit 0.8.1, which requires Rust 1.98 to build, with no change in appearance. Terminal throughput under heavy output drops by about 15%; frame times and input latency are unchanged.
 - 修复恢复后普通标签被当作 Agent：窗格的配置决定它是什么，保存的 Agent 记录不再改变窗格身份。普通 shell 只恢复 Host 停止时仍在运行的 Agent，并在 shell 内恢复，退出后回到 shell；已自行结束的 Agent 不再被自动拉起，没有 Agent 的标签也不再显示 Agent 状态。

@@ -1,4 +1,5 @@
 use super::*;
+use yttt_ui::primitives::kbd::yttt_kbd;
 
 pub fn workbench_palette_item<H>(
     id: impl Into<ElementId>,
@@ -96,11 +97,7 @@ pub fn workbench_keybinding_badge(
             .into_any_element();
     }
     if let Some(keystroke) = parse_keybinding_for_display(&keybinding) {
-        Kbd::new(keystroke)
-            .border_color(theme.border)
-            .bg(theme.surface_elevated)
-            .text_color(theme.text_muted)
-            .into_any_element()
+        yttt_kbd(keystroke, theme, ui_style).into_any_element()
     } else {
         div()
             .rounded(ui_style.radius.compact)
