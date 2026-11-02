@@ -1,5 +1,7 @@
 use gpui::{App, Div, ElementId, Pixels, Rems, Rgba, SharedString, Window, div, prelude::*, px};
 
+use gpui_base::Switch;
+
 use crate::{
     style::{UiStyle, UiStyleId},
     theme::WorkbenchTheme,
@@ -78,7 +80,6 @@ where
     H: Fn(&bool, &mut Window, &mut App) + 'static,
 {
     let style = yttt_switch_style(theme, ui_style);
-    let next_checked = !checked;
     let track_background = if checked {
         style.active_background
     } else {
@@ -95,47 +96,67 @@ where
         style.inactive_thumb
     };
 
+    let switch = Switch::new(id)
+        .checked(checked)
+        .on_change(move |next, _, window, cx| on_change(&next, window, cx))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .rounded_full();
+    let thumb = div()
+        .size(style.thumb_size)
+        .rounded_full()
+        .bg(thumb)
+        .shadow_xs();
+    let align = move |track: Div| {
+        track
+            .flex()
+            .items_center()
+            .when(checked, |this| this.justify_end())
+            .when(!checked, |this| this.justify_start())
+    };
+    // Zed's switch is a single track, so the track itself shows focus and hover.
+    let control = if ui_style.id == UiStyleId::Zed {
+        switch
+            .when(checked, |this| this.justify_end())
+            .when(!checked, |this| this.justify_start())
+            .w(style.track_width)
+            .h(style.track_height)
+            .px(style.track_padding)
+            .border(style.track_border_width)
+            .border_color(border)
+            .bg(track_background)
+            .hover(move |this| this.border_color(style.hover_border))
+            .focus_visible(move |this| this.border_color(style.hover_border))
+            .child(thumb)
+    } else {
+        switch
+            .justify_center()
+            .w(style.width)
+            .h(style.height)
+            .border(style.outer_border_width)
+            .border_color(border)
+            .hover(move |this| this.border_color(style.hover_border))
+            .focus_visible(move |this| this.border_color(style.hover_border))
+            .child(
+                align(div())
+                    .w(style.track_width)
+                    .h(style.track_height)
+                    .px(style.track_padding)
+                    .rounded_full()
+                    .border(style.track_border_width)
+                    .border_color(border)
+                    .bg(track_background)
+                    .child(thumb),
+            )
+    };
+
     div()
         .h(style.control_height)
         .flex()
         .items_center()
         .justify_end()
-        .child(
-            div()
-                .id(id)
-                .cursor_pointer()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(style.width)
-                .h(style.height)
-                .rounded_full()
-                .border(style.outer_border_width)
-                .border_color(border)
-                .hover(move |this| this.border_color(style.hover_border))
-                .on_click(move |_, window, cx| on_change(&next_checked, window, cx))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .when(checked, |this| this.justify_end())
-                        .when(!checked, |this| this.justify_start())
-                        .w(style.track_width)
-                        .h(style.track_height)
-                        .px(style.track_padding)
-                        .rounded_full()
-                        .border(style.track_border_width)
-                        .border_color(border)
-                        .bg(track_background)
-                        .child(
-                            div()
-                                .size(style.thumb_size)
-                                .rounded_full()
-                                .bg(thumb)
-                                .shadow_xs(),
-                        ),
-                ),
-        )
+        .child(control)
 }
 
 pub fn yttt_labeled_switch<H>(

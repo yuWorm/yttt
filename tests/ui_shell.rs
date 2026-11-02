@@ -560,6 +560,69 @@ fn scroll_areas_do_not_bounce_by_default() {
     assert!(!gpui_base::ScrollBounce::enabled_by_default());
 }
 
+struct SwitchHarness {
+    changes: Rc<Cell<usize>>,
+}
+
+impl gpui::Render for SwitchHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let changes = self.changes.clone();
+        gpui::div().size_full().child(
+            yttt_ui::primitives::switch::yttt_switch(
+                "harness-switch",
+                false,
+                WorkbenchTheme::one_dark(),
+                UiStyle::default(),
+                move |_, _, _| changes.set(changes.get() + 1),
+            )
+            .w(gpui::px(32.0))
+            .debug_selector(|| "harness-switch".to_string()),
+        )
+    }
+}
+
+#[gpui::test]
+fn switch_toggles_with_pointer_and_keyboard(cx: &mut gpui::TestAppContext) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let changes = Rc::new(Cell::new(0));
+    let view_changes = changes.clone();
+    let (_root, cx) = cx.add_window_view(
+        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
+            let view = cx.new(|_| SwitchHarness {
+                changes: view_changes,
+            });
+            yttt_ui::window::yttt_root(view, window, cx)
+        },
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let bounds = cx.debug_bounds("harness-switch").unwrap();
+    cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(changes.get(), 1, "pointer should toggle");
+
+    cx.update(|window, cx| window.focus_next(cx));
+    cx.run_until_parked();
+    let space = yttt::config::keybindings::parse_keystroke("space").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: space.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: space });
+    cx.run_until_parked();
+    assert_eq!(changes.get(), 2, "keyboard should toggle");
+}
+
 /// Shows a notification through the real window list, which drives its
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(
