@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 终端字体改为不带 Nerd Font 图标的字体（如 Lilex）时，图标改由随附的 Hack Nerd Font Mono 显示，不再是方块。
+- Terminal fonts without Nerd Font icons, such as Lilex, now draw them from the bundled Hack Nerd Font Mono instead of placeholder boxes.
+- Zed 风格的标题栏、面板分界线与 Zed 对齐。
+- The Zed-style title bar and panel borders now match Zed.
 - Zed 风格下编辑器默认使用随附的 Lilex 字体，与 Zed 一致；Rounded 风格仍用系统等宽字体。
 - In the Zed style the editor now defaults to the bundled Lilex font, as Zed does; the Rounded style keeps the system monospace font.
 - 编辑器默认字号改为 15，行距改为 1.618，与 Zed 一致；已保存的设置不变。行号栏和当前行高亮与 Zed 对齐。

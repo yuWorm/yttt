@@ -18,9 +18,9 @@ use crate::colors::ColorPalette;
 use crate::terminal::TerminalScrollbarMetrics;
 use alacritty_terminal::vte::ansi::CursorShape;
 use gpui::{
-    App, Bounds, ContentMask, Corners, Edges, Font, FontFeatures, FontStyle, FontWeight, Hsla,
-    Pixels, Point, RenderImage, ShapedLine, SharedString, Size, TextAlign, TextRun, UnderlineStyle,
-    Window, px, quad, transparent_black,
+    App, Bounds, ContentMask, Corners, Edges, Font, FontFallbacks, FontFeatures, FontStyle,
+    FontWeight, Hsla, Pixels, Point, RenderImage, ShapedLine, SharedString, Size, TextAlign,
+    TextRun, UnderlineStyle, Window, px, quad, transparent_black,
 };
 use image::{Frame, RgbaImage};
 use parking_lot::Mutex;
@@ -399,6 +399,18 @@ pub struct TerminalDiagnosticsSnapshot {
     pub gpui_wakeups: u64,
 }
 
+/// The Nerd Font yttt bundles. CoreText does not fall back to fonts an app
+/// registers at runtime, so a terminal font without Nerd Font icons would draw
+/// placeholders unless this family is named.
+const NERD_FONT_FALLBACK: &str = "Hack Nerd Font Mono";
+
+fn nerd_font_fallbacks() -> FontFallbacks {
+    static FALLBACKS: std::sync::LazyLock<FontFallbacks> = std::sync::LazyLock::new(|| {
+        FontFallbacks::from_fonts(vec![NERD_FONT_FALLBACK.to_string()])
+    });
+    FALLBACKS.clone()
+}
+
 /// GPUI painter for resolved terminal snapshots.
 #[derive(Clone)]
 pub struct TerminalRenderer {
@@ -575,7 +587,7 @@ impl TerminalRenderer {
         Font {
             family: self.font_family.clone().into(),
             features: FontFeatures::disable_ligatures(),
-            fallbacks: None,
+            fallbacks: Some(nerd_font_fallbacks()),
             weight: if style.bold {
                 FontWeight::BOLD
             } else {
@@ -1861,5 +1873,19 @@ mod tests {
         let spans = TerminalRenderer::background_spans(0, &snapshot.rows[0].cells);
         assert_eq!(spans[0].start_col, 0);
         assert_eq!(spans[0].end_col, 2);
+    }
+
+    #[test]
+    fn terminal_fonts_fall_back_to_the_bundled_nerd_font() {
+        let renderer =
+            TerminalRenderer::new("Lilex".to_string(), px(13.0), 1.0, ColorPalette::default());
+        let font = renderer.font(TerminalFontStyle::default());
+
+        assert_eq!(
+            font.fallbacks
+                .as_ref()
+                .map(|fallbacks| fallbacks.fallback_list().to_vec()),
+            Some(vec![NERD_FONT_FALLBACK.to_string()])
+        );
     }
 }
