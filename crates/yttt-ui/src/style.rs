@@ -99,6 +99,20 @@ pub struct UiControlMetrics {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiTreeMetrics {
+    pub row_height: Rems,
+    /// Horizontal distance between nesting levels.
+    pub indent: Pixels,
+    pub padding_left: Pixels,
+    pub content_gap: Rems,
+    pub icon_size: Pixels,
+    pub show_chevrons: bool,
+    pub indent_guides: bool,
+    /// Zed draws a focused selection as an outline over a full-width row.
+    pub outlined_focus: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiRowMetrics {
     pub palette_height: Rems,
     pub palette_compact_height: Rems,
@@ -229,6 +243,7 @@ pub struct UiStyle {
     pub border: UiBorderScale,
     pub controls: UiControlMetrics,
     pub rows: UiRowMetrics,
+    pub tree: UiTreeMetrics,
     pub palette: UiPaletteMetrics,
     pub shell: UiShellMetrics,
 
@@ -362,6 +377,17 @@ impl UiStyle {
                 search_height: rems(2.0),
                 palette_footer_height: rems(2.1875),
                 status_footer_height: rems(2.875),
+            },
+            // Measured from baseline-1.26.2/main2.png.
+            tree: UiTreeMetrics {
+                row_height: rems(1.625),
+                indent: px(20.0),
+                padding_left: px(9.0),
+                content_gap: rems(0.375),
+                icon_size: px(14.0),
+                show_chevrons: false,
+                indent_guides: true,
+                outlined_focus: true,
             },
             rows: UiRowMetrics {
                 palette_height: rems(3.0),
@@ -533,6 +559,16 @@ impl UiStyle {
                 search_height: rems(2.0),
                 palette_footer_height: rems(3.25),
                 status_footer_height: rems(3.25),
+            },
+            tree: UiTreeMetrics {
+                row_height: rems(2.25),
+                indent: px(14.0),
+                padding_left: px(8.0),
+                content_gap: rems(0.25),
+                icon_size: px(12.0),
+                show_chevrons: true,
+                indent_guides: false,
+                outlined_focus: false,
             },
             rows: UiRowMetrics {
                 palette_height: rems(3.75),

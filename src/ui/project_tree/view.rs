@@ -2,19 +2,26 @@ use std::{
     collections::HashMap,
     fmt::Write as _,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Arc,
 };
 use yttt_ui::menu::{YtttMenu, YtttMenuItem};
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, Styled as _, Subscription, Window, div, px,
+    App, AppContext as _, Context, Div, Entity, EventEmitter, Focusable as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
     input::{Escape, InputEvent, InputState},
-    list::ListItem,
-    tree::{TreeItem, TreeState, tree},
+    scroll::ScrollableElement as _,
+    tree::{TreeItem, TreeState},
+};
+use yttt_ui::{
+    menu::YtttContextMenu as _,
+    tree::{YtttTreeRowState, yttt_tree_row},
 };
 
 use crate::{
@@ -29,13 +36,15 @@ use crate::{
         },
         primitives::input::yttt_borderless_input,
         theme::{
-            current_ui_style,
-            icons::{IconTheme, icon_for_visual},
+            current_ui_style, current_workbench_theme,
+            icons::{IconTheme, icon_for_visual, icon_for_visual_sized},
         },
     },
 };
 
 use super::{ProjectFileTree, ProjectTreeEntryKind, ProjectTreeLoadState, ProjectTreeVisibleRow};
+
+type RowMenuBuilder = dyn Fn(&str, &mut App) -> YtttMenu;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectTreeViewEvent {
@@ -1087,56 +1096,9 @@ impl Render for ProjectTreeView {
         let show_hidden = self.show_hidden;
         let show_focus_indicator = self.show_focus_indicator;
         let shared_mutation_allowed = self.shared_mutation_allowed;
-        let tree = tree(&self.tree, move |ix, entry, selected, _window, cx| {
-            let id = entry.item().id.as_str().to_string();
-            if id == EDIT_ROW_ID {
-                return render_edit_row(
-                    ix,
-                    entry.depth(),
-                    selected,
-                    None,
-                    edit_target.as_ref(),
-                    edit_input.as_ref(),
-                    &icon_theme,
-                    cx,
-                );
-            }
-            let row = rows.get(&id).cloned();
-            if row.as_ref().is_some_and(|row| {
-                matches!(
-                    &edit_target,
-                    Some(ProjectTreeEditTarget::Rename { path })
-                        if row.relative_path.as_deref() == Some(path)
-                )
-            }) {
-                return render_edit_row(
-                    ix,
-                    entry.depth(),
-                    selected,
-                    row,
-                    edit_target.as_ref(),
-                    edit_input.as_ref(),
-                    &icon_theme,
-                    cx,
-                );
-            }
-            render_component_row(
-                ix,
-                entry.depth(),
-                selected,
-                tree_has_keyboard_focus,
-                show_focus_indicator,
-                row,
-                &icon_theme,
-                view.clone(),
-                cx,
-            )
-        })
-        .context_menu(move |_ix, entry, popup, _window, cx| {
-            let (theme, ui_style) = crate::ui::theme::menu_appearance(cx);
+        let build_menu: Rc<RowMenuBuilder> = Rc::new(move |id, cx| {
             let menu = YtttMenu::default();
-            let menu = 'menu: {
-                let id = entry.item().id.as_str();
+            'menu: {
                 let Some(row) = menu_rows.get(id).cloned() else {
                     break 'menu menu;
                 };
@@ -1299,9 +1261,79 @@ impl Render for ProjectTreeView {
                             });
                         }),
                 )
-            };
-            menu.into_popup_menu(popup, theme, ui_style)
+            }
         });
+        let scroll_handle = self.tree.read(cx).scroll_handle().clone();
+        let tree = gpui_base::Tree::new(&self.tree)
+            .item(move |ix, entry, entry_state, _window, cx| {
+                let id = entry.item().id.as_str().to_string();
+                let row_state = YtttTreeRowState {
+                    depth: entry.depth(),
+                    selected: entry_state.is_selected(),
+                    focused: tree_has_keyboard_focus,
+                    focus_ring: tree_has_keyboard_focus && show_focus_indicator,
+                    right_clicked: entry_state.is_right_clicked(),
+                    disabled: entry.is_disabled(),
+                };
+                let element = (|| {
+                    let id = entry.item().id.as_str().to_string();
+                    if id == EDIT_ROW_ID {
+                        return render_edit_row(
+                            ix,
+                            row_state,
+                            None,
+                            edit_target.as_ref(),
+                            edit_input.as_ref(),
+                            &icon_theme,
+                            cx,
+                        );
+                    }
+                    let row = rows.get(&id).cloned();
+                    if row.as_ref().is_some_and(|row| {
+                        matches!(
+                            &edit_target,
+                            Some(ProjectTreeEditTarget::Rename { path })
+                                if row.relative_path.as_deref() == Some(path)
+                        )
+                    }) {
+                        return render_edit_row(
+                            ix,
+                            row_state,
+                            row,
+                            edit_target.as_ref(),
+                            edit_input.as_ref(),
+                            &icon_theme,
+                            cx,
+                        );
+                    }
+                    render_component_row(
+                        ix,
+                        row_state,
+                        tree_has_keyboard_focus,
+                        row,
+                        &icon_theme,
+                        view.clone(),
+                        cx,
+                    )
+                })();
+                if entry.is_disabled() {
+                    return element.into_any_element();
+                }
+                let build_menu = build_menu.clone();
+                element
+                    .yttt_context_menu(crate::ui::theme::menu_appearance, move |_, _, cx| {
+                        build_menu(&id, cx)
+                    })
+                    .into_any_element()
+            })
+            .list_style(gpui::StyleRefinement::default().flex_grow_1().size_full())
+            .relative()
+            .size_full();
+        let tree = div()
+            .id("project-tree")
+            .size_full()
+            .child(tree)
+            .vertical_scrollbar(&scroll_handle);
 
         div()
             .size_full()
@@ -1409,17 +1441,25 @@ fn find_tree_item<'a>(items: &'a [TreeItem], id: &str) -> Option<&'a TreeItem> {
 
 fn render_edit_row(
     ix: usize,
-    depth: usize,
-    selected: bool,
+    state: YtttTreeRowState,
     row: Option<ProjectTreeRenderRow>,
     target: Option<&ProjectTreeEditTarget>,
     input: Option<&Entity<InputState>>,
     icon_theme: &IconTheme,
     cx: &mut App,
-) -> ListItem {
+) -> Stateful<Div> {
     let ui_style = current_ui_style(cx);
+    let theme = current_workbench_theme(cx);
     let Some(input) = input else {
-        return ListItem::new(("project-tree-missing-edit-input", ix)).disabled(true);
+        return yttt_tree_row(
+            ("project-tree-missing-edit-input", ix),
+            YtttTreeRowState {
+                disabled: true,
+                ..state
+            },
+            theme,
+            ui_style,
+        );
     };
     let force_directory = matches!(
         target,
@@ -1443,55 +1483,65 @@ fn render_edit_row(
         icon_theme.resolve_file(path)
     };
 
-    ListItem::new(("project-tree-edit-row", ix))
-        .selected(selected)
-        .pl(px(8.0 + depth as f32 * 14.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(ui_style.spacing.xs)
-                .w_full()
-                .child(div().w(px(12.0)))
-                .child(icon_for_visual(icon, cx.theme().muted_foreground))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .rounded(ui_style.radius.compact)
-                        .border(ui_style.border.hairline)
-                        .border_color(cx.theme().primary)
-                        .child(yttt_borderless_input(input).small()),
-                ),
-        )
+    yttt_tree_row(("project-tree-edit-row", ix), state, theme, ui_style).child(
+        div()
+            .flex()
+            .items_center()
+            .gap(ui_style.tree.content_gap)
+            .w_full()
+            .when(ui_style.tree.show_chevrons, |row| {
+                row.child(div().w(px(12.0)))
+            })
+            .child(icon_for_visual_sized(
+                icon,
+                cx.theme().muted_foreground,
+                ui_style.tree.icon_size,
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .rounded(ui_style.radius.compact)
+                    .border(ui_style.border.hairline)
+                    .border_color(cx.theme().primary)
+                    .child(yttt_borderless_input(input).small()),
+            ),
+    )
 }
 
 fn render_component_row(
     ix: usize,
-    depth: usize,
-    selected: bool,
+    state: YtttTreeRowState,
     tree_has_keyboard_focus: bool,
-    show_focus_indicator: bool,
     row: Option<ProjectTreeRenderRow>,
     icon_theme: &IconTheme,
     view: gpui::WeakEntity<ProjectTreeView>,
     cx: &mut App,
-) -> ListItem {
+) -> Stateful<Div> {
     let ui_style = current_ui_style(cx);
+    let theme = current_workbench_theme(cx);
+    let selected = state.selected;
+    let disabled = YtttTreeRowState {
+        disabled: true,
+        ..state
+    };
     let Some(row) = row else {
-        return ListItem::new(("project-tree-missing-row", ix)).disabled(true);
+        return yttt_tree_row(("project-tree-missing-row", ix), disabled, theme, ui_style);
     };
     if row.synthetic {
-        return ListItem::new(("project-tree-synthetic-row", ix))
-            .disabled(true)
-            .pl(px(8.0 + depth as f32 * 14.0))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .truncate()
-                    .child(row.label),
-            );
+        return yttt_tree_row(
+            ("project-tree-synthetic-row", ix),
+            disabled,
+            theme,
+            ui_style,
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .truncate()
+                .child(row.label),
+        );
     }
 
     let path = row.relative_path.as_deref().unwrap_or(Path::new(""));
@@ -1523,43 +1573,27 @@ fn render_component_row(
     let id = row.id.clone();
     let expanded = row.expanded;
     let is_directory = row.kind.is_some_and(ProjectTreeEntryKind::is_directory);
-    let row_background = if selected && !focused_selection {
-        cx.theme().list_active
-    } else {
-        cx.theme().transparent
-    };
-    let focus_border = cx.theme().ring;
-
-    ListItem::new(("project-tree-row", ix))
-        .selected(selected)
-        .hover_matches_selected(false)
-        .h(ui_style.rows.sidebar_height)
-        .pl(px(8.0 + depth as f32 * 14.0))
-        .rounded(ui_style.radius.compact)
-        .bg(row_background)
-        .children((focused_selection && show_focus_indicator).then(|| {
-            div()
-                .debug_selector(|| "project-tree-focused-row-indicator".to_string())
-                .absolute()
-                .inset_0()
-                .rounded(ui_style.radius.compact)
-                .border(ui_style.border.hairline)
-                .border_color(focus_border)
-        }))
+    yttt_tree_row(("project-tree-row", ix), state, theme, ui_style)
         .child(
             div()
                 .debug_selector(move || format!("project-tree-row-{ix}"))
                 .flex()
                 .items_center()
-                .gap(ui_style.spacing.xs)
+                .gap(ui_style.tree.content_gap)
                 .w_full()
-                .child(div().w(px(12.0)).children(is_directory.then(|| {
-                    icon_for_visual(
-                        icon_theme.resolve_chevron(expanded),
-                        cx.theme().muted_foreground,
-                    )
-                })))
-                .child(icon_for_visual(icon, cx.theme().muted_foreground))
+                .when(ui_style.tree.show_chevrons, |row| {
+                    row.child(div().w(px(12.0)).children(is_directory.then(|| {
+                        icon_for_visual(
+                            icon_theme.resolve_chevron(expanded),
+                            cx.theme().muted_foreground,
+                        )
+                    })))
+                })
+                .child(icon_for_visual_sized(
+                    icon,
+                    cx.theme().muted_foreground,
+                    ui_style.tree.icon_size,
+                ))
                 .child(
                     div()
                         .flex_1()

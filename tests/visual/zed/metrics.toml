@@ -83,3 +83,19 @@ aligned = true
 name = "switch_thumb_px"
 zed = 12.0
 aligned = true
+
+# Measured from baseline-1.26.2/main2.png.
+[[metric]]
+name = "tree_row_height_px"
+zed = 26.0
+aligned = true
+
+[[metric]]
+name = "tree_indent_px"
+zed = 20.0
+aligned = true
+
+[[metric]]
+name = "tree_icon_px"
+zed = 14.0
+aligned = true

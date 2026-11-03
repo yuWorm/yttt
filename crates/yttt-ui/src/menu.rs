@@ -9,15 +9,12 @@ use gpui_base::{
     Button, Positioner, Root, RootPlugin,
     actions::{Cancel, Confirm, SelectDown, SelectUp},
 };
-use gpui_component::{
-    Icon, IconName, Sizable as _,
-    menu::{PopupMenu, PopupMenuItem, PopupMenuStyle},
-};
+use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::{
     primitives::kbd::yttt_kbd,
-    style::{UiStyle, UiStyleId},
-    surface::{UiElevation, YtttSurface as _, floating_shadows},
+    style::UiStyle,
+    surface::{UiElevation, YtttSurface as _},
     theme::WorkbenchTheme,
 };
 
@@ -110,29 +107,6 @@ impl YtttMenuItem {
     pub fn is_disabled(&self) -> bool {
         self.disabled
     }
-
-    #[allow(clippy::disallowed_methods)]
-    fn into_popup_item(self) -> PopupMenuItem {
-        let Some(label) = self.label else {
-            return PopupMenuItem::separator();
-        };
-        let item = PopupMenuItem::new(label)
-            .disabled(self.disabled)
-            .checked(self.checked);
-        let item = match self.target {
-            MenuTarget::None => item,
-            MenuTarget::Action(action) => item.action(action),
-            MenuTarget::Handler(handler) => {
-                item.on_click(move |event, window, cx| handler(event, window, cx))
-            }
-        };
-        // gpui-component runs a handler in preference to the action, so this
-        // only adds the binding to the row.
-        match self.shortcut {
-            Some(action) => item.action(action),
-            None => item,
-        }
-    }
 }
 
 /// The contents of a context or dropdown menu.
@@ -156,24 +130,6 @@ impl YtttMenu {
 
     pub fn items(&self) -> &[YtttMenuItem] {
         &self.items
-    }
-
-    /// Fills a popup menu owned by another component, such as the file tree.
-    pub fn into_popup_menu(
-        self,
-        menu: PopupMenu,
-        theme: WorkbenchTheme,
-        ui_style: UiStyle,
-    ) -> PopupMenu {
-        let menu = match self.action_context {
-            Some(context) => menu.action_context(context),
-            None => menu,
-        };
-        self.items
-            .into_iter()
-            .fold(styled_popup_menu(menu, theme, ui_style), |menu, item| {
-                menu.item(item.into_popup_item())
-            })
     }
 }
 
@@ -568,36 +524,6 @@ pub fn yttt_menu_preview(menu: &YtttMenu, theme: WorkbenchTheme, ui_style: UiSty
                 .map(|item| menu_row(item, &[], theme, ui_style)),
         )
         .into_any_element()
-}
-
-/// Applies Zed's dense context-menu presentation without changing menu behavior.
-fn styled_popup_menu(menu: PopupMenu, theme: WorkbenchTheme, ui_style: UiStyle) -> PopupMenu {
-    if ui_style.id == UiStyleId::Rounded {
-        return menu;
-    }
-
-    menu.style(
-        PopupMenuStyle::new()
-            .background(theme.surface_elevated)
-            .border_color(theme.border)
-            .foreground(theme.text)
-            .muted_foreground(theme.icon_muted)
-            .hover(ui_style.hover_background(theme), theme.text)
-            .selected(ui_style.active_background(theme), theme.text)
-            .disabled_foreground(theme.text_disabled)
-            .shadows(floating_shadows())
-            .radius(ui_style.radius.compact)
-            .min_width(MENU_MIN_WIDTH)
-            .padding(rems(0.25))
-            .gap(px(0.))
-            .item_height(menu_row_height())
-            .item_padding_x(rems(0.375))
-            .item_gap(rems(0.375))
-            .end_slot_gap(rems(1.0))
-            .text_size(ui_style.text.default)
-            .separator(rems(0.375), ui_style.border.hairline, theme.border)
-            .reserve_icon_column(false),
-    )
 }
 
 #[cfg(test)]
