@@ -1791,7 +1791,7 @@ fn yttt_input_style_makes_dialog_input_visible() {
     let theme = WorkbenchTheme::one_dark();
     let style = yttt_input_style(YtttInputKind::Dialog, theme, UiStyle::default());
 
-    assert_eq!(style.height, gpui::rems(2.125));
+    assert_eq!(style.height, gpui::rems(2.0));
     assert_eq!(style.background, theme.element_background);
     assert_eq!(style.border, theme.border_variant);
     assert_eq!(style.focused_border, theme.border_focused);

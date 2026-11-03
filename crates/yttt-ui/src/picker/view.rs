@@ -58,26 +58,51 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
-    let PickerText { no_results, footer } = text;
     yttt_panel_overlay(
-        yttt_panel(YtttPanelKind::Palette, theme, ui_style)
-            .p_0()
-            .overflow_hidden()
-            .child(picker_header(query_input, theme, ui_style))
-            .child(picker_items(
-                rows,
-                no_results,
-                scroll_handle,
-                theme,
-                ui_style,
-                on_confirm_item,
-            ))
-            .child(picker_footer(footer, theme, ui_style)),
+        picker_panel(
+            rows,
+            text,
+            query_input,
+            scroll_handle,
+            theme,
+            ui_style,
+            on_confirm_item,
+        ),
         YtttPanelKind::Palette,
         YtttOverlayPlacement::Top,
         theme,
         ui_style,
     )
+}
+
+/// The picker surface without its modal layer.
+pub fn picker_panel<H, F>(
+    rows: Vec<PickerOverlayRow>,
+    text: PickerText,
+    query_input: &Entity<InputState>,
+    scroll_handle: &ScrollHandle,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    on_confirm_item: F,
+) -> Div
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    F: FnMut(usize) -> H,
+{
+    let PickerText { no_results, footer } = text;
+    yttt_panel(YtttPanelKind::Palette, theme, ui_style)
+        .p_0()
+        .overflow_hidden()
+        .child(picker_header(query_input, theme, ui_style))
+        .child(picker_items(
+            rows,
+            no_results,
+            scroll_handle,
+            theme,
+            ui_style,
+            on_confirm_item,
+        ))
+        .child(picker_footer(footer, theme, ui_style))
 }
 
 #[allow(clippy::too_many_arguments)]

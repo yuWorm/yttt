@@ -26,6 +26,7 @@ use yttt_ui::IconName;
 use yttt_ui::{
     SelectableState,
     menu::{YtttMenu, YtttMenuItem, yttt_menu_preview},
+    picker::{PickerFooterAction, PickerItem, PickerOverlayRow, PickerText, picker_panel},
     primitives::{
         button::{
             YtttButtonExt as _, YtttButtonSize, YtttButtonVariant, yttt_button, yttt_button_style,
@@ -50,7 +51,7 @@ const WINDOW_WIDTH: f32 = 960.;
 const WINDOW_HEIGHT: f32 = 900.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
-                     [--screenshot PATH] [--dump-layout PATH]";
+                     [--scene components|palette] [--screenshot PATH] [--dump-layout PATH]";
 
 type LayoutMap = Rc<RefCell<BTreeMap<String, Bounds<Pixels>>>>;
 
@@ -59,6 +60,16 @@ struct Options {
     style: Option<UiStyleId>,
     screenshot: Option<PathBuf>,
     dump_layout: Option<PathBuf>,
+    scene: Scene,
+}
+
+/// What the gallery window shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Scene {
+    #[default]
+    Components,
+    /// The command palette, laid out like `baseline-1.26.2/palette.png`.
+    Palette,
 }
 
 fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
@@ -75,6 +86,13 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
             }
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--dump-layout" => options.dump_layout = Some(value()?.into()),
+            "--scene" => {
+                options.scene = match value()?.as_str() {
+                    "components" => Scene::Components,
+                    "palette" => Scene::Palette,
+                    _ => bail!(USAGE),
+                }
+            }
             _ => bail!(USAGE),
         }
     }
@@ -116,6 +134,7 @@ fn run(options: Options) {
             let ui_style = appearance.runtime().style;
             cx.set_global(appearance);
 
+            let scene = options.scene;
             let layout = LayoutMap::default();
             let view_layout = layout.clone();
             let window_options = WindowOptions {
@@ -127,7 +146,8 @@ fn run(options: Options) {
             };
             let handle = cx
                 .open_window(window_options, move |window, cx| {
-                    let view = cx.new(|cx| Gallery::new(theme, ui_style, view_layout, window, cx));
+                    let view =
+                        cx.new(|cx| Gallery::new(scene, theme, ui_style, view_layout, window, cx));
                     cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx))
                 })
                 .expect("gallery window opens");
@@ -194,6 +214,7 @@ fn export(
 }
 
 struct Gallery {
+    scene: Scene,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     layout: LayoutMap,
@@ -202,10 +223,13 @@ struct Gallery {
     select: Entity<SelectState<Vec<SharedString>>>,
     menu: YtttMenu,
     tooltip: gpui::AnyView,
+    palette_input: Entity<InputState>,
+    palette_scroll: gpui::ScrollHandle,
 }
 
 impl Gallery {
     fn new(
+        scene: Scene,
         theme: WorkbenchTheme,
         ui_style: UiStyle,
         layout: LayoutMap,
@@ -233,7 +257,12 @@ impl Gallery {
         let tooltip = cx
             .new(|_| yttt_tooltip("Toggle Terminal", theme, ui_style))
             .into();
+        let palette_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Execute a command..."));
         Self {
+            scene,
+            palette_input,
+            palette_scroll: gpui::ScrollHandle::new(),
             theme,
             ui_style,
             layout,
@@ -408,9 +437,90 @@ impl Gallery {
     }
 }
 
+impl Gallery {
+    /// The commands at the top of Zed's palette in the baseline.
+    const PALETTE_COMMANDS: [&str; 13] = [
+        "agent: add selection to thread",
+        "agent: copy thread to clipboard",
+        "agent: create skill from url",
+        "agent: expand message editor",
+        "agent: focus agent",
+        "agent: follow",
+        "agent: import threads from other channels",
+        "agent: load thread from clipboard",
+        "agent: manage profiles",
+        "agent: new terminal thread",
+        "agent: new thread",
+        "agent: open agent diff",
+        "agent: open settings",
+    ];
+
+    fn palette_scene(&self) -> Div {
+        let (theme, ui_style) = (self.theme, self.ui_style);
+        let rows = Self::PALETTE_COMMANDS
+            .iter()
+            .enumerate()
+            .map(|(index, title)| PickerOverlayRow {
+                item: PickerItem::new(*title, *title),
+                state: if index == 0 {
+                    SelectableState::Active
+                } else {
+                    SelectableState::Inactive
+                },
+                status: String::new(),
+                show_subtitle: false,
+                icon: None,
+                keybinding: None,
+            })
+            .collect();
+        let key = |key: &'static str| {
+            yttt_kbd(
+                gpui::Keystroke::parse(key).expect("valid keystroke"),
+                theme,
+                ui_style,
+            )
+            .into_any_element()
+        };
+        let text = PickerText {
+            no_results: "No results".into(),
+            footer: vec![
+                PickerFooterAction {
+                    label: "Run".into(),
+                    key: key("enter"),
+                },
+                PickerFooterAction {
+                    label: "Close".into(),
+                    key: key("escape"),
+                },
+            ],
+        };
+        let panel = picker_panel(
+            rows,
+            text,
+            &self.palette_input,
+            &self.palette_scroll,
+            theme,
+            ui_style,
+            |_| |_: &gpui::ClickEvent, _: &mut Window, _: &mut App| {},
+        );
+        div()
+            .size_full()
+            .flex()
+            .justify_center()
+            .items_start()
+            .pt(ui_style.spacing.overlay_top)
+            .bg(theme.editor_background)
+            .text_color(theme.text)
+            .child(self.tracked("palette", panel))
+    }
+}
+
 impl Render for Gallery {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (theme, ui_style) = (self.theme, self.ui_style);
+        if self.scene == Scene::Palette {
+            return self.palette_scene();
+        }
         div()
             .size_full()
             .flex()
@@ -511,6 +621,16 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Options> {
         parse_options(args.iter().map(|arg| arg.to_string()))
+    }
+
+    #[test]
+    fn options_parse_the_scene() {
+        assert_eq!(parse(&[]).unwrap().scene, Scene::Components);
+        assert_eq!(
+            parse(&["--scene", "palette"]).unwrap().scene,
+            Scene::Palette
+        );
+        assert!(parse(&["--scene", "nope"]).is_err());
     }
 
     #[test]
