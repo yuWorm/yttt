@@ -471,6 +471,7 @@ impl Gallery {
                 show_subtitle: false,
                 icon: None,
                 keybinding: None,
+                highlight: None,
             })
             .collect();
         let key = |key: &'static str| {

@@ -355,6 +355,7 @@ impl WorkbenchView {
                         show_subtitle: true,
                         icon: Some(IconName::FolderClosed),
                         keybinding: None,
+                        highlight: None,
                     },
                     theme,
                     style,

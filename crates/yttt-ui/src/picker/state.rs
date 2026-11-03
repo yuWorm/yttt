@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use super::PickerItem;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -70,5 +72,52 @@ impl PickerState {
         } else {
             self.selected_index -= 1;
         }
+    }
+}
+
+/// The byte range of the first case-insensitive occurrence of `query` in
+/// `text`, matching how [`PickerState::filtered_items`] filters.
+pub fn query_match(text: &str, query: &str) -> Option<Range<usize>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    text.char_indices().find_map(|(start, _)| {
+        let mut rest = text[start..].char_indices();
+        let mut end = start;
+        for wanted in query.chars().flat_map(char::to_lowercase) {
+            let (offset, found) = rest.next()?;
+            if !found.to_lowercase().eq(std::iter::once(wanted)) {
+                return None;
+            }
+            end = start + offset + found.len_utf8();
+        }
+        Some(start..end)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::query_match;
+
+    #[test]
+    fn query_match_finds_the_first_case_insensitive_occurrence() {
+        assert_eq!(query_match("Open Project", "proj"), Some(5..9));
+        assert_eq!(query_match("agent: new thread", " NEW "), Some(7..10));
+        assert_eq!(query_match("abab", "ab"), Some(0..2));
+    }
+
+    #[test]
+    fn query_match_handles_empty_and_missing_queries() {
+        assert_eq!(query_match("Open", ""), None);
+        assert_eq!(query_match("Open", "   "), None);
+        assert_eq!(query_match("Open", "close"), None);
+        assert_eq!(query_match("Op", "open"), None);
+    }
+
+    #[test]
+    fn query_match_returns_byte_ranges_for_non_ascii_text() {
+        assert_eq!(query_match("打开项目", "项目"), Some(6..12));
+        assert_eq!(query_match("Ärger", "ä"), Some(0..2));
     }
 }

@@ -5,7 +5,7 @@ use gpui::{AnyElement, App, ClickEvent, Entity, IntoElement, ScrollHandle, Windo
 use gpui_component::input::InputState;
 use yttt_ui::{
     IconName,
-    picker::{PickerFooterAction, PickerText},
+    picker::{PickerFooterAction, PickerText, query_match},
 };
 
 use crate::palette::{ActivePalette, PaletteItem, PaletteKind};
@@ -101,7 +101,7 @@ where
             } else {
                 SelectableState::Inactive
             };
-            palette_row(active_palette.kind, item, state, theme, ui_style)
+            palette_row(active_palette, item, state, theme, ui_style)
         })
         .collect::<Vec<_>>();
 
@@ -147,7 +147,7 @@ where
             } else {
                 SelectableState::Inactive
             };
-            palette_row(active_palette.kind, item, state, theme, ui_style)
+            palette_row(active_palette, item, state, theme, ui_style)
         })
         .collect();
 
@@ -164,12 +164,13 @@ where
 }
 
 fn palette_row(
-    kind: PaletteKind,
+    active_palette: &ActivePalette,
     item: &PickerItem,
     state: SelectableState,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
 ) -> PickerOverlayRow {
+    let kind = active_palette.kind;
     let status = if !item.enabled {
         item.disabled_reason.clone().unwrap_or_default()
     } else if matches!(kind, PaletteKind::Project | PaletteKind::RecentProject) {
@@ -187,6 +188,7 @@ fn palette_row(
             .clone()
             .filter(|keybinding| !keybinding.trim().is_empty())
             .map(|keybinding| workbench_keybinding_badge(keybinding, theme, ui_style)),
+        highlight: query_match(&item.title, &active_palette.query),
         item: item.clone(),
     }
 }

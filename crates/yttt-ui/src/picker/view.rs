@@ -1,7 +1,9 @@
+use std::ops::Range;
+
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, Entity, InteractiveElement as _, IntoElement,
-    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, Window, div, prelude::*,
-    px, relative,
+    AnyElement, App, ClickEvent, Div, ElementId, Entity, HighlightStyle, InteractiveElement as _,
+    IntoElement, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, StyledText,
+    Window, div, prelude::*, px, relative,
 };
 use gpui_component::input::InputState;
 
@@ -27,6 +29,8 @@ pub struct PickerOverlayRow {
     pub show_subtitle: bool,
     pub icon: Option<IconName>,
     pub keybinding: Option<AnyElement>,
+    /// Byte range of the title drawn in the accent color, as Zed marks matches.
+    pub highlight: Option<Range<usize>>,
 }
 
 pub struct PickerFooterAction {
@@ -291,6 +295,7 @@ where
         show_subtitle,
         icon,
         keybinding,
+        highlight,
     } = row;
     let subtitle = item.subtitle.unwrap_or_default();
     let show_subtitle = show_subtitle && !subtitle.trim().is_empty();
@@ -339,7 +344,7 @@ where
                                 .text_sm()
                                 .text_color(style.title)
                                 .truncate()
-                                .child(item.title),
+                                .child(highlighted_title(item.title, highlight, theme)),
                         )
                         .children(show_subtitle.then(|| {
                             div()
@@ -368,6 +373,29 @@ where
                 })
                 .children(keybinding),
         )
+}
+
+fn highlighted_title(
+    title: String,
+    highlight: Option<Range<usize>>,
+    theme: WorkbenchTheme,
+) -> StyledText {
+    let highlight = highlight.filter(|range| {
+        range.end <= title.len()
+            && title.is_char_boundary(range.start)
+            && title.is_char_boundary(range.end)
+    });
+    let text = StyledText::new(title);
+    match highlight {
+        Some(range) => text.with_highlights([(
+            range,
+            HighlightStyle {
+                color: Some(theme.accent.into()),
+                ..HighlightStyle::default()
+            },
+        )]),
+        None => text,
+    }
 }
 
 fn picker_footer(
