@@ -634,7 +634,7 @@ impl WorkbenchView {
         let ui_style = appearance.style;
         let theme = appearance.ui;
         let editor_theme = appearance.editor;
-        let editor_appearance = EditorAppearance::from(&self.app_settings.editor);
+        let editor_appearance = EditorAppearance::from(&self.app_settings);
         let panel = self.overlays.git_diff_panel.as_mut()?;
         let focus_handle = panel
             .focus_handle

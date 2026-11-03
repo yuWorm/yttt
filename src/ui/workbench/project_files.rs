@@ -1626,7 +1626,7 @@ impl WorkbenchView {
                 CodeEditorState::new(&loaded.canonical_path, config, loaded.text),
                 loaded.fingerprint,
             );
-            let appearance = EditorAppearance::from(&self.app_settings.editor);
+            let appearance = EditorAppearance::from(&self.app_settings);
             let markdown_config = self.markdown_document_config();
             let vim_enabled = self.app_settings.vim.mode != VimModeSetting::Disabled;
             let document = cx.new(|document_cx| {

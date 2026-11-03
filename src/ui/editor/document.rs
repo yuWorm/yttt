@@ -16,12 +16,12 @@ use gpui_markdown_editor::{
 use yttt_ui::IconName;
 
 use crate::{
-    config::settings::EditorSettings,
+    config::settings::{AppSettings, EditorSettings},
     model::editor::DocumentId,
     ui::{
         i18n::{UiText, UiTextKey},
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
-        theme::{current_ui_style, current_workbench_theme},
+        theme::{UiStyleId, ZED_BUFFER_FONT_FAMILY, current_ui_style, current_workbench_theme},
     },
 };
 
@@ -70,6 +70,18 @@ impl Default for EditorAppearance {
             soft_wrap: false,
             line_numbers: true,
         }
+    }
+}
+
+/// Resolves an empty font family the way the UI style does: Zed's style uses
+/// the bundled buffer font, the rounded style keeps the system UI font.
+impl From<&AppSettings> for EditorAppearance {
+    fn from(settings: &AppSettings) -> Self {
+        let mut appearance = Self::from(&settings.editor);
+        if appearance.font_family.is_empty() && settings.theme.ui_style == UiStyleId::Zed {
+            appearance.font_family = ZED_BUFFER_FONT_FAMILY.to_string();
+        }
+        appearance
     }
 }
 

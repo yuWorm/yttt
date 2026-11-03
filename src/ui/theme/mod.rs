@@ -157,6 +157,9 @@ pub struct UiTypography {
     pub mono_font_size: f32,
 }
 
+/// Zed's default buffer font, bundled from `assets/fonts/lilex`.
+pub const ZED_BUFFER_FONT_FAMILY: &str = "Lilex";
+
 impl UiTypography {
     fn resolve(settings: &AppSettings) -> Self {
         let font_family = if settings.general.ui_font_family.is_empty() {
@@ -170,8 +173,7 @@ impl UiTypography {
         };
         let mono_font_family = if settings.editor.font_family.is_empty() {
             if settings.theme.ui_style == UiStyleId::Zed {
-                // Bundled, like Zed's default buffer font.
-                "Lilex"
+                ZED_BUFFER_FONT_FAMILY
             } else if cfg!(target_os = "macos") {
                 "Menlo"
             } else if cfg!(target_os = "windows") {
@@ -794,6 +796,31 @@ fn theme_style(color: Rgba) -> ThemeStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zed_style_editors_render_in_bundled_lilex() {
+        use crate::ui::editor::EditorAppearance;
+
+        let mut settings = AppSettings::default();
+        settings.theme.ui_style = UiStyleId::Zed;
+        assert_eq!(
+            EditorAppearance::from(&settings).resolved_font_family(),
+            ZED_BUFFER_FONT_FAMILY
+        );
+
+        settings.theme.ui_style = UiStyleId::Rounded;
+        assert_eq!(
+            EditorAppearance::from(&settings).resolved_font_family(),
+            ".SystemUIFont"
+        );
+
+        settings.theme.ui_style = UiStyleId::Zed;
+        settings.editor.font_family = "Menlo".to_string();
+        assert_eq!(
+            EditorAppearance::from(&settings).resolved_font_family(),
+            "Menlo"
+        );
+    }
 
     #[test]
     fn zed_style_defaults_the_editor_to_bundled_lilex() {

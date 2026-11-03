@@ -319,7 +319,7 @@ impl WorkbenchView {
                         self.palette.file_preview_rows.clone(),
                         self.palette.file_preview_vertical_scroll.clone(),
                         self.palette.file_preview_horizontal_scroll.clone(),
-                        EditorAppearance::from(&self.app_settings.editor),
+                        EditorAppearance::from(&self.app_settings),
                         runtime.editor,
                         theme.border,
                     )
