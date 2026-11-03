@@ -1514,10 +1514,14 @@ fn git_diff_code_pane(
     };
     let file_path = file.path().to_string();
     let binary = file.binary;
-    let default_editor_appearance = EditorAppearance::default();
-    let font_scale = (editor_appearance.font_size / default_editor_appearance.font_size).max(0.5);
+    // The diff layout was sized for a 14px editor at 1.4 line height; keep
+    // that as the reference so changing the editor defaults does not
+    // rescale existing users' diffs.
+    const BASE_FONT_SIZE: f32 = 14.0;
+    const BASE_LINE_HEIGHT: f32 = 1.4;
+    let font_scale = (editor_appearance.font_size / BASE_FONT_SIZE).max(0.5);
     let editor_density_scale = ((editor_appearance.font_size * editor_appearance.line_height)
-        / (default_editor_appearance.font_size * default_editor_appearance.line_height))
+        / (BASE_FONT_SIZE * BASE_LINE_HEIGHT))
         .max(0.5);
     let unified_content_width = (unified_content_width * font_scale).max(900.0);
     let split_content_width = (split_content_width * font_scale).max(700.0);

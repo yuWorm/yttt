@@ -68,8 +68,8 @@ impl Default for EditorAppearance {
     fn default() -> Self {
         Self {
             font_family: String::new(),
-            font_size: 14.0,
-            line_height: 1.4,
+            font_size: 15.0,
+            line_height: 1.618,
             soft_wrap: false,
             line_numbers: true,
             gutter_padding: (0.0, 0.0),

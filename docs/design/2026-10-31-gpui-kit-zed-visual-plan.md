@@ -431,6 +431,7 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 ### 任务 7.1：编辑器外观（M）
 
 - [ ] 接入 `set_scrollbar_renderer`。
+- [x] 编辑器默认字号 15、行距 1.618，与 Zed 一致。设置文件会保存全部字段，所以已保存过设置的用户不受影响；默认值不区分风格，Rounded 的新用户同样是 15 / 1.618。
 - [x] 对齐 gutter 和当前行：行号右缘 58、正文起点 92（按字号缩放，vendor 补丁 `set_gutter_padding`），当前行与行号颜色取自 Zed One Dark。缩进线、搜索条未做。
 - [x] 打包 Lilex 2.700 四个字重和 OFL。Zed 风格编辑器默认用 Lilex。
 - [ ] 重新评估 `flush_search_panel` 能否由 yttt 自行组合。

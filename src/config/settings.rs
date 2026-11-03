@@ -311,8 +311,9 @@ impl Default for EditorSettings {
     fn default() -> Self {
         Self {
             font_family: String::new(),
-            font_size: 14.0,
-            line_height: 1.4,
+            // Zed 1.26.2's `buffer_font_size` and "comfortable" line height.
+            font_size: 15.0,
+            line_height: 1.618,
             tab_size: 4,
             soft_wrap: false,
             line_numbers: true,

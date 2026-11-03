@@ -544,8 +544,8 @@ project_sidebar_width = 1.0
     assert_eq!(loaded.settings.theme.ui_style, UiStyleId::Zed);
     assert_eq!(loaded.settings.terminal.font_size, 15.0);
     assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
-    assert_eq!(loaded.settings.editor.font_size, 14.0);
-    assert_eq!(loaded.settings.editor.line_height, 1.4);
+    assert_eq!(loaded.settings.editor.font_size, 15.0);
+    assert_eq!(loaded.settings.editor.line_height, 1.618);
     assert_eq!(loaded.settings.editor.tab_size, 4);
     assert_eq!(loaded.settings.editor.autosave, EditorAutosave::Off);
     assert_eq!(loaded.settings.editor.autosave_delay_ms, 1000);
