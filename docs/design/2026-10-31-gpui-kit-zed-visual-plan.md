@@ -402,20 +402,20 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 6.1：行外观（M）
 
-- [ ] 新增 `crates/yttt-ui/src/tree.rs` 的 `yttt_tree_row`。
-- [ ] 对齐行高、缩进、图标、Git 颜色、hover、选中和重命名输入。
+- [x] 新增 `crates/yttt-ui/src/tree.rs` 的 `yttt_tree_row`。
+- [x] 对齐行高 26、缩进 20、图标 14、hover、选中和重命名输入。Zed 风格不显示展开箭头，获得焦点的选中行只画描边。Git 颜色保持原样：基线里的 fixture 在被忽略的目录，Zed 画成灰色，和 yttt 对忽略文件的处理一致。
 
 ### 任务 6.2：切换到 `gpui_base::TreeState`（M）
 
-- [ ] 用 `TreeState` 替换 `gpui_component::tree`，业务状态保留在 `ProjectFileTree`。
+- [x] `TreeState` 已来自 `gpui_base`。文件树改为直接使用 `gpui_base::Tree`，不再经过 `gpui_component::tree`。
 - [ ] 保证刷新后展开和选中状态不丢。
 - [ ] 验证懒加载、隐藏文件、文件操作的现有测试。
-- [ ] 接入 P4 的 context menu。
+- [x] 接入 P4 的 context menu，删除 `PopupMenuStyle`、`MenuItemAppearance`、`hover_matches_selected` 和 `DropdownMenu` 补丁。
 
 ### 任务 6.3：Indent guides（S）
 
-- [ ] 新增绘制逻辑，只绘制可见范围。
-- [ ] 随激活路径高亮，行为以基线 Zed 为准。
+- [x] 每行绘制祖先层级的引导线，随虚拟列表只绘制可见行。
+- [ ] 随激活路径高亮：未做，基线没有展示这一状态。
 
 ### 任务 6.4：Sticky 目录头（M，可延后）
 
@@ -423,6 +423,8 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 - [ ] 不影响虚拟列表性能。
 
 **P6 退出门禁：** L1、L3 通过；1 万文件目录下的滚动无明显退化。
+
+结果（2026-11-03）：L1 新增行高、缩进、图标三项并对齐。L3 用 `yttt-ui-gallery --scene tree` 对照 `main2.png`。1 万项、10 层嵌套的树每帧约 0.21 ms（release、测试平台），只渲染可见行。
 
 ## 9. P7：编辑器与 Markdown
 

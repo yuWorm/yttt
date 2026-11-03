@@ -1,4 +1,3 @@
-// Modified for yttt; see vendor/PATCHES.md.
 use std::rc::Rc;
 
 use gpui::{
@@ -32,7 +31,6 @@ pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement +
 }
 
 impl DropdownMenu for Button {}
-impl DropdownMenu for gpui_base::Button {}
 
 #[derive(IntoElement)]
 pub struct DropdownMenuPopover<T: Selectable + IntoElement + 'static> {

@@ -5,7 +5,10 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use gpui::{AnyElement, ImageSource, IntoElement, Resource, Rgba, SharedString, Styled as _, img};
+use gpui::{
+    AnyElement, ImageSource, IntoElement, Pixels, Resource, Rgba, SharedString, Styled as _, img,
+    px,
+};
 use serde::Deserialize;
 use yttt_ui::{Icon, IconName};
 
@@ -288,13 +291,21 @@ pub enum IconVisual {
 }
 
 pub fn icon_for_visual(visual: IconVisual, fallback_color: impl Into<Rgba>) -> AnyElement {
+    icon_for_visual_sized(visual, fallback_color, px(12.0))
+}
+
+pub fn icon_for_visual_sized(
+    visual: IconVisual,
+    fallback_color: impl Into<Rgba>,
+    size: Pixels,
+) -> AnyElement {
     let fallback_color = fallback_color.into();
     match visual {
         IconVisual::Asset(path) => img(ImageSource::Resource(Resource::Embedded(path)))
-            .size_3()
+            .size(size)
             .into_any_element(),
         IconVisual::Component(icon) => Icon::new(icon)
-            .size_3()
+            .size(size)
             .text_color(fallback_color)
             .into_any_element(),
     }

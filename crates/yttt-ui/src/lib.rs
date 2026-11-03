@@ -4,6 +4,7 @@ pub mod primitives;
 pub mod style;
 pub mod surface;
 pub mod theme;
+pub mod tree;
 pub mod window;
 
 pub use gpui_component::{Icon, IconName};

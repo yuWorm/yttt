@@ -22,7 +22,10 @@ use yttt::{
         theme::{AppearanceState, ThemeRuntime},
     },
 };
-use yttt_ui::IconName;
+use yttt_ui::{
+    Icon, IconName,
+    tree::{YtttTreeRowState, yttt_tree_row},
+};
 use yttt_ui::{
     SelectableState,
     menu::{YtttMenu, YtttMenuItem, yttt_menu_preview},
@@ -51,7 +54,7 @@ const WINDOW_WIDTH: f32 = 960.;
 const WINDOW_HEIGHT: f32 = 900.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
-                     [--scene components|palette] [--screenshot PATH] [--dump-layout PATH]";
+                     [--scene components|palette|tree] [--screenshot PATH] [--dump-layout PATH]";
 
 type LayoutMap = Rc<RefCell<BTreeMap<String, Bounds<Pixels>>>>;
 
@@ -70,6 +73,8 @@ enum Scene {
     Components,
     /// The command palette, laid out like `baseline-1.26.2/palette.png`.
     Palette,
+    /// The file tree of `baseline-1.26.2/main2.png`.
+    Tree,
 }
 
 fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
@@ -90,6 +95,7 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
                 options.scene = match value()?.as_str() {
                     "components" => Scene::Components,
                     "palette" => Scene::Palette,
+                    "tree" => Scene::Tree,
                     _ => bail!(USAGE),
                 }
             }
@@ -455,6 +461,52 @@ impl Gallery {
         "agent: open settings",
     ];
 
+    fn tree_scene(&self) -> Div {
+        let (theme, ui_style) = (self.theme, self.ui_style);
+        let rows = [
+            ("zed-fixture", 0, IconName::FolderOpen, false),
+            ("src", 1, IconName::FolderClosed, false),
+            ("README.md", 1, IconName::BookOpen, true),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, depth, icon, selected))| {
+            yttt_tree_row(
+                ("tree-row", index),
+                YtttTreeRowState {
+                    depth,
+                    selected,
+                    focused: true,
+                    focus_ring: true,
+                    ..YtttTreeRowState::default()
+                },
+                theme,
+                ui_style,
+            )
+            .child(
+                Icon::new(icon)
+                    .size(ui_style.tree.icon_size)
+                    .text_color(theme.text_muted),
+            )
+            .child(label)
+        });
+        div().size_full().bg(theme.editor_background).child(
+            self.tracked(
+                "tree",
+                div()
+                    .w(px(239.))
+                    .h(px(400.))
+                    .pt(px(4.))
+                    .bg(theme.panel_background)
+                    .border_r(ui_style.border.hairline)
+                    .border_color(theme.border)
+                    .flex()
+                    .flex_col()
+                    .children(rows),
+            ),
+        )
+    }
+
     fn palette_scene(&self, window: &Window) -> Div {
         let (theme, ui_style) = (self.theme, self.ui_style);
         let rows = Self::PALETTE_COMMANDS
@@ -520,8 +572,10 @@ impl Gallery {
 impl Render for Gallery {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (theme, ui_style) = (self.theme, self.ui_style);
-        if self.scene == Scene::Palette {
-            return self.palette_scene(window);
+        match self.scene {
+            Scene::Palette => return self.palette_scene(window),
+            Scene::Tree => return self.tree_scene(),
+            Scene::Components => {}
         }
         div()
             .size_full()
@@ -632,6 +686,7 @@ mod tests {
             parse(&["--scene", "palette"]).unwrap().scene,
             Scene::Palette
         );
+        assert_eq!(parse(&["--scene", "tree"]).unwrap().scene, Scene::Tree);
         assert!(parse(&["--scene", "nope"]).is_err());
     }
 

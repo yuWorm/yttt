@@ -44,6 +44,9 @@ fn yttt_value(name: &str, style: UiStyle) -> Option<f32> {
         "text_ui_px" => Some(rems_px(style.text.default)),
         "palette_width_px" => pixels(style.palette.panel_width),
         "palette_row_height_px" => Some(rems_px(style.rows.palette_compact_height)),
+        "tree_row_height_px" => Some(rems_px(style.tree.row_height)),
+        "tree_indent_px" => pixels(style.tree.indent),
+        "tree_icon_px" => pixels(style.tree.icon_size),
         "menu_row_pitch_px" => Some(rems_px(yttt_ui::menu::menu_row_height())),
         _ => None,
     }
