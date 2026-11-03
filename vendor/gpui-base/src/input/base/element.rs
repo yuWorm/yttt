@@ -1209,7 +1209,9 @@ impl<M: InputModeKind> TextElement<M> {
                 None,
             );
 
-            empty_line_number.width + LINE_NUMBER_RIGHT_MARGIN
+            // yttt patch: `gutter_padding` widens the gutter around the numbers.
+            let (before, after) = state.gutter_padding;
+            empty_line_number.width + LINE_NUMBER_RIGHT_MARGIN + font_size * (before + after)
         } else if state.is_code_editor() {
             LINE_NUMBER_RIGHT_MARGIN
         } else {
@@ -2824,6 +2826,11 @@ impl<M: InputModeKind> Element for TextElement<M> {
             wrap_width,
             wrapping_indent,
             line_number_width,
+            gutter_before: if state.mode.line_number() {
+                text_size * state.gutter_padding.0
+            } else {
+                px(0.)
+            },
             space_width,
             lines: Rc::new(vec![]),
             cursor_bounds: None,
@@ -3504,7 +3511,11 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 .iter()
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
             {
-                let p = point(input_bounds.origin.x, origin.y + offset_y);
+                // yttt patch: numbers start after the gutter's leading space.
+                let p = point(
+                    input_bounds.origin.x + prepaint.last_layout.gutter_before,
+                    origin.y + offset_y,
+                );
                 let is_active = prepaint.current_row == Some(buffer_line);
 
                 let height = line_height * lines.len() as f32;

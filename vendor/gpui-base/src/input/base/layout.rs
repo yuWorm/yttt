@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use std::{ops::Range, rc::Rc};
 
 use gpui::{Bounds, Half, Pixels, ShapedLine, TextAlign, px};
@@ -22,6 +23,8 @@ pub(super) struct LastLayout {
     pub(super) wrap_width: Option<Pixels>,
     pub(super) wrapping_indent: WrappingIndent,
     pub(super) line_number_width: Pixels,
+    /// yttt patch: leading gutter space before the line numbers.
+    pub(super) gutter_before: Pixels,
     /// Width of one space in the editor font.
     ///
     /// Past the end of a line there are no glyphs to hit-test against, so this is the

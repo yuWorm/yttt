@@ -990,6 +990,10 @@ backward-compatible existing themes.
 
 With `[theme].ui_style = "zed"`, an empty `general.ui_font_family` uses bundled **IBM Plex Sans**;
 the Rounded style retains the system UI font. An explicit family overrides either fallback.
+Likewise, an empty `editor.font_family` uses bundled **Lilex** in the Zed style, Zed's default
+buffer font, and the platform monospace font in the Rounded style. Regular, bold, italic, and
+bold italic faces are included from [Lilex 2.700](https://github.com/mishamyrt/Lilex/releases/tag/2.700);
+its SIL Open Font License is in `assets/fonts/lilex/`.
 UI controls and picker geometry scale with `general.ui_font_size`. In the Zed style, terminal
 row height is `terminal.font_size × terminal.line_height`; Rounded retains font-metric-based
 row height. Terminal grid origins are snapped to device pixels in the Zed style.

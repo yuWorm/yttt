@@ -19,6 +19,7 @@ use yttt::{
     config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore},
     ui::{
         app::assets,
+        editor::{EditorAppearance, register_builtin_editor_languages, styled_code_editor_input},
         theme::{AppearanceState, ThemeRuntime},
     },
 };
@@ -54,7 +55,7 @@ const WINDOW_WIDTH: f32 = 960.;
 const WINDOW_HEIGHT: f32 = 900.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
-                     [--scene components|palette|tree] [--screenshot PATH] [--dump-layout PATH]";
+                     [--scene components|palette|tree|editor] [--screenshot PATH] [--dump-layout PATH]";
 
 type LayoutMap = Rc<RefCell<BTreeMap<String, Bounds<Pixels>>>>;
 
@@ -75,6 +76,8 @@ enum Scene {
     Palette,
     /// The file tree of `baseline-1.26.2/main2.png`.
     Tree,
+    /// The Markdown editor of `baseline-1.26.2/editor.png`.
+    Editor,
 }
 
 fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
@@ -96,6 +99,7 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
                     "components" => Scene::Components,
                     "palette" => Scene::Palette,
                     "tree" => Scene::Tree,
+                    "editor" => Scene::Editor,
                     _ => bail!(USAGE),
                 }
             }
@@ -131,6 +135,7 @@ fn run(options: Options) {
         .with_assets(assets::app_assets(&config_paths))
         .run(move |cx: &mut App| {
             yttt_ui::init(cx);
+            register_builtin_editor_languages();
             assets::load_ui_fonts(cx);
             let appearance = AppearanceState::new(runtime);
             Theme::global_mut(cx).apply_config(&Rc::new(
@@ -231,6 +236,8 @@ struct Gallery {
     tooltip: gpui::AnyView,
     palette_input: Entity<InputState>,
     palette_scroll: gpui::ScrollHandle,
+    editor: Entity<gpui_component::input::EditorState>,
+    editor_appearance: EditorAppearance,
 }
 
 impl Gallery {
@@ -265,8 +272,24 @@ impl Gallery {
             .into();
         let palette_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Execute a command..."));
+        let editor = cx.new(|cx| {
+            gpui_component::input::EditorState::new(window, cx)
+                .default_value("# Fixture\n")
+                .language("markdown")
+                .line_number(true)
+                .folding(true)
+        });
+        let mut settings = AppSettings::default();
+        settings.theme.ui_style = ui_style.id;
+        let editor_appearance = EditorAppearance::from(&settings);
+        let (before, after) = editor_appearance.gutter_padding;
+        editor.update(cx, |editor, cx| {
+            editor.set_gutter_padding(before, after, cx)
+        });
         Self {
             scene,
+            editor,
+            editor_appearance,
             palette_input,
             palette_scroll: gpui::ScrollHandle::new(),
             theme,
@@ -461,6 +484,20 @@ impl Gallery {
         "agent: open settings",
     ];
 
+    fn editor_scene(&self) -> Div {
+        let theme = self.theme;
+        div()
+            .size_full()
+            .bg(theme.editor_background)
+            .text_color(theme.text)
+            .child(self.tracked(
+                "editor",
+                div().size_full().child(
+                    styled_code_editor_input(&self.editor, &self.editor_appearance).size_full(),
+                ),
+            ))
+    }
+
     fn tree_scene(&self) -> Div {
         let (theme, ui_style) = (self.theme, self.ui_style);
         let rows = [
@@ -575,6 +612,7 @@ impl Render for Gallery {
         match self.scene {
             Scene::Palette => return self.palette_scene(window),
             Scene::Tree => return self.tree_scene(),
+            Scene::Editor => return self.editor_scene(),
             Scene::Components => {}
         }
         div()
@@ -687,6 +725,7 @@ mod tests {
             Scene::Palette
         );
         assert_eq!(parse(&["--scene", "tree"]).unwrap().scene, Scene::Tree);
+        assert_eq!(parse(&["--scene", "editor"]).unwrap().scene, Scene::Editor);
         assert!(parse(&["--scene", "nope"]).is_err());
     }
 

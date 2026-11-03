@@ -16,12 +16,12 @@ use gpui_markdown_editor::{
 use yttt_ui::IconName;
 
 use crate::{
-    config::settings::EditorSettings,
+    config::settings::{AppSettings, EditorSettings},
     model::editor::DocumentId,
     ui::{
         i18n::{UiText, UiTextKey},
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
-        theme::{current_ui_style, current_workbench_theme},
+        theme::{UiStyleId, ZED_BUFFER_FONT_FAMILY, current_ui_style, current_workbench_theme},
     },
 };
 
@@ -44,6 +44,9 @@ pub struct EditorAppearance {
     pub line_height: f32,
     pub soft_wrap: bool,
     pub line_numbers: bool,
+    /// Gutter space before and after the line numbers, in multiples of the
+    /// font size.
+    pub gutter_padding: (f32, f32),
 }
 impl EditorAppearance {
     pub(crate) fn resolved_font_family(&self) -> gpui::SharedString {
@@ -65,13 +68,33 @@ impl Default for EditorAppearance {
     fn default() -> Self {
         Self {
             font_family: String::new(),
-            font_size: 14.0,
-            line_height: 1.4,
+            font_size: 15.0,
+            line_height: 1.618,
             soft_wrap: false,
             line_numbers: true,
+            gutter_padding: (0.0, 0.0),
         }
     }
 }
+
+/// Resolves an empty font family the way the UI style does: Zed's style uses
+/// the bundled buffer font, the rounded style keeps the system UI font.
+impl From<&AppSettings> for EditorAppearance {
+    fn from(settings: &AppSettings) -> Self {
+        let mut appearance = Self::from(&settings.editor);
+        if settings.theme.ui_style == UiStyleId::Zed {
+            if appearance.font_family.is_empty() {
+                appearance.font_family = ZED_BUFFER_FONT_FAMILY.to_string();
+            }
+            appearance.gutter_padding = ZED_GUTTER_PADDING;
+        }
+        appearance
+    }
+}
+
+/// Zed 1.26.2 ends its 15px line numbers 58px into the editor and starts text
+/// at 92px; the shared gutter puts them at 30px and 54px.
+pub(crate) const ZED_GUTTER_PADDING: (f32, f32) = (28.0 / 15.0, 10.0 / 15.0);
 
 impl From<&EditorSettings> for EditorAppearance {
     fn from(settings: &EditorSettings) -> Self {
@@ -81,6 +104,7 @@ impl From<&EditorSettings> for EditorAppearance {
             line_height: settings.line_height,
             soft_wrap: settings.soft_wrap,
             line_numbers: settings.line_numbers,
+            gutter_padding: (0.0, 0.0),
         }
     }
 }
@@ -709,6 +733,8 @@ impl ProjectEditorDocument {
                 input.update(cx, |input, input_cx| {
                     input.set_soft_wrap(self.appearance.soft_wrap, window, input_cx);
                     input.set_line_number(self.appearance.line_numbers, window, input_cx);
+                    let (before, after) = self.appearance.gutter_padding;
+                    input.set_gutter_padding(before, after, input_cx);
                 });
             }
             ProjectEditorSurface::Markdown { editor, .. } => {

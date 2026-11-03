@@ -105,7 +105,7 @@ impl WorkbenchView {
                 .with_editor_settings(&self.app_settings.editor),
                 value,
             ),
-            EditorAppearance::from(&self.app_settings.editor),
+            EditorAppearance::from(&self.app_settings),
         ));
         self.refresh_bars_editor_preview_cache();
         self.finish_opening_layout_editor();
@@ -140,7 +140,7 @@ impl WorkbenchView {
                 .with_editor_settings(&self.app_settings.editor),
                 value,
             ),
-            EditorAppearance::from(&self.app_settings.editor),
+            EditorAppearance::from(&self.app_settings),
         ));
         self.finish_opening_layout_editor();
         Ok(())
@@ -259,7 +259,7 @@ impl WorkbenchView {
                 format,
             },
             editor,
-            EditorAppearance::from(&self.app_settings.editor),
+            EditorAppearance::from(&self.app_settings),
         ));
         self.finish_opening_layout_editor();
         Ok(())

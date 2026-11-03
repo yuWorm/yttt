@@ -430,12 +430,15 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 7.1：编辑器外观（M）
 
-- [ ] 接入 `set_scrollbar_renderer`。
-- [ ] 对齐 gutter、当前行、缩进线、搜索条。
-- [ ] 打包 Lilex，更新 `assets` 和字体列表，保留 OFL 文件。
+- [ ] 接入 `set_scrollbar_renderer`：暂不做，列入 L3 例外。Zed 的 `scrollbar.show = "auto"` 跟随 macOS 系统设置，基线里常驻的轨道可能来自录制机器的设置；基线文档只有两行，看不出滑块比例和光标标记规则。滑块颜色已在 P3 对齐。
+- [x] 编辑器默认字号 15、行距 1.618，与 Zed 一致。设置文件会保存全部字段，所以已保存过设置的用户不受影响；默认值不区分风格，Rounded 的新用户同样是 15 / 1.618。
+- [x] 对齐 gutter 和当前行：行号右缘 58、正文起点 92（按字号缩放，vendor 补丁 `set_gutter_padding`），当前行与行号颜色取自 Zed One Dark。缩进线、搜索条未做。
+- [x] 打包 Lilex 2.700 四个字重和 OFL。Zed 风格编辑器默认用 Lilex。
 - [ ] 重新评估 `flush_search_panel` 能否由 yttt 自行组合。
 
 ### 任务 7.2：Markdown 编辑主题（M）
+
+暂缓（2026-11-03 用户决定）：没有 Zed Markdown 预览基线，现有映射已覆盖标题、引用、链接和代码块。
 
 - [ ] 补全 `to_markdown_editor_theme`。
 - [ ] 对齐标题、段落、列表、代码块、表格、引用块。
@@ -443,10 +446,14 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 7.3：Markdown 只读预览（S）
 
+暂缓，同 7.2。
+
 - [ ] 检查 `src/ui/editor/preview.rs` 当前实现。
 - [ ] 判断是否改用 `gpui_base::text`，结论写进 PR。
 
 **P7 退出门禁：** L3 通过或进入例外清单；IME 和 vim 手工清单通过。
+
+结果（2026-11-03）：代码编辑器的字体、字号、行号栏、当前行通过 L3；滚动条列入例外；Markdown 暂缓。IME 和 vim 由用户在 macOS 上确认通过。
 
 ## 10. P8：Shell 与业务页面
 

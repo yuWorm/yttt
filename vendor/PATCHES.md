@@ -21,6 +21,7 @@
 | `ScrollBounce::enabled_by_default` 恒为 false | `src/scroll_bounce.rs` | C | 0.8 起 macOS 默认回弹，Zed 不回弹。各组件默认值都经过这里，`Sidebar`、设置页、`TextView` 没有单独开关 | 有全局配置，或 yttt 决定采用回弹 |
 | `Button` disabled 时清除 hover、active 样式 | `src/button.rs` | B | disabled 按钮不应有指针反馈 | 上游提供，或 `ButtonStyles` 支持 |
 | `TreeState::focus_handle` | `src/tree.rs` | B | 判断焦点是否在文件树内 | P6 改用 `gpui_base::TreeState` 的公开焦点接口 |
+| 行号栏留白：`set_gutter_padding`、`gutter_padding` | `src/input/base/yttt_ext.rs`、`src/input/base/state.rs`、`src/input/base/layout.rs`、`src/input/base/element.rs`、`src/input/editor/display_map/text_wrapper.rs` | C | 行号前后的间距写死在常量里，对不齐 Zed 的 gutter。用内边距绕开会让当前行高亮缺一截 | 上游提供 gutter 尺寸配置 |
 
 ## gpui-component
 

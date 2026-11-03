@@ -1943,7 +1943,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let appearance = EditorAppearance::from(&self.app_settings.editor);
+        let appearance = EditorAppearance::from(&self.app_settings);
         let markdown_config = self.markdown_document_config();
         if let Some(session) = &mut self.overlays.layout_toml_editor {
             session.set_appearance(appearance.clone());
