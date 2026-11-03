@@ -58,10 +58,21 @@ fn main() {
                 font_id: lilex,
             }],
         );
+        // CoreText may hand the fallback back as a separate font instance, so
+        // compare the glyph, not the font id.
+        let drawn = layout
+            .runs
+            .first()
+            .and_then(|run| run.glyphs.first().map(|glyph| (run.font_id, glyph.id)));
+        let expected = text_system.glyph_for_char(hack, '\u{f07b}');
+        assert!(
+            expected.is_some(),
+            "Hack Nerd Font Mono has the folder icon"
+        );
         assert_eq!(
-            layout.runs.first().map(|run| run.font_id),
-            Some(hack),
-            "Nerd Font icons must come from the bundled fallback"
+            drawn.map(|(_, glyph)| glyph),
+            expected,
+            "Nerd Font icons must come from the bundled fallback; drew {drawn:?}, Hack is {hack:?}"
         );
     }
 }
