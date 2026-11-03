@@ -438,16 +438,22 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 7.2：Markdown 编辑主题（M）
 
+暂缓（2026-11-03 用户决定）：没有 Zed Markdown 预览基线，现有映射已覆盖标题、引用、链接和代码块。
+
 - [ ] 补全 `to_markdown_editor_theme`。
 - [ ] 对齐标题、段落、列表、代码块、表格、引用块。
 - [ ] 主题表达不了时才改 `vendor/gpui-markdown-editor`，并记录到 `PATCHES.md`。
 
 ### 任务 7.3：Markdown 只读预览（S）
 
+暂缓，同 7.2。
+
 - [ ] 检查 `src/ui/editor/preview.rs` 当前实现。
 - [ ] 判断是否改用 `gpui_base::text`，结论写进 PR。
 
 **P7 退出门禁：** L3 通过或进入例外清单；IME 和 vim 手工清单通过。
+
+结果（2026-11-03）：代码编辑器的字体、字号、行号栏、当前行通过 L3；滚动条列入例外；Markdown 暂缓。IME 和 vim 由用户在 macOS 上确认通过。
 
 ## 10. P8：Shell 与业务页面
 
