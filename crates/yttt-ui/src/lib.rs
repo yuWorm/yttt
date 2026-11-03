@@ -1,4 +1,5 @@
 pub mod menu;
+pub mod picker;
 pub mod primitives;
 pub mod style;
 pub mod surface;

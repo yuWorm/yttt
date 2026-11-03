@@ -1,5 +1,3 @@
-use crate::palette::PaletteItem;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PickerItem {
     pub id: String,
@@ -21,18 +19,6 @@ impl PickerItem {
             keybinding: None,
             enabled: true,
             disabled_reason: None,
-        }
-    }
-
-    pub fn from_palette_item(item: &PaletteItem) -> Self {
-        Self {
-            id: item.id.clone(),
-            title: item.title.clone(),
-            subtitle: item.subtitle.clone(),
-            status: item.status.clone(),
-            keybinding: item.keybinding.clone(),
-            enabled: item.enabled,
-            disabled_reason: item.disabled_reason.clone(),
         }
     }
 }

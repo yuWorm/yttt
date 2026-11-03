@@ -337,7 +337,7 @@ gpui-shell 是 JavaScript 插件运行时，不是主题系统，不在本计划
 
 进度（2026-11-02）：右键和下拉菜单改由 `yttt_ui::menu::MenuLayer` 渲染，基于 `gpui_base::Positioner`，每个窗口一个。文件树仍用 Tree 自带的 `PopupMenu`，P6 替换后才能删除 `PopupMenuStyle` 补丁。子菜单未实现，当前菜单都不需要。
 
-L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22.5、文字缩进 10、分组间距约 35 一致。差异：Zed 菜单项右侧显示快捷键，`YtttMenuItem` 没有这一列。菜单宽度随内容变化，未比较。Dialog 和通知没有 Zed 基线，未比对。
+L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22.5、文字缩进 10、分组间距约 35 一致。菜单项右侧的快捷键已补上，从实际绑定读取，文件树和新菜单层都显示。菜单宽度随内容变化，未比较。Dialog 和通知没有 Zed 基线，未比对。
 
 `gpui_component` 的 Dialog 和通知本来就建在 `gpui_base::Dialog` 与 `ToastManager` 上，不重写。`yttt_dialog_overlay` 的 9 处自绘遮罩加了 `gpui_base` 焦点陷阱。通知补丁保留，原因见 `vendor/PATCHES.md`。
 
@@ -371,28 +371,32 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 5.1：下沉 Picker（M）
 
-- [ ] 把 `src/ui/palette/picker` 移到 `crates/yttt-ui/src/picker`。
-- [ ] 将 `palette_item` 的 row 外观合并进去。
-- [ ] 去掉 picker 对业务类型的依赖。
+- [x] 把 `src/ui/palette/picker` 移到 `crates/yttt-ui/src/picker`。
+- [x] 将 `palette_item` 的 row 外观合并进去。
+- [x] 去掉 picker 对业务类型的依赖。`PalettePickerDelegate` 和按 `PaletteKind` 决定的图标、状态留在应用侧。
 
 ### 任务 5.2：Command palette 对齐（M）
 
-- [ ] 用 rem 表示 34rem 宽度。
-- [ ] 对齐行高、匹配高亮、keybinding 显示、footer。
-- [ ] 用虚拟列表验证大列表性能。
+- [x] 宽度按实测 607px，随 UI 字号缩放（37.9375rem）。
+- [x] 对齐行高、keybinding 显示、footer。`yttt-ui-gallery --scene palette` 按 `palette.png` 的布局渲染面板，面板宽高、行距、底栏一致，头部 37.5 对 Zed 约 36。
+- [x] 匹配高亮：标题里第一处命中用强调色。Zed 是模糊匹配，可以标出不连续的字符；yttt 的过滤是子串匹配，所以只标一段。
+- 修复：`Input::h` 只对多行输入生效，单行输入框的配置高度此前从未生效，一律是 32。现在走 `Styled::h`。只有面板输入框有 Zed 实测（28），其余配置改为实际在用的 32，外观不变。
+- [x] 大列表性能：原先每行约 11 µs，2000 行每帧 22.8 ms。现在 64 行以上、行高一致的列表只渲染可见行，2000 行 0.54 ms，2 万行 1.7 ms（release 构建、测试平台）。行高不一致的列表仍全部渲染。
 
 ### 任务 5.3：Select 与带搜索选择（M）
 
-- [ ] 基于 `gpui_base::Select`、`gpui_base::Combobox`。
-- [ ] 复用 picker row。
-- [ ] 替换字体选择等现有调用。
+- [x] `gpui_component::Select` 已基于 `gpui_base::Select`，不重写。改用 Zed 的上下双箭头，Zed 风格下宽度随内容，删除箭头补丁，hover 补丁保留。
+- [x] 不复用 picker row：下拉列表由 `gpui_component::Select` 内部渲染，复用需要重写弹出层。
+- [x] 字体选择等调用都已走 `yttt_select`。
 
 ### 任务 5.4：SSH 项目选择器（M）
 
-- [ ] 评估能否接入 `PickerDelegate`。
-- [ ] 能接入就迁移；不能接入就保留专用 view，只共享 row 和 surface，并记录原因。
+- [x] 评估：不能接入。它依赖 `List` 的分区、搜索和键盘导航，`ListDelegate` 要求返回 `ListItem`，`PickerDelegate` 只有扁平列表。
+- [x] 保留专用 view。行尺寸已共用 palette 的样式参数，面板共用 `yttt_panel`。
 
-**P5 退出门禁：** palette、select 的 L1、L3 通过；`hover_matches_selected` 补丁删除。
+**P5 退出门禁：** palette、select 的 L1、L3 通过。`hover_matches_selected` 只有文件树使用，删除移到 P6。
+
+结果（2026-11-03）：L1 指标全部对齐。L3 用 `--scene palette` 对照 `palette.png`，用展示页对照 `settings_general.png` 的下拉框。真实窗口未手工验证。
 
 ## 8. P6：文件树
 

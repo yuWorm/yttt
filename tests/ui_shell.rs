@@ -623,6 +623,8 @@ fn switch_toggles_with_pointer_and_keyboard(cx: &mut gpui::TestAppContext) {
     assert_eq!(changes.get(), 2, "keyboard should toggle");
 }
 
+gpui::actions!(menu_harness, [MenuBoundAction, MenuUnboundAction]);
+
 struct MenuHarness {
     activated: Rc<Cell<usize>>,
     focus: gpui::FocusHandle,
@@ -651,10 +653,18 @@ impl gpui::Render for MenuHarness {
                 appearance,
                 move |menu, _, _| {
                     let activated = activated.clone();
-                    menu.item(YtttMenuItem::new("Off").disabled(true)).item(
-                        YtttMenuItem::new("Run")
-                            .on_click(move |_, _, _| activated.set(activated.get() + 1)),
-                    )
+                    menu.item(YtttMenuItem::new("Off").disabled(true))
+                        .item(
+                            YtttMenuItem::new("Run")
+                                .on_click(move |_, _, _| activated.set(activated.get() + 1)),
+                        )
+                        .item(YtttMenuItem::new("Bound").action(Box::new(MenuBoundAction)))
+                        .item(
+                            YtttMenuItem::new("Marked")
+                                .on_click(|_, _, _| {})
+                                .shortcut(Box::new(MenuBoundAction)),
+                        )
+                        .item(YtttMenuItem::new("Unbound").action(Box::new(MenuUnboundAction)))
                 },
             ))
     }
@@ -763,6 +773,19 @@ fn menu_stays_inside_the_window_near_its_edge(cx: &mut gpui::TestAppContext) {
 
     assert!(menu.right() <= window.width, "{menu:?} in {window:?}");
     assert!(menu.bottom() <= window.height, "{menu:?} in {window:?}");
+}
+
+#[gpui::test]
+fn menu_rows_show_the_bindings_of_their_actions(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        cx.bind_keys([gpui::KeyBinding::new("cmd-k cmd-j", MenuBoundAction, None)]);
+    });
+    let (cx, _, _) = open_harness_menu(cx);
+
+    assert!(cx.debug_bounds("yttt-menu-shortcut-2").is_some());
+    assert!(cx.debug_bounds("yttt-menu-shortcut-3").is_some());
+    assert!(cx.debug_bounds("yttt-menu-shortcut-1").is_none());
+    assert!(cx.debug_bounds("yttt-menu-shortcut-4").is_none());
 }
 
 #[gpui::test]
@@ -889,6 +912,87 @@ fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
         let _ = window.draw(cx);
         assert!(focus.is_focused(window), "the backdrop must not take focus");
     });
+}
+
+struct LongPicker {
+    rows: usize,
+    selected: usize,
+    input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    scroll: gpui::ScrollHandle,
+}
+
+impl gpui::Render for LongPicker {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::AppContext as _;
+        use yttt_ui::picker::{PickerItem, PickerOverlayRow, PickerText, picker_panel};
+
+        let input = self
+            .input
+            .get_or_insert_with(|| cx.new(|cx| gpui_component::input::InputState::new(window, cx)))
+            .clone();
+        let rows = (0..self.rows)
+            .map(|index| PickerOverlayRow {
+                item: PickerItem::new(index.to_string(), format!("branch-{index}")),
+                state: if index == self.selected {
+                    yttt_ui::SelectableState::Active
+                } else {
+                    yttt_ui::SelectableState::Inactive
+                },
+                status: String::new(),
+                show_subtitle: false,
+                icon: None,
+                keybinding: None,
+                highlight: None,
+            })
+            .collect();
+        picker_panel(
+            rows,
+            PickerText {
+                no_results: "No results".into(),
+                footer: Vec::new(),
+            },
+            &input,
+            &self.scroll,
+            window,
+            WorkbenchTheme::one_dark(),
+            UiStyle::default(),
+            |_| |_: &gpui::ClickEvent, _: &mut gpui::Window, _: &mut gpui::App| {},
+        )
+    }
+}
+
+#[gpui::test]
+fn long_picker_renders_only_rows_near_the_selection(cx: &mut gpui::TestAppContext) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
+        let view = cx.new(|_| LongPicker {
+            rows: 2000,
+            selected: 1500,
+            input: None,
+            scroll: gpui::ScrollHandle::new(),
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
+    for _ in 0..2 {
+        cx.update(|window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+        });
+    }
+
+    let list = cx.debug_bounds("palette-list").unwrap();
+    let selected = cx
+        .debug_bounds("palette-item-1500")
+        .expect("the selected row should render");
+    assert!(list.top() <= selected.top() && selected.bottom() <= list.bottom());
+    assert!(cx.debug_bounds("palette-item-0").is_none());
+    assert!(cx.debug_bounds("palette-item-1999").is_none());
 }
 
 /// Shows a notification through the real window list, which drives its
@@ -1170,7 +1274,7 @@ fn palette_profiles_centralize_row_density_and_surface_treatment() {
     );
 
     assert_eq!(active.height, gpui::rems(3.0));
-    assert_eq!(compact.height, gpui::rems(2.25));
+    assert_eq!(compact.height, gpui::rems(2.03125));
     assert_eq!(active.radius, gpui::px(4.0));
     assert_eq!(active.background, theme.ghost_element_selected);
     assert_eq!(active.title, theme.text);
@@ -1759,8 +1863,8 @@ fn shared_control_density_tracks_ui_font_size(cx: &mut gpui::TestAppContext) {
     assert_eq!(enlarged_icon.size.height, gpui::px(35.0));
     assert_eq!(compact_switch.size.height, gpui::px(24.0));
     assert_eq!(enlarged_switch.size.height, gpui::px(40.0));
-    assert_eq!(compact_palette.size.width, gpui::px(34.0 * 12.0));
-    assert_eq!(enlarged_palette.size.width, gpui::px(34.0 * 20.0));
+    assert_eq!(compact_palette.size.width, gpui::px(455.0));
+    assert_eq!(enlarged_palette.size.width, gpui::px(758.5));
 }
 
 #[test]
@@ -1768,7 +1872,7 @@ fn yttt_input_style_makes_dialog_input_visible() {
     let theme = WorkbenchTheme::one_dark();
     let style = yttt_input_style(YtttInputKind::Dialog, theme, UiStyle::default());
 
-    assert_eq!(style.height, gpui::rems(2.125));
+    assert_eq!(style.height, gpui::rems(2.0));
     assert_eq!(style.background, theme.element_background);
     assert_eq!(style.border, theme.border_variant);
     assert_eq!(style.focused_border, theme.border_focused);

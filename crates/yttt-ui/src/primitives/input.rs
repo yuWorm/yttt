@@ -84,10 +84,9 @@ pub fn yttt_input(
     ui_style: UiStyle,
 ) -> Input {
     let style = yttt_input_style(kind, theme, ui_style);
-    Input::new(state)
-        .appearance(style.appearance)
-        .text_sm()
-        .h(style.height)
+    let input = Input::new(state).appearance(style.appearance).text_sm();
+    // `Input::h` only sizes multi-line inputs, so set the frame height directly.
+    Styled::h(input, style.height)
         .when(!style.appearance, |this| this.p_0())
         .rounded(style.radius)
         .border_color(style.border)

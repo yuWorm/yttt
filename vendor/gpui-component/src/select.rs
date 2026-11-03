@@ -628,7 +628,7 @@ where
                                             .xsmall()
                                             .text_color(cx.theme().muted_foreground)
                                             .into_any_element(),
-                                        None => Caret::new(Size::XSmall)
+                                        None => Caret::new(self.state.size)
                                             .text_color(cx.theme().muted_foreground)
                                             .into_any_element(),
                                     };

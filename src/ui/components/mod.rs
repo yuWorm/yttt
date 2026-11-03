@@ -9,11 +9,11 @@ pub use notification::{
     notification_tone_for_toast, workbench_agent_notification, workbench_error_notification,
     workbench_inline_notification, workbench_status_notification,
 };
-pub use palette_item::{workbench_keybinding_badge, workbench_palette_item};
+pub use palette_item::workbench_keybinding_badge;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement as _, ParentElement as _,
-    SharedString, Stateful, StatefulInteractiveElement as _, Window, div, prelude::*,
+    AnyElement, App, ClickEvent, Div, InteractiveElement as _, ParentElement as _, SharedString,
+    Window, div, prelude::*,
 };
 use gpui_component::notification::Notification;
 use yttt_ui::primitives::button::YtttButton;
@@ -21,12 +21,9 @@ use yttt_ui::{Icon, IconName};
 
 use crate::ui::{
     notifications::{ToastItem, ToastTone},
-    primitives::{
-        notification::{
-            YtttNotificationTone, yttt_notification_style, yttt_notification_surface,
-            yttt_toast_notification,
-        },
-        row::{YtttRowKind, yttt_row, yttt_row_style},
+    primitives::notification::{
+        YtttNotificationTone, yttt_notification_style, yttt_notification_surface,
+        yttt_toast_notification,
     },
     settings::keybinding_display::parse_keybinding_for_display,
     theme::{UiStyle, WorkbenchTheme},

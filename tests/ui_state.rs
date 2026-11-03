@@ -9039,3 +9039,53 @@ fn configured_git_keybinding_dispatches_from_the_workbench() {
     root.run_command(command).unwrap();
     assert!(root.git_diff_panel_is_open());
 }
+
+#[gpui::test]
+fn command_palette_closes_on_a_press_outside_it(cx: &mut gpui::TestAppContext) {
+    cx.update(yttt_ui::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let workspace = workspace_with_sample_project();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        yttt_ui::window::yttt_root(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_palette(PaletteKind::Command);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    let list = cx
+        .debug_bounds("palette-list")
+        .expect("the command palette should render");
+    cx.simulate_mouse_down(
+        gpui::point(list.left() + gpui::px(8.0), list.top() - gpui::px(20.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(
+            root.read(app).active_palette().is_some(),
+            "a press on the query input keeps the palette open"
+        );
+    });
+
+    cx.simulate_mouse_down(
+        gpui::point(gpui::px(4.0), list.bottom() + gpui::px(200.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).active_palette().is_none());
+    });
+}

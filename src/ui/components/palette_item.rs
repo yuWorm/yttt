@@ -1,103 +1,20 @@
 use super::*;
 use yttt_ui::primitives::kbd::yttt_kbd;
 
-pub fn workbench_palette_item<H>(
-    id: impl Into<ElementId>,
-    title: impl Into<String>,
-    subtitle: impl Into<String>,
-    status: impl Into<String>,
-    keybinding: Option<String>,
-    leading_icon: Option<IconName>,
-    row_kind: YtttRowKind,
-    state: SelectableState,
-    enabled: bool,
-    theme: WorkbenchTheme,
-    ui_style: UiStyle,
-    on_click: H,
-) -> Stateful<Div>
-where
-    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-{
-    let style = yttt_row_style(row_kind, state, enabled, theme, ui_style);
-    let title = title.into();
-    let subtitle = subtitle.into();
-    let show_subtitle = row_kind != YtttRowKind::PaletteCompact && !subtitle.trim().is_empty();
-    let status = status.into();
-    let keybinding = keybinding.filter(|keybinding| !keybinding.trim().is_empty());
-
-    yttt_row(row_kind, state, enabled, theme, ui_style)
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(ui_style.palette.item_content_gap)
-        .on_click(on_click)
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap(ui_style.palette.item_content_gap)
-                .children(leading_icon.map(|icon| {
-                    div()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .justify_center()
-                        .w(ui_style.palette.icon_column_width)
-                        .child(
-                            Icon::new(icon)
-                                .size(ui_style.palette.icon_size)
-                                .text_color(style.subtitle),
-                        )
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .gap(ui_style.spacing.xs)
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(style.title)
-                                .truncate()
-                                .child(title),
-                        )
-                        .children(show_subtitle.then(|| {
-                            div()
-                                .text_xs()
-                                .text_color(style.subtitle)
-                                .truncate()
-                                .child(subtitle)
-                        })),
-                ),
-        )
-        .child(palette_item_trailing(
-            status,
-            keybinding,
-            style.status,
-            theme,
-            ui_style,
-        ))
-}
-
 pub fn workbench_keybinding_badge(
     keybinding: impl Into<String>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
 ) -> AnyElement {
     let keybinding = keybinding.into();
-    if !ui_style.palette.bordered_shortcuts {
-        return div()
+    if let Some(keystroke) = parse_keybinding_for_display(&keybinding) {
+        yttt_kbd(keystroke, theme, ui_style).into_any_element()
+    } else if !ui_style.palette.bordered_shortcuts {
+        div()
             .text_sm()
             .text_color(theme.text_muted)
             .child(keybinding)
-            .into_any_element();
-    }
-    if let Some(keystroke) = parse_keybinding_for_display(&keybinding) {
-        yttt_kbd(keystroke, theme, ui_style).into_any_element()
+            .into_any_element()
     } else {
         div()
             .rounded(ui_style.radius.compact)
@@ -111,35 +28,4 @@ pub fn workbench_keybinding_badge(
             .child(keybinding)
             .into_any_element()
     }
-}
-
-fn palette_item_trailing(
-    status: String,
-    keybinding: Option<String>,
-    status_color: gpui::Rgba,
-    theme: WorkbenchTheme,
-    ui_style: UiStyle,
-) -> Div {
-    let mut trailing = div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_end()
-        .gap(ui_style.spacing.md);
-
-    if !status.is_empty() {
-        trailing = trailing.child(
-            div()
-                .text_xs()
-                .text_color(status_color)
-                .truncate()
-                .child(status),
-        );
-    }
-
-    if let Some(keybinding) = keybinding {
-        trailing = trailing.child(workbench_keybinding_badge(keybinding, theme, ui_style));
-    }
-
-    trailing
 }

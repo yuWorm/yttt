@@ -43,6 +43,8 @@ fn yttt_value(name: &str, style: UiStyle) -> Option<f32> {
         "tab_radius_px" => pixels(style.rows.tab_radius),
         "text_ui_px" => Some(rems_px(style.text.default)),
         "palette_width_px" => pixels(style.palette.panel_width),
+        "palette_row_height_px" => Some(rems_px(style.rows.palette_compact_height)),
+        "menu_row_pitch_px" => Some(rems_px(yttt_ui::menu::menu_row_height())),
         _ => None,
     }
 }

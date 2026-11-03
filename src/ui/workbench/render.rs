@@ -356,6 +356,7 @@ impl Render for WorkbenchView {
                         &self.ui_text,
                         &query_input,
                         &self.palette.scroll_handle,
+                        window,
                         preview,
                         appearance.ui,
                         appearance.style,
@@ -368,6 +369,7 @@ impl Render for WorkbenchView {
                                 cx.notify();
                             })
                         },
+                        cx.listener(|this, _, window, cx| this.dismiss_palette(window, cx)),
                     ));
                 } else if active_palette.kind == PaletteKind::WorkspaceHistory {
                     root = root.child(self.workspace_history_overlay(
@@ -384,6 +386,7 @@ impl Render for WorkbenchView {
                         &self.ui_text,
                         &query_input,
                         &self.palette.scroll_handle,
+                        window,
                         appearance.ui,
                         appearance.style,
                         |selected_index| {
@@ -398,6 +401,7 @@ impl Render for WorkbenchView {
                                 cx.notify();
                             })
                         },
+                        cx.listener(|this, _, window, cx| this.dismiss_palette(window, cx)),
                     ));
                 }
             }
