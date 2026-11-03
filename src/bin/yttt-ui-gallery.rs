@@ -16,11 +16,22 @@ use gpui::{
 };
 use gpui_component::{IndexPath, Theme, input::InputState, select::SelectState};
 use yttt::{
-    config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore},
+    config::{
+        paths::AppConfigPaths,
+        scope::save_scoped_settings,
+        settings::{AppSettings, LanguageSetting},
+        theme::ThemeStore,
+    },
+    model::{
+        ids::ProjectId,
+        project::{ProjectDescriptor, ProjectLocation},
+        workspace::Workspace,
+    },
     ui::{
         app::assets,
         editor::{EditorAppearance, register_builtin_editor_languages, styled_code_editor_input},
         theme::{AppearanceState, ThemeRuntime},
+        workbench::WorkbenchView,
     },
 };
 use yttt_ui::{
@@ -55,7 +66,7 @@ const WINDOW_WIDTH: f32 = 960.;
 const WINDOW_HEIGHT: f32 = 900.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
-                     [--scene components|palette|tree|editor] [--screenshot PATH] [--dump-layout PATH]";
+                     [--scene components|palette|tree|editor|main] [--screenshot PATH] [--dump-layout PATH]";
 
 type LayoutMap = Rc<RefCell<BTreeMap<String, Bounds<Pixels>>>>;
 
@@ -78,6 +89,8 @@ enum Scene {
     Tree,
     /// The Markdown editor of `baseline-1.26.2/editor.png`.
     Editor,
+    /// A full workbench sized like `baseline-1.26.2/main2.png`.
+    Main,
 }
 
 fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
@@ -100,6 +113,7 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
                     "palette" => Scene::Palette,
                     "tree" => Scene::Tree,
                     "editor" => Scene::Editor,
+                    "main" => Scene::Main,
                     _ => bail!(USAGE),
                 }
             }
@@ -148,15 +162,25 @@ fn run(options: Options) {
             let scene = options.scene;
             let layout = LayoutMap::default();
             let view_layout = layout.clone();
+            // The main scene matches the Zed baseline window.
+            let (width, height) = if scene == Scene::Main {
+                (1536., 1049.)
+            } else {
+                (WINDOW_WIDTH, WINDOW_HEIGHT)
+            };
             let window_options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(40.), px(40.)),
-                    size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
+                    size(px(width), px(height)),
                 ))),
                 ..Default::default()
             };
             let handle = cx
                 .open_window(window_options, move |window, cx| {
+                    if scene == Scene::Main {
+                        let view = cx.new(|_| main_workbench(ui_style.id));
+                        return cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx));
+                    }
                     let view =
                         cx.new(|cx| Gallery::new(scene, theme, ui_style, view_layout, window, cx));
                     cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx))
@@ -185,6 +209,45 @@ fn run(options: Options) {
             })
             .detach();
         });
+}
+
+/// A workbench on a fixture shaped like the Zed baseline's: a project with
+/// `src/` and `README.md`, one shell tab, and no running processes.
+fn main_workbench(style: UiStyleId) -> WorkbenchView {
+    let root = std::env::temp_dir().join("yttt-ui-gallery-main");
+    let project = root.join("zed-fixture");
+    let _ = std::fs::create_dir_all(project.join("src"));
+    let _ = std::fs::write(project.join("README.md"), "# Fixture\n");
+    let paths = AppConfigPaths::from_config_dir(root.join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.language = LanguageSetting::English;
+    settings.general.onboarding_completed = true;
+    settings.theme.ui_style = style;
+    let _ = save_scoped_settings(&paths, &settings, &AppSettings::default(), false);
+
+    let location = ProjectLocation::local(std::fs::canonicalize(&project).unwrap_or(project));
+    let descriptor = ProjectDescriptor::new(
+        ProjectId::from_legacy_location(&location.display_path()),
+        location,
+    );
+    let layout = toml::from_str(
+        r#"
+        [project]
+        name = "zed-fixture"
+        default_tab = "shell"
+
+        [[tabs]]
+        id = "shell"
+        title = "shell"
+        layout = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
+        "#,
+    )
+    .expect("fixture layout parses");
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(descriptor, layout)
+        .expect("fixture project opens");
+    WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths)
 }
 
 fn export(
@@ -613,6 +676,7 @@ impl Render for Gallery {
             Scene::Palette => return self.palette_scene(window),
             Scene::Tree => return self.tree_scene(),
             Scene::Editor => return self.editor_scene(),
+            Scene::Main => unreachable!("the main scene renders a workbench, not the gallery"),
             Scene::Components => {}
         }
         div()
@@ -726,6 +790,7 @@ mod tests {
         );
         assert_eq!(parse(&["--scene", "tree"]).unwrap().scene, Scene::Tree);
         assert_eq!(parse(&["--scene", "editor"]).unwrap().scene, Scene::Editor);
+        assert_eq!(parse(&["--scene", "main"]).unwrap().scene, Scene::Main);
         assert!(parse(&["--scene", "nope"]).is_err());
     }
 

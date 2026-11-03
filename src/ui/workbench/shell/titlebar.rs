@@ -29,7 +29,18 @@ pub fn workbench_titlebar(
             this.h(if cfg!(target_os = "windows") {
                 px(32.0)
             } else {
-                (window.rem_size() * 1.75).max(px(34.0))
+                // Zed's 34px bar sits above its border; TitleBar's height
+                // includes the border.
+                (window.rem_size() * 1.75).max(px(34.0)) + ui_style.border.hairline
+            })
+            // Zed 1.26.2 starts the title 74px in, past the traffic lights;
+            // TitleBar reserves 80px before our own padding.
+            .when(cfg!(target_os = "macos"), |this| {
+                this.pl(px(74.0)
+                    - ui_style
+                        .shell
+                        .titlebar_padding_x
+                        .to_pixels(window.rem_size()))
             })
         })
         .border_color(theme.border)
