@@ -369,6 +369,7 @@ impl Render for WorkbenchView {
                                 cx.notify();
                             })
                         },
+                        cx.listener(|this, _, window, cx| this.dismiss_palette(window, cx)),
                     ));
                 } else if active_palette.kind == PaletteKind::WorkspaceHistory {
                     root = root.child(self.workspace_history_overlay(
@@ -400,6 +401,7 @@ impl Render for WorkbenchView {
                                 cx.notify();
                             })
                         },
+                        cx.listener(|this, _, window, cx| this.dismiss_palette(window, cx)),
                     ));
                 }
             }

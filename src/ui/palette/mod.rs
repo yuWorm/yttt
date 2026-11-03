@@ -1,7 +1,9 @@
 pub mod picker;
 pub mod surface;
 
-use gpui::{AnyElement, App, ClickEvent, Entity, IntoElement, ScrollHandle, Window};
+use gpui::{
+    AnyElement, App, ClickEvent, Entity, IntoElement, MouseDownEvent, ScrollHandle, Window,
+};
 use gpui_component::input::InputState;
 use yttt_ui::{
     IconName,
@@ -77,6 +79,7 @@ pub fn palette_overlay<H, F>(
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     on_confirm_item: F,
+    on_dismiss: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -115,6 +118,7 @@ where
         theme,
         ui_style,
         on_confirm_item,
+        on_dismiss,
     )
 }
 
@@ -129,6 +133,7 @@ pub fn file_finder_palette_overlay<H, F>(
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     on_confirm_item: F,
+    on_dismiss: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -164,6 +169,7 @@ where
         theme,
         ui_style,
         on_confirm_item,
+        on_dismiss,
     )
 }
 

@@ -425,6 +425,9 @@ impl WorkbenchView {
                 .max_h(style.palette.panel_max_height.min(available_height))
                 .max_w(style.palette.panel_max_width.min(available_width))
                 .debug_selector(|| "workspace-history-picker".into())
+                .on_mouse_down_out(
+                    cx.listener(|this, _, window, cx| this.dismiss_palette(window, cx)),
+                )
                 .child(
                     div()
                         .flex_none()

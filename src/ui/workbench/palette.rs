@@ -495,7 +495,18 @@ impl WorkbenchView {
                 self.flush_pending_status_notifications(window, cx);
                 cx.notify();
             }
-            InputEvent::Focus | InputEvent::Blur => {}
+            InputEvent::Blur => self.dismiss_palette(window, cx),
+            InputEvent::Focus => {}
         }
+    }
+
+    /// Closes the palette when focus or a click leaves it, as Zed's modals do.
+    /// A menu opened from a palette row takes focus without dismissing it.
+    pub(super) fn dismiss_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.active_palette.is_none() || yttt_ui::menu::menu_is_open(window, cx) {
+            return;
+        }
+        self.close_palette();
+        cx.notify();
     }
 }

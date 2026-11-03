@@ -2,8 +2,8 @@ use std::ops::Range;
 
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, Entity, HighlightStyle, InteractiveElement as _,
-    IntoElement, Pixels, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _,
-    StyledText, Window, div, point, prelude::*, px, relative,
+    IntoElement, MouseDownEvent, Pixels, ScrollHandle, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyledText, Window, div, point, prelude::*, px, relative,
 };
 use gpui_component::input::InputState;
 
@@ -59,6 +59,7 @@ pub fn picker_overlay<H, F>(
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     on_confirm_item: F,
+    on_dismiss: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -74,7 +75,8 @@ where
             theme,
             ui_style,
             on_confirm_item,
-        ),
+        )
+        .on_mouse_down_out(on_dismiss),
         YtttPanelKind::Palette,
         YtttOverlayPlacement::Top,
         theme,
@@ -126,6 +128,7 @@ pub fn picker_overlay_with_preview<H, F>(
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     on_confirm_item: F,
+    on_dismiss: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -176,7 +179,8 @@ where
                             .child(preview),
                     ),
             )
-            .child(picker_footer(footer, theme, ui_style)),
+            .child(picker_footer(footer, theme, ui_style))
+            .on_mouse_down_out(on_dismiss),
         YtttPanelKind::Palette,
         YtttOverlayPlacement::Top,
         theme,

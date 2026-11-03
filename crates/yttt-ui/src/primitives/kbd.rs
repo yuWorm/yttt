@@ -16,5 +16,10 @@ pub fn yttt_kbd(keystroke: Keystroke, theme: WorkbenchTheme, ui_style: UiStyle) 
             .bg(theme.surface_elevated)
             .text_color(theme.text_muted);
     }
-    kbd.appearance(false).text_color(theme.text_muted)
+    // `appearance(false)` renders bare text and drops every style, so keep the
+    // chip's small type and strip its chrome instead.
+    kbd.bg(gpui::transparent_black())
+        .p_0()
+        .min_w(gpui::px(0.))
+        .text_color(theme.text_muted)
 }
