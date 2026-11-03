@@ -798,6 +798,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn one_dark_editor_gutter_uses_zed_colors() {
+        let editor = ThemeRuntime::default().editor;
+
+        assert_eq!(editor.active_line, gpui::rgba(0x2f343ebf));
+        assert_eq!(editor.line_number, gpui::rgb(0x4e5a5f));
+        assert_eq!(editor.active_line_number, gpui::rgb(0xd0d4da));
+    }
+
+    #[test]
     fn zed_style_editors_render_in_bundled_lilex() {
         use crate::ui::editor::EditorAppearance;
 

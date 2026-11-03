@@ -241,16 +241,16 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     assert_eq!(
         highlight.editor_active_line,
         Some(gpui::Hsla::from(
-            rgb(0x2c313c).alpha(0.08 + 0.04 * (1.0 - DEFAULT_WINDOW_OPACITY))
+            rgb(0x2f343e).alpha(0.08 + 0.04 * (1.0 - DEFAULT_WINDOW_OPACITY))
         ))
     );
     assert_eq!(
         highlight.editor_line_number,
-        Some(gpui::Hsla::from(rgb(0x495162)))
+        Some(gpui::Hsla::from(rgb(0x4e5a5f)))
     );
     assert_eq!(
         highlight.editor_active_line_number,
-        Some(gpui::Hsla::from(rgb(0xabb2bf)))
+        Some(gpui::Hsla::from(rgb(0xd0d4da)))
     );
 
     let expected_syntax: [(&str, u32); 16] = [

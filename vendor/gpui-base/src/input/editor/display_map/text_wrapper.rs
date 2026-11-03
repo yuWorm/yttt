@@ -1,3 +1,4 @@
+// Modified for yttt; see vendor/PATCHES.md.
 use super::inline_line::InputLine;
 use gpui::Half;
 use std::borrow::Cow;
@@ -1624,6 +1625,7 @@ mod tests {
             wrap_width: None,
             wrapping_indent: WrappingIndent::default(),
             line_number_width: px(0.),
+            gutter_before: px(0.),
             space_width: px(0.),
             cursor_bounds: None,
             text_align: TextAlign::Left,

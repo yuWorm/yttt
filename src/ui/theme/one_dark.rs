@@ -15,9 +15,11 @@ pub(super) fn theme() -> AppTheme {
         editor: EditorTheme {
             background: rgb(0x282c33),
             foreground: rgb(0xacb2be),
-            active_line: rgb(0x2c313c),
-            line_number: rgb(0x495162),
-            active_line_number: rgb(0xabb2bf),
+            // Zed 1.26.2's One Dark: `editor.active_line.background` and the
+            // line number colors.
+            active_line: rgba(0x2f343ebf),
+            line_number: rgb(0x4e5a5f),
+            active_line_number: rgb(0xd0d4da),
             syntax: EditorSyntaxTheme {
                 boolean: rgb(0xd19a66),
                 comment: rgb(0x7f838c),

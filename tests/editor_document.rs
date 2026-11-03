@@ -176,6 +176,7 @@ fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::
         line_height: 1.4,
         soft_wrap: false,
         line_numbers: true,
+        gutter_padding: (0.0, 0.0),
     };
     let (document, cx) = cx.add_window_view(|window, entity_cx| {
         ProjectEditorDocument::new(model, appearance, window, entity_cx)
@@ -205,6 +206,7 @@ fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::
                 line_height: 1.6,
                 soft_wrap: true,
                 line_numbers: false,
+                gutter_padding: (0.0, 0.0),
             },
             window,
             entity_cx,

@@ -101,6 +101,19 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx.notify();
     }
 
+    /// Adds space before and after the line numbers, in multiples of the font
+    /// size, so a gutter can match another editor's proportions.
+    pub fn set_gutter_padding(&mut self, before: f32, after: f32, cx: &mut Context<Self>) {
+        if self.gutter_padding != (before, after) {
+            self.gutter_padding = (before, after);
+            cx.notify();
+        }
+    }
+
+    pub fn gutter_padding(&self) -> (f32, f32) {
+        self.gutter_padding
+    }
+
     pub fn text_input_enabled(&self) -> bool {
         self.text_input_enabled
     }

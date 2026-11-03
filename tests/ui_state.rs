@@ -4043,6 +4043,7 @@ fn layout_default_editor_uses_editor_settings_and_updates_appearance(
                 line_height: 1.6,
                 soft_wrap: true,
                 line_numbers: false,
+                gutter_padding: (28.0 / 15.0, 10.0 / 15.0),
             }
         );
         root.layout_toml_editor_value().unwrap().to_string()
@@ -4067,6 +4068,7 @@ fn layout_default_editor_uses_editor_settings_and_updates_appearance(
                 line_height: 1.7,
                 soft_wrap: false,
                 line_numbers: true,
+                gutter_padding: (28.0 / 15.0, 10.0 / 15.0),
             }
         );
         assert_eq!(

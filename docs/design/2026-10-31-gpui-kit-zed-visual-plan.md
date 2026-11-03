@@ -431,8 +431,8 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 ### 任务 7.1：编辑器外观（M）
 
 - [ ] 接入 `set_scrollbar_renderer`。
-- [ ] 对齐 gutter、当前行、缩进线、搜索条。
-- [ ] 打包 Lilex，更新 `assets` 和字体列表，保留 OFL 文件。
+- [x] 对齐 gutter 和当前行：行号右缘 58、正文起点 92（按字号缩放，vendor 补丁 `set_gutter_padding`），当前行与行号颜色取自 Zed One Dark。缩进线、搜索条未做。
+- [x] 打包 Lilex 2.700 四个字重和 OFL。Zed 风格编辑器默认用 Lilex。
 - [ ] 重新评估 `flush_search_panel` 能否由 yttt 自行组合。
 
 ### 任务 7.2：Markdown 编辑主题（M）

@@ -485,6 +485,9 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(crate) disabled: bool,
     pub(crate) readonly: bool,
     pub(super) text_input_enabled: bool,
+    /// yttt patch: extra gutter space before and after the line numbers, in
+    /// multiples of the font size.
+    pub(super) gutter_padding: (f32, f32),
     pub(super) cursor_shape: super::yttt_ext::InputCursorShape,
     pub(crate) text_align: TextAlign,
     pub(super) masked: bool,
@@ -978,6 +981,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             disabled: false,
             readonly: false,
             text_input_enabled: true,
+            gutter_padding: (0., 0.),
             cursor_shape: Default::default(),
             text_align: TextAlign::Left,
             masked: false,
