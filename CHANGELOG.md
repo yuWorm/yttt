@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Zed 风格下编辑器默认使用随附的 Lilex 字体，与 Zed 一致；Rounded 风格仍用系统等宽字体。
+- In the Zed style the editor now defaults to the bundled Lilex font, as Zed does; the Rounded style keeps the system monospace font.
 - 默认 One Dark 主题改用 Zed 的配色，按钮文字改为 14px；新增 Compact、Medium、Large 按钮尺寸。
 - The default One Dark theme now uses Zed's palette and button text is 14px, with new Compact, Medium, and Large button sizes.
 - 开关改为 Zed 的单层样式。

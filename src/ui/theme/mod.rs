@@ -169,7 +169,10 @@ impl UiTypography {
             settings.general.ui_font_family.clone()
         };
         let mono_font_family = if settings.editor.font_family.is_empty() {
-            if cfg!(target_os = "macos") {
+            if settings.theme.ui_style == UiStyleId::Zed {
+                // Bundled, like Zed's default buffer font.
+                "Lilex"
+            } else if cfg!(target_os = "macos") {
                 "Menlo"
             } else if cfg!(target_os = "windows") {
                 "Consolas"
@@ -791,6 +794,20 @@ fn theme_style(color: Rgba) -> ThemeStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zed_style_defaults_the_editor_to_bundled_lilex() {
+        let mut settings = AppSettings::default();
+        settings.theme.ui_style = UiStyleId::Zed;
+        assert_eq!(UiTypography::resolve(&settings).mono_font_family, "Lilex");
+
+        settings.theme.ui_style = UiStyleId::Rounded;
+        assert_ne!(UiTypography::resolve(&settings).mono_font_family, "Lilex");
+
+        settings.theme.ui_style = UiStyleId::Zed;
+        settings.editor.font_family = "Menlo".to_string();
+        assert_eq!(UiTypography::resolve(&settings).mono_font_family, "Menlo");
+    }
 
     #[test]
     fn editor_theme_styles_frontend_captures() {

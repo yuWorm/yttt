@@ -166,6 +166,17 @@ pub fn load_ui_fonts(cx: &gpui::App) {
                 )
                 .as_slice(),
             ),
+            // Lilex 2.700, Zed's default buffer font; OFL 1.1 in assets/fonts/lilex.
+            Cow::Borrowed(
+                include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf").as_slice(),
+            ),
+            Cow::Borrowed(include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf").as_slice()),
+            Cow::Borrowed(
+                include_bytes!("../../../assets/fonts/lilex/Lilex-Italic.ttf").as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!("../../../assets/fonts/lilex/Lilex-BoldItalic.ttf").as_slice(),
+            ),
             // Nerd Fonts v3.4.0 (Hack 3.003); licenses accompany the bundled font files.
             Cow::Borrowed(
                 include_bytes!(
