@@ -311,6 +311,7 @@ fn terminal_font_step(
     font_select: &Entity<SettingsFontFamilySelectState>,
 ) -> Div {
     let font_select = yttt_select(font_select, theme, ui_style)
+        .w(ui_style.controls.settings_control_width)
         .search_placeholder(ui_text.get(UiTextKey::SettingsSearchFont))
         .cleanable(false);
     let recommendation = match font_detection {

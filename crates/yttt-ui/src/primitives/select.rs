@@ -6,7 +6,11 @@ use gpui_component::{
     select::{Select, SelectDelegate, SelectItem, SelectState},
 };
 
-use crate::{style::UiStyle, theme::WorkbenchTheme};
+use crate::{
+    Icon, IconName,
+    style::{UiStyle, UiStyleId},
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttSelectStyle {
@@ -47,10 +51,17 @@ where
     <D::Item as SelectItem>::Value: PartialEq + Clone,
 {
     let style = yttt_select_style(theme, ui_style);
-    Select::new(state)
+    let select = Select::new(state)
         .small()
         .appearance(true)
-        .w(style.width)
+        .icon(Icon::new(IconName::ChevronsUpDown));
+    // Zed's dropdowns fit their value; the rounded style keeps a fixed column.
+    let select = if ui_style.id == UiStyleId::Zed {
+        select.w_auto()
+    } else {
+        select.w(style.width)
+    };
+    select
         .h(style.height)
         .menu_width(style.menu_width)
         .rounded(style.radius)

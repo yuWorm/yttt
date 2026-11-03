@@ -385,7 +385,7 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 5.3：Select 与带搜索选择（M）
 
-- [ ] 基于 `gpui_base::Select`、`gpui_base::Combobox`。
+- [x] `gpui_component::Select` 已基于 `gpui_base::Select`，不重写。改用 Zed 的上下双箭头，Zed 风格下宽度随内容，删除箭头补丁，hover 补丁保留。
 - [ ] 复用 picker row。
 - [ ] 替换字体选择等现有调用。
 
@@ -394,7 +394,7 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 - [ ] 评估能否接入 `PickerDelegate`。
 - [ ] 能接入就迁移；不能接入就保留专用 view，只共享 row 和 surface，并记录原因。
 
-**P5 退出门禁：** palette、select 的 L1、L3 通过；`hover_matches_selected` 补丁删除。
+**P5 退出门禁：** palette、select 的 L1、L3 通过。`hover_matches_selected` 只有文件树使用，删除移到 P6。
 
 ## 8. P6：文件树
 

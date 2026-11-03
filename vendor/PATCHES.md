@@ -36,7 +36,7 @@
 | `PopupMenuStyle`、`MenuItemAppearance`，带样式时恢复 1px 边框 | `src/menu/*` | C | 0.8.1 的 `popover_style` 去掉了边框，改用阴影环 | P6 换掉 Tree 后删除。右键和下拉菜单已改走 `yttt_ui::menu::MenuLayer`，只有文件树还经过 `PopupMenu` |
 | `ListItem::hover_matches_selected`，选中背景 | `src/list/list_item.rs` | C | 文件树和列表的选中外观 | P5、P6 自有行外观 |
 | 各分区标题独立测量 | `src/list/list.rs`、`src/list/cache.rs`、`src/list/delegate.rs` | C | SSH 列表有多个分区 | 上游支持，或 P5 不再使用 `List` |
-| `Select` 触发器 hover，自身箭头用 XSmall | `src/select.rs` | C | 保持现有下拉外观 | P5 自有 select |
+| `Select` 触发器 hover | `src/select.rs` | C | 触发器悬停时显示 hover 背景，0.8.1 去掉了 | 上游提供 hover 配置 |
 | 中号和大号输入框内边距 12、16 | `src/sizing.rs` | C | 0.8.1 改成 10、12，文字左移 2px | P3 用 token 定义 |
 | 主题 `placeholder_foreground` | `src/theme/schema.rs`、`src/theme/theme_color.rs`、`src/input/input.rs` | C | 占位符颜色独立于 muted 文本 | P3 自有 input |
 
@@ -54,6 +54,7 @@ dockerfile、hcl、nix、scss、vue 和 JSX 高亮由 `src/ui/editor/language.rs
 |---|---|
 | `TooltipAppearance` | 主题的 `muted_foreground` 已是同一颜色 |
 | Radio 行高和上边距 | Zed 没有对应控件，改用上游默认值 |
+| `Select` 箭头用 XSmall | `yttt_select` 改用公开的 `.icon()`，显示 Zed 的上下双箭头 |
 
 ## 不重放
 
