@@ -475,6 +475,9 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 - 8.2 状态栏：高度 31 与 Zed 一致。默认内容为空，由 bars 配置决定，不属于外观对齐。
 - 8.6 终端字体：默认值不变。实测：终端字体设为 Lilex 时，Powerline 分隔符来自 Lilex 自身，Nerd Font 图标则回退到系统字体、画成占位方块；CoreText 不会回退到运行时注册的字体。现在终端字体显式以随附的 Hack Nerd Font Mono 为回退，`platform_fonts` 测试锁定该行为。未跑终端性能基准。
 - 8.3 面板分界线：颜色改为 `border`（Zed 的 `pane_group.border` 回退值），分屏线同步；线贴在面板边缘，去掉拖拽区露出的 2px 底色。
+- 8.4 设置页：已检查。没有直接使用 `gpui_component` 控件（clippy 禁止），也没有写死的颜色；开关、下拉框、输入框在 P3、P5 已换成 yttt 控件。剩余 `px` 是页面宽度等布局尺寸，按“不重排布局”保留。
+- 8.5 Command Center、Agent 侧边栏：已检查。颜色都来自主题变量；约 90 处 `px` 是状态点和小间距等几何，Zed 没有对应物，改成变量没有可见变化，不做。
+- 8.7 Windows 标题栏：待用户在 Windows 上按 `docs/windows-titlebar-verification.md` 执行。
 
 ## 11. P9：全量验收与收尾
 
