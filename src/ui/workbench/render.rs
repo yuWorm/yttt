@@ -356,6 +356,7 @@ impl Render for WorkbenchView {
                         &self.ui_text,
                         &query_input,
                         &self.palette.scroll_handle,
+                        window,
                         preview,
                         appearance.ui,
                         appearance.style,
@@ -384,6 +385,7 @@ impl Render for WorkbenchView {
                         &self.ui_text,
                         &query_input,
                         &self.palette.scroll_handle,
+                        window,
                         appearance.ui,
                         appearance.style,
                         |selected_index| {

@@ -455,7 +455,7 @@ impl Gallery {
         "agent: open settings",
     ];
 
-    fn palette_scene(&self) -> Div {
+    fn palette_scene(&self, window: &Window) -> Div {
         let (theme, ui_style) = (self.theme, self.ui_style);
         let rows = Self::PALETTE_COMMANDS
             .iter()
@@ -500,6 +500,7 @@ impl Gallery {
             text,
             &self.palette_input,
             &self.palette_scroll,
+            window,
             theme,
             ui_style,
             |_| |_: &gpui::ClickEvent, _: &mut Window, _: &mut App| {},
@@ -517,10 +518,10 @@ impl Gallery {
 }
 
 impl Render for Gallery {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (theme, ui_style) = (self.theme, self.ui_style);
         if self.scene == Scene::Palette {
-            return self.palette_scene();
+            return self.palette_scene(window);
         }
         div()
             .size_full()

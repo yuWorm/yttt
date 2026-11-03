@@ -914,6 +914,87 @@ fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
     });
 }
 
+struct LongPicker {
+    rows: usize,
+    selected: usize,
+    input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    scroll: gpui::ScrollHandle,
+}
+
+impl gpui::Render for LongPicker {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::AppContext as _;
+        use yttt_ui::picker::{PickerItem, PickerOverlayRow, PickerText, picker_panel};
+
+        let input = self
+            .input
+            .get_or_insert_with(|| cx.new(|cx| gpui_component::input::InputState::new(window, cx)))
+            .clone();
+        let rows = (0..self.rows)
+            .map(|index| PickerOverlayRow {
+                item: PickerItem::new(index.to_string(), format!("branch-{index}")),
+                state: if index == self.selected {
+                    yttt_ui::SelectableState::Active
+                } else {
+                    yttt_ui::SelectableState::Inactive
+                },
+                status: String::new(),
+                show_subtitle: false,
+                icon: None,
+                keybinding: None,
+                highlight: None,
+            })
+            .collect();
+        picker_panel(
+            rows,
+            PickerText {
+                no_results: "No results".into(),
+                footer: Vec::new(),
+            },
+            &input,
+            &self.scroll,
+            window,
+            WorkbenchTheme::one_dark(),
+            UiStyle::default(),
+            |_| |_: &gpui::ClickEvent, _: &mut gpui::Window, _: &mut gpui::App| {},
+        )
+    }
+}
+
+#[gpui::test]
+fn long_picker_renders_only_rows_near_the_selection(cx: &mut gpui::TestAppContext) {
+    use gpui::AppContext as _;
+
+    cx.update(yttt_ui::init);
+    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
+        let view = cx.new(|_| LongPicker {
+            rows: 2000,
+            selected: 1500,
+            input: None,
+            scroll: gpui::ScrollHandle::new(),
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
+    for _ in 0..2 {
+        cx.update(|window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+        });
+    }
+
+    let list = cx.debug_bounds("palette-list").unwrap();
+    let selected = cx
+        .debug_bounds("palette-item-1500")
+        .expect("the selected row should render");
+    assert!(list.top() <= selected.top() && selected.bottom() <= list.bottom());
+    assert!(cx.debug_bounds("palette-item-0").is_none());
+    assert!(cx.debug_bounds("palette-item-1999").is_none());
+}
+
 /// Shows a notification through the real window list, which drives its
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(
