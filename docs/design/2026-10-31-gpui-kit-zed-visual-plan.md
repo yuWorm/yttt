@@ -386,15 +386,17 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 ### 任务 5.3：Select 与带搜索选择（M）
 
 - [x] `gpui_component::Select` 已基于 `gpui_base::Select`，不重写。改用 Zed 的上下双箭头，Zed 风格下宽度随内容，删除箭头补丁，hover 补丁保留。
-- [ ] 复用 picker row。
-- [ ] 替换字体选择等现有调用。
+- [x] 不复用 picker row：下拉列表由 `gpui_component::Select` 内部渲染，复用需要重写弹出层。
+- [x] 字体选择等调用都已走 `yttt_select`。
 
 ### 任务 5.4：SSH 项目选择器（M）
 
-- [ ] 评估能否接入 `PickerDelegate`。
-- [ ] 能接入就迁移；不能接入就保留专用 view，只共享 row 和 surface，并记录原因。
+- [x] 评估：不能接入。它依赖 `List` 的分区、搜索和键盘导航，`ListDelegate` 要求返回 `ListItem`，`PickerDelegate` 只有扁平列表。
+- [x] 保留专用 view。行尺寸已共用 palette 的样式参数，面板共用 `yttt_panel`。
 
 **P5 退出门禁：** palette、select 的 L1、L3 通过。`hover_matches_selected` 只有文件树使用，删除移到 P6。
+
+结果（2026-11-03）：L1 指标全部对齐。L3 用 `--scene palette` 对照 `palette.png`，用展示页对照 `settings_general.png` 的下拉框。真实窗口未手工验证。
 
 ## 8. P6：文件树
 
