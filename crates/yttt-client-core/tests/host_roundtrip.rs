@@ -1866,9 +1866,28 @@ async fn exited_terminal_reconnects_with_its_final_checkpoint_until_acknowledged
         panic!("unexpected spawn response: {spawned:?}");
     };
     drop(first);
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
 
+    // Reattach only once the Host has recorded the exit; a fixed sleep raced
+    // the shell on slow CI runners.
     let second = host.client("exit-second").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let Response::Resources(resources) =
+                second.request(Request::ListResources).await.unwrap()
+            else {
+                panic!("resource catalog");
+            };
+            if resources.terminals.iter().any(|terminal| {
+                terminal.session_id == session_id
+                    && matches!(terminal.process_state, TerminalProcessState::Exited { .. })
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("terminal exit timeout");
     let attached = second
         .request(Request::AttachTerminal(AttachTerminal {
             session_id: session_id.clone(),
