@@ -4,10 +4,7 @@ use std::time::Duration;
 
 use yttt_core::model::ids::{ClientInstanceId, ProjectId, TerminalSessionId};
 use yttt_host::{
-    runtime::{
-        EXIT_ACK_TTL, HostRuntime, HostRuntimeConfig, HostRuntimeError, TerminalControlOutcome,
-        UnattendedTakeoverPolicy,
-    },
+    runtime::{EXIT_ACK_TTL, HostRuntime, HostRuntimeError},
     terminal::HostTerminalEvent,
 };
 use yttt_protocol::terminal::{
@@ -171,208 +168,171 @@ async fn wait_for_event(
     .expect("runtime event timeout");
 }
 
+fn controller_changed(expected: &ClientInstanceId) -> impl FnMut(&HostTerminalEvent) -> bool + '_ {
+    move |event| {
+        matches!(
+            event,
+            HostTerminalEvent::ControllerChanged(state)
+                if state.controller.as_ref() == Some(expected)
+        )
+    }
+}
+
 #[tokio::test]
-async fn second_interactive_acquire_returns_conflict_instead_of_preempting() {
+async fn the_first_client_to_write_becomes_the_terminal_controller() {
     let runtime = HostRuntime::new();
+    let mut events = runtime.subscribe_control();
     runtime
         .spawn(spec("lease", "printf lease-ready; sleep 30"))
         .unwrap();
     let first = ClientInstanceId::new("client-1");
-    let second = ClientInstanceId::new("client-2");
     let session_id = TerminalSessionId::new("lease");
+    assert_eq!(runtime.terminal_controller().controller, None);
+
+    let observer = runtime
+        .acquire_lease(&session_id, &first, TerminalLeaseMode::Observer)
+        .unwrap();
+    assert_eq!(observer.mode, TerminalLeaseMode::Observer);
+    assert_eq!(runtime.terminal_controller().controller, None);
 
     let lease = runtime
         .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
         .unwrap();
     assert_eq!(lease.owner, first);
-    let observer = runtime
-        .acquire_lease(&session_id, &second, TerminalLeaseMode::Observer)
-        .unwrap();
-    assert_eq!(observer.mode, TerminalLeaseMode::Observer);
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(first.clone())
+    );
+    wait_for_event(&mut events, controller_changed(&first)).await;
+    runtime.terminate(&session_id).unwrap();
+}
 
-    let conflict = runtime
+#[tokio::test]
+async fn a_new_client_takes_control_of_every_terminal() {
+    let runtime = HostRuntime::new();
+    let mut events = runtime.subscribe_control();
+    runtime
+        .spawn(spec("takeover-a", "printf a-ready; sleep 30"))
+        .unwrap();
+    runtime
+        .spawn(spec("takeover-b", "printf b-ready; sleep 30"))
+        .unwrap();
+    let first = ClientInstanceId::new("client-1");
+    let second = ClientInstanceId::new("client-2");
+    let a = TerminalSessionId::new("takeover-a");
+    let b = TerminalSessionId::new("takeover-b");
+    runtime
+        .acquire_lease(&a, &first, TerminalLeaseMode::Interactive)
+        .unwrap();
+    runtime
+        .acquire_lease(&b, &first, TerminalLeaseMode::Interactive)
+        .unwrap();
+
+    let lease = runtime
+        .acquire_lease(&a, &second, TerminalLeaseMode::Interactive)
+        .unwrap();
+    assert_eq!(lease.owner, second);
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(second.clone())
+    );
+    let mut sent = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        sent.push(event);
+    }
+    assert!(sent.iter().any(controller_changed(&second)));
+    for session_id in [&a, &b] {
+        assert!(runtime.validate_lease(session_id, &first).is_err());
+        assert!(runtime.validate_lease(session_id, &second).is_ok());
+        assert!(sent.iter().any(|event| matches!(
+            event,
+            HostTerminalEvent::LeaseRevoked { session_id: revoked, previous_owner }
+                if revoked == session_id && *previous_owner == first
+        )));
+    }
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn a_client_that_lost_control_observes_until_it_takes_control_back() {
+    let runtime = HostRuntime::new();
+    let mut events = runtime.subscribe_control();
+    runtime
+        .spawn(spec("take-back", "printf take-back; sleep 30"))
+        .unwrap();
+    let first = ClientInstanceId::new("client-1");
+    let second = ClientInstanceId::new("client-2");
+    let session_id = TerminalSessionId::new("take-back");
+    runtime
+        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
+        .unwrap();
+    runtime
         .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
+        .unwrap();
+
+    // Asking again, as a reconnecting pane does, does not take control back.
+    let conflict = runtime
+        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
         .unwrap_err();
     assert!(matches!(
         conflict,
-        HostRuntimeError::LeaseConflict { holder, .. } if holder == first
+        HostRuntimeError::LeaseConflict { holder, .. } if holder == second
     ));
+    assert!(
+        runtime
+            .request_terminal_control(&session_id, &first)
+            .is_err()
+    );
+    assert!(matches!(
+        runtime.claim_terminal_control(&first),
+        Err(HostRuntimeError::NotTerminalController { controller }) if controller == second
+    ));
+
+    let taken = runtime.take_terminal_control(&first);
+    assert_eq!(taken.controller, Some(first.clone()));
     assert!(runtime.validate_lease(&session_id, &first).is_ok());
     assert!(runtime.validate_lease(&session_id, &second).is_err());
-    runtime.terminate(&session_id).unwrap();
-}
-
-#[tokio::test]
-async fn idle_ttl_does_not_transfer_control_without_negotiation() {
-    let runtime = HostRuntime::new();
-    runtime.set_now_millis(1_000);
-    runtime
-        .spawn(spec("idle-lease", "printf idle-ready; sleep 30"))
-        .unwrap();
-    let first = ClientInstanceId::new("client-1");
-    let second = ClientInstanceId::new("client-2");
-    let session_id = TerminalSessionId::new("idle-lease");
-
-    runtime
-        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
-        .unwrap();
-    runtime.set_now_millis(1_000 + 20_000);
-    let conflict = runtime
-        .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
-        .unwrap_err();
-    assert!(matches!(conflict, HostRuntimeError::LeaseConflict { .. }));
-    assert!(runtime.validate_lease(&session_id, &first).is_ok());
-    runtime.terminate(&session_id).unwrap();
-}
-
-#[tokio::test]
-async fn request_terminal_control_notifies_holder_and_transfers_on_release() {
-    let runtime = HostRuntime::new();
-    let mut events = runtime.subscribe_control();
-    runtime
-        .spawn(spec("negotiate", "printf negotiate-ready; sleep 30"))
-        .unwrap();
-    let first = ClientInstanceId::new("client-1");
-    let second = ClientInstanceId::new("client-2");
-    let session_id = TerminalSessionId::new("negotiate");
-
-    runtime
-        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
-        .unwrap();
-    let pending = runtime
-        .request_terminal_control(&session_id, &second)
-        .unwrap();
-    assert_eq!(
-        pending,
-        TerminalControlOutcome::Pending {
-            holder: first.clone()
-        }
+    wait_for_event(&mut events, |event| {
+        matches!(
+            event,
+            HostTerminalEvent::ControlGranted { session_id: granted, lease }
+                if *granted == session_id && lease.owner == first
+        )
+    })
+    .await;
+    assert!(
+        runtime
+            .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
+            .is_err()
     );
-    wait_for_event(&mut events, |event| {
-        matches!(
-            event,
-            HostTerminalEvent::ControlRequested {
-                session_id: requested,
-                holder,
-                requester,
-            } if *requested == session_id && *holder == first && *requester == second
-        )
-    })
-    .await;
-
-    runtime.release_control(&session_id, &first).unwrap();
-    wait_for_event(&mut events, |event| {
-        matches!(
-            event,
-            HostTerminalEvent::LeaseReleased {
-                session_id: released,
-                previous_owner,
-            } if *released == session_id && *previous_owner == first
-        )
-    })
-    .await;
-    wait_for_event(&mut events, |event| {
-        matches!(
-            event,
-            HostTerminalEvent::ControlGranted { session_id: granted, lease }
-                if *granted == session_id && lease.owner == second
-        )
-    })
-    .await;
-    assert!(runtime.validate_lease(&session_id, &first).is_err());
-    assert!(runtime.validate_lease(&session_id, &second).is_ok());
     runtime.terminate(&session_id).unwrap();
 }
 
 #[tokio::test]
-async fn after_idle_policy_grants_pending_request_and_emits_expired() {
-    let runtime = HostRuntime::new_with_config(HostRuntimeConfig {
-        takeover_policy: UnattendedTakeoverPolicy::AfterIdle {
-            idle: Duration::from_secs(5),
-        },
-        control_request_timeout: Duration::from_secs(30),
-    });
-    let mut events = runtime.subscribe_control();
-    runtime.set_now_millis(1_000);
-    runtime
-        .spawn(spec("idle-takeover", "printf idle-takeover; sleep 30"))
-        .unwrap();
-    let first = ClientInstanceId::new("client-1");
-    let second = ClientInstanceId::new("client-2");
-    let session_id = TerminalSessionId::new("idle-takeover");
-
-    runtime
-        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
-        .unwrap();
-    runtime.set_now_millis(1_000 + 6_000);
-    let granted = runtime
-        .request_terminal_control(&session_id, &second)
-        .unwrap();
-    let TerminalControlOutcome::Granted(lease) = granted else {
-        panic!("expected idle policy to grant control: {granted:?}");
-    };
-    assert_eq!(lease.owner, second);
-    wait_for_event(&mut events, |event| {
-        matches!(
-            event,
-            HostTerminalEvent::LeaseExpired {
-                session_id: expired,
-                previous_owner,
-            } if *expired == session_id && *previous_owner == first
-        )
-    })
-    .await;
-    assert!(runtime.validate_lease(&session_id, &first).is_err());
-    assert!(runtime.validate_lease(&session_id, &second).is_ok());
-    runtime.terminate(&session_id).unwrap();
-}
-
-#[tokio::test]
-async fn disconnected_holder_transfers_to_pending_requester() {
+async fn a_suspended_controller_keeps_control_until_it_resumes() {
     let runtime = HostRuntime::new();
-    let mut events = runtime.subscribe_control();
-    runtime
-        .spawn(spec("disconnect", "printf disconnect-ready; sleep 30"))
-        .unwrap();
-    let first = ClientInstanceId::new("client-1");
-    let second = ClientInstanceId::new("client-2");
-    let session_id = TerminalSessionId::new("disconnect");
-
-    runtime
-        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
-        .unwrap();
-    runtime
-        .request_terminal_control(&session_id, &second)
-        .unwrap();
-    runtime.release_client(&first);
-    wait_for_event(&mut events, |event| {
-        matches!(
-            event,
-            HostTerminalEvent::ControlGranted { session_id: granted, lease }
-                if *granted == session_id && lease.owner == second
-        )
-    })
-    .await;
-    assert!(runtime.validate_lease(&session_id, &second).is_ok());
-    runtime.terminate(&session_id).unwrap();
-}
-
-#[tokio::test]
-async fn suspended_holder_keeps_its_lease_until_released_or_taken_over() {
-    let runtime = HostRuntime::new();
-    let mut events = runtime.subscribe_control();
     runtime
         .spawn(spec("suspend", "printf suspend-ready; sleep 30"))
         .unwrap();
     let first = ClientInstanceId::new("client-1");
     let second = ClientInstanceId::new("client-2");
     let session_id = TerminalSessionId::new("suspend");
-    let lease = runtime
+    runtime
+        .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
+        .unwrap();
+    runtime
         .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
         .unwrap();
+    let lease = runtime.validate_lease(&session_id, &first).unwrap();
 
     runtime.suspend_client(&first);
     assert_eq!(runtime.lease(&session_id, &first), Some(lease.clone()));
+    assert!(
+        runtime
+            .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
+            .is_err()
+    );
     runtime.resume_client(&first);
     assert_eq!(
         runtime
@@ -381,35 +341,52 @@ async fn suspended_holder_keeps_its_lease_until_released_or_taken_over() {
             .lease_epoch,
         lease.lease_epoch
     );
-    // A present Client still waits for a present holder.
-    assert!(
-        runtime
-            .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
-            .is_err()
+    runtime.terminate(&session_id).unwrap();
+}
+
+#[tokio::test]
+async fn a_departed_controller_hands_control_to_the_latest_present_viewer() {
+    let runtime = HostRuntime::new();
+    let mut events = runtime.subscribe_control();
+    runtime
+        .spawn(spec("departed", "printf departed; sleep 30"))
+        .unwrap();
+    let controller = ClientInstanceId::new("controller");
+    let older = ClientInstanceId::new("older-viewer");
+    let newer = ClientInstanceId::new("newer-viewer");
+    let probe = ClientInstanceId::new("probe");
+    let session_id = TerminalSessionId::new("departed");
+    for client in [&controller, &older, &newer, &probe] {
+        runtime.resume_client(client);
+    }
+    runtime
+        .acquire_lease(&session_id, &controller, TerminalLeaseMode::Interactive)
+        .unwrap();
+    // A Client that renders no terminal (a probe) is not offered control.
+    runtime.register_attachment(&session_id, &older);
+    runtime.register_attachment(&session_id, &newer);
+
+    runtime.suspend_client(&controller);
+    runtime.release_client(&controller);
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(newer.clone())
     );
+    assert!(runtime.validate_lease(&session_id, &newer).is_ok());
+    wait_for_event(&mut events, controller_changed(&newer)).await;
 
-    runtime.suspend_client(&first);
-    runtime.release_client(&first);
-    assert!(runtime.lease(&session_id, &first).is_none());
-
-    let lease = runtime
-        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
+    runtime.release_client(&newer);
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(older.clone())
+    );
+    runtime.release_client(&older);
+    assert_eq!(runtime.terminal_controller().controller, None);
+    // With nobody in control, the next Client to write takes it.
+    runtime
+        .acquire_lease(&session_id, &probe, TerminalLeaseMode::Interactive)
         .unwrap();
-    runtime.suspend_client(&first);
-    let taken = runtime
-        .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
-        .unwrap();
-    assert_eq!(taken.owner, second);
-    assert_ne!(taken.lease_epoch, lease.lease_epoch);
-    wait_for_event(&mut events, |event| {
-        matches!(
-            event,
-            HostTerminalEvent::LeaseExpired { session_id: expired, previous_owner }
-                if *expired == session_id && *previous_owner == first
-        )
-    })
-    .await;
-    assert!(runtime.lease(&session_id, &first).is_none());
+    assert_eq!(runtime.terminal_controller().controller, Some(probe));
     runtime.terminate(&session_id).unwrap();
 }
 
@@ -432,39 +409,17 @@ async fn lease_events_are_not_pushed_out_by_a_flood_of_frames() {
         .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
         .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
-    runtime.suspend_client(&first);
     runtime
         .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
         .unwrap();
     wait_for_event(&mut control, |event| {
         matches!(
             event,
-            HostTerminalEvent::LeaseExpired { session_id: expired, previous_owner }
-                if *expired == session_id && *previous_owner == first
+            HostTerminalEvent::LeaseRevoked { session_id: revoked, previous_owner }
+                if *revoked == session_id && *previous_owner == first
         )
     })
     .await;
-    runtime.terminate(&session_id).unwrap();
-}
-
-#[tokio::test]
-async fn suspended_holder_hands_its_lease_to_a_pending_requester() {
-    let runtime = HostRuntime::new();
-    runtime
-        .spawn(spec("suspend-pending", "printf suspend-ready; sleep 30"))
-        .unwrap();
-    let first = ClientInstanceId::new("client-1");
-    let second = ClientInstanceId::new("client-2");
-    let session_id = TerminalSessionId::new("suspend-pending");
-    runtime
-        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
-        .unwrap();
-    runtime
-        .request_terminal_control(&session_id, &second)
-        .unwrap();
-
-    runtime.suspend_client(&first);
-    assert!(runtime.validate_lease(&session_id, &second).is_ok());
     runtime.terminate(&session_id).unwrap();
 }
 

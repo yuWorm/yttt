@@ -732,6 +732,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceStatusRestoring => " · 正在恢复",
         UiTextKey::WorkspaceStatusSaving => " · 正在保存",
         UiTextKey::WorkspaceStatusHistory => "工作区历史…",
+        UiTextKey::WorkspaceStatusTerminalsControlledElsewhere => " · 终端由另一个客户端控制",
+        UiTextKey::WorkspaceStatusTakeTerminalControl => "接管终端",
+        UiTextKey::WorkspaceStatusTakeTerminalControlFailed => "接管终端失败：{detail}",
         UiTextKey::PersistenceDocumentSyncFailed => "无法把 {path} 的未保存修改存到 Host：{error}",
         UiTextKey::PersistenceWorkspaceDeleted => "该工作区在 Host 上已不存在",
         UiTextKey::PersistenceOpenFailed => "无法在 Host 上打开工作区：{error}",
@@ -1666,7 +1669,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "收到意外的 Host 终端响应：{response}"
         }
         UiTextKey::TerminalI18nSessionMissingFromCatalog => "终端会话已不在 Host 资源目录中。",
-        UiTextKey::TerminalI18nLeaseRevoked => "终端输入租约已被另一客户端撤销。",
+        UiTextKey::TerminalI18nControlledElsewhere => {
+            "终端由另一个客户端控制，接管后即可在此输入。"
+        }
         UiTextKey::TerminalI18nLeaseReleased => "终端输入租约已释放。",
         UiTextKey::TerminalI18nLeaseExpired => "终端输入租约在空闲接管后已过期。",
         UiTextKey::TerminalI18nControlRequested => "另一客户端（{client}）请求了终端控制权。",

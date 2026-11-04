@@ -19,7 +19,7 @@
 8. 慢 Client 不能阻塞 PTY reader、其他 Client 或 Host 资源循环。
 9. 本地 IPC 仍须验证操作系统用户、endpoint 权限、profile、build 和一次性认证材料；“仅本机”不等于“可信”。
 10. Wire 协议不序列化 Rust 进程内对象、GPUI Entity、PTY handle 或 SSH channel。
-11. 同一 Host 的所有已认证 Client 会话都可写，不存在 profile 级单写者控制权。写入冲突由资源自身排序：布局按 Host revision，终端输入按 Interactive lease，文件编辑按每文档 lease。
+11. 同一 Host 的所有已认证 Client 会话都可写布局与文件，不存在 profile 级单写者控制权：布局按 Host revision，文件编辑按每文档 lease。终端例外：同一时刻只有一个终端 controller 持有全部 Interactive lease，见 §7.4。
 12. 共享配置、工作区索引及可恢复草稿由 Host 权威持久化，本机 UI 也不能绕过 Host 写入。
 13. 入口来源由 listener 指定；Client 自报 actor、通道或同 UID 不能把 TLS/SSH 工作入口升级为本机管理入口。
 
@@ -515,15 +515,24 @@ UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；re
 
 - `Interactive`：可输入、resize、scroll；每个 terminal 唯一 owner。
 - `Observer`：只读附加。
-- acquire 新 Interactive lease 时，Host 撤销旧 lease，并向旧 owner 发送 `TerminalLeaseRevoked`。
+- 终端 controller：Host 上所有 Interactive lease 都属于同一个 Client，为远程办公设计成“谁坐下归谁”：
+  - 一个从未要过写入权的 Client 会话，第一次请求 Interactive（`AttachTerminal`、`AcquireTerminalLease`、
+    `SpawnTerminal`）即成为 controller，Host 把每个终端的 lease 转给它：旧 owner 收到
+    `TerminalLeaseRevoked`，新 controller 收到 `TerminalControlGranted`，所有 Client 收到
+    `TerminalControllerChanged { controller, epoch }`。
+  - 失去控制的 Client 再请求（重连、resync、reattach）得到 `Conflict`，附加降为 Observer，新建终端被拒；
+    只有显式的 `TakeTerminalController`（界面“接管终端”）能拿回，同样一次转移全部 lease。
+  - 同一会话重连不是新 Client，不会抢回控制。没有 controller 时，下一个请求写入的 Client 成为 controller。
+  - `RequestTerminalControl` 等同于一次 Interactive `AcquireTerminalLease`，不再排队或等待持有者同意。
+  - `ReadTerminalController` 读取当前状态；旧 Host 回复 `Unsupported`，Client 不显示接管入口。
 - lease 与 control 事件走 runtime 独立的控制广播，不与画面 `Update` 共用队列；连接的控制广播 lag 时，
   Host 按该连接每个 attachment 的当前模式与 runtime lease 对账，补发 `TerminalControlGranted` /
   `TerminalLeaseRevoked`。Desktop pane 事件桥 lag 时向 pane 发 `Resync` 并重发最新元数据，pane 据
   连接状态、catalog 与 `AcquireTerminalLease` 重新判定 lease 与退出。
-- lease 属于 Client 会话而非连接：session 连接断开后，该 Client 的 lease 挂起保留 60 s。
-  同一会话在宽限期内重连即恢复原 lease 与 `lease_epoch`；期间其他 Client 的
-  `AcquireTerminalLease`、Interactive `AttachTerminal` 或 `RequestTerminalControl` 立即接管
-  （`TerminalLeaseExpired`）。宽限期结束仍未重连才释放，不终止 terminal。
+- lease 与控制权属于 Client 会话而非连接：session 连接断开后，该 Client 的 lease 与控制权挂起保留 60 s。
+  同一会话在宽限期内重连即恢复原 lease 与 `lease_epoch`；期间其他 Client 可用 `TakeTerminalController`
+  接管，新会话的首次写入请求也会接管。宽限期结束仍未重连才释放，不终止 terminal；离开的 controller
+  把控制权交给最近连上、且附加了终端的 Client，没有则 controller 置空。
 - resize 被 Host 拒绝时，Client 把输入上下文的 `geometry_epoch` 退回 Host 仍持有的值，
   否则此后的输入都会以 `StaleGeometry` 被拒。
 
@@ -761,8 +770,8 @@ ClientCore diagnostics 保留最近 16 次断开记录；Host 在 `host.log` 记
 - sequence gap 断开并重建整条 session 连接，不应用损坏 delta。
 - 最终帧总在 `TerminalExit` 之前到达；每个 `client_instance_id` 至多一条 session 连接，同会话替换、异会话拒绝。
 - 隐藏终端只收元数据 delta，重新可见时收到 snapshot；慢 Client 恢复读取后无 gap、无 resync。
-- Interactive lease 排他、Observer 只读；断线后同一会话重连仍可输入和 resize，其他 Client
-  可接管挂起的 lease，宽限期结束后释放。
+- Interactive lease 排他、Observer 只读；新 Client 首次写入接管全部终端，失去控制的 Client 重连仍只读，
+  显式接管才拿回；断线后同一会话重连仍可输入和 resize，宽限期结束后控制权交给最近连上的观察者。
 - pane/tab/project close 只终止对应 terminal。
 - window close 不终止 terminal。
 - explicit Quit 走 `DrainAndStop` 并停止 Host。

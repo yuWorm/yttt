@@ -217,6 +217,11 @@ pub enum Request {
         revision: u64,
         visible: Vec<TerminalSessionId>,
     },
+    /// The Client whose leases are Interactive. Answered with `TerminalController`.
+    ReadTerminalController,
+    /// Makes this Client the terminal controller, moving every terminal lease
+    /// to it. Answered with `TerminalController`.
+    TakeTerminalController,
 }
 
 impl Request {
@@ -234,7 +239,8 @@ impl Request {
             | Self::RequestCheckpoint { .. }
             | Self::AcknowledgeTerminalExit { .. }
             | Self::ReadAgentSnapshots { .. }
-            | Self::SetTerminalVisibility { .. } => None,
+            | Self::SetTerminalVisibility { .. }
+            | Self::ReadTerminalController => None,
             Self::SpawnTerminal { .. }
             | Self::TerminalInput(_)
             | Self::AgentCommand(_)
@@ -242,6 +248,7 @@ impl Request {
             | Self::SetTerminalQueryPalette(_)
             | Self::RequestTerminalControl { .. }
             | Self::ReleaseTerminalControl { .. }
+            | Self::TakeTerminalController
             | Self::ReleaseTerminalLease { .. }
             | Self::TerminateMany { .. } => Some(Capability::TerminalInteractive),
             Self::AttachTerminal(attach) => (attach.mode == TerminalLeaseMode::Interactive)
@@ -330,7 +337,9 @@ impl Request {
             Self::Ping { .. }
             | Self::ListResources
             | Self::ReadAgentSnapshots { .. }
-            | Self::SetTerminalVisibility { .. } => String::new(),
+            | Self::SetTerminalVisibility { .. }
+            | Self::ReadTerminalController
+            | Self::TakeTerminalController => String::new(),
         }
     }
 }
@@ -427,6 +436,7 @@ pub enum Response {
     Workspace(WorkspaceResponse),
     RemoteAccess(crate::remote_access::RemoteAccessResponse),
     DeviceSettings(crate::remote_access::RemoteAccessSettings),
+    TerminalController(TerminalController),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -485,6 +495,8 @@ pub enum ServerEvent {
     AgentStateCleared(crate::workspace::AgentStateCleared),
     /// Configuration changed through the Host; Clients that cache it reload.
     ConfigChanged,
+    /// Another Client took terminal control, or the controller left.
+    TerminalControllerChanged(TerminalController),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,6 +510,14 @@ pub struct TerminalLease {
     pub owner: ClientInstanceId,
     pub mode: TerminalLeaseMode,
     pub lease_epoch: u64,
+}
+
+/// The one Client whose terminal leases are Interactive; every other Client
+/// observes. `epoch` grows with each change of controller.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalController {
+    pub controller: Option<ClientInstanceId>,
+    pub epoch: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +653,7 @@ mod capability_tests {
             Request::ReleaseTerminalControl {
                 session_id: session(),
             },
+            Request::TakeTerminalController,
             Request::TerminateTerminal {
                 session_id: session(),
                 host_epoch: 1,
@@ -693,6 +714,7 @@ mod capability_tests {
     #[test]
     fn observer_and_read_paths_do_not_require_a_capability() {
         assert_eq!(Request::Ping { sent_millis: 1 }.required_capability(), None);
+        assert_eq!(Request::ReadTerminalController.required_capability(), None);
         assert_eq!(
             Request::AttachTerminal(attach(TerminalLeaseMode::Observer)).required_capability(),
             None

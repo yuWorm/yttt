@@ -168,6 +168,11 @@ impl WorkbenchView {
         } else {
             ""
         };
+        let observing = self.terminals_controlled_elsewhere();
+        let control = observing.then(|| {
+            self.ui_text
+                .get(UiTextKey::WorkspaceStatusTerminalsControlledElsewhere)
+        });
         div()
             .flex()
             .items_center()
@@ -175,7 +180,21 @@ impl WorkbenchView {
             .px(appearance.style.spacing.md)
             .text_sm()
             .debug_selector(|| "workspace-status".to_string())
-            .child(format!("{identity}{state}"))
+            .child(format!("{identity}{state}{}", control.unwrap_or_default()))
+            .when(observing, |banner| {
+                banner.child(
+                    yttt_button(
+                        "take-terminal-control",
+                        self.ui_text
+                            .get(UiTextKey::WorkspaceStatusTakeTerminalControl),
+                        YtttButtonVariant::Primary,
+                        appearance.ui,
+                        appearance.style,
+                    )
+                    .disabled(self.terminal_control_taking())
+                    .on_click(cx.listener(|root, _, _window, cx| root.take_terminal_control(cx))),
+                )
+            })
             .child(
                 yttt_button(
                     "workspace-history",

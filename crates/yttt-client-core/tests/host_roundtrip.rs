@@ -2650,7 +2650,19 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         ClientCoreError::Protocol(failure) if failure.code == FailureCode::StaleEpoch
     ));
 
-    let conflict = observer
+    // The observer has never written: its first ask takes terminal control.
+    let Response::TerminalLease(new_owner_lease) = observer
+        .request(Request::AcquireTerminalLease {
+            session_id: session_id.clone(),
+            mode: TerminalLeaseMode::Interactive,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("a new Client must take control of the existing terminal")
+    };
+    // The former owner asking again, as a reconnecting pane does, does not.
+    let conflict = owner
         .request(Request::AcquireTerminalLease {
             session_id: session_id.clone(),
             mode: TerminalLeaseMode::Interactive,
@@ -2661,22 +2673,6 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         conflict,
         ClientCoreError::Protocol(failure) if failure.code == FailureCode::Conflict
     ));
-    owner
-        .request(Request::ReleaseTerminalControl {
-            session_id: session_id.clone(),
-        })
-        .await
-        .unwrap();
-    let Response::TerminalLease(new_owner_lease) = observer
-        .request(Request::AcquireTerminalLease {
-            session_id: session_id.clone(),
-            mode: TerminalLeaseMode::Interactive,
-        })
-        .await
-        .unwrap()
-    else {
-        panic!("new controller must attach the existing terminal")
-    };
     let former_owner_input = owner
         .request(Request::TerminalInput(TerminalInput {
             session_id: session_id.clone(),
@@ -5220,6 +5216,77 @@ async fn a_reconnecting_client_keeps_its_interactive_lease() {
         .await,
         Ok(Response::TerminalResized { geometry_epoch: 2 })
     );
+}
+
+#[tokio::test]
+async fn a_new_client_takes_terminal_control_and_the_former_one_takes_it_back() {
+    let host = RunningHost::start().await;
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("controller-handover");
+    let session_id = spec.session_id.clone();
+    let first_id = ClientInstanceId::new("desk");
+    let second_id = ClientInstanceId::new("laptop");
+    let mut first = raw_client(&host, "desk").await;
+    let spawned = raw_request(&mut first, 1, spawn_request(spec, host.host_epoch())).await;
+    assert!(matches!(spawned, Ok(Response::TerminalSpawned { .. })));
+    let acquire = || Request::AcquireTerminalLease {
+        session_id: session_id.clone(),
+        mode: TerminalLeaseMode::Interactive,
+    };
+
+    let mut second = raw_client(&host, "laptop").await;
+    let mut events = std::collections::VecDeque::new();
+    let taken = raw_request_keeping_events(&mut second, 1, acquire(), &mut events).await;
+    assert!(matches!(taken, Ok(Response::TerminalLease(lease)) if lease.owner == second_id));
+    assert!(matches!(
+        raw_request_keeping_events(&mut second, 2, Request::ReadTerminalController, &mut events)
+            .await,
+        Ok(Response::TerminalController(state)) if state.controller == Some(second_id.clone())
+    ));
+
+    // The desk's connection drops and its session comes back: it observes.
+    drop(first);
+    let mut first = raw_client(&host, "desk").await;
+    assert!(matches!(
+        raw_request(&mut first, 2, acquire()).await,
+        Err(failure) if failure.code == FailureCode::Conflict
+    ));
+    assert!(matches!(
+        raw_request(&mut first, 3, spawn_request(spawn_spec(), host.host_epoch())).await,
+        Err(failure) if failure.code == FailureCode::Conflict
+    ));
+
+    assert!(matches!(
+        raw_request(&mut first, 4, Request::TakeTerminalController).await,
+        Ok(Response::TerminalController(state)) if state.controller == Some(first_id.clone())
+    ));
+    assert!(matches!(
+        raw_request(&mut first, 5, acquire()).await,
+        Ok(Response::TerminalLease(lease)) if lease.owner == first_id
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if events.iter().any(|event| {
+                matches!(
+                    &event.body,
+                    ServerEvent::TerminalControllerChanged(state)
+                        if state.controller == Some(first_id.clone())
+                )
+            }) {
+                break;
+            }
+            match raw_receive(&mut second).await {
+                ControlMessage::Event(event) => events.push_back(event),
+                message => panic!("unexpected raw client message: {message:?}"),
+            }
+        }
+    })
+    .await
+    .expect("controller change was not announced");
+    assert!(matches!(
+        raw_request(&mut second, 3, acquire()).await,
+        Err(failure) if failure.code == FailureCode::Conflict
+    ));
 }
 
 #[tokio::test]

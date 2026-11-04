@@ -148,11 +148,6 @@ pub enum HostTerminalEvent {
         session_id: TerminalSessionId,
         previous_owner: yttt_core::model::ids::ClientInstanceId,
     },
-    ControlRequested {
-        session_id: TerminalSessionId,
-        holder: yttt_core::model::ids::ClientInstanceId,
-        requester: yttt_core::model::ids::ClientInstanceId,
-    },
     ControlGranted {
         session_id: TerminalSessionId,
         lease: yttt_protocol::TerminalLease,
@@ -161,15 +156,7 @@ pub enum HostTerminalEvent {
         session_id: TerminalSessionId,
         previous_owner: yttt_core::model::ids::ClientInstanceId,
     },
-    LeaseExpired {
-        session_id: TerminalSessionId,
-        previous_owner: yttt_core::model::ids::ClientInstanceId,
-    },
-    ControlDenied {
-        session_id: TerminalSessionId,
-        requester: yttt_core::model::ids::ClientInstanceId,
-        reason: yttt_protocol::TerminalControlDeniedReason,
-    },
+    ControllerChanged(yttt_protocol::TerminalController),
 }
 
 #[derive(Debug, thiserror::Error)]

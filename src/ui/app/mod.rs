@@ -582,7 +582,10 @@ fn open_workbench_window(
         if restore_remote_clients.replace(false) {
             start_remote_client_restore(cx.global::<DesktopWindowContext>().profile.clone(), cx);
         }
-        view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
+        view.update(cx, |view, cx| {
+            view.start_ssh_event_listener(cx);
+            view.start_terminal_control_listener(cx);
+        });
         if should_check_for_updates {
             view.update(cx, |view, cx| view.start_update_check(window, cx));
         }
@@ -889,6 +892,7 @@ fn replace_host_runtime(
         workbench.update(cx, |workbench, cx| {
             workbench.set_host_runtime_status(&status);
             workbench.start_ssh_event_listener(cx);
+            workbench.start_terminal_control_listener(cx);
         });
     }
 }

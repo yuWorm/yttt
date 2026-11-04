@@ -22,7 +22,8 @@ pub use codec::{
 pub use control::{
     Capability, ClientRequest, ControlMessage, FailureCode, HostBlocker, HostEvent, HostResponse,
     MessageChunk, ProtocolFailure, Request, ResourceCatalog, Response, ServerEvent,
-    TerminalControlDeniedReason, TerminalLease, TerminalPlacement, TerminalTerminationResult,
+    TerminalControlDeniedReason, TerminalController, TerminalLease, TerminalPlacement,
+    TerminalTerminationResult,
 };
 pub use desktop::{
     DesktopShellMessage, DesktopShellRejectReason, DesktopShellRequest,

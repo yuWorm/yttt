@@ -44,6 +44,13 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   新增事件 `ServerEvent::WorkspaceChanged(WorkspaceLayoutUpdate { workspace_id, layout })`。
   旧 Host 对 `Apply` 回复 `Unsupported`,旧 Client 丢弃不认识的事件。`ServerEvent`、`Response`
   因携带 `f32` 布局宽度不再实现 `Eq`(仅 Rust 类型变化,wire 不变)。
+  v22 内追加(未升版本):终端 controller。请求 `ReadTerminalController`、`TakeTerminalController`
+  以 `Response::TerminalController(TerminalController { controller, epoch })` 回复,事件
+  `ServerEvent::TerminalControllerChanged(TerminalController)`。所有 Interactive lease 归同一个
+  controller;新会话首次请求写入即接管,失去控制的会话只能显式 `TakeTerminalController`。
+  `RequestTerminalControl` 不再排队,Host 不再发送 `TerminalControlRequested`、`TerminalControlDenied`、
+  `TerminalLeaseExpired` 与 `TerminalControlPending`(名称保留不复用)。旧 Host 对两个新请求回复
+  `Unsupported`,Client 隐藏接管入口;旧 Client 跳过新事件,失去控制后仍按 lease 事件变为只读。
   v22 发布前一并收敛为每个 Client 一条连接(v22 尚未发布,直接改写样本,不另升版本):
   `ConnectionChannel` 只剩 `Session`、`Lifecycle`、`DesktopOwner`;删除 `Control`、
   `TerminalInteractive`、`StateEvents`、`TerminalData` 变体、`TerminalInteractiveMessage` 与

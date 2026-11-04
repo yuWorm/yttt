@@ -408,3 +408,35 @@ fn a_lost_pane_attaches_to_the_terminal_the_host_restarts(cx: &mut TestAppContex
     });
     runtime.shutdown_client();
 }
+
+#[gpui::test]
+fn a_pane_another_client_took_offers_to_take_control_back(cx: &mut TestAppContext) {
+    let host = RecoveryHost::start();
+    let runtime = host.client("desk");
+    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
+    let observes =
+        |cx: &mut VisualTestContext| cx.read(|app| pane.read(app).observes_another_controller(app));
+    pump_until(cx, "writable terminal", |cx| {
+        cx.read(|app| pane.read(app).is_running()) && !observes(cx)
+    });
+    let session_id = catalog(&runtime).terminals.remove(0).session_id;
+
+    let laptop = host.client("laptop");
+    assert!(matches!(
+        laptop.request_blocking_typed(Request::AcquireTerminalLease {
+            session_id,
+            mode: TerminalLeaseMode::Interactive,
+        }),
+        Ok(Response::TerminalLease(_))
+    ));
+    pump_until(cx, "control notice", observes);
+
+    cx.update(|_window, cx| pane.update(cx, |pane, cx| pane.take_terminal_control(cx)));
+    pump_until(cx, "control taken back", |cx| !observes(cx));
+    send_input(&pane, cx);
+    pump_until(cx, "input after taking control", |_| {
+        received_input_count(host.root.path(), "x") == 1
+    });
+    laptop.shutdown_client();
+    runtime.shutdown_client();
+}

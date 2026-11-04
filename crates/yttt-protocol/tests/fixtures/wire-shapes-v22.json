@@ -1090,6 +1090,7 @@
       "acknowledged"
     ],
     "ReadDeviceSettings": [],
+    "ReadTerminalController": [],
     "ReadTerminalViewport": [],
     "ReleaseTerminalControl": [
       "session_id"
@@ -1128,6 +1129,7 @@
     "SshDisconnect": [
       "connection_id"
     ],
+    "TakeTerminalController": [],
     "TerminalInput": [],
     "TerminateMany": [
       "requests"
@@ -1191,6 +1193,7 @@
       "holder",
       "session_id"
     ],
+    "TerminalController": [],
     "TerminalDetached": [],
     "TerminalExitAcknowledged": [],
     "TerminalInputAccepted": [
@@ -1377,6 +1380,7 @@
       "requester",
       "session_id"
     ],
+    "TerminalControllerChanged": [],
     "TerminalExit": [
       "code",
       "final_sequence",
@@ -1495,6 +1499,12 @@
   },
   "TerminalControlDeniedReason": {
     "TimedOut": []
+  },
+  "TerminalController": {
+    "": [
+      "controller",
+      "epoch"
+    ]
   },
   "TerminalExecutionSpec": {
     "Command": [

@@ -67,6 +67,7 @@ mod ssh_connections;
 mod ssh_project_picker;
 mod state;
 mod surface;
+mod terminal_control;
 mod update;
 mod vim_controller;
 mod work_area;
@@ -345,6 +346,7 @@ pub struct WorkbenchView {
     presented_error_notification: Option<String>,
     project: ProjectControllerState,
     ssh: SshControllerState,
+    terminal_control: terminal_control::TerminalControlState,
     agent_manager: AgentManager,
     agent_sessions: AgentSessionsControllerState,
     settings: SettingsControllerState,
@@ -652,6 +654,7 @@ impl WorkbenchView {
                 .map(crate::runtime::agent_hooks::AgentSnapshotClient::new),
         );
         self.ssh.event_task = None;
+        self.reset_terminal_control();
     }
 
     fn terminate_host_sessions_matching(
@@ -966,6 +969,7 @@ impl WorkbenchView {
                 ..Default::default()
             },
             ssh,
+            terminal_control: Default::default(),
             agent_manager,
             agent_sessions: AgentSessionsControllerState::default(),
             active_project_file_watcher: None,

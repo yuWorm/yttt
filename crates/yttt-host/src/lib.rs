@@ -43,7 +43,7 @@ use crate::{
     },
     lifecycle::HostLifecycle,
     project::{HostProjectError, HostProjectRuntime},
-    runtime::{AttachmentResyncReason, HostRuntime, HostRuntimeError, TerminalControlOutcome},
+    runtime::{AttachmentResyncReason, HostRuntime, HostRuntimeError},
     ssh_runtime::HostSshRuntime,
     terminal::{HostTerminalEvent, HostedTerminalError},
     terminal_data::{TerminalStream, TerminalStreamContext},
@@ -404,8 +404,7 @@ where
             _ = exit_reaper.tick() => {
                 let now = now_millis();
                 let reaped_exits = runtime.reap_expired_exits(now);
-                let reaped_control = runtime.reap_pending_control(now);
-                if reaped_exits != 0 || reaped_control != 0 {
+                if reaped_exits != 0 {
                     lifecycle.resource_changed();
                 }
                 agent_hooks.decay_stale_activity();
@@ -1064,7 +1063,8 @@ fn request_changes_resource_catalog(request: &Request) -> bool {
         | Request::SshConnect(_)
         | Request::SshDisconnect { .. }
         | Request::RequestTerminalControl { .. }
-        | Request::ReleaseTerminalControl { .. } => true,
+        | Request::ReleaseTerminalControl { .. }
+        | Request::TakeTerminalController => true,
         Request::Project(request) => matches!(
             request,
             yttt_protocol::project::ProjectRequest::Register { .. }
@@ -1946,26 +1946,6 @@ fn control_event(
                 previous_owner,
             })
         }
-        HostTerminalEvent::LeaseExpired {
-            session_id,
-            previous_owner,
-        } if previous_owner == *client_id => {
-            if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                attachment.mode = TerminalLeaseMode::Observer;
-            }
-            Some(ServerEvent::TerminalLeaseExpired {
-                session_id,
-                previous_owner,
-            })
-        }
-        HostTerminalEvent::ControlRequested {
-            session_id,
-            holder,
-            requester,
-        } if holder == *client_id => Some(ServerEvent::TerminalControlRequested {
-            session_id,
-            requester,
-        }),
         HostTerminalEvent::ControlGranted { lease, .. } if lease.owner == *client_id => {
             if let Some(attachment) = subscriptions.get_mut(&lease.session_id) {
                 attachment.mode = TerminalLeaseMode::Interactive;
@@ -1974,15 +1954,9 @@ fn control_event(
             }
             Some(ServerEvent::TerminalControlGranted { lease })
         }
-        HostTerminalEvent::ControlDenied {
-            session_id,
-            requester,
-            reason,
-        } if requester == *client_id => Some(ServerEvent::TerminalControlDenied {
-            session_id,
-            requester,
-            reason,
-        }),
+        HostTerminalEvent::ControllerChanged(controller) => {
+            Some(ServerEvent::TerminalControllerChanged(controller))
+        }
         _ => None,
     }
 }
@@ -1994,7 +1968,9 @@ fn resync_leases(
     client_id: &ClientInstanceId,
     subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
 ) -> Vec<ServerEvent> {
-    let mut events = Vec::new();
+    let mut events = vec![ServerEvent::TerminalControllerChanged(
+        runtime.terminal_controller(),
+    )];
     for (session_id, attachment) in subscriptions.iter_mut() {
         match (attachment.mode, runtime.lease(session_id, client_id)) {
             (TerminalLeaseMode::Interactive, None) => {
@@ -2246,13 +2222,14 @@ async fn handle_request(
             .map_err(runtime_failure),
         Request::RequestTerminalControl { session_id } => runtime
             .request_terminal_control(&session_id, client_id)
-            .map(|outcome| match outcome {
-                TerminalControlOutcome::Granted(lease) => Response::TerminalLease(lease),
-                TerminalControlOutcome::Pending { holder } => {
-                    Response::TerminalControlPending { session_id, holder }
-                }
-            })
+            .map(Response::TerminalLease)
             .map_err(runtime_failure),
+        Request::ReadTerminalController => {
+            Ok(Response::TerminalController(runtime.terminal_controller()))
+        }
+        Request::TakeTerminalController => Ok(Response::TerminalController(
+            runtime.take_terminal_control(client_id),
+        )),
         Request::ReleaseTerminalControl { session_id } => (|| {
             require_interactive_attachment(attachments, &session_id)?;
             runtime.release_control(&session_id, client_id)?;
@@ -2955,6 +2932,11 @@ fn spawn_terminal(
     if !allow_new {
         return Err(outcome_unknown_failure(&start_id));
     }
+    // A Client that lost terminal control takes it back before starting one.
+    context
+        .runtime
+        .claim_terminal_control(client_id)
+        .map_err(runtime_failure)?;
     if attempts.records.len() >= MAX_START_ATTEMPTS {
         return Err(ProtocolFailure::new(
             FailureCode::ResourceLimit,
@@ -3078,7 +3060,7 @@ fn runtime_failure(error: HostRuntimeError) -> ProtocolFailure {
         HostRuntimeError::AddressConflict { .. } => FailureCode::AddressConflict,
         HostRuntimeError::NotFound(_) => FailureCode::NotFound,
         HostRuntimeError::LeaseConflict { .. }
-        | HostRuntimeError::ControlRequestConflict { .. }
+        | HostRuntimeError::NotTerminalController { .. }
         | HostRuntimeError::TerminalStillRunning(_) => FailureCode::Conflict,
         HostRuntimeError::LeaseRequired(_) => FailureCode::PermissionDenied,
         HostRuntimeError::StaleHostEpoch { .. }
@@ -3429,6 +3411,8 @@ mod session_retention_tests {
 #[cfg(test)]
 mod lease_resync_tests {
     use super::*;
+    use std::collections::HashSet;
+
     use yttt_core::model::ids::ProjectId;
     use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec};
 
@@ -3467,7 +3451,8 @@ mod lease_resync_tests {
         let lease = runtime
             .acquire_lease(&held, &client, TerminalLeaseMode::Interactive)
             .unwrap();
-        // The attachment missed the grant of `held` and the loss of `lost`.
+        let lost_lease = runtime.lease(&lost, &client).unwrap();
+        // The attachment missed the grant of `held`.
         let mut subscriptions = HashMap::from([
             (
                 held.clone(),
@@ -3475,24 +3460,43 @@ mod lease_resync_tests {
             ),
             (
                 lost.clone(),
-                TerminalAttachment::new(TerminalLeaseMode::Interactive, 7),
+                TerminalAttachment::new(TerminalLeaseMode::Interactive, lost_lease.lease_epoch),
             ),
         ]);
 
-        let mut events = resync_leases(&runtime, &client, &mut subscriptions);
-        events.sort_by_key(|event| matches!(event, ServerEvent::TerminalLeaseRevoked { .. }));
-
+        let events = resync_leases(&runtime, &client, &mut subscriptions);
         assert!(matches!(
             &events[..],
             [
+                ServerEvent::TerminalControllerChanged(state),
                 ServerEvent::TerminalControlGranted { lease: granted },
-                ServerEvent::TerminalLeaseRevoked { session_id, .. },
-            ] if *granted == lease && *session_id == lost
+            ] if state.controller.as_ref() == Some(&client) && *granted == lease
         ));
         assert_eq!(subscriptions[&held].mode, TerminalLeaseMode::Interactive);
         assert_eq!(subscriptions[&held].lease_epoch, lease.lease_epoch);
+
+        // Then it missed another Client taking control.
+        let other = ClientInstanceId::new("other");
+        runtime.take_terminal_control(&other);
+        let events = resync_leases(&runtime, &client, &mut subscriptions);
+        assert!(matches!(
+            &events[0],
+            ServerEvent::TerminalControllerChanged(state) if state.controller.as_ref() == Some(&other)
+        ));
+        let revoked = events[1..]
+            .iter()
+            .filter_map(|event| match event {
+                ServerEvent::TerminalLeaseRevoked { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(revoked, HashSet::from([held.clone(), lost.clone()]));
+        assert_eq!(subscriptions[&held].mode, TerminalLeaseMode::Observer);
         assert_eq!(subscriptions[&lost].mode, TerminalLeaseMode::Observer);
-        assert!(resync_leases(&runtime, &client, &mut subscriptions).is_empty());
+        assert_eq!(
+            resync_leases(&runtime, &client, &mut subscriptions).len(),
+            1
+        );
         for session_id in [&held, &lost] {
             runtime.terminate(session_id).unwrap();
         }

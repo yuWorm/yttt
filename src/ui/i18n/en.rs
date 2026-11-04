@@ -906,6 +906,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceStatusRestoring => " · Restoring",
         UiTextKey::WorkspaceStatusSaving => " · Saving",
         UiTextKey::WorkspaceStatusHistory => "Workspace history…",
+        UiTextKey::WorkspaceStatusTerminalsControlledElsewhere => {
+            " · Another client is controlling the terminals"
+        }
+        UiTextKey::WorkspaceStatusTakeTerminalControl => "Take control",
+        UiTextKey::WorkspaceStatusTakeTerminalControlFailed => {
+            "Couldn't take terminal control: {detail}"
+        }
         UiTextKey::PersistenceDocumentSyncFailed => {
             "Could not store unsaved edits of {path} on the Host: {error}"
         }
@@ -2104,10 +2111,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::TerminalI18nSessionMissingFromCatalog => {
             "Terminal session is no longer present in the Host catalog."
         }
-        UiTextKey::TerminalI18nLeaseRevoked => {
-            "Terminal input lease was revoked by another client."
-        }
         UiTextKey::TerminalI18nLeaseReleased => "Terminal input lease was released.",
+        UiTextKey::TerminalI18nControlledElsewhere => {
+            "Another client is controlling the terminals. Take control to type here."
+        }
         UiTextKey::TerminalI18nLeaseExpired => "Terminal input lease expired after idle takeover.",
         UiTextKey::TerminalI18nControlRequested => {
             "Another client ({client}) requested terminal control."

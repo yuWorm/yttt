@@ -4,14 +4,14 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use parking_lot::Mutex;
 use tokio::sync::{broadcast, watch};
 use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
 use yttt_protocol::{
-    HostBlocker, TerminalControlDeniedReason, TerminalLease, TerminalPlacement,
+    HostBlocker, TerminalController, TerminalLease, TerminalPlacement,
     terminal::{
         TerminalExecutionSpec, TerminalLeaseMode, TerminalProcessState, TerminalSpawnSpec,
         TerminatedTerminal,
@@ -25,53 +25,30 @@ use crate::terminal::{HostTerminalEvent, HostedTerminal, HostedTerminalError};
 const RUNTIME_EVENT_CAPACITY: usize = 256;
 const RETAINED_ATTACHMENT_QUEUE_DIAGNOSTICS: usize = 4_096;
 pub const EXIT_ACK_TTL: Duration = Duration::from_secs(10 * 60);
-pub const DEFAULT_CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnattendedTakeoverPolicy {
-    Never,
-    AfterIdle { idle: Duration },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HostRuntimeConfig {
-    pub takeover_policy: UnattendedTakeoverPolicy,
-    pub control_request_timeout: Duration,
-}
-
-impl Default for HostRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            takeover_policy: UnattendedTakeoverPolicy::Never,
-            control_request_timeout: DEFAULT_CONTROL_REQUEST_TIMEOUT,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TerminalControlOutcome {
-    Granted(TerminalLease),
-    Pending { holder: ClientInstanceId },
-}
 
 #[derive(Clone)]
 struct LeaseState {
     holder: ClientInstanceId,
     lease_epoch: u64,
-    last_activity_millis: u64,
 }
 
-#[derive(Clone)]
-struct PendingControlRequest {
-    requester: ClientInstanceId,
-    requested_at_millis: u64,
-}
+/// How many Clients that have written are remembered, so a long-lived Host
+/// does not grow without bound.
+const REMEMBERED_WRITERS: usize = 1_024;
 
 struct ControlState {
+    /// Every lease is held by `controller`.
     leases: HashMap<TerminalSessionId, LeaseState>,
-    pending: HashMap<TerminalSessionId, PendingControlRequest>,
-    /// Clients whose connection dropped but whose leases are kept until they
-    /// reconnect or their grace period ends.
+    controller: Option<ClientInstanceId>,
+    controller_epoch: u64,
+    /// Clients that have asked for an Interactive lease, oldest first. A
+    /// Client asking for the first time takes control; one that lost it
+    /// takes it back explicitly.
+    writers: VecDeque<ClientInstanceId>,
+    /// Connected Clients, least recently connected first.
+    present: Vec<ClientInstanceId>,
+    /// Clients whose connection dropped but whose leases and control are kept
+    /// until they reconnect or their grace period ends.
     suspended: HashSet<ClientInstanceId>,
 }
 
@@ -145,23 +122,20 @@ pub struct HostRuntime {
     /// a burst of output cannot push them out.
     control_events: broadcast::Sender<HostTerminalEvent>,
     attachment_queues: Mutex<VecDeque<Arc<QueueDiagnostics>>>,
-    config: HostRuntimeConfig,
-    clock_override: Mutex<Option<u64>>,
 }
 
 impl HostRuntime {
     pub fn new() -> Arc<Self> {
-        Self::new_with_config(HostRuntimeConfig::default())
-    }
-
-    pub fn new_with_config(config: HostRuntimeConfig) -> Arc<Self> {
         let (events, _) = broadcast::channel(RUNTIME_EVENT_CAPACITY);
         let (control_events, _) = broadcast::channel(RUNTIME_EVENT_CAPACITY);
         Arc::new(Self {
             terminals: Mutex::new(HashMap::new()),
             control: Mutex::new(ControlState {
                 leases: HashMap::new(),
-                pending: HashMap::new(),
+                controller: None,
+                controller_epoch: 0,
+                writers: VecDeque::new(),
+                present: Vec::new(),
                 suspended: HashSet::new(),
             }),
             visibility: Mutex::new(HashMap::new()),
@@ -171,17 +145,7 @@ impl HostRuntime {
             events,
             control_events,
             attachment_queues: Mutex::new(VecDeque::new()),
-            config,
-            clock_override: Mutex::new(None),
         })
-    }
-
-    pub fn set_now_millis(&self, now: u64) {
-        *self.clock_override.lock() = Some(now);
-    }
-
-    fn now_millis(&self) -> u64 {
-        self.clock_override.lock().unwrap_or_else(system_now_millis)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<HostTerminalEvent> {
@@ -189,7 +153,7 @@ impl HostRuntime {
     }
 
     /// Lease and control changes: `LeaseReleased`, `LeaseRevoked`,
-    /// `LeaseExpired` and the `Control*` events.
+    /// `ControlGranted` and `ControllerChanged`.
     pub fn subscribe_control(&self) -> broadcast::Receiver<HostTerminalEvent> {
         self.control_events.subscribe()
     }
@@ -349,6 +313,31 @@ impl HostRuntime {
             .map(|lease| wire_lease(session_id, lease))
     }
 
+    pub fn terminal_controller(&self) -> TerminalController {
+        controller_state(&self.control.lock())
+    }
+
+    /// Lets `client_id` write terminals. A Client asking for the first time,
+    /// or while nobody is in control, takes control; one that lost it must
+    /// take it back with `take_terminal_control`.
+    pub fn claim_terminal_control(
+        &self,
+        client_id: &ClientInstanceId,
+    ) -> Result<(), HostRuntimeError> {
+        let sessions = self.terminal_ids();
+        let mut control = self.control.lock();
+        self.claim_locked(&mut control, &sessions, client_id)
+    }
+
+    /// Makes `client_id` the controller, moving every lease to it.
+    pub fn take_terminal_control(&self, client_id: &ClientInstanceId) -> TerminalController {
+        let sessions = self.terminal_ids();
+        let mut control = self.control.lock();
+        remember_writer(&mut control, client_id);
+        self.hand_control_locked(&mut control, &sessions, client_id.clone());
+        controller_state(&control)
+    }
+
     pub fn acquire_lease(
         &self,
         session_id: &TerminalSessionId,
@@ -366,103 +355,42 @@ impl HostRuntime {
                 lease_epoch: self.next_lease_epoch.fetch_add(1, Ordering::Relaxed),
             });
         }
-        let now = self.now_millis();
+        let sessions = self.terminal_ids();
         let mut control = self.control.lock();
-        self.reap_session_locked(&mut control, session_id, now);
-        if let Some(holder) = control
-            .leases
-            .get(session_id)
-            .map(|lease| lease.holder.clone())
-            && holder != *client_id
-        {
-            if control.suspended.contains(&holder) {
-                return Ok(self.transfer_lease_locked(
+        self.claim_locked(&mut control, &sessions, client_id)
+            .map_err(|error| match error {
+                HostRuntimeError::NotTerminalController { controller } => {
+                    HostRuntimeError::LeaseConflict {
+                        session_id: session_id.clone(),
+                        holder: controller,
+                    }
+                }
+                error => error,
+            })?;
+        // A terminal spawned after `sessions` was read has no lease yet.
+        Ok(match control.leases.get(session_id) {
+            Some(lease) if lease.holder == *client_id => wire_lease(session_id, lease),
+            Some(lease) => {
+                let previous_owner = lease.holder.clone();
+                self.transfer_lease_locked(
                     &mut control,
                     session_id,
                     client_id.clone(),
-                    holder,
-                    TransferReason::Expired,
-                    now,
-                ));
+                    previous_owner,
+                )
             }
-            return Err(HostRuntimeError::LeaseConflict {
-                session_id: session_id.clone(),
-                holder,
-            });
-        }
-        if let Some(current) = control.leases.get_mut(session_id) {
-            current.last_activity_millis = now;
-            return Ok(wire_lease(session_id, current));
-        }
-        Ok(self.grant_lease_locked(&mut control, session_id, client_id.clone(), now))
+            None => self.grant_lease_locked(&mut control, session_id, client_id.clone()),
+        })
     }
 
+    /// Superseded by the terminal controller: grants the lease only to a
+    /// Client that may write, like `acquire_lease`.
     pub fn request_terminal_control(
         &self,
         session_id: &TerminalSessionId,
         client_id: &ClientInstanceId,
-    ) -> Result<TerminalControlOutcome, HostRuntimeError> {
-        if self.terminal(session_id).is_none() {
-            return Err(HostRuntimeError::NotFound(session_id.clone()));
-        }
-        let now = self.now_millis();
-        let mut control = self.control.lock();
-        self.reap_session_locked(&mut control, session_id, now);
-        if let Some(current) = control.leases.get(session_id).cloned() {
-            if current.holder == *client_id {
-                if let Some(lease) = control.leases.get_mut(session_id) {
-                    lease.last_activity_millis = now;
-                }
-                return Ok(TerminalControlOutcome::Granted(wire_lease(
-                    session_id, &current,
-                )));
-            }
-            if self.holder_is_idle(&current, now) || control.suspended.contains(&current.holder) {
-                let lease = self.transfer_lease_locked(
-                    &mut control,
-                    session_id,
-                    client_id.clone(),
-                    current.holder,
-                    TransferReason::Expired,
-                    now,
-                );
-                return Ok(TerminalControlOutcome::Granted(lease));
-            }
-            if let Some(pending) = control.pending.get(session_id) {
-                if pending.requester == *client_id {
-                    return Ok(TerminalControlOutcome::Pending {
-                        holder: current.holder,
-                    });
-                }
-                return Err(HostRuntimeError::ControlRequestConflict {
-                    session_id: session_id.clone(),
-                    requester: pending.requester.clone(),
-                });
-            }
-            control.pending.insert(
-                session_id.clone(),
-                PendingControlRequest {
-                    requester: client_id.clone(),
-                    requested_at_millis: now,
-                },
-            );
-            let holder = current.holder.clone();
-            drop(control);
-            let _ = self
-                .control_events
-                .send(HostTerminalEvent::ControlRequested {
-                    session_id: session_id.clone(),
-                    holder: holder.clone(),
-                    requester: client_id.clone(),
-                });
-            return Ok(TerminalControlOutcome::Pending { holder });
-        }
-        Ok(TerminalControlOutcome::Granted(self.grant_lease_locked(
-            &mut control,
-            session_id,
-            client_id.clone(),
-            now,
-        )))
+    ) -> Result<TerminalLease, HostRuntimeError> {
+        self.acquire_lease(session_id, client_id, TerminalLeaseMode::Interactive)
     }
 
     pub fn validate_lease(
@@ -470,9 +398,8 @@ impl HostRuntime {
         session_id: &TerminalSessionId,
         client_id: &ClientInstanceId,
     ) -> Result<TerminalLease, HostRuntimeError> {
-        let now = self.now_millis();
-        let mut control = self.control.lock();
-        let Some(lease) = control.leases.get_mut(session_id) else {
+        let control = self.control.lock();
+        let Some(lease) = control.leases.get(session_id) else {
             return Err(HostRuntimeError::LeaseRequired(session_id.clone()));
         };
         if lease.holder != *client_id {
@@ -481,7 +408,6 @@ impl HostRuntime {
                 holder: lease.holder.clone(),
             });
         }
-        lease.last_activity_millis = now;
         Ok(wire_lease(session_id, lease))
     }
 
@@ -494,7 +420,6 @@ impl HostRuntime {
         session_id: &TerminalSessionId,
         client_id: &ClientInstanceId,
     ) -> Result<(), HostRuntimeError> {
-        let now = self.now_millis();
         let mut control = self.control.lock();
         let Some(current) = control.leases.get(session_id).cloned() else {
             return Err(HostRuntimeError::LeaseRequired(session_id.clone()));
@@ -505,33 +430,18 @@ impl HostRuntime {
                 holder: current.holder,
             });
         }
-        self.yield_lease_locked(&mut control, session_id, current.holder, now);
+        self.yield_lease_locked(&mut control, session_id, current.holder);
         Ok(())
     }
 
-    pub fn reap_pending_control(&self, now_millis: u64) -> usize {
-        let session_ids = self
-            .control
-            .lock()
-            .pending
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut resolved = 0;
-        let mut control = self.control.lock();
-        for session_id in session_ids {
-            if self.reap_session_locked(&mut control, &session_id, now_millis) {
-                resolved += 1;
-            }
-        }
-        resolved
-    }
-
-    /// Releases everything `client_id` holds, including its leases.
+    /// Releases everything `client_id` holds, including its leases. A
+    /// departing controller hands control to the most recently connected
+    /// Client that renders a terminal, if any.
     pub fn release_client(&self, client_id: &ClientInstanceId) {
-        let now = self.now_millis();
+        let sessions = self.terminal_ids();
         let mut control = self.control.lock();
         control.suspended.remove(client_id);
+        control.present.retain(|present| present != client_id);
         let held = control
             .leases
             .iter()
@@ -539,44 +449,61 @@ impl HostRuntime {
             .map(|(session_id, _)| session_id.clone())
             .collect::<Vec<_>>();
         for session_id in held {
-            self.yield_lease_locked(&mut control, &session_id, client_id.clone(), now);
+            self.yield_lease_locked(&mut control, &session_id, client_id.clone());
         }
         drop(control);
         self.detach_client(client_id);
+
+        let mut control = self.control.lock();
+        if control.controller.as_ref() != Some(client_id) {
+            return;
+        }
+        let viewers = self
+            .attachments
+            .lock()
+            .keys()
+            .map(|(owner, _)| owner.clone())
+            .collect::<HashSet<_>>();
+        match control
+            .present
+            .iter()
+            .rev()
+            .find(|present| viewers.contains(*present))
+            .cloned()
+        {
+            Some(successor) => self.hand_control_locked(&mut control, &sessions, successor),
+            None => {
+                control.controller = None;
+                control.controller_epoch += 1;
+                let _ = self
+                    .control_events
+                    .send(HostTerminalEvent::ControllerChanged(controller_state(
+                        &control,
+                    )));
+            }
+        }
     }
 
     /// Ends the streams of a Client whose connection dropped but keeps its
-    /// leases, so the same Client session resumes them when it reconnects.
-    /// Another Client that asks for a kept lease takes it over.
+    /// leases and control, so the same Client session resumes them when it
+    /// reconnects.
     pub fn suspend_client(&self, client_id: &ClientInstanceId) {
-        let now = self.now_millis();
         let mut control = self.control.lock();
         control.suspended.insert(client_id.clone());
-        let requested = control
-            .leases
-            .iter()
-            .filter(|(session_id, lease)| {
-                lease.holder == *client_id && control.pending.contains_key(*session_id)
-            })
-            .map(|(session_id, _)| session_id.clone())
-            .collect::<Vec<_>>();
-        for session_id in requested {
-            self.reap_session_locked(&mut control, &session_id, now);
-        }
+        control.present.retain(|present| present != client_id);
         drop(control);
         self.detach_client(client_id);
     }
 
-    /// Marks a suspended Client present again; its kept leases stay valid.
+    /// Marks a Client connected; a suspended one keeps its leases.
     pub fn resume_client(&self, client_id: &ClientInstanceId) {
-        self.control.lock().suspended.remove(client_id);
+        let mut control = self.control.lock();
+        control.suspended.remove(client_id);
+        control.present.retain(|present| present != client_id);
+        control.present.push(client_id.clone());
     }
 
     fn detach_client(&self, client_id: &ClientInstanceId) {
-        self.control
-            .lock()
-            .pending
-            .retain(|_, pending| pending.requester != *client_id);
         self.visibility.lock().remove(client_id);
         let affected = {
             let mut attachments = self.attachments.lock();
@@ -600,21 +527,85 @@ impl HostRuntime {
         }
     }
 
+    fn terminal_ids(&self) -> Vec<TerminalSessionId> {
+        self.terminals.lock().keys().cloned().collect()
+    }
+
+    fn claim_locked(
+        &self,
+        control: &mut ControlState,
+        sessions: &[TerminalSessionId],
+        client_id: &ClientInstanceId,
+    ) -> Result<(), HostRuntimeError> {
+        if control.controller.as_ref() == Some(client_id) {
+            return Ok(());
+        }
+        let first_ask = remember_writer(control, client_id);
+        match control.controller.clone() {
+            Some(controller) if !first_ask => {
+                Err(HostRuntimeError::NotTerminalController { controller })
+            }
+            _ => {
+                self.hand_control_locked(control, sessions, client_id.clone());
+                Ok(())
+            }
+        }
+    }
+
+    /// Makes `controller` the controller and moves every lease to it,
+    /// granting one for each terminal in `sessions` that has none.
+    fn hand_control_locked(
+        &self,
+        control: &mut ControlState,
+        sessions: &[TerminalSessionId],
+        controller: ClientInstanceId,
+    ) {
+        if control.controller.as_ref() == Some(&controller) {
+            return;
+        }
+        control.controller = Some(controller.clone());
+        control.controller_epoch += 1;
+        let _ = self
+            .control_events
+            .send(HostTerminalEvent::ControllerChanged(controller_state(
+                control,
+            )));
+        let mut targets = sessions.iter().cloned().collect::<HashSet<_>>();
+        targets.extend(control.leases.keys().cloned());
+        for session_id in targets {
+            let lease = match control.leases.get(&session_id) {
+                Some(lease) if lease.holder == controller => continue,
+                Some(lease) => {
+                    let previous_owner = lease.holder.clone();
+                    self.transfer_lease_locked(
+                        control,
+                        &session_id,
+                        controller.clone(),
+                        previous_owner,
+                    );
+                    continue;
+                }
+                None => self.grant_lease_locked(control, &session_id, controller.clone()),
+            };
+            let _ = self.control_events.send(HostTerminalEvent::ControlGranted {
+                session_id: session_id.clone(),
+                lease,
+            });
+        }
+    }
+
     fn grant_lease_locked(
         &self,
         control: &mut ControlState,
         session_id: &TerminalSessionId,
         holder: ClientInstanceId,
-        now: u64,
     ) -> TerminalLease {
         let lease = LeaseState {
             holder,
             lease_epoch: self.next_lease_epoch.fetch_add(1, Ordering::Relaxed),
-            last_activity_millis: now,
         };
         let wire = wire_lease(session_id, &lease);
         control.leases.insert(session_id.clone(), lease);
-        control.pending.remove(session_id);
         wire
     }
 
@@ -623,21 +614,8 @@ impl HostRuntime {
         control: &mut ControlState,
         session_id: &TerminalSessionId,
         previous_owner: ClientInstanceId,
-        now: u64,
     ) {
         control.leases.remove(session_id);
-        if let Some(pending) = control.pending.remove(session_id) {
-            let lease = self.grant_lease_locked(control, session_id, pending.requester, now);
-            let _ = self.control_events.send(HostTerminalEvent::LeaseReleased {
-                session_id: session_id.clone(),
-                previous_owner,
-            });
-            let _ = self.control_events.send(HostTerminalEvent::ControlGranted {
-                session_id: session_id.clone(),
-                lease,
-            });
-            return;
-        }
         let _ = self.control_events.send(HostTerminalEvent::LeaseReleased {
             session_id: session_id.clone(),
             previous_owner,
@@ -650,75 +628,17 @@ impl HostRuntime {
         session_id: &TerminalSessionId,
         new_holder: ClientInstanceId,
         previous_owner: ClientInstanceId,
-        reason: TransferReason,
-        now: u64,
     ) -> TerminalLease {
-        control.pending.remove(session_id);
-        let lease = self.grant_lease_locked(control, session_id, new_holder, now);
-        let event = match reason {
-            TransferReason::Expired => HostTerminalEvent::LeaseExpired {
-                session_id: session_id.clone(),
-                previous_owner,
-            },
-            TransferReason::Revoked => HostTerminalEvent::LeaseRevoked {
-                session_id: session_id.clone(),
-                previous_owner,
-            },
-        };
-        let _ = self.control_events.send(event);
+        let lease = self.grant_lease_locked(control, session_id, new_holder);
+        let _ = self.control_events.send(HostTerminalEvent::LeaseRevoked {
+            session_id: session_id.clone(),
+            previous_owner,
+        });
         let _ = self.control_events.send(HostTerminalEvent::ControlGranted {
             session_id: session_id.clone(),
             lease: lease.clone(),
         });
         lease
-    }
-
-    fn holder_is_idle(&self, lease: &LeaseState, now: u64) -> bool {
-        match self.config.takeover_policy {
-            UnattendedTakeoverPolicy::Never => false,
-            UnattendedTakeoverPolicy::AfterIdle { idle } => {
-                now.saturating_sub(lease.last_activity_millis) >= idle.as_millis() as u64
-            }
-        }
-    }
-
-    fn request_timed_out(&self, pending: &PendingControlRequest, now: u64) -> bool {
-        now.saturating_sub(pending.requested_at_millis)
-            >= self.config.control_request_timeout.as_millis() as u64
-    }
-
-    fn reap_session_locked(
-        &self,
-        control: &mut ControlState,
-        session_id: &TerminalSessionId,
-        now: u64,
-    ) -> bool {
-        let Some(pending) = control.pending.get(session_id).cloned() else {
-            return false;
-        };
-        if let Some(lease) = control.leases.get(session_id).cloned()
-            && (self.holder_is_idle(&lease, now) || control.suspended.contains(&lease.holder))
-        {
-            self.transfer_lease_locked(
-                control,
-                session_id,
-                pending.requester,
-                lease.holder,
-                TransferReason::Expired,
-                now,
-            );
-            return true;
-        }
-        if self.request_timed_out(&pending, now) {
-            control.pending.remove(session_id);
-            let _ = self.control_events.send(HostTerminalEvent::ControlDenied {
-                session_id: session_id.clone(),
-                requester: pending.requester,
-                reason: TerminalControlDeniedReason::TimedOut,
-            });
-            return true;
-        }
-        false
     }
 
     pub fn register_attachment(
@@ -956,11 +876,7 @@ impl HostRuntime {
 
     pub fn placements(&self) -> Vec<TerminalPlacement> {
         let terminals = self.terminals.lock();
-        let now = self.now_millis();
-        let mut control = self.control.lock();
-        for session_id in control.pending.keys().cloned().collect::<Vec<_>>() {
-            self.reap_session_locked(&mut control, &session_id, now);
-        }
+        let control = self.control.lock();
         let mut placements = terminals
             .values()
             .map(|terminal| {
@@ -1064,7 +980,6 @@ impl HostRuntime {
     fn forget_terminal(&self, session_id: &TerminalSessionId) {
         let mut control = self.control.lock();
         control.leases.remove(session_id);
-        control.pending.remove(session_id);
         drop(control);
         self.attachments
             .lock()
@@ -1092,9 +1007,6 @@ impl HostRuntime {
             let mut control = self.control.lock();
             control
                 .leases
-                .retain(|session_id, _| terminals.contains_key(session_id));
-            control
-                .pending
                 .retain(|session_id, _| terminals.contains_key(session_id));
             self.attachments.lock().retain(|(_, session_id), attached| {
                 if terminals.contains_key(session_id) {
@@ -1126,18 +1038,23 @@ fn wire_lease(session_id: &TerminalSessionId, lease: &LeaseState) -> TerminalLea
     }
 }
 
-#[derive(Clone, Copy)]
-enum TransferReason {
-    Expired,
-    #[allow(dead_code)]
-    Revoked,
+fn controller_state(control: &ControlState) -> TerminalController {
+    TerminalController {
+        controller: control.controller.clone(),
+        epoch: control.controller_epoch,
+    }
 }
 
-fn system_now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+/// Records that `client_id` asked to write; true the first time.
+fn remember_writer(control: &mut ControlState, client_id: &ClientInstanceId) -> bool {
+    if control.writers.contains(client_id) {
+        return false;
+    }
+    if control.writers.len() == REMEMBERED_WRITERS {
+        control.writers.pop_front();
+    }
+    control.writers.push_back(client_id.clone());
+    true
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1161,11 +1078,8 @@ pub enum HostRuntimeError {
     },
     #[error("terminal session {0} requires an active ownership lease")]
     LeaseRequired(TerminalSessionId),
-    #[error("terminal session {session_id} already has a pending control request from {requester}")]
-    ControlRequestConflict {
-        session_id: TerminalSessionId,
-        requester: ClientInstanceId,
-    },
+    #[error("terminals are controlled by client {controller}")]
+    NotTerminalController { controller: ClientInstanceId },
     #[error("host epoch is stale: expected {expected}, received {actual}")]
     StaleHostEpoch { expected: u64, actual: u64 },
     #[error("terminal session {session_id} epoch is stale: expected {expected}, received {actual}")]

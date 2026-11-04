@@ -179,6 +179,9 @@ pub struct TerminalPaneView {
     window_handle: Option<AnyWindowHandle>,
     lifecycle: PaneLifecycle,
     terminal_error: Option<String>,
+    /// A `TakeTerminalController` sent from this pane's read-only notice.
+    taking_control: bool,
+    take_control_error: Option<String>,
     exit_emitted: bool,
     terminal_input_gate: TerminalInputGate,
     generation: u64,
@@ -475,6 +478,8 @@ impl TerminalPaneView {
             window_handle: None,
             lifecycle: PaneLifecycle::Idle,
             terminal_error: None,
+            taking_control: false,
+            take_control_error: None,
             exit_emitted: false,
             terminal_input_gate,
             generation: 0,
@@ -703,10 +708,6 @@ impl TerminalPaneView {
             mode: TerminalLeaseMode::Interactive,
         });
         let generation = self.generation;
-        let was_interactive = self
-            .terminal
-            .as_ref()
-            .is_some_and(|terminal| !terminal.read(cx).is_read_only());
         cx.spawn_in(window, async move |this, cx| {
             let checkpoint = checkpoint.recv_async().await;
             let lease = lease.recv_async().await;
@@ -725,16 +726,9 @@ impl TerminalPaneView {
                         pane.terminal_error = None;
                         writer.submit_pending_resize();
                     }
-                    _ => {
-                        pane.set_interactive_lease(0, cx);
-                        if was_interactive {
-                            pane.terminal_error = Some(
-                                UiText::current(cx)
-                                    .get(UiTextKey::TerminalI18nLeaseRevoked)
-                                    .to_string(),
-                            );
-                        }
-                    }
+                    // Another Client controls the terminals; the workbench
+                    // status says so.
+                    _ => pane.set_interactive_lease(0, cx),
                 }
                 cx.notify();
             });
@@ -931,7 +925,12 @@ impl TerminalPaneView {
                         {
                             let mut context = attached_writer.mutation_context.write();
                             context.session_epoch = session_epoch;
-                            context.lease_epoch = lease.lease_epoch;
+                            // An Observer lease carries an epoch but grants no input.
+                            context.lease_epoch = if lease.mode == TerminalLeaseMode::Interactive {
+                                lease.lease_epoch
+                            } else {
+                                0
+                            };
                         }
                         attached_writer
                             .adopt_host_geometry_epoch(checkpoint.viewport.geometry_epoch);
@@ -1125,9 +1124,8 @@ impl TerminalPaneView {
                     session_id: revoked_session_id,
                     ..
                 } if revoked_session_id == session_id => {
+                    // Another Client took control; the workbench status says so.
                     self.set_interactive_lease(0, cx);
-                    self.terminal_error =
-                        Some(ui_text.get(UiTextKey::TerminalI18nLeaseRevoked).to_string());
                     cx.notify();
                 }
                 ServerEvent::TerminalLeaseReleased {
@@ -1244,6 +1242,104 @@ impl TerminalPaneView {
                 resume,
             },
         ));
+    }
+
+    /// Whether this running pane only observes because another Client
+    /// controls the terminals.
+    fn observes_another_controller(&self, cx: &gpui::App) -> bool {
+        self.lifecycle == PaneLifecycle::Running
+            && !self.attaching
+            && self
+                .host_runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.is_connected())
+            && self
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.read(cx).is_read_only())
+    }
+
+    /// Takes control of every terminal; the leases the Host then grants make
+    /// this pane writable.
+    fn take_terminal_control(&mut self, cx: &mut Context<Self>) {
+        let Some(runtime) = self.host_runtime.clone() else {
+            return;
+        };
+        if self.taking_control {
+            return;
+        }
+        self.taking_control = true;
+        self.take_control_error = None;
+        cx.notify();
+        let response = runtime.request(Request::TakeTerminalController);
+        cx.spawn(async move |this, cx| {
+            let result = response.recv_async().await;
+            let _ = this.update(cx, |pane, cx| {
+                pane.taking_control = false;
+                let detail = match result {
+                    Ok(Ok(Response::TerminalController(_))) => None,
+                    Ok(Ok(response)) => Some(format!("{response:?}")),
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(error) => Some(error.to_string()),
+                };
+                pane.take_control_error = detail.map(|detail| {
+                    UiText::current(cx)
+                        .get(UiTextKey::WorkspaceStatusTakeTerminalControlFailed)
+                        .replace("{detail}", &detail)
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_control_notice(&self, ui_text: &UiText, cx: &mut Context<Self>) -> gpui::Div {
+        let ui_style = current_ui_style(cx);
+        let message = self.take_control_error.clone().unwrap_or_else(|| {
+            ui_text
+                .get(UiTextKey::TerminalI18nControlledElsewhere)
+                .to_string()
+        });
+        let button = div()
+            .id(SharedString::from(format!(
+                "take-control-pane-{}",
+                self.pane_id
+            )))
+            .rounded(ui_style.radius.action)
+            .border(ui_style.border.hairline)
+            .border_color(self.theme.border)
+            .bg(self.theme.surface)
+            .px(ui_style.spacing.lg)
+            .py(ui_style.spacing.xs)
+            .text_color(self.theme.text)
+            .child(ui_text.get(UiTextKey::WorkspaceStatusTakeTerminalControl));
+        let button = if self.taking_control {
+            button.opacity(0.5)
+        } else {
+            button
+                .cursor_pointer()
+                .hover(|button| button.bg(ui_style.hover_background(self.theme)))
+                .on_click(cx.listener(|pane, _, _window, cx| pane.take_terminal_control(cx)))
+        };
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(ui_style.spacing.md)
+            .px(ui_style.spacing.md)
+            .py(ui_style.spacing.xs)
+            .bg(self.theme.surface)
+            .border_b(ui_style.border.hairline)
+            .border_color(self.theme.border)
+            .text_sm()
+            .text_color(if self.take_control_error.is_some() {
+                self.theme.danger
+            } else {
+                self.theme.text
+            })
+            .debug_selector(|| "terminal-control-notice".to_string())
+            .child(message)
+            .child(button)
     }
 
     fn set_spawn_failure(&mut self, message: String, cx: &mut Context<Self>) {
@@ -1579,7 +1675,15 @@ impl Render for TerminalPaneView {
             );
         }
         let body = if let Some(terminal) = &self.terminal {
-            div().flex().flex_1().child(terminal.clone())
+            let notice = self
+                .observes_another_controller(cx)
+                .then(|| self.render_control_notice(&ui_text, cx));
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .children(notice)
+                .child(div().flex().flex_1().min_h_0().child(terminal.clone()))
         } else {
             let lines = match &self.lifecycle {
                 PaneLifecycle::SpawnFailed { .. } => spawn_failure_lines(
