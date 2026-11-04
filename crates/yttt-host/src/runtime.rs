@@ -141,6 +141,9 @@ pub struct HostRuntime {
     next_session_epoch: AtomicU64,
     next_lease_epoch: AtomicU64,
     events: broadcast::Sender<HostTerminalEvent>,
+    /// Lease and control changes, apart from the frame updates in `events` so
+    /// a burst of output cannot push them out.
+    control_events: broadcast::Sender<HostTerminalEvent>,
     attachment_queues: Mutex<VecDeque<Arc<QueueDiagnostics>>>,
     config: HostRuntimeConfig,
     clock_override: Mutex<Option<u64>>,
@@ -153,6 +156,7 @@ impl HostRuntime {
 
     pub fn new_with_config(config: HostRuntimeConfig) -> Arc<Self> {
         let (events, _) = broadcast::channel(RUNTIME_EVENT_CAPACITY);
+        let (control_events, _) = broadcast::channel(RUNTIME_EVENT_CAPACITY);
         Arc::new(Self {
             terminals: Mutex::new(HashMap::new()),
             control: Mutex::new(ControlState {
@@ -165,6 +169,7 @@ impl HostRuntime {
             next_session_epoch: AtomicU64::new(1),
             next_lease_epoch: AtomicU64::new(1),
             events,
+            control_events,
             attachment_queues: Mutex::new(VecDeque::new()),
             config,
             clock_override: Mutex::new(None),
@@ -181,6 +186,12 @@ impl HostRuntime {
 
     pub fn subscribe(&self) -> broadcast::Receiver<HostTerminalEvent> {
         self.events.subscribe()
+    }
+
+    /// Lease and control changes: `LeaseReleased`, `LeaseRevoked`,
+    /// `LeaseExpired` and the `Control*` events.
+    pub fn subscribe_control(&self) -> broadcast::Receiver<HostTerminalEvent> {
+        self.control_events.subscribe()
     }
 
     pub fn spawn(
@@ -437,11 +448,13 @@ impl HostRuntime {
             );
             let holder = current.holder.clone();
             drop(control);
-            let _ = self.events.send(HostTerminalEvent::ControlRequested {
-                session_id: session_id.clone(),
-                holder: holder.clone(),
-                requester: client_id.clone(),
-            });
+            let _ = self
+                .control_events
+                .send(HostTerminalEvent::ControlRequested {
+                    session_id: session_id.clone(),
+                    holder: holder.clone(),
+                    requester: client_id.clone(),
+                });
             return Ok(TerminalControlOutcome::Pending { holder });
         }
         Ok(TerminalControlOutcome::Granted(self.grant_lease_locked(
@@ -615,17 +628,17 @@ impl HostRuntime {
         control.leases.remove(session_id);
         if let Some(pending) = control.pending.remove(session_id) {
             let lease = self.grant_lease_locked(control, session_id, pending.requester, now);
-            let _ = self.events.send(HostTerminalEvent::LeaseReleased {
+            let _ = self.control_events.send(HostTerminalEvent::LeaseReleased {
                 session_id: session_id.clone(),
                 previous_owner,
             });
-            let _ = self.events.send(HostTerminalEvent::ControlGranted {
+            let _ = self.control_events.send(HostTerminalEvent::ControlGranted {
                 session_id: session_id.clone(),
                 lease,
             });
             return;
         }
-        let _ = self.events.send(HostTerminalEvent::LeaseReleased {
+        let _ = self.control_events.send(HostTerminalEvent::LeaseReleased {
             session_id: session_id.clone(),
             previous_owner,
         });
@@ -652,8 +665,8 @@ impl HostRuntime {
                 previous_owner,
             },
         };
-        let _ = self.events.send(event);
-        let _ = self.events.send(HostTerminalEvent::ControlGranted {
+        let _ = self.control_events.send(event);
+        let _ = self.control_events.send(HostTerminalEvent::ControlGranted {
             session_id: session_id.clone(),
             lease: lease.clone(),
         });
@@ -698,7 +711,7 @@ impl HostRuntime {
         }
         if self.request_timed_out(&pending, now) {
             control.pending.remove(session_id);
-            let _ = self.events.send(HostTerminalEvent::ControlDenied {
+            let _ = self.control_events.send(HostTerminalEvent::ControlDenied {
                 session_id: session_id.clone(),
                 requester: pending.requester,
                 reason: TerminalControlDeniedReason::TimedOut,
@@ -779,6 +792,18 @@ impl HostRuntime {
             self.refresh_terminal_subscriber_count(&session_id);
         }
         true
+    }
+
+    /// Whether `client_id` views `session_id` scrolled back from the bottom.
+    pub fn attachment_scrolled(
+        &self,
+        session_id: &TerminalSessionId,
+        client_id: &ClientInstanceId,
+    ) -> bool {
+        self.attachments
+            .lock()
+            .get(&(client_id.clone(), session_id.clone()))
+            .is_some_and(|attached| attached.borrow().display_offset != 0)
     }
 
     pub fn attachment_receiver(

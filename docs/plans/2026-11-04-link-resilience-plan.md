@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** A 完成；B 进行中。
+**状态：** A、B 完成；C 进行中。
 
 **依据：** 2026-11-04 的空闲断连分析（`e46c64c` 已修复断线丢租约）与同日对 Host、SSH 隧道、TLS、Host 托管 SSH 项目的代码审查；`docs/host-client-architecture.md`。
 
@@ -69,14 +69,14 @@
 
 ## B1：Host 控制事件独立通道并可对账
 
-- [ ] 测试：大量终端输出使画面事件溢出时，lease 撤销/授予仍送达 Client；人为让控制通道溢出后，Client 收到按当前状态补发的 lease 事件。
-- [ ] runtime 拆出控制事件广播（lease、control、exit），画面 `Update` 不再进入它；`forward_state_events` 不再为画面更新锁 attachment 表。
-- [ ] 控制通道 lag 时，按本连接每个 attachment 的当前 mode 与 runtime lease 对比，补发 `TerminalControlGranted` / `TerminalLeaseRevoked`。
+- [x] 测试：大量终端输出使画面事件溢出时，lease 撤销/授予仍送达 Client；人为让控制通道溢出后，Client 收到按当前状态补发的 lease 事件。
+- [x] runtime 拆出控制事件广播（lease、control、exit），画面 `Update` 不再进入它；`forward_state_events` 不再为画面更新锁 attachment 表。
+- [x] 控制通道 lag 时，按本连接每个 attachment 的当前 mode 与 runtime lease 对比，补发 `TerminalControlGranted` / `TerminalLeaseRevoked`。
 
 ## B2：桌面 pane 以状态对账代替丢事件
 
-- [ ] 测试：pane 事件桥 lag 后，pane 仍得到最终的退出与 lease 状态。
-- [ ] pane 事件桥 lag 时发送 `Resync`；pane 收到后按 catalog placement 的 `owner` 与 mirror 元数据重新判定 lease 与退出，并在连接状态为 `HostLost` 时显示断开。
+- [x] 测试：pane 事件桥 lag 后，pane 仍得到最终的退出与 lease 状态。
+- [x] pane 事件桥 lag 时发送 `Resync`；pane 收到后按 catalog placement 的 `owner` 与 mirror 元数据重新判定 lease 与退出，并在连接状态为 `HostLost` 时显示断开。
 
 **验收：** 控制状态在任意事件丢失后都能收敛到 Host 的当前状态。
 

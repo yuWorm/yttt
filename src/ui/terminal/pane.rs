@@ -655,6 +655,24 @@ impl TerminalPaneView {
         }
     }
 
+    /// Recovers state from events the pane missed: a lost Host, a terminal
+    /// the catalog no longer lists, or a lease that changed hands.
+    fn resync_with_host(
+        &mut self,
+        runtime: &DesktopHostRuntime,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match runtime.state() {
+            ConnectionState::HostLost { message } => self.set_terminal_lost(message, cx),
+            ConnectionState::Ready { .. } => {
+                self.sync_host_terminal(window, cx);
+                self.reclaim_host_lease(window, cx);
+            }
+            _ => {}
+        }
+    }
+
     /// After a reconnect the Host still streams this terminal, but may have
     /// kept this Client's lease or given it to another Client: asks for it
     /// again, takes the Host's geometry epoch and resends a resize it missed.
@@ -1007,6 +1025,9 @@ impl TerminalPaneView {
                             pane.handle_host_event(event, &runtime, window, cx);
                         })
                     }
+                    TerminalPaneHostEvent::Resync => this.update_in(cx, move |pane, window, cx| {
+                        pane.resync_with_host(&runtime, window, cx);
+                    }),
                 };
                 if result.is_err() {
                     break;

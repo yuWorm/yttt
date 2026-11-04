@@ -1704,6 +1704,7 @@ async fn forward_state_events(
     let mut token_usage_events = context.agent_hooks.subscribe_token_usage();
     let mut project_events = context.projects.subscribe();
     let mut runtime_events = context.runtime.subscribe();
+    let mut control_events = context.runtime.subscribe_control();
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
     for update in context.agent_hooks.snapshots_after(&[]) {
         send_host_state_event(
@@ -1720,109 +1721,45 @@ async fn forward_state_events(
     }
     loop {
         tokio::select! {
-            event = runtime_events.recv() => {
-                let server_event = {
+            event = runtime_events.recv() => match event {
+                // Only a scrolled-back attachment counts output; the check
+                // avoids taking the attachment lock for every frame.
+                Ok(HostTerminalEvent::Update { session_id, .. })
+                    if context.runtime.attachment_scrolled(&session_id, &client_id) =>
+                {
+                    if let Some(attachment) = attachments.lock().await.get_mut(&session_id)
+                        && attachment.display_offset != 0
+                    {
+                        attachment.unseen_output = attachment.unseen_output.saturating_add(1);
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    for (session_id, attachment) in attachments.lock().await.iter_mut() {
+                        let scrolled = attachment.display_offset != 0;
+                        attachment.note_lagged(skipped);
+                        context
+                            .runtime
+                            .note_attachment_lag(session_id, &client_id, skipped, scrolled);
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => return Err(()),
+            },
+            event = control_events.recv() => {
+                let bodies = {
                     let mut subscriptions = attachments.lock().await;
                     match event {
-                        Ok(HostTerminalEvent::Update { session_id, .. }) => {
-                            if let Some(attachment) = subscriptions.get_mut(&session_id)
-                                && attachment.display_offset != 0
-                            {
-                                attachment.unseen_output =
-                                    attachment.unseen_output.saturating_add(1);
-                            }
-                            None
-                        }
-                        Ok(HostTerminalEvent::LeaseRevoked {
-                            session_id,
-                            previous_owner,
-                        }) if previous_owner == client_id => {
-                            if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                                attachment.mode = TerminalLeaseMode::Observer;
-                            }
-                            Some(ServerEvent::TerminalLeaseRevoked {
-                                session_id,
-                                previous_owner,
-                            })
-                        }
-                        Ok(HostTerminalEvent::LeaseReleased {
-                            session_id,
-                            previous_owner,
-                        }) if previous_owner == client_id => {
-                            if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                                attachment.mode = TerminalLeaseMode::Observer;
-                            }
-                            Some(ServerEvent::TerminalLeaseReleased {
-                                session_id,
-                                previous_owner,
-                            })
-                        }
-                        Ok(HostTerminalEvent::LeaseExpired {
-                            session_id,
-                            previous_owner,
-                        }) if previous_owner == client_id => {
-                            if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                                attachment.mode = TerminalLeaseMode::Observer;
-                            }
-                            Some(ServerEvent::TerminalLeaseExpired {
-                                session_id,
-                                previous_owner,
-                            })
-                        }
-                        Ok(HostTerminalEvent::ControlRequested {
-                            session_id,
-                            holder,
-                            requester,
-                        }) if holder == client_id => {
-                            Some(ServerEvent::TerminalControlRequested {
-                                session_id,
-                                requester,
-                            })
-                        }
-                        Ok(HostTerminalEvent::ControlGranted { lease, .. })
-                            if lease.owner == client_id =>
-                        {
-                            if let Some(attachment) =
-                                subscriptions.get_mut(&lease.session_id)
-                            {
-                                attachment.mode = TerminalLeaseMode::Interactive;
-                                attachment.lease_epoch = lease.lease_epoch;
-                                attachment.last_client_sequence = 0;
-                            }
-                            Some(ServerEvent::TerminalControlGranted { lease })
-                        }
-                        Ok(HostTerminalEvent::ControlDenied {
-                            session_id,
-                            requester,
-                            reason,
-                        }) if requester == client_id => {
-                            Some(ServerEvent::TerminalControlDenied {
-                                session_id,
-                                requester,
-                                reason,
-                            })
-                        }
-                        Ok(HostTerminalEvent::TitleChanged { .. } | HostTerminalEvent::Bell { .. }) => {
-                            None
-                        }
-                        Ok(_) => None,
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            for (session_id, attachment) in subscriptions.iter_mut() {
-                                let scrolled = attachment.display_offset != 0;
-                                attachment.note_lagged(skipped);
-                                context.runtime.note_attachment_lag(
-                                    session_id,
-                                    &client_id,
-                                    skipped,
-                                    scrolled,
-                                );
-                            }
-                            None
+                        Ok(event) => control_event(event, &client_id, &mut subscriptions)
+                            .into_iter()
+                            .collect(),
+                        // Missed lease changes are recovered from current state.
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            resync_leases(&context.runtime, &client_id, &mut subscriptions)
                         }
                         Err(broadcast::error::RecvError::Closed) => return Err(()),
                     }
                 };
-                if let Some(body) = server_event {
+                for body in bodies {
                     send_host_state_event(&writer, context, body)?;
                 }
             }
@@ -1903,6 +1840,108 @@ async fn forward_state_events(
         }
     }
 }
+/// The event a lease or control change sends to `client_id`, updating its
+/// attachment.
+fn control_event(
+    event: HostTerminalEvent,
+    client_id: &ClientInstanceId,
+    subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
+) -> Option<ServerEvent> {
+    match event {
+        HostTerminalEvent::LeaseRevoked {
+            session_id,
+            previous_owner,
+        } if previous_owner == *client_id => {
+            if let Some(attachment) = subscriptions.get_mut(&session_id) {
+                attachment.mode = TerminalLeaseMode::Observer;
+            }
+            Some(ServerEvent::TerminalLeaseRevoked {
+                session_id,
+                previous_owner,
+            })
+        }
+        HostTerminalEvent::LeaseReleased {
+            session_id,
+            previous_owner,
+        } if previous_owner == *client_id => {
+            if let Some(attachment) = subscriptions.get_mut(&session_id) {
+                attachment.mode = TerminalLeaseMode::Observer;
+            }
+            Some(ServerEvent::TerminalLeaseReleased {
+                session_id,
+                previous_owner,
+            })
+        }
+        HostTerminalEvent::LeaseExpired {
+            session_id,
+            previous_owner,
+        } if previous_owner == *client_id => {
+            if let Some(attachment) = subscriptions.get_mut(&session_id) {
+                attachment.mode = TerminalLeaseMode::Observer;
+            }
+            Some(ServerEvent::TerminalLeaseExpired {
+                session_id,
+                previous_owner,
+            })
+        }
+        HostTerminalEvent::ControlRequested {
+            session_id,
+            holder,
+            requester,
+        } if holder == *client_id => Some(ServerEvent::TerminalControlRequested {
+            session_id,
+            requester,
+        }),
+        HostTerminalEvent::ControlGranted { lease, .. } if lease.owner == *client_id => {
+            if let Some(attachment) = subscriptions.get_mut(&lease.session_id) {
+                attachment.mode = TerminalLeaseMode::Interactive;
+                attachment.lease_epoch = lease.lease_epoch;
+                attachment.last_client_sequence = 0;
+            }
+            Some(ServerEvent::TerminalControlGranted { lease })
+        }
+        HostTerminalEvent::ControlDenied {
+            session_id,
+            requester,
+            reason,
+        } if requester == *client_id => Some(ServerEvent::TerminalControlDenied {
+            session_id,
+            requester,
+            reason,
+        }),
+        _ => None,
+    }
+}
+
+/// Brings `client_id`'s attachments in line with the leases it holds now,
+/// with the events it would have received.
+fn resync_leases(
+    runtime: &HostRuntime,
+    client_id: &ClientInstanceId,
+    subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
+) -> Vec<ServerEvent> {
+    let mut events = Vec::new();
+    for (session_id, attachment) in subscriptions.iter_mut() {
+        match (attachment.mode, runtime.lease(session_id, client_id)) {
+            (TerminalLeaseMode::Interactive, None) => {
+                attachment.mode = TerminalLeaseMode::Observer;
+                events.push(ServerEvent::TerminalLeaseRevoked {
+                    session_id: session_id.clone(),
+                    previous_owner: client_id.clone(),
+                });
+            }
+            (TerminalLeaseMode::Observer, Some(lease)) => {
+                attachment.mode = TerminalLeaseMode::Interactive;
+                attachment.lease_epoch = lease.lease_epoch;
+                attachment.last_client_sequence = 0;
+                events.push(ServerEvent::TerminalControlGranted { lease });
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
 async fn serve_desktop_owner_connection(
     mut stream: TransportStream,
     mut stop: watch::Receiver<bool>,
@@ -3310,5 +3349,78 @@ mod session_retention_tests {
             sessions.remove(&id);
         }
         assert_eq!(sessions.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod lease_resync_tests {
+    use super::*;
+    use yttt_core::model::ids::ProjectId;
+    use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec};
+
+    #[tokio::test]
+    async fn a_lagged_connection_relearns_the_leases_it_holds() {
+        let runtime = HostRuntime::new();
+        let held = TerminalSessionId::new("held");
+        let lost = TerminalSessionId::new("lost");
+        for session_id in [&held, &lost] {
+            runtime
+                .spawn(TerminalSpawnSpec {
+                    session_id: session_id.clone(),
+                    project_id: ProjectId::new("project"),
+                    cwd: yttt_protocol::ProjectRelativePath::root(),
+                    execution: TerminalExecutionSpec::Shell {
+                        program: "/bin/sh".to_string(),
+                        args: Vec::new(),
+                        initial_command: None,
+                    },
+                    geometry: TerminalGeometry {
+                        cols: 80,
+                        rows: 24,
+                        cell_width: 0,
+                        cell_height: 0,
+                    },
+                    geometry_epoch: 1,
+                    query_palette: Vec::new(),
+                    palette_revision: 1,
+                    scrollback_limit: 100,
+                    environment: Vec::new(),
+                    removed_environment: Vec::new(),
+                })
+                .unwrap();
+        }
+        let client = ClientInstanceId::new("client");
+        let lease = runtime
+            .acquire_lease(&held, &client, TerminalLeaseMode::Interactive)
+            .unwrap();
+        // The attachment missed the grant of `held` and the loss of `lost`.
+        let mut subscriptions = HashMap::from([
+            (
+                held.clone(),
+                TerminalAttachment::new(TerminalLeaseMode::Observer, 0),
+            ),
+            (
+                lost.clone(),
+                TerminalAttachment::new(TerminalLeaseMode::Interactive, 7),
+            ),
+        ]);
+
+        let mut events = resync_leases(&runtime, &client, &mut subscriptions);
+        events.sort_by_key(|event| matches!(event, ServerEvent::TerminalLeaseRevoked { .. }));
+
+        assert!(matches!(
+            &events[..],
+            [
+                ServerEvent::TerminalControlGranted { lease: granted },
+                ServerEvent::TerminalLeaseRevoked { session_id, .. },
+            ] if *granted == lease && *session_id == lost
+        ));
+        assert_eq!(subscriptions[&held].mode, TerminalLeaseMode::Interactive);
+        assert_eq!(subscriptions[&held].lease_epoch, lease.lease_epoch);
+        assert_eq!(subscriptions[&lost].mode, TerminalLeaseMode::Observer);
+        assert!(resync_leases(&runtime, &client, &mut subscriptions).is_empty());
+        for session_id in [&held, &lost] {
+            runtime.terminate(session_id).unwrap();
+        }
     }
 }

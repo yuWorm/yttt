@@ -504,6 +504,10 @@ UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；re
 - `Interactive`：可输入、resize、scroll；每个 terminal 唯一 owner。
 - `Observer`：只读附加。
 - acquire 新 Interactive lease 时，Host 撤销旧 lease，并向旧 owner 发送 `TerminalLeaseRevoked`。
+- lease 与 control 事件走 runtime 独立的控制广播，不与画面 `Update` 共用队列；连接的控制广播 lag 时，
+  Host 按该连接每个 attachment 的当前模式与 runtime lease 对账，补发 `TerminalControlGranted` /
+  `TerminalLeaseRevoked`。Desktop pane 事件桥 lag 时向 pane 发 `Resync` 并重发最新元数据，pane 据
+  连接状态、catalog 与 `AcquireTerminalLease` 重新判定 lease 与退出。
 - lease 属于 Client 会话而非连接：session 连接断开后，该 Client 的 lease 挂起保留 60 s。
   同一会话在宽限期内重连即恢复原 lease 与 `lease_epoch`；期间其他 Client 的
   `AcquireTerminalLease`、Interactive `AttachTerminal` 或 `RequestTerminalControl` 立即接管

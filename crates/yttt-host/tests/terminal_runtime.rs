@@ -228,7 +228,7 @@ async fn idle_ttl_does_not_transfer_control_without_negotiation() {
 #[tokio::test]
 async fn request_terminal_control_notifies_holder_and_transfers_on_release() {
     let runtime = HostRuntime::new();
-    let mut events = runtime.subscribe();
+    let mut events = runtime.subscribe_control();
     runtime
         .spawn(spec("negotiate", "printf negotiate-ready; sleep 30"))
         .unwrap();
@@ -292,7 +292,7 @@ async fn after_idle_policy_grants_pending_request_and_emits_expired() {
         },
         control_request_timeout: Duration::from_secs(30),
     });
-    let mut events = runtime.subscribe();
+    let mut events = runtime.subscribe_control();
     runtime.set_now_millis(1_000);
     runtime
         .spawn(spec("idle-takeover", "printf idle-takeover; sleep 30"))
@@ -330,7 +330,7 @@ async fn after_idle_policy_grants_pending_request_and_emits_expired() {
 #[tokio::test]
 async fn disconnected_holder_transfers_to_pending_requester() {
     let runtime = HostRuntime::new();
-    let mut events = runtime.subscribe();
+    let mut events = runtime.subscribe_control();
     runtime
         .spawn(spec("disconnect", "printf disconnect-ready; sleep 30"))
         .unwrap();
@@ -360,7 +360,7 @@ async fn disconnected_holder_transfers_to_pending_requester() {
 #[tokio::test]
 async fn suspended_holder_keeps_its_lease_until_released_or_taken_over() {
     let runtime = HostRuntime::new();
-    let mut events = runtime.subscribe();
+    let mut events = runtime.subscribe_control();
     runtime
         .spawn(spec("suspend", "printf suspend-ready; sleep 30"))
         .unwrap();
@@ -410,6 +410,40 @@ async fn suspended_holder_keeps_its_lease_until_released_or_taken_over() {
     })
     .await;
     assert!(runtime.lease(&session_id, &first).is_none());
+    runtime.terminate(&session_id).unwrap();
+}
+
+#[tokio::test]
+async fn lease_events_are_not_pushed_out_by_a_flood_of_frames() {
+    let runtime = HostRuntime::new();
+    // Never read, so frame events overflow it.
+    let _frames = runtime.subscribe();
+    let mut control = runtime.subscribe_control();
+    runtime
+        .spawn(spec(
+            "flood",
+            "i=0; while [ $i -lt 3000 ]; do echo flood-$i; i=$((i+1)); done; sleep 30",
+        ))
+        .unwrap();
+    let first = ClientInstanceId::new("client-1");
+    let second = ClientInstanceId::new("client-2");
+    let session_id = TerminalSessionId::new("flood");
+    runtime
+        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    runtime.suspend_client(&first);
+    runtime
+        .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
+        .unwrap();
+    wait_for_event(&mut control, |event| {
+        matches!(
+            event,
+            HostTerminalEvent::LeaseExpired { session_id: expired, previous_owner }
+                if *expired == session_id && *previous_owner == first
+        )
+    })
+    .await;
     runtime.terminate(&session_id).unwrap();
 }
 

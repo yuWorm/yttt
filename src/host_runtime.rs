@@ -26,6 +26,8 @@ use crate::{
 pub enum TerminalPaneHostEvent {
     Metadata(TerminalMirrorMetadata),
     Client(ClientEvent),
+    /// Events were dropped; the pane re-reads lease and connection state.
+    Resync,
 }
 
 #[derive(PartialEq, Eq)]
@@ -144,6 +146,64 @@ async fn forward_client_events(
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+/// Forwards one pane's events. A lag sends `Resync` and the latest metadata,
+/// since the dropped events may have been its exit or lease changes.
+async fn forward_pane_events(
+    mut events: tokio::sync::broadcast::Receiver<ClientEvent>,
+    sender: flume::Sender<TerminalPaneHostEvent>,
+    session_id: TerminalSessionId,
+    metadata: impl Fn(&TerminalSessionId) -> Option<TerminalMirrorMetadata>,
+) {
+    let mut last_metadata = None::<TerminalPaneMetadataKey>;
+    loop {
+        let refresh_metadata = match events.recv().await {
+            Ok(ClientEvent::TerminalUpdated(update)) if update.session_id() == &session_id => true,
+            Ok(event) if terminal_client_event_matches(&event, &session_id) => {
+                if sender
+                    .send_async(TerminalPaneHostEvent::Client(event))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                false
+            }
+            Ok(_) => false,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                if sender
+                    .send_async(TerminalPaneHostEvent::Resync)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                // The final metadata also carries an exit that was dropped.
+                last_metadata = None;
+                true
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+        if !refresh_metadata {
+            continue;
+        }
+        let Some(metadata) = metadata(&session_id) else {
+            continue;
+        };
+        let metadata_key = TerminalPaneMetadataKey::from(&metadata);
+        if last_metadata.as_ref() == Some(&metadata_key) {
+            continue;
+        }
+        last_metadata = Some(metadata_key);
+        if sender
+            .send_async(TerminalPaneHostEvent::Metadata(metadata))
+            .await
+            .is_err()
+        {
+            break;
         }
     }
 }
@@ -582,51 +642,14 @@ impl DesktopHostRuntime {
         session_id: TerminalSessionId,
     ) -> flume::Receiver<TerminalPaneHostEvent> {
         let (sender, receiver) = flume::bounded(TERMINAL_PANE_EVENT_QUEUE_CAPACITY);
-        let mut events = self.client.subscribe_events();
+        let events = self.client.subscribe_events();
         let client = self.client.clone();
-        self.runtime.spawn(async move {
-            let mut last_metadata = None::<TerminalPaneMetadataKey>;
-            loop {
-                let refresh_metadata = match events.recv().await {
-                    Ok(ClientEvent::TerminalUpdated(update))
-                        if update.session_id() == &session_id =>
-                    {
-                        true
-                    }
-                    Ok(event) if terminal_client_event_matches(&event, &session_id) => {
-                        if sender
-                            .send_async(TerminalPaneHostEvent::Client(event))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                        false
-                    }
-                    Ok(_) => false,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                if !refresh_metadata {
-                    continue;
-                }
-                let Some(metadata) = client.terminal_metadata(&session_id) else {
-                    continue;
-                };
-                let metadata_key = TerminalPaneMetadataKey::from(&metadata);
-                if last_metadata.as_ref() == Some(&metadata_key) {
-                    continue;
-                }
-                last_metadata = Some(metadata_key);
-                if sender
-                    .send_async(TerminalPaneHostEvent::Metadata(metadata))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
+        self.runtime.spawn(forward_pane_events(
+            events,
+            sender,
+            session_id,
+            move |session_id| client.terminal_metadata(session_id),
+        ));
         receiver
     }
 
@@ -952,6 +975,36 @@ mod tests {
         assert_eq!(epoch, Some(2));
         assert_eq!(latest.get(&TerminalSessionId::new("quiet")), Some(&7));
         assert_eq!(latest.get(&TerminalSessionId::new("noisy")), Some(&20));
+    }
+
+    #[tokio::test]
+    async fn a_lagging_pane_bridge_asks_its_pane_to_resync() {
+        let session_id = TerminalSessionId::new("pane");
+        let (broadcast, events) = tokio::sync::broadcast::channel(2);
+        // The lease change is pushed out before the bridge reads anything.
+        for _ in 0..4 {
+            broadcast
+                .send(ClientEvent::Connection(ConnectionState::Connecting))
+                .unwrap();
+        }
+        drop(broadcast);
+        let (sender, receiver) = flume::bounded(8);
+        let metadata = TerminalMirrorMetadata {
+            title: None,
+            process_state: yttt_protocol::terminal::TerminalProcessState::Exited { code: Some(0) },
+            session_epoch: 1,
+            sequence: 9,
+        };
+        let latest = metadata.clone();
+        forward_pane_events(events, sender, session_id, move |_| Some(latest.clone())).await;
+        let received = receiver.drain().collect::<Vec<_>>();
+        assert!(matches!(
+            &received[..],
+            [
+                TerminalPaneHostEvent::Resync,
+                TerminalPaneHostEvent::Metadata(sent),
+            ] if *sent == metadata
+        ));
     }
 
     #[test]
