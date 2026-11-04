@@ -46,11 +46,11 @@
 
 ## A3：重连后不制造快照风暴
 
-- [x] 测试：Client 重连时只有可见终端收到全量快照，不可见终端只收元数据；重新订阅的响应不再携带 viewport。
+- [x] 测试：重连时可见性上报先于重新订阅、重新订阅带 `subscribe_only`（recovery_tests）；`subscribe_only` 得到 `Applied` 且流仍以 snapshot 开始（host_roundtrip）。不可见终端只收元数据沿用既有的 `hidden_terminal_streams_metadata_only_until_revealed`。
 - [x] `connected_session` 在重新订阅之前先发送 `SetTerminalVisibility`。
 - [x] `RequestCheckpoint` 追加 `#[serde(default)] subscribe_only: bool`；为 `true` 时 Host 只建立订阅、返回 `Applied`。旧 Host 忽略该字段返回 checkpoint，Client 两种响应都接受。
 
-**验收：** 32 个终端、只有 4 个可见时，重连后的首轮下行数据量按可见数而非总数增长（测试中以帧计数断言）。
+**验收：** 重连后不可见终端不再推送全量快照、重新订阅不再重复附带 checkpoint。**未做：** 按帧计数断言首轮下行量的端到端测试。
 
 ## A4：断连原因可追溯
 
