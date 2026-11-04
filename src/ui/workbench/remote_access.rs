@@ -438,6 +438,7 @@ impl WorkbenchView {
                             .remote_access
                             .as_ref()
                             .and_then(|status| status.bound_address)
+                            .map(crate::remote_launch::exported_address)
                             .ok_or_else(|| {
                                 root.ui_text
                                     .get(UiTextKey::WorkbenchI18nRemoteAccessNotListening)
@@ -448,14 +449,23 @@ impl WorkbenchView {
                                     address.to_string(),
                                     info,
                                 )
+                                .map(|payload| (address, payload))
                                 .map_err(str::to_string)
                             });
                         match payload {
-                            Ok(payload) => {
+                            Ok((address, payload)) => {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload));
-                                root.ssh.remote_access_error = Some(
-                                    root.ui_text.get(UiTextKey::RemoteAccessCopied).to_string(),
+                                let text = &root.ui_text;
+                                let mut message = format!(
+                                    "{} {} {address}",
+                                    text.get(UiTextKey::RemoteAccessCopied),
+                                    text.get(UiTextKey::RemoteAccessCodeAddress),
                                 );
+                                if address.ip().is_loopback() {
+                                    message.push(' ');
+                                    message.push_str(text.get(UiTextKey::RemoteAccessLoopbackOnly));
+                                }
+                                root.ssh.remote_access_error = Some(message);
                             }
                             Err(error) => {
                                 root.ssh.remote_access_error = Some(format!(

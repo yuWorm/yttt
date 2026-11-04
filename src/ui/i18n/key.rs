@@ -751,6 +751,8 @@ pub enum UiTextKey {
     RemoteAccessConfirmDescription,
     RemoteAccessConfirm,
     RemoteAccessCopied,
+    RemoteAccessCodeAddress,
+    RemoteAccessLoopbackOnly,
     ConnectExistingHost,
     ExistingHostDescription,
     ConnectionCodeLabel,

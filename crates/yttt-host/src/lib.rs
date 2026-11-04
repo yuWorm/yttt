@@ -1184,6 +1184,7 @@ async fn serve_session_connection(
         reader,
         writer.clone(),
         client_id.clone(),
+        session_idle_timeout(context.identity.ingress),
         interactive,
         requests_tx,
         failed_tx,
@@ -1280,19 +1281,44 @@ async fn serve_session_connection(
 /// before it is closed as unresponsive; a Client keeps far fewer in flight.
 const MAX_BUFFERED_REQUESTS: usize = 1024;
 
+/// How long a network Session connection may stay silent before it is closed;
+/// a Client sends a heartbeat every 5 s.
+const NETWORK_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The silence after which a Session connection is presumed dead. Network
+/// peers may vanish without closing; local IPC reports a closed peer itself.
+fn session_idle_timeout(ingress: yttt_transport::IngressKind) -> Option<Duration> {
+    (ingress != yttt_transport::IngressKind::LocalAdmin).then_some(NETWORK_SESSION_IDLE_TIMEOUT)
+}
+
 /// Reads a Session connection: answers Ping at once, hands terminal input,
 /// resize and scroll to the interactive worker and every other request to
 /// the connection's executor. Reports why it stopped through `failed`.
-async fn read_session_requests(
-    mut reader: SessionReader<tokio::io::ReadHalf<TransportStream>>,
+async fn read_session_requests<R: tokio::io::AsyncRead + Unpin>(
+    mut reader: SessionReader<R>,
     writer: SessionWriter,
     client_id: ClientInstanceId,
+    idle_timeout: Option<Duration>,
     interactive: mpsc::Sender<InteractiveRequest>,
     requests: mpsc::Sender<ClientRequest>,
     failed: tokio::sync::oneshot::Sender<String>,
 ) {
     let reason = loop {
-        let message = match reader.receive().await {
+        let received = match idle_timeout {
+            Some(idle_timeout) => {
+                match tokio::time::timeout(idle_timeout, reader.receive()).await {
+                    Ok(received) => received,
+                    Err(_) => {
+                        break format!(
+                            "no message from the Client for {} s",
+                            idle_timeout.as_secs()
+                        );
+                    }
+                }
+            }
+            None => reader.receive().await,
+        };
+        let message = match received {
             Ok(message) => message,
             Err(error) => {
                 let Some(request_id) = error.unsupported_request_id() else {
@@ -3470,5 +3496,107 @@ mod lease_resync_tests {
         for session_id in [&held, &lost] {
             runtime.terminate(session_id).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod session_idle_tests {
+    use super::*;
+
+    /// A reader over one end of a pipe; `client` writes the other end.
+    struct Pipe {
+        client: SessionWriter,
+        failed: tokio::sync::oneshot::Receiver<String>,
+        requests: mpsc::Receiver<ClientRequest>,
+        _held: (
+            [yttt_transport::SessionWriterTask; 2],
+            tokio::io::ReadHalf<tokio::io::DuplexStream>,
+            mpsc::Receiver<InteractiveRequest>,
+            AbortOnDrop,
+        ),
+    }
+
+    fn spawn_reader(idle_timeout: Option<Duration>) -> Pipe {
+        let (host, client) = tokio::io::duplex(64 * 1024);
+        let (host_read, host_write) = tokio::io::split(host);
+        let (client_read, client_write) = tokio::io::split(client);
+        let (host_writer, host_writer_task) = SessionWriter::spawn(host_write);
+        let (client, client_writer_task) = SessionWriter::spawn(client_write);
+        let (interactive, interactive_requests) = mpsc::channel(8);
+        let (requests_tx, requests) = mpsc::channel(8);
+        let (failed_tx, failed) = tokio::sync::oneshot::channel();
+        let reader = AbortOnDrop(tokio::spawn(read_session_requests(
+            SessionReader::new(host_read),
+            host_writer,
+            ClientInstanceId::new("idle"),
+            idle_timeout,
+            interactive,
+            requests_tx,
+            failed_tx,
+        )));
+        Pipe {
+            client,
+            failed,
+            requests,
+            _held: (
+                [host_writer_task, client_writer_task],
+                client_read,
+                interactive_requests,
+                reader,
+            ),
+        }
+    }
+
+    fn workspace_request(request_id: u64) -> ControlMessage {
+        ControlMessage::Request(ClientRequest {
+            request_id,
+            actor_device_id: None,
+            lease_epoch: None,
+            body: Request::Workspace(yttt_protocol::workspace::WorkspaceRequest::Environment),
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_network_connection_is_closed_after_the_idle_timeout() {
+        let pipe = spawn_reader(Some(Duration::from_secs(60)));
+        let started = tokio::time::Instant::now();
+        let reason = pipe.failed.await.unwrap();
+        assert!(reason.contains("no message"), "{reason}");
+        assert!(started.elapsed() >= Duration::from_secs(60));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn any_message_restarts_the_idle_timeout() {
+        let mut pipe = spawn_reader(Some(Duration::from_secs(60)));
+        for request_id in 1..=3 {
+            tokio::time::sleep(Duration::from_secs(40)).await;
+            pipe.client
+                .send_reliable(&workspace_request(request_id))
+                .unwrap();
+            assert_eq!(pipe.requests.recv().await.unwrap().request_id, request_id);
+        }
+        assert!(pipe.failed.try_recv().is_err());
+        let reason = pipe.failed.await.unwrap();
+        assert!(reason.contains("no message"), "{reason}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn local_connections_have_no_idle_timeout() {
+        assert_eq!(
+            session_idle_timeout(yttt_transport::IngressKind::LocalAdmin),
+            None
+        );
+        for ingress in [
+            yttt_transport::IngressKind::TlsWork,
+            yttt_transport::IngressKind::SshWork,
+        ] {
+            assert_eq!(
+                session_idle_timeout(ingress),
+                Some(NETWORK_SESSION_IDLE_TIMEOUT)
+            );
+        }
+        let mut pipe = spawn_reader(None);
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        assert!(pipe.failed.try_recv().is_err());
     }
 }

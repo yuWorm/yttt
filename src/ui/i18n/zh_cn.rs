@@ -822,6 +822,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::RemoteAccessConfirm => "确认",
         UiTextKey::RemoteAccessCopied => "已复制 Base64 连接码，包含地址和访问密钥，请妥善保密。",
+        UiTextKey::RemoteAccessCodeAddress => "连接码中的地址：",
+        UiTextKey::RemoteAccessLoopbackOnly => "远程访问监听的是回环地址，此连接码只能在本机使用。",
         UiTextKey::ConnectExistingHost => "连接已有 yttt",
         UiTextKey::ExistingHostDescription => {
             "粘贴另一台电脑导出的连接码，通过 TLS 直接连接，无需 SSH 或部署 Server。"

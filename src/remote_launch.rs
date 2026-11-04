@@ -1,5 +1,6 @@
 use std::{
     io::{self, Read as _, Write as _},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     process::{Command, Stdio},
 };
 
@@ -102,6 +103,43 @@ pub(crate) fn validate_connection_address(address: &str) -> Result<(), &'static 
     Ok(())
 }
 
+/// The address a connection code should carry for a listener bound to
+/// `bound`. A wildcard address cannot be dialed, so it becomes this machine's
+/// outbound address of the same family; anything else is exported as bound.
+pub(crate) fn exported_address(bound: SocketAddr) -> SocketAddr {
+    exported_address_with(bound, outbound_address)
+}
+
+fn exported_address_with(
+    bound: SocketAddr,
+    outbound: impl FnOnce(IpAddr) -> Option<IpAddr>,
+) -> SocketAddr {
+    if !bound.ip().is_unspecified() {
+        return bound;
+    }
+    outbound(bound.ip()).map_or(bound, |ip| SocketAddr::new(ip, bound.port()))
+}
+
+/// The local address the routing table picks for traffic leaving this
+/// machine. Connecting a UDP socket only consults routes; nothing is sent.
+fn outbound_address(family: IpAddr) -> Option<IpAddr> {
+    let (local, remote): (SocketAddr, SocketAddr) = if family.is_ipv4() {
+        (
+            (Ipv4Addr::UNSPECIFIED, 0).into(),
+            (Ipv4Addr::new(192, 0, 2, 1), 9).into(),
+        )
+    } else {
+        (
+            (Ipv6Addr::UNSPECIFIED, 0).into(),
+            (Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 9).into(),
+        )
+    };
+    let socket = std::net::UdpSocket::bind(local).ok()?;
+    socket.connect(remote).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_unspecified() && !ip.is_loopback()).then_some(ip)
+}
+
 #[cfg(test)]
 mod connection_code_tests {
     use super::*;
@@ -150,6 +188,32 @@ mod connection_code_tests {
             "host:\n22",
         ] {
             assert!(ConnectionCode::encode(address.into(), info()).is_err());
+        }
+    }
+
+    #[test]
+    fn a_wildcard_listener_exports_the_outbound_address() {
+        let lan = IpAddr::from([192, 168, 1, 20]);
+        let exported = exported_address_with("0.0.0.0:43123".parse().unwrap(), |family| {
+            assert!(family.is_ipv4());
+            Some(lan)
+        });
+        assert_eq!(exported, SocketAddr::new(lan, 43123));
+        let exported = exported_address_with("[::]:43123".parse().unwrap(), |family| {
+            assert!(family.is_ipv6());
+            None
+        });
+        assert_eq!(exported, "[::]:43123".parse().unwrap());
+    }
+
+    #[test]
+    fn a_specific_listener_is_exported_as_bound() {
+        for bound in ["127.0.0.1:43123", "192.168.1.20:43123", "[fe80::1]:43123"] {
+            let bound: SocketAddr = bound.parse().unwrap();
+            assert_eq!(
+                exported_address_with(bound, |_| panic!("no lookup for {bound}")),
+                bound
+            );
         }
     }
 }

@@ -1000,6 +1000,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessCopied => {
             "Base64 connection code copied, including the address and access key. Keep it private."
         }
+        UiTextKey::RemoteAccessCodeAddress => "Address in the code:",
+        UiTextKey::RemoteAccessLoopbackOnly => {
+            "Remote access listens on a loopback address, so only this computer can use the code."
+        }
         UiTextKey::ConnectExistingHost => "Connect to existing yttt",
         UiTextKey::ExistingHostDescription => {
             "Paste a connection code from the other computer. Connect directly over TLS; no SSH or Server deployment required."

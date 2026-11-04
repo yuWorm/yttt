@@ -6,7 +6,7 @@ use sha2::{Digest as _, Sha256};
 use std::{
     collections::HashMap,
     fs, io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::Path,
     sync::{
         Arc,
@@ -220,6 +220,16 @@ struct NetworkGeneration {
     admission: Arc<NetworkAdmission>,
     task: JoinHandle<()>,
 }
+/// How long the manager waits before rebinding a listener that failed to
+/// open or stopped on its own, doubling up to the maximum.
+const FIRST_REBIND_DELAY: Duration = Duration::from_secs(1);
+const MAX_REBIND_DELAY: Duration = Duration::from_secs(30);
+
+struct Rebind {
+    at: tokio::time::Instant,
+    delay: Duration,
+}
+
 struct Manager {
     store: Arc<Mutex<DeviceSettingsStore>>,
     context: ConnectionContext,
@@ -228,6 +238,8 @@ struct Manager {
     effective: RemoteAccessState,
     error: Option<String>,
     next_connection: Arc<AtomicU64>,
+    /// A pending attempt to restore the enabled listener without user action.
+    rebind: Option<Rebind>,
 }
 
 pub(crate) async fn run(
@@ -246,12 +258,12 @@ pub(crate) async fn run(
         effective: RemoteAccessState::Disabled,
         error: None,
         next_connection,
+        rebind: None,
     };
     if desired.enabled
         && let Err(error) = manager.enable(desired.listen_address, true).await
     {
-        manager.effective = RemoteAccessState::Failed;
-        manager.error = Some(error.message);
+        manager.listener_failed(error.message);
     }
     let mut health = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -265,8 +277,10 @@ pub(crate) async fn run(
             _ = health.tick() => {
                 if manager.network.as_ref().is_some_and(|network| network.task.is_finished()) {
                     manager.stop_network().await;
-                    manager.effective = RemoteAccessState::Failed;
-                    manager.error = Some("network listener stopped unexpectedly; local Host and tasks remain running".to_string());
+                    manager.listener_failed("network listener stopped unexpectedly; local Host and tasks remain running".to_string());
+                }
+                if manager.rebind.as_ref().is_some_and(|rebind| rebind.at <= tokio::time::Instant::now()) {
+                    manager.rebind().await;
                 }
             }
         }
@@ -275,6 +289,29 @@ pub(crate) async fn run(
 }
 
 impl Manager {
+    /// Marks the listener failed and schedules the next attempt to reopen it.
+    fn listener_failed(&mut self, error: String) {
+        let delay = self.rebind.as_ref().map_or(FIRST_REBIND_DELAY, |rebind| {
+            (rebind.delay * 2).min(MAX_REBIND_DELAY)
+        });
+        self.rebind = Some(Rebind {
+            at: tokio::time::Instant::now() + delay,
+            delay,
+        });
+        self.effective = RemoteAccessState::Failed;
+        self.error = Some(format!("{error}; retrying in {} s", delay.as_secs()));
+    }
+    async fn rebind(&mut self) {
+        let settings = self.store.lock().settings().clone();
+        if !settings.enabled || self.network.is_some() {
+            self.rebind = None;
+            return;
+        }
+        match self.enable(settings.listen_address, true).await {
+            Ok(()) => self.rebind = None,
+            Err(error) => self.listener_failed(error.message),
+        }
+    }
     fn status(&self) -> RemoteAccessStatus {
         RemoteAccessStatus {
             settings: self.store.lock().settings().clone(),
@@ -292,6 +329,13 @@ impl Manager {
         &mut self,
         request: RemoteAccessRequest,
     ) -> Result<RemoteAccessResponse, ProtocolFailure> {
+        if !matches!(
+            request,
+            RemoteAccessRequest::Status | RemoteAccessRequest::ExportConnectionInfo
+        ) {
+            // The user's choice supersedes an automatic retry.
+            self.rebind = None;
+        }
         match request {
             RemoteAccessRequest::Status => {}
             RemoteAccessRequest::SetEnabled {
@@ -454,6 +498,11 @@ impl Manager {
     }
 }
 
+/// How long an accepted connection has for TLS and authentication together.
+const NETWORK_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The longest pause after accept fails, e.g. while file descriptors run out.
+const MAX_ACCEPT_BACKOFF: Duration = Duration::from_secs(1);
+
 async fn network_loop(
     listener: TlsListener,
     token: Arc<AuthToken>,
@@ -465,14 +514,32 @@ async fn network_loop(
     let mut tasks = JoinSet::new();
     let mut stop = context.stop.clone();
     let mut next_accept = tokio::time::Instant::now();
+    let mut accept_backoff = Duration::ZERO;
+    let mut penalties = HandshakePenalties::default();
     loop {
         tokio::select! {
             changed = stop.changed() => { if changed.is_err() || *stop.borrow() { break; } }
             completed = tasks.join_next(), if !tasks.is_empty() => {
-                if !matches!(completed, Some(Ok(Ok(())))) { next_accept = tokio::time::Instant::now() + Duration::from_millis(100); }
+                if let Some(Ok(Some((peer, authenticated)))) = completed {
+                    let now = tokio::time::Instant::now();
+                    if authenticated { penalties.forgive(peer) } else { penalties.record_failure(peer, now) }
+                }
             }
             accepted = async { tokio::time::sleep_until(next_accept).await; listener.accept_tcp().await } => {
-                let Ok(stream) = accepted else { break };
+                let (stream, peer) = match accepted {
+                    Ok(accepted) => { accept_backoff = Duration::ZERO; accepted }
+                    Err(_) => {
+                        // Errors such as running out of descriptors pass; back off and keep listening.
+                        accept_backoff = (accept_backoff * 2).clamp(Duration::from_millis(10), MAX_ACCEPT_BACKOFF);
+                        next_accept = tokio::time::Instant::now() + accept_backoff;
+                        continue;
+                    }
+                };
+                let peer = peer.ip();
+                let Some(start) = penalties.admit(peer, tokio::time::Instant::now()) else {
+                    drop(stream);
+                    continue;
+                };
                 let (Ok(pending), Ok(slot)) = (handshakes.clone().try_acquire_owned(), streams.clone().try_acquire_owned()) else {
                     drop(stream);
                     next_accept = tokio::time::Instant::now() + Duration::from_millis(50);
@@ -480,8 +547,10 @@ async fn network_loop(
                 };
                 let mut connection = context.clone();
                 connection.identity.connection_sequence = sequence.fetch_add(1, Ordering::Relaxed);
-                connection.handshake_permit = Some(Arc::new(Mutex::new(Some(pending))));
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                // `serve_connection` releases the permit once the Client authenticates.
+                let permit = Arc::new(Mutex::new(Some(pending)));
+                connection.handshake_permit = Some(permit.clone());
+                let deadline = start + NETWORK_HANDSHAKE_TIMEOUT;
                 connection.handshake_deadline = Some(deadline);
                 let acceptor = listener.acceptor();
                 let token = token.clone();
@@ -489,10 +558,17 @@ async fn network_loop(
                 tasks.spawn(async move {
                     let _slot = slot;
                     let stream = tokio::select! {
-                        _ = stop.changed() => return Ok(()),
-                        stream = tokio::time::timeout_at(deadline, acceptor.accept(stream)) => stream.map_err(|_| ())?.map_err(|_| ())?,
+                        _ = stop.changed() => return None,
+                        stream = async {
+                            tokio::time::sleep_until(start).await;
+                            tokio::time::timeout_at(deadline, acceptor.accept(stream)).await
+                        } => stream,
                     };
-                    super::serve_connection(Box::new(stream), token, connection).await
+                    if let Ok(Ok(stream)) = stream {
+                        let _ = super::serve_connection(Box::new(stream), token, connection).await;
+                    }
+                    let authenticated = permit.lock().is_none();
+                    Some((peer, authenticated))
                 });
             }
         }
@@ -505,9 +581,166 @@ async fn network_loop(
         .close();
     while tasks.join_next().await.is_some() {}
 }
+
+/// The pause after the first unauthenticated failure from an address; it
+/// doubles with each further failure up to the maximum, which stays below a
+/// Client's TLS handshake timeout so a delayed Client still connects.
+const FIRST_HANDSHAKE_PENALTY: Duration = Duration::from_millis(100);
+const MAX_HANDSHAKE_PENALTY: Duration = Duration::from_secs(5);
+/// How long an address's failures are remembered after its pause ends.
+const HANDSHAKE_PENALTY_MEMORY: Duration = Duration::from_secs(60);
+const MAX_PENALIZED_ADDRESSES: usize = 4096;
+
+/// Delays connections from an address whose connections recently failed
+/// before authenticating, so one misbehaving peer cannot slow down others.
+/// Clients sharing the address, e.g. behind NAT, are delayed, not refused.
+#[derive(Default)]
+struct HandshakePenalties {
+    addresses: HashMap<IpAddr, HandshakePenalty>,
+}
+
+struct HandshakePenalty {
+    failures: u32,
+    until: tokio::time::Instant,
+    /// A connection is already waiting for this pause to end.
+    waiting: bool,
+}
+
+impl HandshakePenalties {
+    /// When a new connection from `address` may start its handshake, or
+    /// `None` to refuse it because another one is already waiting.
+    fn admit(
+        &mut self,
+        address: IpAddr,
+        now: tokio::time::Instant,
+    ) -> Option<tokio::time::Instant> {
+        let Some(penalty) = self.addresses.get_mut(&address) else {
+            return Some(now);
+        };
+        if now >= penalty.until {
+            return Some(now);
+        }
+        if penalty.waiting {
+            return None;
+        }
+        penalty.waiting = true;
+        Some(penalty.until)
+    }
+
+    fn record_failure(&mut self, address: IpAddr, now: tokio::time::Instant) {
+        if self.addresses.len() >= MAX_PENALIZED_ADDRESSES {
+            self.addresses
+                .retain(|_, penalty| now < penalty.until + HANDSHAKE_PENALTY_MEMORY);
+        }
+        let known = self.addresses.contains_key(&address);
+        if !known && self.addresses.len() >= MAX_PENALIZED_ADDRESSES {
+            return;
+        }
+        let penalty = self.addresses.entry(address).or_insert(HandshakePenalty {
+            failures: 0,
+            until: now,
+            waiting: false,
+        });
+        if now >= penalty.until + HANDSHAKE_PENALTY_MEMORY {
+            penalty.failures = 0;
+        }
+        penalty.failures = penalty.failures.saturating_add(1);
+        let delay = FIRST_HANDSHAKE_PENALTY
+            .saturating_mul(1 << (penalty.failures - 1).min(16))
+            .min(MAX_HANDSHAKE_PENALTY);
+        penalty.until = now + delay;
+        penalty.waiting = false;
+    }
+
+    fn forgive(&mut self, address: IpAddr) {
+        self.addresses.remove(&address);
+    }
+}
+
 fn failure(message: impl Into<String>) -> ProtocolFailure {
     ProtocolFailure::new(FailureCode::InvalidRequest, message, false)
 }
 fn io_failure(error: io::Error) -> ProtocolFailure {
     ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn address(last: u8) -> IpAddr {
+        IpAddr::from([192, 0, 2, last])
+    }
+
+    #[test]
+    fn a_failing_address_is_delayed_without_affecting_others() {
+        let mut penalties = HandshakePenalties::default();
+        let now = tokio::time::Instant::now();
+        penalties.record_failure(address(1), now);
+        assert_eq!(
+            penalties.admit(address(1), now),
+            Some(now + FIRST_HANDSHAKE_PENALTY)
+        );
+        assert_eq!(penalties.admit(address(2), now), Some(now));
+        let later = now + FIRST_HANDSHAKE_PENALTY;
+        assert_eq!(penalties.admit(address(1), later), Some(later));
+    }
+
+    #[test]
+    fn only_one_connection_waits_per_address() {
+        let mut penalties = HandshakePenalties::default();
+        let now = tokio::time::Instant::now();
+        penalties.record_failure(address(1), now);
+        assert!(penalties.admit(address(1), now).is_some());
+        assert_eq!(penalties.admit(address(1), now), None);
+        // The waiting connection failed as well: the next one may wait again.
+        penalties.record_failure(address(1), now);
+        assert_eq!(
+            penalties.admit(address(1), now),
+            Some(now + FIRST_HANDSHAKE_PENALTY * 2)
+        );
+    }
+
+    #[test]
+    fn repeated_failures_double_the_pause_up_to_the_maximum() {
+        let mut penalties = HandshakePenalties::default();
+        let mut now = tokio::time::Instant::now();
+        let mut expected = FIRST_HANDSHAKE_PENALTY;
+        for _ in 0..12 {
+            penalties.record_failure(address(1), now);
+            assert_eq!(penalties.admit(address(1), now), Some(now + expected));
+            now += expected;
+            expected = (expected * 2).min(MAX_HANDSHAKE_PENALTY);
+        }
+        assert_eq!(expected, MAX_HANDSHAKE_PENALTY);
+    }
+
+    #[test]
+    fn authentication_or_a_quiet_minute_forgets_failures() {
+        let mut penalties = HandshakePenalties::default();
+        let now = tokio::time::Instant::now();
+        penalties.record_failure(address(1), now);
+        penalties.record_failure(address(1), now);
+        penalties.forgive(address(1));
+        assert_eq!(penalties.admit(address(1), now), Some(now));
+
+        penalties.record_failure(address(2), now);
+        penalties.record_failure(address(2), now);
+        let later = now + FIRST_HANDSHAKE_PENALTY * 2 + HANDSHAKE_PENALTY_MEMORY;
+        penalties.record_failure(address(2), later);
+        assert_eq!(
+            penalties.admit(address(2), later),
+            Some(later + FIRST_HANDSHAKE_PENALTY)
+        );
+    }
+
+    #[test]
+    fn the_table_of_penalized_addresses_is_bounded() {
+        let mut penalties = HandshakePenalties::default();
+        let now = tokio::time::Instant::now();
+        for index in 0..MAX_PENALIZED_ADDRESSES as u32 + 10 {
+            penalties.record_failure(IpAddr::from(index.to_be_bytes()), now);
+        }
+        assert_eq!(penalties.addresses.len(), MAX_PENALIZED_ADDRESSES);
+    }
 }

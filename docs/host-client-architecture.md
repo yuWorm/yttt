@@ -59,6 +59,11 @@ flowchart LR
 进行标准验证，环境身份与转发地址分离；不启用 early data。证书、私钥和专用 TCP 秘密只在
 主动启用时生成并存入设备私有状态，重置递增 credential generation 并撤销旧 TLS 通道。
 本机管理 IPC、TLS 工作入口和独立 Server 的 SSH 工作 IPC 具有独立凭据和取消域。
+监听 accept 出错时退避重试（上限 1 s），不退出；监听意外结束或启动时绑定失败，Host 按 1 s 起、
+上限 30 s 的退避重新绑定，用户的远程访问操作取消待定的重试。认证前失败的来源 IP，其新连接延迟到
+节流结束（100 ms 起翻倍，上限 5 s，认证成功或静默 1 分钟后清除）再握手，每个 IP 同时只有一个在等待，
+其他来源不受影响。TLS 加认证握手期限 10 s。两端开启 TCP keepalive（30 s 后每 10 s 探测）。
+导出连接码时，监听在未指定地址上则换成本机出站地址；监听回环地址时提示连接码只能在本机使用。
 
 ## 3. crate 与责任边界
 
@@ -652,7 +657,8 @@ Disconnected -> Connecting -> Ready
 恢复规则：
 
 - 临时 I/O、握手超时、AlreadyConnected、StaleHostEpoch 或 HostShuttingDown：保留 mirrors，使用带抖动的指数退避，初次重试 100–200 ms，上限 5 s。永久错误停止重试。
-- 底层连接建立的期限由 connector 的 `LinkProfile` 决定：本机 30 s，远程（SSH 隧道、TLS）90 s；应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
+- 底层连接建立的期限由 connector 的 `LinkProfile` 决定：本机 30 s，远程（SSH 隧道、TLS）90 s；TLS connector 内部另以
+  TCP 建连（含解析，多个地址错开 250 ms 并行尝试）15 s、TLS 握手 10 s 分别计时；应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
 - 心跳 Ping 每 5 s 以交互优先级发送。有心跳未回复时，连接自最近一次入站消息（或 Ping 发出）起静默超过
   `LinkProfile::liveness_timeout`（本机 15 s，远程 45 s）即触发重连：慢链路上 Pong 排在已发出的数据之后，
   持续到达的其他消息同样证明链路存活。Pong 迟到超过 4 倍期限时仍断开，即使有其他消息到达。
@@ -660,6 +666,8 @@ Disconnected -> Connecting -> Ready
   socket 拒绝通道时才运行 `yttt-server ensure` 并重试一次。streamlocal 开通道期限 8 s。
 - 只有一个重连状态机：任何读写错误、心跳超时、队列溢出或终端 sequence gap 都断开整条 session 连接后重连。
   Host 在连接关闭时释放该连接的终端流与状态事件转发，即使当前没有输出。
+- Host 读网络入口（TLS、SSH 工作入口）的 session 连接时，60 s 没有任何入站消息即关闭连接，随后进入 lease 宽限期；
+  对端休眠或断网不再留下占用远程客户端名额与 lease 的连接。本机 IPC 无此期限。
 - Host 最多保留 64 个认证 Client 会话，包括最多 16 个闲置会话。闲置会话最多保留 5 分钟，保留窗口内可继续使用请求日志；活动会话不参与淘汰。
 - 重连成功：更新 host epoch/connection sequence，立即请求 catalog 与 Agent 快照、对已附加终端重新订阅并重新上报可见集合；终端流以 Host snapshot 恢复 mirror。Host epoch 变化时清除旧 mirror 与已附加集合。
 - Host 在断线期间仍存活：相同 terminal ID 通过新连接的 snapshot 及后续 delta 继续。

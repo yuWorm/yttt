@@ -11316,7 +11316,9 @@ dependencies = [
 name = "yttt-transport-tls"
 version = "0.3.19"
 dependencies = [
+ "rcgen",
  "rustls",
+ "socket2",
  "tokio",
  "tokio-rustls",
  "yttt-protocol",
