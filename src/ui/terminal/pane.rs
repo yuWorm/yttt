@@ -678,6 +678,7 @@ impl TerminalPaneView {
         let checkpoint = runtime.request(Request::RequestCheckpoint {
             session_id: session_id.clone(),
             after_sequence: None,
+            subscribe_only: false,
         });
         let lease = runtime.request(Request::AcquireTerminalLease {
             session_id,

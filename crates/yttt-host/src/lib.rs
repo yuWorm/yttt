@@ -940,6 +940,7 @@ async fn serve_client_session(
     }
     context.runtime.resume_client(&client_id);
     context.lifecycle.client_connected();
+    log_session(&client_id, generation, "connected");
     let attachments = shared_terminal_attachments(context, &client_id);
     let request_journal = {
         let mut journals = context.request_journals.lock();
@@ -989,7 +990,24 @@ async fn serve_client_session(
     }
     context.lifecycle.client_disconnected();
     context.lifecycle.resource_changed();
-    result
+    match &result {
+        Ok(()) => log_session(&client_id, generation, "ended"),
+        Err(reason) => log_session(&client_id, generation, &format!("dropped: {reason}")),
+    }
+    result.map_err(|_| ())
+}
+
+/// Records a Session connection change in the Host log, which is otherwise
+/// the only trace of why a Client reconnected.
+fn log_session(client_id: &ClientInstanceId, generation: u64, change: &str) {
+    eprintln!(
+        "{} session {client_id} #{generation} {change}",
+        log_timestamp()
+    );
+}
+
+fn log_timestamp() -> impl std::fmt::Display {
+    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z")
 }
 
 fn shared_terminal_attachments(
@@ -1089,7 +1107,7 @@ async fn serve_session_connection(
     request_journal: Arc<tokio::sync::Mutex<RequestJournal>>,
     mut replaced: watch::Receiver<bool>,
     context: &ConnectionContext,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     const MAX_QUEUED_REQUESTS: usize = 64;
     let (reader, writer) = tokio::io::split(stream);
     let mut reader = SessionReader::new(reader);
@@ -1192,10 +1210,12 @@ async fn serve_session_connection(
                     let message = match message {
                         Ok(message) => message,
                         Err(error) => {
-                            let request_id = error.unsupported_request_id().ok_or(())?;
+                            let request_id = error
+                                .unsupported_request_id()
+                                .ok_or_else(|| format!("read failed: {error}"))?;
                             writer
                                 .send_reliable(&ControlMessage::Response(HostResponse::unsupported(request_id)))
-                                .map_err(|_| ())?;
+                                .map_err(|error| error.to_string())?;
                             break;
                         }
                     };
@@ -1209,7 +1229,7 @@ async fn serve_session_connection(
                             };
                             interactive
                                 .try_send(InteractiveRequest::Input(request))
-                                .map_err(|_| ())?;
+                                .map_err(|_| "interactive queue overflowed".to_string())?;
                         }
                         ControlMessage::Request(request) => {
                             if let Request::Ping { sent_millis } = request.body {
@@ -1221,11 +1241,11 @@ async fn serve_session_connection(
                                             host_millis: now_millis(),
                                         }),
                                     }))
-                                    .map_err(|_| ())?;
+                                    .map_err(|error| error.to_string())?;
                             } else if interactive_lane_request(&request.body) {
                                 interactive
                                     .try_send(InteractiveRequest::Request(request))
-                                    .map_err(|_| ())?;
+                                    .map_err(|_| "interactive queue overflowed".to_string())?;
                             } else if recovery_request(&request.body) {
                                 let uses_attachments =
                                     request_uses_terminal_attachments(&request.body);
@@ -1239,7 +1259,7 @@ async fn serve_session_connection(
                                 .await;
                                 writer
                                     .send_reliable(&ControlMessage::Response(response))
-                                    .map_err(|_| ())?;
+                                    .map_err(|error| error.to_string())?;
                                 if uses_attachments {
                                     streams.reconcile(&attachments, None).await;
                                 }
@@ -1252,16 +1272,20 @@ async fn serve_session_connection(
                         }
                         ControlMessage::Response(_)
                         | ControlMessage::Event(_)
-                        | ControlMessage::Chunk(_) => return Err(()),
+                        | ControlMessage::Chunk(_) => {
+                            return Err("Client sent a Host message".to_string());
+                        }
                     }
                     break;
                 }
                 finished = running.join_next(), if !running.is_empty() => {
                     let (response, changed, uses_attachments, attached) =
-                        finished.ok_or(())?.map_err(|_| ())?;
+                        finished
+                            .ok_or("request set emptied")?
+                            .map_err(|error| format!("request task failed: {error}"))?;
                     writer
                         .send_reliable(&ControlMessage::Response(response))
-                        .map_err(|_| ())?;
+                        .map_err(|error| error.to_string())?;
                     // Streams start after the response that attached them is queued.
                     if uses_attachments {
                         streams.reconcile(&attachments, attached.as_ref()).await;
@@ -1270,7 +1294,11 @@ async fn serve_session_connection(
                         context.lifecycle.resource_changed();
                     }
                 }
-                () = writer.closed() => return Err(()),
+                () = writer.closed() => {
+                    return Err(writer
+                        .close_reason()
+                        .map_or_else(|| "writer closed".to_string(), |reason| reason.to_string()));
+                }
                 changed = replaced.changed() => {
                     if changed.is_err() || *replaced.borrow() {
                         return Ok(());
@@ -1579,6 +1607,9 @@ enum InteractiveRequest {
 /// closed as unresponsive.
 const MAX_QUEUED_INTERACTIVE_REQUESTS: usize = 1024;
 
+/// How often one connection logs rejected input for the same terminal.
+const INPUT_REJECTION_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
 async fn run_interactive_requests(
     mut requests: mpsc::Receiver<InteractiveRequest>,
     writer: SessionWriter,
@@ -1586,7 +1617,16 @@ async fn run_interactive_requests(
     attachments: SharedTerminalAttachments,
     context: ConnectionContext,
 ) {
+    // Per terminal: when a rejection was last logged and how many since.
+    let mut rejections = HashMap::<TerminalSessionId, (Option<std::time::Instant>, u64)>::new();
     while let Some(request) = requests.recv().await {
+        let input_session = match &request {
+            InteractiveRequest::Input(ClientRequest {
+                body: Request::TerminalInput(input),
+                ..
+            }) => Some(input.session_id.clone()),
+            _ => None,
+        };
         let (request, reply) = match request {
             InteractiveRequest::Input(request) => (request, false),
             InteractiveRequest::Request(request) => (request, true),
@@ -1619,8 +1659,20 @@ async fn run_interactive_requests(
             {
                 return;
             }
-        } else if let Err(error) = response.result {
-            eprintln!("one-way terminal input rejected: {error:?}");
+        } else if let (Err(error), Some(session_id)) = (response.result, input_session) {
+            let now = std::time::Instant::now();
+            let (logged_at, suppressed) = rejections.entry(session_id.clone()).or_default();
+            if logged_at.is_none_or(|at| now.duration_since(at) >= INPUT_REJECTION_LOG_INTERVAL) {
+                eprintln!(
+                    "{} session {client_id} input to {session_id} rejected ({} more since last report): {error:?}",
+                    log_timestamp(),
+                    *suppressed
+                );
+                *logged_at = Some(now);
+                *suppressed = 0;
+            } else {
+                *suppressed += 1;
+            }
         }
     }
 }
@@ -2248,10 +2300,19 @@ async fn handle_request(
         })()
         .map_err(runtime_failure),
         // v22 clients still ask; the raw replay cursor is ignored.
-        Request::RequestCheckpoint { session_id, .. } => (|| {
+        Request::RequestCheckpoint {
+            session_id,
+            subscribe_only,
+            ..
+        } => (|| {
             let terminal = runtime
                 .terminal(&session_id)
                 .ok_or_else(|| HostRuntimeError::NotFound(session_id.clone()))?;
+            // The stream starts with a snapshot; repeating it here doubles
+            // what a reconnecting Client downloads.
+            if subscribe_only {
+                return Ok(Response::Applied);
+            }
             let display_offset = attachments
                 .get(&session_id)
                 .map_or(0, |attachment| attachment.display_offset);

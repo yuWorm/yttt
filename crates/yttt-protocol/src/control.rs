@@ -161,6 +161,11 @@ pub enum Request {
     RequestCheckpoint {
         session_id: TerminalSessionId,
         after_sequence: Option<u64>,
+        /// Only (re)subscribe this connection to the terminal's stream, whose
+        /// first frame is a snapshot anyway: the Host answers `Applied`
+        /// instead of a checkpoint. An older Host ignores it.
+        #[serde(default)]
+        subscribe_only: bool,
     },
     AcknowledgeTerminalExit {
         session_id: TerminalSessionId,

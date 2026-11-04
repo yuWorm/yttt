@@ -255,7 +255,9 @@ Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须
 对账规则：
 
 1. Host 在连接关闭时忘记该连接的终端流。重连后若 Host epoch 未变，Client 对自己已附加的每个
-   session 发送 `RequestCheckpoint` 重新订阅：仍持有 Interactive lease（见 §7.4 宽限期）的终端
+   session 发送 `RequestCheckpoint { subscribe_only: true }` 重新订阅（Host 只回 `Applied`，
+   不重复附带 checkpoint；旧 Host 忽略该字段仍回 checkpoint），且先于它上报可见集合，
+   避免不可见终端在重连时推送全量快照：仍持有 Interactive lease（见 §7.4 宽限期）的终端
    恢复为 Interactive，其余为 Observer，重新订阅本身不抢 lease；Host 发送的 initial
    snapshot 建立或替换 mirror。catalog 刷新不请求快照，也不改写现有 mirror。
    Desktop pane 收到 `Ready` 后再以 `AcquireTerminalLease` 确认 lease、以 checkpoint 的
@@ -639,8 +641,12 @@ Disconnected -> Connecting -> Ready
 恢复规则：
 
 - 临时 I/O、握手超时、AlreadyConnected、StaleHostEpoch 或 HostShuttingDown：保留 mirrors，使用带抖动的指数退避，初次重试 100–200 ms，上限 5 s。永久错误停止重试。
-- 底层连接建立最多等待 30 s，应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
-- 心跳 Ping 每 5 s 以交互优先级发送，15 s 内没有对应响应即触发重连；它不排在文件／Git 请求或大响应的分块之后。
+- 底层连接建立的期限由 connector 的 `LinkProfile` 决定：本机 30 s，远程（SSH 隧道、TLS）90 s；应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
+- 心跳 Ping 每 5 s 以交互优先级发送。有心跳未回复时，连接自最近一次入站消息（或 Ping 发出）起静默超过
+  `LinkProfile::liveness_timeout`（本机 15 s，远程 45 s）即触发重连：慢链路上 Pong 排在已发出的数据之后，
+  持续到达的其他消息同样证明链路存活。Pong 迟到超过 4 倍期限时仍断开，即使有其他消息到达。
+- SSH 隧道重连按失败类型走最少步骤：开通道超时或会话断开即重建 SSH，不在僵死会话上重试；会话正常但远端
+  socket 拒绝通道时才运行 `yttt-server ensure` 并重试一次。streamlocal 开通道期限 8 s。
 - 只有一个重连状态机：任何读写错误、心跳超时、队列溢出或终端 sequence gap 都断开整条 session 连接后重连。
   Host 在连接关闭时释放该连接的终端流与状态事件转发，即使当前没有输出。
 - Host 最多保留 64 个认证 Client 会话，包括最多 16 个闲置会话。闲置会话最多保留 5 分钟，保留窗口内可继续使用请求日志；活动会话不参与淘汰。
@@ -709,6 +715,10 @@ root PID 选择最近的已知 Agent descendant，以两个连续 miss 作为退
 - Host draining/stopping
 
 错误日志可记录 request kind、resource ID、epoch、sequence、queue depth 和耗时；不得记录 terminal input、clipboard、token、password、private key、完整环境变量或文件正文。
+
+连接变化有时间戳日志：Desktop 把断开原因、重连耗时与 `HostLost` 写入 profile `logs/client.log`（1 MiB 轮转一次），
+ClientCore diagnostics 保留最近 16 次断开记录；Host 在 `host.log` 记录每条 session 连接的建立与结束原因
+（读失败、写超时、队列溢出、被替换），单向输入被拒按终端每 10 s 至多记一条并带被抑制次数。
 
 常驻 Host diagnostics 每 5 s 采样并写入 bounded rotating JSONL；missed tick 使用 `Skip`，
 不会在 runtime 恢复后补跑一串采样。terminal input、parser 和队列 latency 计数仍逐事件累计，

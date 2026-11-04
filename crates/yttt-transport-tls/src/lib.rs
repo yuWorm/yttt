@@ -8,7 +8,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector as RustlsConnector};
 use yttt_protocol::remote_access::TLS_SERVER_NAME;
 use yttt_transport::{
-    BoxFuture, TransportConnector, TransportError, TransportListener, TransportStream,
+    BoxFuture, LinkProfile, TransportConnector, TransportError, TransportListener, TransportStream,
 };
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -57,6 +57,10 @@ impl TransportConnector for TlsConnector {
                 ))
             })?
         })
+    }
+
+    fn link_profile(&self) -> LinkProfile {
+        LinkProfile::REMOTE
     }
 }
 

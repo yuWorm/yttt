@@ -51,6 +51,9 @@ const MAX_REMOTE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_REMOTE_OPERATIONS: usize = 16;
 const SSH_COMMAND_CAPACITY: usize = 64;
 const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+/// A healthy session opens a forwarded socket within a round trip; one that
+/// takes longer is treated as dead so the tunnel is rebuilt.
+const STREAMLOCAL_OPEN_TIMEOUT: Duration = Duration::from_secs(8);
 
 type ReverseForwardTargets = Arc<Mutex<HashMap<u32, SocketAddr>>>;
 
@@ -259,6 +262,10 @@ impl yttt_transport::TransportConnector for StreamLocalConnector {
                 .map_err(|error| yttt_transport::TransportError::Other(error.to_string()))
         })
     }
+
+    fn link_profile(&self) -> yttt_transport::LinkProfile {
+        yttt_transport::LinkProfile::REMOTE
+    }
 }
 
 enum TransportServiceInner {
@@ -394,7 +401,9 @@ impl TransportService {
         }
     }
 
-    async fn open_streamlocal(
+    /// Opens a channel to `socket` on the remote end of `connection_id`.
+    /// `ChannelRefused` means the session works but nothing accepted it.
+    pub async fn open_streamlocal(
         &self,
         connection_id: ConnectionId,
         socket: String,
@@ -1807,12 +1816,16 @@ async fn connection_loop(
                     }
                 }
                 Some(ConnectionCommand::StreamLocal { socket, reply }) => {
-                    let result = tokio::time::timeout(CHANNEL_OPEN_TIMEOUT,
+                    let result = match tokio::time::timeout(STREAMLOCAL_OPEN_TIMEOUT,
                         session.as_ref().get_ref().channel_open_direct_streamlocal(socket)).await
-                        .map_err(|_| TransportError::RequestTimedOut)
-                        .and_then(|result| result.map_err(|error| TransportError::Connection(error.to_string())))
-                        .map(|channel| Box::new(channel.into_stream()) as yttt_transport::TransportStream)
-                        .map_err(|error| TransportError::Connection(error.to_string()));
+                    {
+                        Ok(Ok(channel)) => Ok(Box::new(channel.into_stream()) as yttt_transport::TransportStream),
+                        Ok(Err(russh::Error::ChannelOpenFailure(reason))) => {
+                            Err(TransportError::ChannelRefused(format!("{reason:?}")))
+                        }
+                        Ok(Err(error)) => Err(TransportError::Russh(error)),
+                        Err(_) => Err(TransportError::RequestTimedOut),
+                    };
                     let _ = reply.send(result);
                 }
                 Some(ConnectionCommand::CancelReverseForward(forward)) => {
@@ -2274,6 +2287,10 @@ pub enum TransportError {
     Superseded,
     #[error("SSH connection failed: {0}")]
     Connection(String),
+    /// The SSH session works, but the remote end refused the forwarded
+    /// channel, e.g. because nothing listens on the requested socket.
+    #[error("remote end refused the SSH channel: {0}")]
+    ChannelRefused(String),
     #[error("SSH authentication was rejected")]
     AuthenticationRejected,
     #[error("failed to use SSH agent: {0}")]

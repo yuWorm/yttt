@@ -7,6 +7,7 @@ pub mod cli;
 #[cfg(target_os = "macos")]
 mod cli_registration;
 pub mod config;
+mod connection_log;
 pub mod desktop_shell;
 pub mod desktop_tray;
 pub use yttt_core::model;

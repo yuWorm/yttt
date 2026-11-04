@@ -258,6 +258,7 @@ impl WorkbenchView {
                 let checkpoint = runtime.request(yttt_protocol::Request::RequestCheckpoint {
                     session_id,
                     after_sequence: None,
+                    subscribe_only: false,
                 });
                 let reply = reply.clone();
                 let target = target.clone();

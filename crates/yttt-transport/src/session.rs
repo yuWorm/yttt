@@ -56,6 +56,27 @@ pub enum SessionSendError {
     Encode(#[from] ProtocolCodecError),
 }
 
+/// Why a Session connection's write side closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionCloseReason {
+    /// This end closed it.
+    Local,
+    /// A send queue exceeded its bound.
+    Overflow,
+    /// A frame write failed or made no progress before its deadline.
+    WriteFailed,
+}
+
+impl std::fmt::Display for SessionCloseReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Local => "closed locally",
+            Self::Overflow => "send queue overflowed",
+            Self::WriteFailed => "write failed or timed out",
+        })
+    }
+}
+
 /// A render lane refused a frame: it exceeds the lane budget or the connection closed.
 #[derive(Debug)]
 pub struct RenderRejected;
@@ -97,6 +118,8 @@ enum Slot {
 #[derive(Default)]
 struct State {
     closed: bool,
+    /// Why the connection closed first.
+    close_reason: Option<SessionCloseReason>,
     interactive: VecDeque<Item>,
     current_interactive: Option<Item>,
     reliable: VecDeque<Item>,
@@ -241,8 +264,12 @@ struct Shared {
 }
 
 impl Shared {
-    fn close(&self) {
-        self.state.lock().close();
+    fn close(&self, reason: SessionCloseReason) {
+        {
+            let mut state = self.state.lock();
+            state.close_reason.get_or_insert(reason);
+            state.close();
+        }
         self.closed.send_replace(true);
         self.ready.notify_one();
         self.progress.notify_waiters();
@@ -318,7 +345,7 @@ pub struct SessionWriterTask {
 
 impl Drop for SessionWriterTask {
     fn drop(&mut self) {
-        self.shared.close();
+        self.shared.close(SessionCloseReason::Local);
         self.task.abort();
     }
 }
@@ -397,7 +424,7 @@ impl SessionWriter {
         let others = state.reliable_bytes - state.reliable[position].bytes;
         if others != 0 && item.bytes > RELIABLE_BYTES.saturating_sub(others) {
             drop(state);
-            self.shared.close();
+            self.shared.close(SessionCloseReason::Overflow);
             return Err(SessionSendError::Overflow);
         }
         state.reliable_bytes = others + item.bytes;
@@ -429,7 +456,12 @@ impl SessionWriter {
     }
 
     pub fn close(&self) {
-        self.shared.close();
+        self.shared.close(SessionCloseReason::Local);
+    }
+
+    /// Why the write side closed, once it has.
+    pub fn close_reason(&self) -> Option<SessionCloseReason> {
+        self.shared.state.lock().close_reason
     }
 
     /// Resolves once the connection's write side has closed.
@@ -467,7 +499,7 @@ impl SessionWriter {
         };
         if !admitted {
             drop(state);
-            self.shared.close();
+            self.shared.close(SessionCloseReason::Overflow);
             return Err(SessionSendError::Overflow);
         }
         match priority {
@@ -570,7 +602,7 @@ async fn run_writer(shared: Arc<Shared>, mut writer: impl AsyncWrite + Unpin) {
             continue;
         };
         if send_frame(&mut writer, &frame).await.is_err() {
-            shared.close();
+            shared.close(SessionCloseReason::WriteFailed);
             return;
         }
         shared.state.lock().finish(slot);

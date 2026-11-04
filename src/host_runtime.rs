@@ -175,6 +175,12 @@ impl DesktopHostRuntime {
             format!("desktop-{}", uuid::Uuid::new_v4()),
         ))?;
         let client = Arc::new(runtime.block_on(ClientCore::connect(connector, identity, token))?);
+        crate::connection_log::follow(
+            client.clone(),
+            runtime.handle(),
+            launcher.logs_dir(),
+            "local".to_string(),
+        );
         let environment = match runtime.block_on(client.request(Request::Workspace(
             yttt_protocol::workspace::WorkspaceRequest::Environment,
         )))? {

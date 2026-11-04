@@ -1102,7 +1102,8 @@
     "RemoteFile": [],
     "RequestCheckpoint": [
       "after_sequence",
-      "session_id"
+      "session_id",
+      "subscribe_only"
     ],
     "RequestTerminalControl": [
       "session_id"

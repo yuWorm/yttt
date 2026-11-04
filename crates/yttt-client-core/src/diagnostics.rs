@@ -1,7 +1,10 @@
 use std::{
+    collections::VecDeque,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use parking_lot::Mutex;
 
 use yttt_transport::WireReceiveDiagnostics;
 
@@ -36,6 +39,19 @@ impl ClientLatencyDiagnostics {
     }
 }
 
+/// How many recent disconnects diagnostics keep.
+const RECENT_DISCONNECTS: usize = 16;
+
+/// One time the Client lost its Host session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisconnectRecord {
+    /// Wall-clock time of the disconnect, in Unix milliseconds.
+    pub at_unix_millis: u64,
+    pub reason: String,
+    /// How long until the session was ready again; `None` while it is not.
+    pub recovered_after: Option<Duration>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClientPipelineDiagnosticsSnapshot {
     pub ipc_payload_bytes: u64,
@@ -44,6 +60,8 @@ pub struct ClientPipelineDiagnosticsSnapshot {
     pub connection_attempts: u64,
     pub reconnects: u64,
     pub heartbeat_round_trip: ClientLatencyDiagnosticsSnapshot,
+    /// The most recent disconnects, oldest first.
+    pub recent_disconnects: Vec<DisconnectRecord>,
 }
 
 #[derive(Default)]
@@ -54,6 +72,7 @@ pub(crate) struct ClientPipelineDiagnostics {
     connection_attempts: AtomicU64,
     reconnects: AtomicU64,
     heartbeat_round_trip: ClientLatencyDiagnostics,
+    disconnects: Mutex<VecDeque<(DisconnectRecord, std::time::Instant)>>,
 }
 
 impl ClientPipelineDiagnostics {
@@ -79,6 +98,33 @@ impl ClientPipelineDiagnostics {
         self.reconnects.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn record_disconnect(&self, reason: &str) -> DisconnectRecord {
+        let record = DisconnectRecord {
+            at_unix_millis: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis() as u64),
+            reason: reason.to_string(),
+            recovered_after: None,
+        };
+        let mut disconnects = self.disconnects.lock();
+        if disconnects.len() == RECENT_DISCONNECTS {
+            disconnects.pop_front();
+        }
+        disconnects.push_back((record.clone(), std::time::Instant::now()));
+        record
+    }
+
+    /// Marks the latest disconnect recovered; returns it with its duration.
+    pub(crate) fn record_recovered(&self) -> Option<DisconnectRecord> {
+        let mut disconnects = self.disconnects.lock();
+        let (record, since) = disconnects.back_mut()?;
+        if record.recovered_after.is_some() {
+            return None;
+        }
+        record.recovered_after = Some(since.elapsed());
+        Some(record.clone())
+    }
+
     pub(crate) fn record_heartbeat(&self, duration: Duration) {
         self.heartbeat_round_trip.record(duration);
     }
@@ -91,6 +137,37 @@ impl ClientPipelineDiagnostics {
             connection_attempts: self.connection_attempts.load(Ordering::Acquire),
             reconnects: self.reconnects.load(Ordering::Acquire),
             heartbeat_round_trip: self.heartbeat_round_trip.snapshot(),
+            recent_disconnects: self
+                .disconnects
+                .lock()
+                .iter()
+                .map(|(record, _)| record.clone())
+                .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnects_record_their_reason_and_recovery() {
+        let diagnostics = ClientPipelineDiagnostics::default();
+        assert!(diagnostics.record_recovered().is_none());
+        for index in 0..RECENT_DISCONNECTS + 2 {
+            diagnostics.record_disconnect(&format!("drop {index}"));
+        }
+        let recovered = diagnostics.record_recovered().expect("latest disconnect");
+        assert!(recovered.recovered_after.is_some());
+        assert!(diagnostics.record_recovered().is_none(), "recovered once");
+        let recent = diagnostics.snapshot().recent_disconnects;
+        assert_eq!(recent.len(), RECENT_DISCONNECTS);
+        assert_eq!(recent.first().unwrap().reason, "drop 2");
+        assert_eq!(
+            recent.last().unwrap().reason,
+            format!("drop {}", RECENT_DISCONNECTS + 1)
+        );
+        assert!(recent.last().unwrap().recovered_after.is_some());
     }
 }

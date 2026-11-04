@@ -639,6 +639,7 @@ async fn blocked_project_request_does_not_delay_terminal_input() {
         client.request(Request::RequestCheckpoint {
             session_id: session_id.clone(),
             after_sequence: None,
+            subscribe_only: false,
         }),
     )
     .await
@@ -2507,6 +2508,7 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         .request(Request::RequestCheckpoint {
             session_id: session_id.clone(),
             after_sequence: None,
+            subscribe_only: false,
         })
         .await
         .unwrap()
@@ -3952,6 +3954,7 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
             .request(Request::RequestCheckpoint {
                 session_id: session_id.clone(),
                 after_sequence: None,
+                subscribe_only: false,
             })
             .await;
         panic!(
@@ -4251,6 +4254,7 @@ async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output()
         .request(Request::RequestCheckpoint {
             session_id: session_id.clone(),
             after_sequence: None,
+            subscribe_only: false,
         })
         .await
         .unwrap()
@@ -5171,6 +5175,7 @@ async fn a_reconnecting_client_keeps_its_interactive_lease() {
             Request::RequestCheckpoint {
                 session_id: session_id.clone(),
                 after_sequence: None,
+                subscribe_only: false,
             },
             &mut events,
         )
@@ -5255,4 +5260,44 @@ async fn another_client_takes_over_a_disconnected_owners_lease() {
     })
     .await
     .expect("lease takeover timeout");
+}
+
+#[tokio::test]
+async fn a_subscribe_only_resubscription_streams_without_a_checkpoint_reply() {
+    let host = RunningHost::start().await;
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("subscribe-only");
+    let session_id = spec.session_id.clone();
+    let mut first = raw_client(&host, "subscribe-only-owner").await;
+    let spawned = raw_request(&mut first, 1, spawn_request(spec, host.host_epoch())).await;
+    assert!(matches!(spawned, Ok(Response::TerminalSpawned { .. })));
+    drop(first);
+
+    let mut second = raw_client(&host, "subscribe-only-owner").await;
+    let mut events = std::collections::VecDeque::new();
+    assert_eq!(
+        raw_request_keeping_events(
+            &mut second,
+            2,
+            Request::RequestCheckpoint {
+                session_id: session_id.clone(),
+                after_sequence: None,
+                subscribe_only: true,
+            },
+            &mut events,
+        )
+        .await,
+        Ok(Response::Applied)
+    );
+    let update = tokio::time::timeout(
+        Duration::from_secs(5),
+        next_terminal_update(&mut second, &mut events),
+    )
+    .await
+    .expect("resubscribed stream timeout");
+    assert!(matches!(
+        update,
+        yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(viewport)
+            if viewport.session_id == session_id
+    ));
 }

@@ -7,7 +7,7 @@ use yttt_protocol::{
     BuildIdentity, HostResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, terminal::*,
 };
 use yttt_transport::{
-    TransportListener, memory_pair, receive_control, receive_handshake, send_control,
+    LinkProfile, TransportListener, memory_pair, receive_control, receive_handshake, send_control,
 };
 
 fn identity() -> ClientIdentity {
@@ -66,6 +66,7 @@ fn context() -> TestContext {
             diagnostics: Arc::default(),
             visibility: watch::channel(None).1,
             shutdown,
+            liveness_timeout: LinkProfile::LOCAL.liveness_timeout,
         },
         shutdown_tx,
     }
@@ -432,6 +433,50 @@ async fn a_new_session_resubscribes_attached_terminals() {
     assert!(session.await.unwrap().is_none());
 }
 
+#[tokio::test]
+async fn a_new_session_reports_visibility_before_it_resubscribes_without_a_checkpoint() {
+    let mut context = context();
+    let id = viewport(1).session_id;
+    register_terminal(&context, id.clone());
+    let (_visibility, visibility) = watch::channel(Some(Arc::new(VisibleTerminals {
+        revision: 3,
+        sessions: Vec::new(),
+    })));
+    context.session.visibility = visibility;
+    let (client, mut server) = tokio::io::duplex(8192);
+    let host = tokio::spawn(async move {
+        let mut bodies = Vec::new();
+        for _ in 0..4 {
+            let ControlMessage::Request(request) = receive_control(&mut server).await.unwrap()
+            else {
+                panic!("expected a request");
+            };
+            bodies.push(request.body);
+        }
+        (bodies, server)
+    });
+    let shutdown = context.shutdown_tx.clone();
+    let session = tokio::spawn(async move { run_session(client, &context).await });
+    let (bodies, _server) = host.await.unwrap();
+    let visibility = bodies
+        .iter()
+        .position(|body| matches!(body, Request::SetTerminalVisibility { revision: 3, .. }))
+        .expect("visibility is reported");
+    let resubscribe = bodies
+        .iter()
+        .position(|body| {
+            matches!(
+                body,
+                Request::RequestCheckpoint { session_id, subscribe_only: true, .. }
+                    if *session_id == id
+            )
+        })
+        .expect("the terminal is resubscribed without a checkpoint");
+    assert!(visibility < resubscribe);
+    shutdown.send(true).unwrap();
+    assert!(session.await.unwrap().is_none());
+}
+
 #[test]
 fn a_failed_resubscription_is_not_retried() {
     let context = context();
@@ -555,6 +600,64 @@ async fn a_silent_session_is_detected_by_its_heartbeat() {
     let result = tokio::time::timeout(Duration::from_secs(45), run_session(client, &context))
         .await
         .expect("silent connection must fail before the test deadline");
+    assert!(result.is_some_and(|message| message.contains("heartbeat")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn inbound_traffic_keeps_a_session_alive_while_its_pong_is_late() {
+    let context = context();
+    let shutdown = context.shutdown_tx.clone();
+    let (client, server) = tokio::io::duplex(1 << 16);
+    let task = tokio::spawn(async move { run_session(client, &context).await });
+    let (mut requests, mut host) = tokio::io::split(server);
+    let _drain = tokio::spawn(async move { while receive_control(&mut requests).await.is_ok() {} });
+    // The Host streams for well past the liveness timeout but never answers Ping.
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        send_control(
+            &mut host,
+            &ControlMessage::Event(HostEvent {
+                host_sequence: 1,
+                body: ServerEvent::TerminalLeaseRevoked {
+                    session_id: TerminalSessionId::new("busy"),
+                    previous_owner: ClientInstanceId::new("other"),
+                },
+            }),
+        )
+        .await
+        .unwrap();
+    }
+    assert!(!task.is_finished(), "a streaming Host is alive");
+    shutdown.send(true).unwrap();
+    assert!(task.await.unwrap().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_streaming_host_that_never_answers_is_dropped_eventually() {
+    let context = context();
+    let (client, server) = tokio::io::duplex(1 << 16);
+    let task = tokio::spawn(async move { run_session(client, &context).await });
+    let (mut requests, mut host) = tokio::io::split(server);
+    let _drain = tokio::spawn(async move { while receive_control(&mut requests).await.is_ok() {} });
+    let _stream = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let event = ControlMessage::Event(HostEvent {
+                host_sequence: 1,
+                body: ServerEvent::TerminalLeaseRevoked {
+                    session_id: TerminalSessionId::new("busy"),
+                    previous_owner: ClientInstanceId::new("other"),
+                },
+            });
+            if send_control(&mut host, &event).await.is_err() {
+                break;
+            }
+        }
+    });
+    let result = tokio::time::timeout(Duration::from_secs(120), task)
+        .await
+        .expect("an unanswered heartbeat must end the session")
+        .unwrap();
     assert!(result.is_some_and(|message| message.contains("heartbeat")));
 }
 

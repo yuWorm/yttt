@@ -16,10 +16,11 @@ pub use error::TransportError;
 pub use memory::{MemoryConnector, MemoryListener, memory_pair};
 pub use session::{
     CHUNK_PAYLOAD_BYTES, RENDER_LANE_BYTES, RenderLane, RenderObserver, RenderRejected,
-    SessionReader, SessionSendError, SessionWriter, SessionWriterTask,
+    SessionCloseReason, SessionReader, SessionSendError, SessionWriter, SessionWriterTask,
 };
 pub use stream::{
-    BoxFuture, SharedConnector, TransportConnector, TransportIo, TransportListener, TransportStream,
+    BoxFuture, LinkProfile, SharedConnector, TransportConnector, TransportIo, TransportListener,
+    TransportStream,
 };
 pub use wire::{
     WireError, WireReceiveDiagnostics, receive_control, receive_desktop_shell, receive_handshake,

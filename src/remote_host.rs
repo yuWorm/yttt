@@ -198,43 +198,151 @@ fn send_status(
         })
 }
 
-struct RemoteConnector {
-    service: TransportService,
-    credentials: Arc<ConnectionCredentials>,
-    socket: String,
-    server: String,
-    gate: tokio::sync::Mutex<()>,
+/// Why a tunnel to the remote Host could not be opened.
+enum TunnelFailure {
+    /// The SSH session works but nothing accepts on the Host socket.
+    Refused(String),
+    /// The SSH session is gone or stalled.
+    Session(String),
 }
-impl TransportConnector for RemoteConnector {
+
+/// The steps a tunnel to the remote Host can take to recover.
+trait TunnelLink: Send + Sync + 'static {
+    fn open(
+        &self,
+    ) -> yttt_transport::BoxFuture<'_, Result<yttt_transport::TransportStream, TunnelFailure>>;
+    /// Replaces the SSH session.
+    fn rebuild(&self) -> yttt_transport::BoxFuture<'_, Result<(), yttt_transport::TransportError>>;
+    /// Starts the remote Server if it is not running.
+    fn ensure_server(
+        &self,
+    ) -> yttt_transport::BoxFuture<'_, Result<(), yttt_transport::TransportError>>;
+}
+
+/// Reconnects a tunnel with as few steps as its failure needs: a stalled
+/// session is rebuilt at once instead of being waited on again, and the
+/// remote Server is started only when the session works but nothing listens.
+struct TunnelConnector<L> {
+    link: L,
+    gate: tokio::sync::Mutex<()>,
+    /// Counts rebuilt sessions, so a caller that waited on the gate reuses one.
+    rebuilds: std::sync::atomic::AtomicU64,
+}
+
+impl<L: TunnelLink> TunnelConnector<L> {
+    fn new(link: L) -> Self {
+        Self {
+            link,
+            gate: tokio::sync::Mutex::new(()),
+            rebuilds: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    async fn connect_tunnel(
+        &self,
+    ) -> Result<yttt_transport::TransportStream, yttt_transport::TransportError> {
+        use std::sync::atomic::Ordering;
+        let rebuilds = self.rebuilds.load(Ordering::Acquire);
+        let failure = match self.link.open().await {
+            Ok(stream) => return Ok(stream),
+            Err(failure) => failure,
+        };
+        let _guard = self.gate.lock().await;
+        if let TunnelFailure::Refused(_) = failure {
+            return self.start_server_and_open().await;
+        }
+        if self.rebuilds.load(Ordering::Acquire) != rebuilds {
+            match self.link.open().await {
+                Ok(stream) => return Ok(stream),
+                Err(TunnelFailure::Refused(_)) => return self.start_server_and_open().await,
+                Err(TunnelFailure::Session(_)) => {}
+            }
+        }
+        self.link.rebuild().await?;
+        self.rebuilds.fetch_add(1, Ordering::AcqRel);
+        match self.link.open().await {
+            Ok(stream) => Ok(stream),
+            Err(TunnelFailure::Refused(_)) => self.start_server_and_open().await,
+            Err(TunnelFailure::Session(message)) => {
+                Err(yttt_transport::TransportError::Other(message))
+            }
+        }
+    }
+
+    async fn start_server_and_open(
+        &self,
+    ) -> Result<yttt_transport::TransportStream, yttt_transport::TransportError> {
+        self.link.ensure_server().await?;
+        self.link.open().await.map_err(|failure| match failure {
+            TunnelFailure::Refused(message) | TunnelFailure::Session(message) => {
+                yttt_transport::TransportError::Other(message)
+            }
+        })
+    }
+}
+
+impl<L: TunnelLink> TransportConnector for TunnelConnector<L> {
     fn connect(
         &self,
     ) -> yttt_transport::BoxFuture<
         '_,
         Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
     > {
+        Box::pin(self.connect_tunnel())
+    }
+
+    fn link_profile(&self) -> yttt_transport::LinkProfile {
+        yttt_transport::LinkProfile::REMOTE
+    }
+}
+
+/// A tunnel over this app's SSH connection to the remote Server's socket.
+struct SshTunnel {
+    service: TransportService,
+    credentials: Arc<ConnectionCredentials>,
+    socket: String,
+    server: String,
+}
+
+impl TunnelLink for SshTunnel {
+    fn open(
+        &self,
+    ) -> yttt_transport::BoxFuture<'_, Result<yttt_transport::TransportStream, TunnelFailure>> {
         Box::pin(async move {
-            let connector = self
-                .service
-                .streamlocal_connector(self.credentials.connection.id.clone(), self.socket.clone());
-            if let Ok(stream) = connector.connect().await {
-                return Ok(stream);
-            }
-            let _guard = self.gate.lock().await;
-            if let Ok(stream) = connector.connect().await {
-                return Ok(stream);
-            }
+            self.service
+                .open_streamlocal(self.credentials.connection.id.clone(), self.socket.clone())
+                .await
+                .map_err(|error| match error {
+                    yttt_ssh::TransportError::ChannelRefused(_) => {
+                        TunnelFailure::Refused(error.to_string())
+                    }
+                    error => TunnelFailure::Session(error.to_string()),
+                })
+        })
+    }
+
+    fn rebuild(&self) -> yttt_transport::BoxFuture<'_, Result<(), yttt_transport::TransportError>> {
+        Box::pin(async move {
             self.service
                 .connect(self.credentials.request(true))
                 .await
-                .map_err(ssh_transport_error)?;
+                .map(|_| ())
+                .map_err(ssh_transport_error)
+        })
+    }
+
+    fn ensure_server(
+        &self,
+    ) -> yttt_transport::BoxFuture<'_, Result<(), yttt_transport::TransportError>> {
+        Box::pin(async move {
             let service = self.service.clone();
             let id = self.credentials.connection.id.clone();
             let server = self.server.clone();
             tokio::task::spawn_blocking(move || ensure_server(&service, id, &server, None))
                 .await
                 .map_err(|error| yttt_transport::TransportError::Other(error.to_string()))?
-                .map_err(yttt_transport::TransportError::Other)?;
-            connector.connect().await
+                .map(|_| ())
+                .map_err(yttt_transport::TransportError::Other)
         })
     }
 }
@@ -304,6 +412,7 @@ pub fn connect(
                 events,
                 cancellation,
                 label,
+                &launch.local_profile.paths().logs,
             )
         }
     }
@@ -469,13 +578,12 @@ fn connect_ssh(
         );
     }
     cancellation.check(&events)?;
-    let connector = SharedConnector::new(RemoteConnector {
+    let connector = SharedConnector::new(TunnelConnector::new(SshTunnel {
         service,
         credentials: credentials.clone(),
         socket: descriptor.endpoint.clone(),
         server,
-        gate: tokio::sync::Mutex::new(()),
-    });
+    }));
     let token = decode_token(&descriptor.auth_token_hex)?;
     let identity = ClientIdentity {
         expected_environment: None,
@@ -506,6 +614,7 @@ fn connect_ssh(
         events,
         cancellation,
         label,
+        &launch.local_profile.paths().logs,
     )
 }
 
@@ -533,6 +642,7 @@ fn run_cancellable_blocking<T: Send + 'static>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn initialize_environment(
     runtime: tokio::runtime::Runtime,
     connector: SharedConnector,
@@ -541,6 +651,7 @@ fn initialize_environment(
     events: flume::Sender<RemoteConnectEvent>,
     cancellation: RemoteConnectCancellation,
     label: String,
+    logs: &Path,
 ) -> Result<RemoteEnvironment, String> {
     cancellation.check(&events)?;
     let client = Arc::new(runtime.block_on(async {
@@ -551,6 +662,7 @@ fn initialize_environment(
             _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
         }
     })?);
+    crate::connection_log::follow(client.clone(), runtime.handle(), logs, label.clone());
     let environment = match runtime.block_on(async {
         cancellation.check(&events)?;
         tokio::select! {
@@ -879,6 +991,127 @@ fn read_server_bytes(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// What one `open` of a scripted tunnel returns.
+    #[derive(Clone, Copy)]
+    enum Open {
+        Ok,
+        Refused,
+        Stalled,
+    }
+
+    #[derive(Default)]
+    struct ScriptedLink {
+        opens: std::sync::Mutex<std::collections::VecDeque<Open>>,
+        calls: std::sync::Mutex<Vec<&'static str>>,
+    }
+
+    impl ScriptedLink {
+        fn new(opens: impl IntoIterator<Item = Open>) -> Self {
+            Self {
+                opens: std::sync::Mutex::new(opens.into_iter().collect()),
+                calls: Default::default(),
+            }
+        }
+    }
+
+    impl TunnelLink for Arc<ScriptedLink> {
+        fn open(
+            &self,
+        ) -> yttt_transport::BoxFuture<'_, Result<yttt_transport::TransportStream, TunnelFailure>>
+        {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("open");
+                match self
+                    .opens
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("unscripted open")
+                {
+                    Open::Ok => {
+                        Ok(Box::new(tokio::io::duplex(64).0) as yttt_transport::TransportStream)
+                    }
+                    Open::Refused => Err(TunnelFailure::Refused("no listener".into())),
+                    Open::Stalled => Err(TunnelFailure::Session("timed out".into())),
+                }
+            })
+        }
+
+        fn rebuild(
+            &self,
+        ) -> yttt_transport::BoxFuture<'_, Result<(), yttt_transport::TransportError>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("rebuild");
+                Ok(())
+            })
+        }
+
+        fn ensure_server(
+            &self,
+        ) -> yttt_transport::BoxFuture<'_, Result<(), yttt_transport::TransportError>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("ensure");
+                Ok(())
+            })
+        }
+    }
+
+    fn tunnel_calls(opens: impl IntoIterator<Item = Open>) -> (bool, Vec<&'static str>) {
+        let link = Arc::new(ScriptedLink::new(opens));
+        let connector = TunnelConnector::new(link.clone());
+        let connected = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(connector.connect_tunnel())
+            .is_ok();
+        let calls = link.calls.lock().unwrap().clone();
+        (connected, calls)
+    }
+
+    #[test]
+    fn a_stalled_session_is_rebuilt_without_waiting_on_it_again() {
+        assert_eq!(
+            tunnel_calls([Open::Stalled, Open::Ok]),
+            (true, vec!["open", "rebuild", "open"])
+        );
+    }
+
+    #[test]
+    fn a_reachable_remote_host_is_not_ensured() {
+        assert_eq!(tunnel_calls([Open::Ok]), (true, vec!["open"]));
+        assert!(
+            !tunnel_calls([Open::Stalled, Open::Ok])
+                .1
+                .contains(&"ensure")
+        );
+    }
+
+    #[test]
+    fn a_stopped_remote_host_is_started_once() {
+        assert_eq!(
+            tunnel_calls([Open::Refused, Open::Ok]),
+            (true, vec!["open", "ensure", "open"])
+        );
+        assert_eq!(
+            tunnel_calls([Open::Stalled, Open::Refused, Open::Ok]),
+            (true, vec!["open", "rebuild", "open", "ensure", "open"])
+        );
+        assert_eq!(
+            tunnel_calls([Open::Refused, Open::Refused]),
+            (false, vec!["open", "ensure", "open"])
+        );
+    }
+
+    #[test]
+    fn a_tunnel_reconnects_on_a_remote_link_budget() {
+        let connector = TunnelConnector::new(Arc::new(ScriptedLink::default()));
+        assert_eq!(
+            connector.link_profile(),
+            yttt_transport::LinkProfile::REMOTE
+        );
+    }
 
     #[test]
     fn cancelled_phase_does_not_start_a_remote_side_effect() {

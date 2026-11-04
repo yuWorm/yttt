@@ -14,7 +14,9 @@ use std::{
 };
 
 use diagnostics::ClientPipelineDiagnostics;
-pub use diagnostics::{ClientLatencyDiagnosticsSnapshot, ClientPipelineDiagnosticsSnapshot};
+pub use diagnostics::{
+    ClientLatencyDiagnosticsSnapshot, ClientPipelineDiagnosticsSnapshot, DisconnectRecord,
+};
 pub use mirror::{MirrorApply, TerminalMirror, TerminalMirrorMetadata};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
@@ -40,9 +42,9 @@ const EVENT_CAPACITY: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const INITIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How many liveness timeouts a Pong may lag while other messages arrive.
+const HEARTBEAT_UNANSWERED_FACTOR: u32 = 4;
 
 struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
 impl<T> Drop for AbortOnDrop<T> {
@@ -215,6 +217,8 @@ struct ClientSessionContext {
     diagnostics: Arc<ClientPipelineDiagnostics>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
     shutdown: watch::Receiver<bool>,
+    /// How long the session may stay silent with a heartbeat unanswered.
+    liveness_timeout: Duration,
 }
 
 impl ClientCore {
@@ -621,6 +625,7 @@ async fn run_supervisor(
             diagnostics: diagnostics.clone(),
             visibility: visibility.clone(),
             shutdown: shutdown.clone(),
+            liveness_timeout: connector.link_profile().liveness_timeout,
         };
         let disconnected = connected_session(
             connection,
@@ -636,6 +641,7 @@ async fn run_supervisor(
         };
         attempt = attempt.saturating_add(1);
         diagnostics.record_reconnect();
+        diagnostics.record_disconnect(&message);
         while let Ok(command) = commands.try_recv() {
             if let Some(reply) = command.reply {
                 let _ = reply.send(Err(ClientCoreError::NotConnected));
@@ -680,6 +686,7 @@ async fn run_supervisor(
                     install_host_epoch(connection.host.host_epoch, &epoch_state);
                     identity.host_epoch_hint = Some(connection.host.host_epoch);
                     attempt = 0;
+                    diagnostics.record_recovered();
                     set_state(
                         &state,
                         &events,
@@ -785,13 +792,16 @@ async fn establish(
     identity: &ClientIdentity,
     token: &AuthToken,
 ) -> Result<(TransportStream, AuthenticatedHost), ConnectFailure> {
-    let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect())
-        .await
-        .map_err(|_| ConnectFailure::Retry("Host transport connection timed out".into()))?
-        .map_err(|error| match error {
-            TransportError::Permanent(message) => ConnectFailure::Fatal(message),
-            error => ConnectFailure::Retry(error.to_string()),
-        })?;
+    let mut stream = tokio::time::timeout(
+        connector.link_profile().connect_timeout,
+        connector.connect(),
+    )
+    .await
+    .map_err(|_| ConnectFailure::Retry("Host transport connection timed out".into()))?
+    .map_err(|error| match error {
+        TransportError::Permanent(message) => ConnectFailure::Fatal(message),
+        error => ConnectFailure::Retry(error.to_string()),
+    })?;
     let host = client_handshake(&mut stream, identity, token)
         .await
         .map_err(ConnectFailure::from)?;
@@ -850,6 +860,24 @@ async fn connected_session(
     {
         return Some("failed to request Host Agent snapshots".to_string());
     }
+    // Report visibility before resubscribing: until then the Host streams
+    // every attached terminal as visible, and each starts with a snapshot.
+    if let Some(visible) = visibility.borrow_and_update().clone()
+        && send_internal_request(
+            &writer,
+            &mut pending,
+            &next_internal_request_id,
+            actor(),
+            Request::SetTerminalVisibility {
+                revision: visible.revision,
+                visible: visible.sessions.clone(),
+            },
+            PendingRequest::Visibility,
+        )
+        .is_err()
+    {
+        return Some("failed to report terminal visibility".to_string());
+    }
     let attached = {
         let terminal_state = context.terminal_state.read();
         if terminal_state.host_epoch == Some(context.host_epoch) {
@@ -867,6 +895,7 @@ async fn connected_session(
             Request::RequestCheckpoint {
                 session_id: session_id.clone(),
                 after_sequence: None,
+                subscribe_only: true,
             },
             PendingRequest::Resubscribe(session_id),
         )
@@ -915,7 +944,11 @@ async fn connected_session(
             }
         }
     }));
+    // The outstanding heartbeat and when it was sent. Any inbound message
+    // shows the link is alive: on a slow link a Pong waits behind data
+    // already in flight.
     let mut heartbeat = None::<(u64, tokio::time::Instant)>;
+    let mut last_inbound = tokio::time::Instant::now();
     let mut heartbeat_tick = tokio::time::interval_at(
         tokio::time::Instant::now() + HEARTBEAT_INTERVAL,
         HEARTBEAT_INTERVAL,
@@ -982,7 +1015,10 @@ async fn connected_session(
             }
             message = messages_rx.recv() => {
                 let (message, observation) = match message {
-                    Some(Ok(message)) => message,
+                    Some(Ok(message)) => {
+                        last_inbound = tokio::time::Instant::now();
+                        message
+                    }
                     Some(Err(error)) => break Some(error),
                     None => break Some("Host session reader stopped".to_string()),
                 };
@@ -992,8 +1028,8 @@ async fn connected_session(
                             if !matches!(&response.result, Ok(Response::Pong { .. })) {
                                 break Some("Host rejected heartbeat".into());
                             }
-                            if let Some((_, deadline)) = heartbeat.take() {
-                                context.diagnostics.record_heartbeat(tokio::time::Instant::now().saturating_duration_since(deadline - HEARTBEAT_TIMEOUT));
+                            if let Some((_, sent_at)) = heartbeat.take() {
+                                context.diagnostics.record_heartbeat(tokio::time::Instant::now().saturating_duration_since(sent_at));
                             }
                             continue;
                         }
@@ -1126,8 +1162,14 @@ async fn connected_session(
                 }
             }
             _ = heartbeat_tick.tick() => {
-                if let Some((_, deadline)) = heartbeat {
-                    if tokio::time::Instant::now() >= deadline {
+                if let Some((_, sent_at)) = heartbeat {
+                    let now = tokio::time::Instant::now();
+                    let silent = now.saturating_duration_since(last_inbound.max(sent_at)) >= context.liveness_timeout;
+                    // A Host that streams but never answers is not serving
+                    // requests either.
+                    let unanswered = now.saturating_duration_since(sent_at)
+                        >= context.liveness_timeout * HEARTBEAT_UNANSWERED_FACTOR;
+                    if silent || unanswered {
                         break Some("Host heartbeat timed out".into());
                     }
                     continue;
@@ -1140,13 +1182,18 @@ async fn connected_session(
                 if let Err(error) = writer.send_interactive(&ping) {
                     break Some(error.to_string());
                 }
-                heartbeat = Some((request_id, tokio::time::Instant::now() + HEARTBEAT_TIMEOUT));
+                heartbeat = Some((request_id, tokio::time::Instant::now()));
             }
             _ = cleanup.tick() => {
                 pending.retain(|_, request| !matches!(request, PendingRequest::User { reply, .. } if reply.is_closed()));
                 interactive_pending.retain(|_, reply: &mut oneshot::Sender<Result<Response, ClientCoreError>>| !reply.is_closed());
             }
-            () = writer.closed() => break Some("Host session writer closed".to_string()),
+            () = writer.closed() => {
+                let reason = writer
+                    .close_reason()
+                    .map_or_else(|| "closed".to_string(), |reason| reason.to_string());
+                break Some(format!("Host session writer closed: {reason}"));
+            }
         }
     };
     for (_, request) in pending {

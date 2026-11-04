@@ -235,6 +235,11 @@ impl HostLauncher {
         Self::with_lifetime(profile, executable, yttt_host::HostLifetime::Independent)
     }
 
+    /// Where this profile keeps its logs.
+    pub fn logs_dir(&self) -> &Path {
+        &self.profile.paths().logs
+    }
+
     pub fn desktop_owned(profile: AppProfile, executable: impl Into<PathBuf>) -> Self {
         Self::with_lifetime(profile, executable, yttt_host::HostLifetime::DesktopOwned)
     }
