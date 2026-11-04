@@ -4,9 +4,9 @@ use gpui::{
     App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _,
 };
+use gpui_base::{IndexPath, input::InputState};
 use gpui_component::{
-    ActiveTheme as _, IndexPath,
-    input::InputState,
+    ActiveTheme as _,
     list::{ListDelegate, ListItem, ListState},
 };
 use yttt_core::model::{

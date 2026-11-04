@@ -6,10 +6,8 @@ use std::{
 use yttt_ui::primitives::button::YtttButtonExt as _;
 
 use gpui::{App, Context, Entity, FontWeight, Subscription, Task, Window, div, px, relative};
-use gpui_component::{
-    input::{InputEvent, InputState},
-    spinner::Spinner,
-};
+use gpui_base::input::{InputEvent, InputState};
+use gpui_component::spinner::Spinner;
 use yttt_agent_core::{
     AgentBoardCommand, AgentBoardTask, AgentExecutionRecord, AgentExecutionTelemetry,
     AgentExitReason, AgentMessageRole, AgentPlanStatus, AgentProcessState, AgentQuestionAnswer,

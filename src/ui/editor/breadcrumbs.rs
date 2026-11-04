@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use gpui_component::input::Rope;
+use gpui_base::input::Rope;
 use tree_sitter::{Language, Node, Parser, Tree};
 
 use super::EditorLanguageId;

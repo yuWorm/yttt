@@ -1,8 +1,6 @@
 use gpui::{App, SharedString, Task, Window};
-use gpui_component::{
-    IndexPath,
-    searchable_list::{SearchableListDelegate, SearchableListItem},
-};
+use gpui_base::IndexPath;
+use gpui_component::searchable_list::{SearchableListDelegate, SearchableListItem};
 
 pub const SYSTEM_FONT_FAMILY_LABEL: &str = "System default";
 

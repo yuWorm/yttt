@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::StyledExt as _;
+use gpui_base::StyledExt as _;
 
 const MAX_EAGER_DIFF_LINES: usize = 2_000;
 const MAX_EAGER_DIFF_BYTES: usize = 512 * 1024;

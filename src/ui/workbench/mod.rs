@@ -5,16 +5,20 @@ use gpui::{
     PathPromptOptions, Pixels, Point, Render, Rgba, ScrollHandle, SharedString, Stateful,
     Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rems, rgba,
 };
+use gpui_base::{
+    IndexPath,
+    input::{InputEvent, InputState, Rope},
+    v_virtual_list,
+};
 use gpui_component::{
-    ActiveTheme as _, IndexPath, Sizable as _, Theme as ComponentTheme, WindowExt as _,
+    ActiveTheme as _, Sizable as _, Theme as ComponentTheme, WindowExt as _,
     dialog::DialogFooter,
     highlighter::SyntaxHighlighter,
-    input::{Input, InputEvent, InputState, NumberInputEvent, Rope, StepAction},
+    input::{Input, NumberInputEvent, StepAction},
     scroll::ScrollableElement as _,
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
     tab::{Tab, TabBar},
-    v_virtual_list,
 };
 use yttt_agent_core::{
     AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTask, AgentTaskSource, AgentTurnState,

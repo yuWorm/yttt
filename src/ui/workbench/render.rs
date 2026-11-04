@@ -903,7 +903,7 @@ const BAR_COMPONENT_CATALOG: [BarComponentCatalog; 41] = [
 
 pub(super) fn layout_toml_editor_window_content(
     root: &mut WorkbenchView,
-    input: &Entity<gpui_component::input::EditorState>,
+    input: &Entity<gpui_base::input::EditorState>,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -920,7 +920,7 @@ pub(super) fn layout_toml_editor_window_content(
 
 fn standard_layout_toml_editor_window_content(
     root: &mut WorkbenchView,
-    input: &Entity<gpui_component::input::EditorState>,
+    input: &Entity<gpui_base::input::EditorState>,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let appearance = root.theme_runtime();
@@ -972,7 +972,7 @@ fn standard_layout_toml_editor_window_content(
 
 fn bars_toml_editor_window_content(
     root: &mut WorkbenchView,
-    input: &Entity<gpui_component::input::EditorState>,
+    input: &Entity<gpui_base::input::EditorState>,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {

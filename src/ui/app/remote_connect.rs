@@ -81,7 +81,7 @@ struct RemoteConnectView {
     connecting: bool,
     cancelled: bool,
     connected: Rc<Cell<bool>>,
-    replacement_credentials: Option<gpui::Entity<gpui_component::input::InputState>>,
+    replacement_credentials: Option<gpui::Entity<gpui_base::input::InputState>>,
     remember_replacement: bool,
     event_sender: Option<flume::Sender<RemoteConnectEvent>>,
     cancellation: Option<RemoteConnectCancellation>,
@@ -408,7 +408,7 @@ impl RemoteConnectView {
                             _ => UiTextKey::SshKeyPassphrase,
                         });
                     self.replacement_credentials = Some(cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        gpui_base::input::InputState::new(window, cx)
                             .masked(true)
                             .placeholder(placeholder)
                     }));

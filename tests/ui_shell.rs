@@ -592,14 +592,12 @@ fn switch_toggles_with_pointer_and_keyboard(cx: &mut gpui::TestAppContext) {
     cx.update(yttt_ui::init);
     let changes = Rc::new(Cell::new(0));
     let view_changes = changes.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|_| SwitchHarness {
-                changes: view_changes,
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|_| SwitchHarness {
+            changes: view_changes,
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -695,19 +693,17 @@ fn open_harness_menu_at(
     let view_activated = activated.clone();
     let focus = Rc::new(std::cell::RefCell::new(None));
     let view_focus = focus.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|cx| {
-                let focus = cx.focus_handle();
-                view_focus.replace(Some(focus.clone()));
-                MenuHarness {
-                    activated: view_activated,
-                    focus,
-                }
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            view_focus.replace(Some(focus.clone()));
+            MenuHarness {
+                activated: view_activated,
+                focus,
+            }
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     let focus = focus.borrow().clone().unwrap();
     cx.update(|window, cx| {
         focus.focus(window, cx);
@@ -849,16 +845,14 @@ fn tab_stays_inside_a_dialog_overlay(cx: &mut gpui::TestAppContext) {
     cx.update(yttt_ui::init);
     let focus = Rc::new(std::cell::RefCell::new(None));
     let view_focus = focus.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|cx| {
-                let focus = cx.focus_handle();
-                view_focus.replace(Some(focus.clone()));
-                DialogTrapHarness { focus }
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            view_focus.replace(Some(focus.clone()));
+            DialogTrapHarness { focus }
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     let focus = focus.borrow().clone().unwrap();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -885,16 +879,14 @@ fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
     cx.update(yttt_ui::init);
     let focus = Rc::new(std::cell::RefCell::new(None));
     let view_focus = focus.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|cx| {
-                let focus = cx.focus_handle();
-                view_focus.replace(Some(focus.clone()));
-                DialogTrapHarness { focus }
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            view_focus.replace(Some(focus.clone()));
+            DialogTrapHarness { focus }
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     let focus = focus.borrow().clone().unwrap();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -917,7 +909,7 @@ fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
 struct LongPicker {
     rows: usize,
     selected: usize,
-    input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    input: Option<gpui::Entity<gpui_base::input::InputState>>,
     scroll: gpui::ScrollHandle,
 }
 
@@ -932,7 +924,7 @@ impl gpui::Render for LongPicker {
 
         let input = self
             .input
-            .get_or_insert_with(|| cx.new(|cx| gpui_component::input::InputState::new(window, cx)))
+            .get_or_insert_with(|| cx.new(|cx| gpui_base::input::InputState::new(window, cx)))
             .clone();
         let rows = (0..self.rows)
             .map(|index| PickerOverlayRow {
@@ -970,7 +962,7 @@ fn long_picker_renders_only_rows_near_the_selection(cx: &mut gpui::TestAppContex
     use gpui::AppContext as _;
 
     cx.update(yttt_ui::init);
-    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
+    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_base::Root>| {
         let view = cx.new(|_| LongPicker {
             rows: 2000,
             selected: 1500,
@@ -1003,7 +995,7 @@ fn show_notification(
 ) -> &mut gpui::VisualTestContext {
     use gpui::AppContext as _;
 
-    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
+    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_base::Root>| {
         let view = cx.new(|_| gpui::EmptyView);
         yttt_ui::window::yttt_root(view, window, cx)
     });

@@ -1,5 +1,5 @@
 use gpui::{Entity, Subscription};
-use gpui_component::input::InputState;
+use gpui_base::input::InputState;
 
 use crate::{
     model::{ids::ProjectId, project::ProjectLocation},
@@ -21,7 +21,7 @@ pub(in super::super) struct OverlayControllerState {
     pub(in super::super) tab_rename_input_needs_focus: bool,
     pub(in super::super) keybinding_recorder_needs_focus: bool,
     pub(in super::super) layout_toml_editor: Option<LayoutEditorSession>,
-    pub(in super::super) layout_toml_input: Option<Entity<gpui_component::input::EditorState>>,
+    pub(in super::super) layout_toml_input: Option<Entity<gpui_base::input::EditorState>>,
     pub(in super::super) layout_toml_input_subscription: Option<Subscription>,
     pub(in super::super) layout_toml_input_needs_focus: bool,
     pub(in super::super) settling_focus: Option<gpui::FocusHandle>,

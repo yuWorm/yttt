@@ -13,12 +13,11 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme as _, Sizable as _,
+use gpui_base::{
+    TreeItem, TreeState,
     input::{Escape, InputEvent, InputState},
-    scroll::ScrollableElement as _,
-    tree::{TreeItem, TreeState},
 };
+use gpui_component::{ActiveTheme as _, Sizable as _, scroll::ScrollableElement as _};
 use yttt_ui::{
     menu::YtttContextMenu as _,
     tree::{YtttTreeRowState, yttt_tree_row},

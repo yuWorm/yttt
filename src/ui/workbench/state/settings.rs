@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use gpui::{Entity, Subscription};
-use gpui_component::{VirtualListScrollHandle, input::InputState};
+use gpui_base::{VirtualListScrollHandle, input::InputState};
 
 use crate::{
     config::project_settings::{EffectiveProjectEditorSetting, ProjectEditorSettingKey},

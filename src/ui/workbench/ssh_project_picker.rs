@@ -2088,18 +2088,14 @@ fn ssh_project_browser(
         .min_h_0()
         .flex()
         .flex_col()
+        .capture_action(cx.listener(|this, _: &gpui_base::input::MoveDown, _, cx| {
+            this.move_ssh_project_selection(true, cx);
+        }))
+        .capture_action(cx.listener(|this, _: &gpui_base::input::MoveUp, _, cx| {
+            this.move_ssh_project_selection(false, cx);
+        }))
         .capture_action(
-            cx.listener(|this, _: &gpui_component::input::MoveDown, _, cx| {
-                this.move_ssh_project_selection(true, cx);
-            }),
-        )
-        .capture_action(
-            cx.listener(|this, _: &gpui_component::input::MoveUp, _, cx| {
-                this.move_ssh_project_selection(false, cx);
-            }),
-        )
-        .capture_action(
-            cx.listener(|this, _: &gpui_component::input::IndentInline, _, cx| {
+            cx.listener(|this, _: &gpui_base::input::IndentInline, _, cx| {
                 if !this.ssh.project_picker.loading
                     && let Some(path) = this.selected_ssh_project_directory()
                 {
@@ -2109,13 +2105,11 @@ fn ssh_project_browser(
                 }
             }),
         )
-        .capture_action(
-            cx.listener(|this, _: &gpui_component::input::Escape, _, cx| {
-                this.close_ssh_project_picker(cx);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
+        .capture_action(cx.listener(|this, _: &gpui_base::input::Escape, _, cx| {
+            this.close_ssh_project_picker(cx);
+            cx.stop_propagation();
+            cx.notify();
+        }))
         .child(
             div()
                 .flex()

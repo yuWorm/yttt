@@ -1,6 +1,6 @@
 use super::auxiliary_windows::RemoteServicesPage;
 use super::*;
-use gpui_component::FocusTrapElement as _;
+use gpui_base::FocusTrapElement as _;
 use yttt_core::model::ids::{ConnectionId, CredentialId};
 use yttt_ui::menu::{YtttDropdownMenu as _, YtttMenuItem};
 use yttt_ui::primitives::button::{yttt_button, yttt_button_base};
@@ -353,7 +353,7 @@ pub(super) fn render(
                 }
             }))
             .capture_action(
-                cx.listener(|root, _: &gpui_component::input::Escape, window, cx| {
+                cx.listener(|root, _: &gpui_base::input::Escape, window, cx| {
                     root.dismiss_remote_connection_editor(window, cx);
                     cx.stop_propagation();
                 }),

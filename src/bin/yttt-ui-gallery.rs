@@ -14,7 +14,8 @@ use gpui::{
     AnyElement, App, Bounds, Div, Entity, Pixels, Render, SharedString, Window, WindowBounds,
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
-use gpui_component::{IndexPath, Theme, input::InputState, select::SelectState};
+use gpui_base::{IndexPath, input::InputState};
+use gpui_component::{Theme, select::SelectState};
 use yttt::{
     config::{
         paths::AppConfigPaths,
@@ -299,7 +300,7 @@ struct Gallery {
     tooltip: gpui::AnyView,
     palette_input: Entity<InputState>,
     palette_scroll: gpui::ScrollHandle,
-    editor: Entity<gpui_component::input::EditorState>,
+    editor: Entity<gpui_base::input::EditorState>,
     editor_appearance: EditorAppearance,
 }
 
@@ -336,7 +337,7 @@ impl Gallery {
         let palette_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Execute a command..."));
         let editor = cx.new(|cx| {
-            gpui_component::input::EditorState::new(window, cx)
+            gpui_base::input::EditorState::new(window, cx)
                 .default_value("# Fixture\n")
                 .language("markdown")
                 .line_number(true)
