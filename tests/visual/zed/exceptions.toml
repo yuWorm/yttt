@@ -1,0 +1,38 @@
+# Regions where yttt does not match the Zed 1.26.2 baseline, by decision.
+# scripts/ui_visual_diff.py reads this with --exceptions; every entry needs a
+# region, a reason, and who approved it. Reviewed in P9 on 2026-11-04.
+
+[[exception]]
+region = "editor.scrollbar"
+reason = "Only the thumb color is aligned. Zed's ~14px square thumb and cursor markers need set_scrollbar_renderer, and the baseline's always-on track may come from the capture machine's scrollbar setting (P7)."
+approved_by = "yuWorm"
+
+[[exception]]
+region = "main.layout"
+reason = "yttt puts the project sidebar on the left and the file tree on the right, unlike Zed. Only the shared parts are compared: title bar, status bar, and panel borders (P8)."
+approved_by = "yuWorm"
+
+[[exception]]
+region = "menu.width"
+reason = "Context menus size to their content, so widths differ with the entries; row height, indent, and group spacing match (P4)."
+approved_by = "yuWorm"
+
+[[exception]]
+region = "dialog"
+reason = "No Zed baseline exists for these dialogs; they only take the theme colors (P4)."
+approved_by = "yuWorm"
+
+[[exception]]
+region = "notification"
+reason = "No Zed baseline exists for toasts; they only take the theme colors (P4)."
+approved_by = "yuWorm"
+
+[[exception]]
+region = "markdown"
+reason = "Markdown editor alignment is deferred; there is no Zed Markdown preview baseline (decided 2026-11-03)."
+approved_by = "yuWorm"
+
+[[exception]]
+region = "radio"
+reason = "Zed has no matching control, so radios only inherit the theme colors (P3)."
+approved_by = "yuWorm"
