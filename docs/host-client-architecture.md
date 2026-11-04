@@ -282,6 +282,12 @@ Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须
 也不重放排队 mutation。Session 连接握手后，Client 以一次 `Ping` 往返确认 Host 已把连接绑定到
 本 Client 会话，之后才报告 Ready：以他人会话身份连接会在绑定时被 Host 关闭。
 
+远程环境的配置读取经 `HostStorage` 缓存：同一路径只有首次读取等待网络，之后立即返回缓存，缓存超过 2 s
+的读取同时在后台刷新；Host 在配置经它写入、删除或改名成功后向所有连接发 `ServerEvent::ConfigChanged`，
+Client 收到后、以及每次重连就绪后在后台刷新全部缓存。本地写入推进缓存代次，更早发出的后台刷新不能覆盖它；
+写入使用缓存中最新的 revision。直接在 Host 磁盘上的修改由周期刷新发现。远程链路上 `Workspace` 与
+`Project` 请求的期限为 120 s。
+
 HostBootstrap 显式传入原 `config_root`，不根据 Server descriptor 猜路径。共享配置 RPC 只允许
 已知配置文件与 `projects`、`themes`、`agent-providers` 子树，拒绝设备状态、密钥和 symlink 越界。
 设备远程访问偏好与登录启动授权留在私有状态域；普通配置测试必须显式选择临时文件 backend，

@@ -55,6 +55,8 @@ pub struct WorkspaceService {
     agent_states: crate::workspace_objects::WorkspaceObjects<AgentStateRef>,
     backups: crate::workspace_backups::WorkspaceBackups,
     state: Mutex<ServiceState>,
+    /// Counts configuration changes made through the Host.
+    config_changes: tokio::sync::watch::Sender<u64>,
 }
 
 struct ServiceState {
@@ -356,6 +358,7 @@ impl WorkspaceService {
             drafts,
             agent_states,
             backups,
+            config_changes: tokio::sync::watch::Sender::new(0),
             state: Mutex::new(ServiceState {
                 workspaces,
                 next_temporary_file: 0,
@@ -400,6 +403,33 @@ impl WorkspaceService {
 
     /// Handles one request on behalf of a connected client.
     pub fn handle(
+        &self,
+        client_id: &ClientInstanceId,
+        request: WorkspaceRequest,
+    ) -> Result<WorkspaceResponse, ProtocolFailure> {
+        let changes_config = matches!(
+            request,
+            WorkspaceRequest::WriteConfig { .. }
+                | WorkspaceRequest::DeleteConfig { .. }
+                | WorkspaceRequest::WriteProjectConfig { .. }
+                | WorkspaceRequest::DeleteProjectConfig { .. }
+                | WorkspaceRequest::RenameConfigDirectory { .. }
+                | WorkspaceRequest::RemoveConfigDirectory { .. }
+        );
+        let response = self.handle_request(client_id, request);
+        if changes_config && response.is_ok() {
+            self.config_changes.send_modify(|changes| *changes += 1);
+        }
+        response
+    }
+
+    /// Notifies when configuration changes through the Host; edits made on
+    /// disk directly are not seen.
+    pub(crate) fn subscribe_config_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.config_changes.subscribe()
+    }
+
+    fn handle_request(
         &self,
         client_id: &ClientInstanceId,
         request: WorkspaceRequest,

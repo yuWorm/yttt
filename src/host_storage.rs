@@ -20,6 +20,28 @@ use yttt_protocol::{
     },
 };
 
+/// How long a cached remote configuration document is served before a read
+/// also refreshes it in the background.
+const CONFIG_REFRESH_AFTER: Duration = Duration::from_secs(2);
+
+/// A remote configuration document as last read or written.
+struct CachedConfig {
+    /// `None` when the document does not exist.
+    bytes: Option<Vec<u8>>,
+    revision: Option<WorkspaceConfigRevision>,
+    /// The request that reads it again.
+    request: WorkspaceRequest,
+    fetched_at: std::time::Instant,
+    refreshing: bool,
+    /// Bumped by every local write, so an older refresh cannot undo it.
+    generation: u64,
+}
+
+/// Remote configuration documents by client path. A remote read waits for
+/// the network only the first time; later reads return the cached document
+/// and refresh it in the background, as do Host change notifications.
+type ConfigCache = Arc<Mutex<HashMap<PathBuf, CachedConfig>>>;
+
 pub struct HostStorage {
     client: Arc<ClientCore>,
     runtime: tokio::runtime::Handle,
@@ -27,6 +49,7 @@ pub struct HostStorage {
     environment: yttt_protocol::workspace::WorkspaceEnvironment,
     remote: bool,
     state: Mutex<StorageState>,
+    config_cache: ConfigCache,
 }
 #[derive(Default)]
 struct StorageState {
@@ -61,6 +84,10 @@ impl HostStorage {
         environment: yttt_protocol::workspace::WorkspaceEnvironment,
         remote: bool,
     ) -> Self {
+        let config_cache = ConfigCache::default();
+        if remote {
+            follow_config_changes(&client, &runtime, &config_cache);
+        }
         Self {
             client,
             runtime,
@@ -68,7 +95,71 @@ impl HostStorage {
             environment,
             remote,
             state: Mutex::new(StorageState::default()),
+            config_cache,
         }
+    }
+
+    /// The cached document at `path`, refreshing it in the background once
+    /// it is older than `CONFIG_REFRESH_AFTER`. `None` when not cached.
+    fn cached_config(&self, path: &Path) -> Option<Option<Vec<u8>>> {
+        if !self.remote {
+            return None;
+        }
+        let mut cache = self.config_cache.lock();
+        let entry = cache.get_mut(path)?;
+        if entry.fetched_at.elapsed() >= CONFIG_REFRESH_AFTER && !entry.refreshing {
+            entry.refreshing = true;
+            refresh_config(
+                &self.client,
+                &self.runtime,
+                &self.config_cache,
+                path.to_owned(),
+                entry.request.clone(),
+                entry.generation,
+            );
+        }
+        Some(entry.bytes.clone())
+    }
+
+    fn cache_config(
+        &self,
+        path: &Path,
+        request: WorkspaceRequest,
+        bytes: Option<Vec<u8>>,
+        revision: Option<WorkspaceConfigRevision>,
+    ) {
+        if self.remote {
+            let mut cache = self.config_cache.lock();
+            let generation = cache.get(path).map_or(0, |entry| entry.generation + 1);
+            cache.insert(
+                path.to_owned(),
+                CachedConfig {
+                    bytes,
+                    revision,
+                    request,
+                    fetched_at: std::time::Instant::now(),
+                    refreshing: false,
+                    generation,
+                },
+            );
+        }
+    }
+
+    /// The request that reads the configuration document at `path`.
+    fn config_read_request(
+        &self,
+        state: &StorageState,
+        path: &Path,
+    ) -> io::Result<WorkspaceRequest> {
+        Ok(match state.project_config_targets.get(path) {
+            Some((project_root, file)) => WorkspaceRequest::ReadProjectConfig {
+                project_root: project_root.clone(),
+                file: *file,
+            },
+            None => WorkspaceRequest::ReadConfig {
+                relative_path: self.config_relative(path)?,
+            },
+        })
     }
     fn with_state<T>(
         &self,
@@ -168,21 +259,19 @@ impl HostStorage {
     }
     fn read_locked(&self, state: &mut StorageState, path: &Path) -> io::Result<Vec<u8>> {
         if path.starts_with(&self.config_root) || state.project_config_targets.contains_key(path) {
-            let request = match state.project_config_targets.get(path) {
-                Some((project_root, file)) => WorkspaceRequest::ReadProjectConfig {
-                    project_root: project_root.clone(),
-                    file: *file,
-                },
-                None => WorkspaceRequest::ReadConfig {
-                    relative_path: self.config_relative(path)?,
-                },
-            };
-            let WorkspaceResponse::Config(config) = self.workspace(request)? else {
+            let request = self.config_read_request(state, path)?;
+            let WorkspaceResponse::Config(config) = self.workspace(request.clone())? else {
                 return Err(unexpected());
             };
-            state.config_revisions.insert(
-                path.to_owned(),
-                config.as_ref().map(|config| config.revision.clone()),
+            let revision = config.as_ref().map(|config| config.revision.clone());
+            state
+                .config_revisions
+                .insert(path.to_owned(), revision.clone());
+            self.cache_config(
+                path,
+                request,
+                config.as_ref().map(|config| config.bytes.clone()),
+                revision,
             );
             config.map(|config| config.bytes).ok_or_else(|| {
                 io::Error::new(
@@ -222,6 +311,9 @@ impl ConfigStorage for HostStorage {
             .map(|_| ())
     }
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        if let Some(bytes) = self.cached_config(path) {
+            return bytes.ok_or_else(not_found);
+        }
         self.with_state(|state| self.read_locked(state, path))
     }
     fn read_project_config(
@@ -230,6 +322,9 @@ impl ConfigStorage for HostStorage {
         file: WorkspaceProjectConfigFile,
         path: &Path,
     ) -> io::Result<Vec<u8>> {
+        if let Some(bytes) = self.cached_config(path) {
+            return bytes.ok_or_else(not_found);
+        }
         self.with_state(|state| {
             state.project_config_targets.insert(
                 path.to_path_buf(),
@@ -253,7 +348,13 @@ impl ConfigStorage for HostStorage {
                         Err(error) => return Err(error),
                     }
                 }
-                let expected_revision = state.config_revisions.get(path).cloned().flatten();
+                // A background refresh may have seen a newer revision.
+                let expected_revision = self
+                    .config_cache
+                    .lock()
+                    .get(path)
+                    .map(|entry| entry.revision.clone())
+                    .unwrap_or_else(|| state.config_revisions.get(path).cloned().flatten());
                 let request = match state.project_config_targets.get(path) {
                     Some((project_root, file)) => WorkspaceRequest::WriteProjectConfig {
                         project_root: project_root.clone(),
@@ -273,7 +374,9 @@ impl ConfigStorage for HostStorage {
                 };
                 state
                     .config_revisions
-                    .insert(path.to_owned(), Some(revision));
+                    .insert(path.to_owned(), Some(revision.clone()));
+                let read = self.config_read_request(state, path)?;
+                self.cache_config(path, read, Some(bytes.to_vec()), Some(revision));
                 Ok(())
             } else {
                 let (project_id, relative_path) = self.location(state, path)?;
@@ -372,6 +475,8 @@ impl ConfigStorage for HostStorage {
                 };
                 self.workspace(request)?;
                 state.config_revisions.insert(path.to_owned(), None);
+                let read = self.config_read_request(state, path)?;
+                self.cache_config(path, read, None, None);
             } else {
                 let (project_id, relative_path) = self.location(state, path)?;
                 self.project(ProjectRequest::DeleteEntry {
@@ -387,6 +492,9 @@ impl ConfigStorage for HostStorage {
         self.workspace(WorkspaceRequest::RemoveConfigDirectory {
             relative_directory: self.config_relative(path)?,
         })?;
+        self.config_cache
+            .lock()
+            .retain(|cached, _| !cached.starts_with(path));
         Ok(())
     }
     fn rename_directory(&self, from: &Path, to: &Path) -> io::Result<()> {
@@ -397,6 +505,9 @@ impl ConfigStorage for HostStorage {
             })?;
             state
                 .config_revisions
+                .retain(|path, _| !path.starts_with(from) && !path.starts_with(to));
+            self.config_cache
+                .lock()
                 .retain(|path, _| !path.starts_with(from) && !path.starts_with(to));
             Ok(())
         })
@@ -442,6 +553,84 @@ impl ConfigStorage for HostStorage {
     fn is_dir(&self, path: &Path) -> bool {
         self.browse(path).is_ok()
     }
+}
+
+fn not_found() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        "remote configuration does not exist",
+    )
+}
+
+/// Refreshes every cached document when the Host reports a configuration
+/// change, after a reconnect (changes may have been missed), or on lag.
+fn follow_config_changes(
+    client: &Arc<ClientCore>,
+    runtime: &tokio::runtime::Handle,
+    cache: &ConfigCache,
+) {
+    let mut events = client.subscribe_events();
+    let (client, refresh_runtime, cache) = (client.clone(), runtime.clone(), cache.clone());
+    runtime.spawn(async move {
+        loop {
+            let stale = match events.recv().await {
+                Ok(yttt_client_core::ClientEvent::Server(event)) => {
+                    matches!(event.body, yttt_protocol::ServerEvent::ConfigChanged)
+                }
+                Ok(yttt_client_core::ClientEvent::Connection(
+                    yttt_client_core::ConnectionState::Ready { .. },
+                )) => true,
+                Ok(_) => false,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            if !stale {
+                continue;
+            }
+            let pending = {
+                let mut cache = cache.lock();
+                cache
+                    .iter_mut()
+                    .filter(|(_, entry)| !entry.refreshing)
+                    .map(|(path, entry)| {
+                        entry.refreshing = true;
+                        (path.clone(), entry.request.clone(), entry.generation)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (path, request, generation) in pending {
+                refresh_config(&client, &refresh_runtime, &cache, path, request, generation);
+            }
+        }
+    });
+}
+
+/// Reads one cached document again without blocking the caller.
+fn refresh_config(
+    client: &Arc<ClientCore>,
+    runtime: &tokio::runtime::Handle,
+    cache: &ConfigCache,
+    path: PathBuf,
+    request: WorkspaceRequest,
+    generation: u64,
+) {
+    let (client, cache) = (client.clone(), cache.clone());
+    runtime.spawn(async move {
+        let result = client.request(Request::Workspace(request)).await;
+        let mut cache = cache.lock();
+        let Some(entry) = cache.get_mut(&path) else {
+            return;
+        };
+        if entry.generation != generation {
+            return;
+        }
+        entry.refreshing = false;
+        if let Ok(Response::Workspace(WorkspaceResponse::Config(config))) = result {
+            entry.revision = config.as_ref().map(|config| config.revision.clone());
+            entry.bytes = config.map(|config| config.bytes);
+            entry.fetched_at = std::time::Instant::now();
+        }
+    });
 }
 
 fn unexpected() -> io::Error {

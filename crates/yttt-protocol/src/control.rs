@@ -483,6 +483,8 @@ pub enum ServerEvent {
     DocumentChanged(Box<crate::workspace::DocumentUpdate>),
     /// The Host dropped a pane's Agent state.
     AgentStateCleared(crate::workspace::AgentStateCleared),
+    /// Configuration changed through the Host; Clients that cache it reload.
+    ConfigChanged,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

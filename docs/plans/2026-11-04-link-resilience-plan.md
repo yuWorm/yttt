@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** A、B、C 完成（C2 的行为测试待 SSH server 夹具）；D 进行中。
+**状态：** A–D 已实现。遗留：C2 行为测试待 SSH server 夹具；D1 首次读取与写入仍同步；D2 期限仍从入队计；D3 待手工验证。
 
 **依据：** 2026-11-04 的空闲断连分析（`e46c64c` 已修复断线丢租约）与同日对 Host、SSH 隧道、TLS、Host 托管 SSH 项目的代码审查；`docs/host-client-architecture.md`。
 
@@ -118,16 +118,19 @@
 
 ## D1：UI 线程不做远程配置往返
 
-- [ ] 审计 `config::storage` 的全部调用点，列出 UI 线程上的读写。
-- [ ] 测试：远程配置读取在连接慢或断开时不阻塞调用线程（缓存命中立即返回，未命中返回明确错误）。
-- [ ] `HostStorage` 在绑定时预取配置并按变更事件更新缓存，读取走缓存；写入异步提交，UI 线程不等待。
+- [x] 审计 `config::storage` 的调用点：约 74 处，集中在 `ui/theme/zed/installed.rs`（20）、`config/project_settings.rs`（17）、`config/layout_loader.rs`（14），其余分布在 keybindings、theme、settings、bars、layout editor 与设置页；它们经同步的 `ConfigStorage` 接口到达 `HostStorage`，调用线程即等待网络。
+- [x] 测试：远程配置读取在首次之后不等待网络，断开后仍立即返回缓存；其他 Client 的写入经通知刷新缓存；Host 磁盘上的修改由周期刷新发现；本地写入使用最新 revision（`tests/remote_config_cache.rs`）。
+- [x] `HostStorage`（仅远程）缓存配置读取并在后台刷新；Host 对经它的配置变更广播 `ServerEvent::ConfigChanged`，Client 收到后与重连后刷新缓存。
+- [ ] **未完成：** 同一路径的首次读取、目录探测（`is_dir`/`read_dir`）与写入仍同步等待网络；彻底消除需要把 `ConfigStorage` 调用方改为异步，留作后续。
 
 ## D2：请求期限按请求大小与链路区分
 
-- [ ] 远程链路上 `Workspace` 打开等大响应使用较长期限；期限从请求真正发出开始计算，不含排队。
+- [x] 远程链路上 `Workspace` 与 `Project` 请求使用 120 s 期限（由 connector 的 `LinkProfile` 判定）。
+- [ ] **未完成：** 期限仍从入队开始计算；改为从发出开始需要调整过期请求在发送前被丢弃的语义，留作后续。
 
 ## D3：阻止 App Nap
 
-- [ ] 有终端附加或远程连接时，以 `NSProcessInfo beginActivityWithOptions` 声明用户活动；全部断开时结束。手工验证：后台闲置后 `ps` 中 UI 进程优先级不再降到 4。
+- [x] 进程启动时以 `NSProcessInfo beginActivityWithOptions`（`UserInitiatedAllowingIdleSystemSleep`）声明活动并持有到进程结束。**偏离：** 未按“有终端附加或远程连接时”启停——UI 进程总有 Host 会话，全程持有更简单且等价。
+- [ ] 手工验证（未执行）：用本分支构建的 App 放到后台闲置几分钟后，`ps -o pid,pri,comm -p <UI pid>` 的优先级不再降到 4，`logs/client.log` 中没有断开记录。
 
-**验收：** 远程慢链路或断线时 UI 不冻结；后台闲置不再触发断连。
+**验收：** 远程慢链路或断线时，已读取过的配置不再冻结 UI；后台闲置不再触发断连（待 D3 手工验证）。

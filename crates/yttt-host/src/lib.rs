@@ -1736,6 +1736,7 @@ async fn forward_state_events(
     let mut project_events = context.projects.subscribe();
     let mut runtime_events = context.runtime.subscribe();
     let mut control_events = context.runtime.subscribe_control();
+    let mut config_changes = context.workspaces.subscribe_config_changes();
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
     for update in context.agent_hooks.snapshots_after(&[]) {
         send_host_state_event(
@@ -1867,6 +1868,12 @@ async fn forward_state_events(
                         ServerEvent::ProjectTokenUsage(summary),
                     )?;
                 }
+            }
+            changed = config_changes.changed() => {
+                if changed.is_err() {
+                    return Err(());
+                }
+                send_host_state_event(&writer, context, ServerEvent::ConfigChanged)?;
             }
             changed = resource_changes.changed() => {
                 if changed.is_err() {

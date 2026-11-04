@@ -32,9 +32,9 @@ use yttt_protocol::{
     workspace::{WorkspaceId, WorkspaceLayoutUpdate, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport::{
-    AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, SessionReader, SessionWriter,
-    SessionWriterTask, SharedConnector, TransportConnector, TransportError, TransportStream,
-    client_handshake,
+    AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, LinkProfile, SessionReader,
+    SessionWriter, SessionWriterTask, SharedConnector, TransportConnector, TransportError,
+    TransportStream, client_handshake,
 };
 
 const COMMAND_CAPACITY: usize = 256;
@@ -148,6 +148,7 @@ struct ClientCoreInner {
     client_id: yttt_core::model::ids::ClientInstanceId,
     visibility_scopes: Mutex<VisibilityScopes>,
     visibility: watch::Sender<Option<Arc<VisibleTerminals>>>,
+    link: LinkProfile,
 }
 
 impl Drop for ClientCoreInner {
@@ -279,6 +280,7 @@ impl ClientCore {
             client_id: identity.client_instance_id.clone(),
             visibility_scopes: Mutex::default(),
             visibility,
+            link: connector.link_profile(),
             supervisor: Mutex::new(Some(supervisor)),
         });
         let initial = tokio::time::timeout(INITIAL_CONNECT_TIMEOUT, initial_rx)
@@ -457,7 +459,7 @@ impl ClientCore {
         if !matches!(self.state(), ConnectionState::Ready { .. }) {
             return Err(ClientCoreError::NotConnected);
         }
-        let timeout = Self::request_timeout(&body);
+        let timeout = self.request_timeout(&body);
         let (reply, response) = oneshot::channel();
         self.enqueue_command(body, Some(reply))?;
         Ok(PendingClientRequest {
@@ -492,7 +494,7 @@ impl ClientCore {
         } else {
             &self.inner.commands
         };
-        let deadline = tokio::time::Instant::now() + Self::request_timeout(&body);
+        let deadline = tokio::time::Instant::now() + self.request_timeout(&body);
         sender
             .try_send(ClientCommand {
                 deadline,
@@ -518,11 +520,21 @@ impl ClientCore {
         }
     }
 
-    fn request_timeout(request: &Request) -> Duration {
-        match request {
-            Request::RemoteFile(_) | Request::RemoteCommand(_) => REMOTE_REQUEST_TIMEOUT,
-            _ => REQUEST_TIMEOUT,
+    fn request_timeout(&self, request: &Request) -> Duration {
+        request_timeout(request, self.inner.link)
+    }
+}
+
+/// How long a request may wait for its response. Over a network link,
+/// workspace and project requests carry whole layouts, drafts and files,
+/// which a slow link needs longer to move than the local default.
+fn request_timeout(request: &Request, link: LinkProfile) -> Duration {
+    match request {
+        Request::RemoteFile(_) | Request::RemoteCommand(_) => REMOTE_REQUEST_TIMEOUT,
+        Request::Workspace(_) | Request::Project(_) if link == LinkProfile::REMOTE => {
+            REMOTE_REQUEST_TIMEOUT
         }
+        _ => REQUEST_TIMEOUT,
     }
 }
 

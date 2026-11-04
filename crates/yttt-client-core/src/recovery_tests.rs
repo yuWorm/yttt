@@ -7,7 +7,7 @@ use yttt_protocol::{
     BuildIdentity, HostResponse, ProtocolRange, RESOURCE_PROTOCOL_VERSION, terminal::*,
 };
 use yttt_transport::{
-    LinkProfile, TransportListener, memory_pair, receive_control, receive_handshake, send_control,
+    TransportListener, memory_pair, receive_control, receive_handshake, send_control,
 };
 
 fn identity() -> ClientIdentity {
@@ -659,6 +659,18 @@ async fn a_streaming_host_that_never_answers_is_dropped_eventually() {
         .expect("an unanswered heartbeat must end the session")
         .unwrap();
     assert!(result.is_some_and(|message| message.contains("heartbeat")));
+}
+
+#[test]
+fn workspace_and_project_requests_get_longer_on_a_remote_link() {
+    let open = Request::Workspace(yttt_protocol::workspace::WorkspaceRequest::List);
+    assert_eq!(request_timeout(&open, LinkProfile::LOCAL), REQUEST_TIMEOUT);
+    assert_eq!(
+        request_timeout(&open, LinkProfile::REMOTE),
+        REMOTE_REQUEST_TIMEOUT
+    );
+    let ping = Request::Ping { sent_millis: 0 };
+    assert_eq!(request_timeout(&ping, LinkProfile::REMOTE), REQUEST_TIMEOUT);
 }
 
 #[test]

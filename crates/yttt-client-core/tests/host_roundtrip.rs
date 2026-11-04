@@ -5379,3 +5379,43 @@ async fn ping_is_answered_while_slow_requests_fill_the_queue() {
     .await
     .expect("Ping waited behind queued requests");
 }
+
+#[tokio::test]
+async fn a_configuration_write_tells_other_clients_to_reload() {
+    let host = RunningHost::start().await;
+    let mut watcher = raw_client(&host, "config-watcher").await;
+    // Bind the watcher's session before the write.
+    assert!(matches!(
+        raw_request(&mut watcher, 1, Request::Ping { sent_millis: 0 }).await,
+        Ok(Response::Pong { .. })
+    ));
+    let mut writer = raw_client(&host, "config-writer").await;
+    assert!(matches!(
+        raw_request(
+            &mut writer,
+            1,
+            Request::Workspace(yttt_protocol::workspace::WorkspaceRequest::WriteConfig {
+                relative_path: remote_rel("settings.toml"),
+                expected_revision: None,
+                bytes: b"[terminal]\n".to_vec(),
+            }),
+        )
+        .await,
+        Ok(Response::Workspace(
+            yttt_protocol::workspace::WorkspaceResponse::ConfigWritten { .. }
+        ))
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ControlMessage::Event(HostEvent {
+                body: ServerEvent::ConfigChanged,
+                ..
+            }) = raw_receive(&mut watcher).await
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("configuration change notification timeout");
+}
