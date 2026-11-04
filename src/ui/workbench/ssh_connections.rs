@@ -5,7 +5,6 @@ use std::{
 };
 
 use base64::Engine as _;
-use gpui_component::radio::RadioGroup;
 use yttt_client_core::ClientEvent;
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
@@ -15,6 +14,7 @@ use yttt_protocol::{
     Request, Response, ServerEvent,
     ssh::{CredentialAnswer, CredentialChallengeKind, HostKeyDecision},
 };
+use yttt_ui::primitives::radio::yttt_horizontal_radio_group;
 
 use crate::config::ssh::{
     CredentialBinding, CredentialKind, CredentialRef, SshAuthPreference, SshConnectionConfig,
@@ -1626,7 +1626,7 @@ pub(super) fn ssh_connection_editor(
                         .child(root.ui_text.get(UiTextKey::SshAuthentication)),
                 )
                 .child(
-                    RadioGroup::horizontal("ssh-authentication")
+                    yttt_horizontal_radio_group("ssh-authentication")
                         .children([
                             root.ui_text.get(UiTextKey::SshAuthAuto),
                             root.ui_text.get(UiTextKey::SshAuthAgent),

@@ -6,6 +6,11 @@ use crate::{
     theme::WorkbenchTheme,
 };
 
+/// Spells a keystroke the way the platform does, such as `⌘K` or `Ctrl+K`.
+pub fn format_keystroke(keystroke: &Keystroke) -> String {
+    Kbd::format(keystroke)
+}
+
 /// Shows a keystroke. Zed draws these as muted text without a key cap.
 #[allow(clippy::disallowed_methods)]
 pub fn yttt_kbd(keystroke: Keystroke, theme: WorkbenchTheme, ui_style: UiStyle) -> Kbd {

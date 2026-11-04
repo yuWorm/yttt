@@ -1,5 +1,6 @@
 use gpui::{App, Div, IntoElement, Pixels, RenderOnce, Rgba, Window};
 use gpui_base::FocusTrapElement as _;
+pub use gpui_component::dialog::DialogFooter;
 
 use crate::{
     primitives::panel::{

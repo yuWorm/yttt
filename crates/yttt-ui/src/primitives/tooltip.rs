@@ -1,4 +1,4 @@
-use gpui::{Styled as _, px, rems};
+use gpui::{AnyView, App, IntoElement, Styled as _, Window, px, rems};
 use gpui_component::{text::Text, tooltip::Tooltip};
 
 use crate::{
@@ -31,4 +31,13 @@ pub fn yttt_tooltip(text: impl Into<Text>, theme: WorkbenchTheme, ui_style: UiSt
         .py(rems(0.25))
         .gap(rems(1.0))
         .text_size(ui_style.text.default)
+}
+
+/// A tooltip whose content `builder` draws itself, unstyled.
+pub fn yttt_tooltip_view<E, F>(builder: F, window: &mut Window, cx: &mut App) -> AnyView
+where
+    E: IntoElement,
+    F: Fn(&mut Window, &mut App) -> E + 'static,
+{
+    Tooltip::element(builder).build(window, cx)
 }

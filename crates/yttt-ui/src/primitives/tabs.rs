@@ -1,5 +1,9 @@
-use gpui::{ElementId, Pixels, Rems, Rgba, prelude::*, px};
+use gpui::{ElementId, Pixels, Rems, Rgba, SharedString, prelude::*, px};
 use gpui_base::Tab;
+use gpui_component::{
+    Sizable as _,
+    tab::{Tab as Segment, TabBar},
+};
 
 use crate::{
     SelectableState,
@@ -66,4 +70,17 @@ pub fn yttt_tab(
         .text_color(row.title)
         .text_size(ui_style.text.default)
         .hover(move |this| this.bg(row.hover_background))
+}
+
+/// A small segmented control. Its children are [`yttt_segment`]s.
+pub fn yttt_segmented_control(id: impl Into<ElementId>, selected_index: usize) -> TabBar {
+    TabBar::new(id)
+        .segmented()
+        .xsmall()
+        .selected_index(selected_index)
+}
+
+/// One choice of a [`yttt_segmented_control`].
+pub fn yttt_segment(label: impl Into<SharedString>) -> Segment {
+    Segment::new().label(label)
 }

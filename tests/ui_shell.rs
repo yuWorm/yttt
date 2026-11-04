@@ -1,5 +1,4 @@
 use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
-use gpui_component::IconName;
 use std::{cell::Cell, mem::discriminant, rc::Rc, time::Duration};
 use yttt::config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore};
 use yttt::model::{
@@ -55,6 +54,7 @@ use yttt::{
     model::{ids::ProjectId, layout::SplitDirection},
     ui::workbench::WorkbenchView,
 };
+use yttt_ui::IconName;
 
 #[test]
 fn root_view_uses_loaded_theme_runtime() {
@@ -189,11 +189,11 @@ fn tab_context_close_scopes_follow_visible_mixed_order() {
 fn tab_project_tree_toggle_reflects_panel_state() {
     assert_eq!(
         discriminant(&project_tree_toggle_icon(false)),
-        discriminant(&gpui_component::IconName::PanelRightOpen)
+        discriminant(&IconName::PanelRightOpen)
     );
     assert_eq!(
         discriminant(&project_tree_toggle_icon(true)),
-        discriminant(&gpui_component::IconName::PanelRightClose)
+        discriminant(&IconName::PanelRightClose)
     );
     assert_eq!(project_tree_toggle_tooltip(false), "Show Project Panel");
     assert_eq!(project_tree_toggle_tooltip(true), "Hide Project Panel");
@@ -991,7 +991,7 @@ fn long_picker_renders_only_rows_near_the_selection(cx: &mut gpui::TestAppContex
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(
     cx: &mut gpui::TestAppContext,
-    notification: impl FnOnce() -> gpui_component::notification::Notification + 'static,
+    notification: impl FnOnce() -> yttt_ui::primitives::notification::Notification + 'static,
 ) -> &mut gpui::VisualTestContext {
     use gpui::AppContext as _;
 
@@ -1000,7 +1000,7 @@ fn show_notification(
         yttt_ui::window::yttt_root(view, window, cx)
     });
     cx.update(|window, cx| {
-        gpui_component::WindowExt::push_notification(window, notification(), cx);
+        yttt_ui::window::WindowExt::push_notification(window, notification(), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -1225,11 +1225,11 @@ fn yttt_tabbar_style_uses_passed_theme() {
 fn tab_toolbar_icons_match_split_orientation() {
     assert_eq!(
         discriminant(&tab_toolbar_icon(SplitDirection::Vertical)),
-        discriminant(&gpui_component::IconName::PanelBottom)
+        discriminant(&IconName::PanelBottom)
     );
     assert_eq!(
         discriminant(&tab_toolbar_icon(SplitDirection::Horizontal)),
-        discriminant(&gpui_component::IconName::PanelRight)
+        discriminant(&IconName::PanelRight)
     );
 }
 

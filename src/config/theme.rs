@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use crate::ui::theme::ThemeMode;
 use gpui::{Rgba, rgb, rgba};
-use gpui_component::ThemeMode;
 
 use crate::{
     config::paths::AppConfigPaths,

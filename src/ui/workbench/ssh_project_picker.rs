@@ -2,12 +2,10 @@ use std::path::Path;
 
 use crate::config::ssh::SshAuthPreference;
 use crate::ui::theme::icons::icon_for_visual;
-use gpui_component::{
-    list::{List, ListEvent, ListState},
-    radio::RadioGroup,
-};
 use yttt_ui::primitives::{
     input::{YtttInputKind, yttt_input},
+    list::{List, ListEvent, ListState},
+    radio::yttt_horizontal_radio_group,
     row::{YtttRowKind, yttt_row},
 };
 
@@ -1627,7 +1625,7 @@ fn ssh_project_quick_connect(
                         .child(root.ui_text.get(UiTextKey::SshAuthentication)),
                 )
                 .child(
-                    RadioGroup::horizontal("ssh-project-authentication")
+                    yttt_horizontal_radio_group("ssh-project-authentication")
                         .children([
                             root.ui_text.get(UiTextKey::SshAuthAuto),
                             root.ui_text.get(UiTextKey::SshAuthAgent),

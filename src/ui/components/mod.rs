@@ -15,14 +15,13 @@ use gpui::{
     AnyElement, App, ClickEvent, Div, InteractiveElement as _, ParentElement as _, SharedString,
     Window, div, prelude::*,
 };
-use gpui_component::notification::Notification;
 use yttt_ui::primitives::button::YtttButton;
 use yttt_ui::{Icon, IconName};
 
 use crate::ui::{
     notifications::{ToastItem, ToastTone},
     primitives::notification::{
-        YtttNotificationTone, yttt_notification_style, yttt_notification_surface,
+        Notification, YtttNotificationTone, yttt_notification_style, yttt_notification_surface,
         yttt_toast_notification,
     },
     settings::keybinding_display::parse_keybinding_for_display,

@@ -23,11 +23,11 @@ use gpui::{
     Subscription, Window, div, px,
 };
 use gpui_base::input::{InputEvent, InputState};
-use gpui_component::scroll::ScrollableElement as _;
 use serde::{Deserialize, Serialize};
 use std::io::{Read as _, Write as _};
 use yttt_core::model::ids::CredentialId;
 use yttt_protocol::remote_access::RemoteConnectionInfo;
+use yttt_ui::primitives::scroll::ScrollableElement as _;
 use zeroize::Zeroizing;
 
 pub(super) fn save_replacement_credential(

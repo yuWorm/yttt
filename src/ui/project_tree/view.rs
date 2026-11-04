@@ -17,7 +17,7 @@ use gpui_base::{
     TreeItem, TreeState,
     input::{Escape, InputEvent, InputState},
 };
-use gpui_component::{ActiveTheme as _, Sizable as _, scroll::ScrollableElement as _};
+use yttt_ui::primitives::{Sizable as _, scroll::ScrollableElement as _};
 use yttt_ui::{
     menu::YtttContextMenu as _,
     tree::{YtttTreeRowState, yttt_tree_row},
@@ -1493,7 +1493,7 @@ fn render_edit_row(
             })
             .child(icon_for_visual_sized(
                 icon,
-                cx.theme().muted_foreground,
+                theme.text_muted,
                 ui_style.tree.icon_size,
             ))
             .child(
@@ -1502,7 +1502,7 @@ fn render_edit_row(
                     .min_w_0()
                     .rounded(ui_style.radius.compact)
                     .border(ui_style.border.hairline)
-                    .border_color(cx.theme().primary)
+                    .border_color(theme.element_selected)
                     .child(yttt_borderless_input(input).small()),
             ),
     )
@@ -1537,7 +1537,7 @@ fn render_component_row(
         .child(
             div()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(theme.text_muted)
                 .truncate()
                 .child(row.label),
         );
@@ -1551,18 +1551,18 @@ fn render_component_row(
         _ => icon_theme.resolve_file(path),
     };
     let status_color = match row.git_status {
-        Some(GitFileStatus::Added | GitFileStatus::Untracked) => Some(cx.theme().success),
-        Some(GitFileStatus::Modified) => Some(cx.theme().warning),
-        Some(GitFileStatus::Deleted) => Some(cx.theme().danger),
+        Some(GitFileStatus::Added | GitFileStatus::Untracked) => Some(theme.success),
+        Some(GitFileStatus::Modified) => Some(theme.warning),
+        Some(GitFileStatus::Deleted) => Some(theme.danger),
         Some(GitFileStatus::Ignored) | None => None,
     };
     let focused_selection = selected && tree_has_keyboard_focus;
     let label_color = if focused_selection {
-        cx.theme().foreground
+        theme.text
     } else if row.git_status == Some(GitFileStatus::Ignored) {
-        cx.theme().muted_foreground
+        theme.text_muted
     } else {
-        cx.theme().foreground
+        theme.text
     };
     let hint = match &row.load_state {
         ProjectTreeLoadState::Loading => Some("…".to_string()),
@@ -1582,15 +1582,12 @@ fn render_component_row(
                 .w_full()
                 .when(ui_style.tree.show_chevrons, |row| {
                     row.child(div().w(px(12.0)).children(is_directory.then(|| {
-                        icon_for_visual(
-                            icon_theme.resolve_chevron(expanded),
-                            cx.theme().muted_foreground,
-                        )
+                        icon_for_visual(icon_theme.resolve_chevron(expanded), theme.text_muted)
                     })))
                 })
                 .child(icon_for_visual_sized(
                     icon,
-                    cx.theme().muted_foreground,
+                    theme.text_muted,
                     ui_style.tree.icon_size,
                 ))
                 .child(
@@ -1613,7 +1610,7 @@ fn render_component_row(
                         .max_w(px(120.0))
                         .truncate()
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(theme.text_muted)
                         .child(hint)
                 })),
         )

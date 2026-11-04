@@ -654,7 +654,7 @@ impl WorkbenchView {
             GitDiffPanelContent::Loading | GitDiffPanelContent::Error(_) => false,
         };
         if eagerly_render_selected_file && panel.syntax_highlights.is_empty() {
-            sync_git_diff_syntax_highlights(panel, &cx.theme().highlight_theme);
+            sync_git_diff_syntax_highlights(panel, &current_highlight_theme(cx));
         }
         if eagerly_render_selected_file && panel.unified_view_rows.is_empty() {
             sync_git_diff_view_rows(panel, theme, editor_theme);
@@ -1258,10 +1258,7 @@ fn sync_selected_git_diff(panel: &mut GitDiffPanel) {
     }));
 }
 
-fn sync_git_diff_syntax_highlights(
-    panel: &mut GitDiffPanel,
-    theme: &gpui_component::highlighter::HighlightTheme,
-) {
+fn sync_git_diff_syntax_highlights(panel: &mut GitDiffPanel, theme: &HighlightTheme) {
     let GitDiffPanelContent::Ready(result) = &panel.content else {
         return;
     };
@@ -1279,25 +1276,12 @@ fn sync_git_diff_syntax_highlights(
         source.push('\n');
         line_ranges.push(start..end);
     }
-    let rope = Rope::from(source.as_str());
-    let mut highlighter = SyntaxHighlighter::new(&resolution.highlighter_name);
-    highlighter.update(None, &rope, None);
-    let mut highlights = Vec::with_capacity(line_count);
-    for range in line_ranges {
-        let line_start = range.start;
-        let line_end = range.end;
-        let styles = highlighter
-            .styles(&(line_start..line_end), theme)
-            .into_iter()
-            .filter_map(|(style_range, style)| {
-                let start = style_range.start.max(line_start) - line_start;
-                let end = style_range.end.min(line_end).saturating_sub(line_start);
-                (start < end).then_some((start..end, style))
-            })
-            .collect();
-        highlights.push(styles);
-    }
-    panel.syntax_highlights = Arc::new(highlights);
+    panel.syntax_highlights = Arc::new(highlight_lines(
+        &resolution.highlighter_name,
+        &source,
+        line_ranges,
+        theme,
+    ));
 }
 
 fn sync_git_diff_view_rows(

@@ -13,7 +13,7 @@ use gpui::{
 };
 #[cfg(feature = "perf-metrics")]
 use gpui::{IntoElement, ParentElement, Render, WindowKind, div, point};
-use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
+use gpui_base::Root as ComponentRoot;
 use reqwest_client::ReqwestClient;
 
 use crate::{
@@ -48,7 +48,7 @@ pub(crate) fn rebind_application_keybindings(
     config: &crate::config::keybindings::KeybindingsConfig,
 ) {
     cx.clear_key_bindings();
-    gpui_component::rebind_keybindings(cx);
+    yttt_ui::rebind_keybindings(cx);
     cx.bind_keys(gpui_markdown_editor::default_key_bindings());
     let registry = bindable_registry();
     cx.bind_keys(compiled_app_keybindings(config, &registry));
@@ -131,9 +131,7 @@ pub fn run(
         crate::ui::editor::register_builtin_editor_languages();
         crate::ui::editor::init_vim_mode(cx);
         let appearance = AppearanceState::new(theme_runtime);
-        Theme::global_mut(cx).apply_config(&Rc::new(
-            appearance.runtime().to_gpui_component_theme_config(),
-        ));
+        appearance.runtime().apply_component_theme(cx);
         cx.set_global(appearance.clone());
         let command_registry = bindable_registry();
         cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
@@ -234,9 +232,7 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
             crate::ui::editor::register_builtin_editor_languages();
             crate::ui::editor::init_vim_mode(cx);
             cx.set_global(HostRuntimeGlobal::disabled());
-            Theme::global_mut(cx).apply_config(&Rc::new(
-                appearance.runtime().to_gpui_component_theme_config(),
-            ));
+            appearance.runtime().apply_component_theme(cx);
             cx.set_global(appearance);
             cx.set_global(crate::remote_restore::RemoteRestoreGlobal::new(
                 registration,
@@ -255,9 +251,7 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
                     cx.set_global(HostRuntimeGlobal::ready(remote.runtime));
                     let (app_settings, theme_runtime) = load_app_runtime(&remote.config_paths);
                     let appearance = AppearanceState::new(theme_runtime);
-                    Theme::global_mut(cx).apply_config(&Rc::new(
-                        appearance.runtime().to_gpui_component_theme_config(),
-                    ));
+                    appearance.runtime().apply_component_theme(cx);
                     cx.set_global(appearance.clone());
                     rebind_application_keybindings(
                         cx,
@@ -1201,7 +1195,7 @@ pub fn workbench_window_options(
         window_min_size: Some(size(px(960.0), px(640.0))),
         window_background: window_background_appearance(effect),
         app_id: Some(platform::APP_ID.to_string()),
-        titlebar: Some(TitleBar::title_bar_options()),
+        titlebar: Some(yttt_ui::window::yttt_titlebar_options()),
         ..Default::default()
     }
 }

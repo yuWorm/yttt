@@ -1,6 +1,6 @@
-use gpui_component::tooltip::Tooltip;
 use yttt_ui::Icon;
 use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
+use yttt_ui::primitives::tooltip::yttt_tooltip_view;
 
 #[derive(Clone, Copy)]
 struct AgentSessionTooltipText {
@@ -1280,74 +1280,77 @@ impl WorkbenchView {
                 let session_id = session_id.clone();
                 let model = model.clone();
                 let transcript = transcript.clone();
-                Tooltip::element(move |_, _| {
-                    div()
-                        .debug_selector(|| "agent-session-tooltip".to_string())
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .w(px(420.0))
-                        .overflow_hidden()
-                        .gap(ui_style.spacing.xs)
-                        .child(
-                            div()
-                                .debug_selector(|| "agent-session-tooltip-title".to_string())
-                                .min_w_0()
-                                .w_full()
-                                .whitespace_normal()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text)
-                                .child(title.clone()),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .w_full()
-                                .truncate()
-                                .text_xs()
-                                .text_color(theme.text_subtle)
-                                .child(meta.clone()),
-                        )
-                        .child(agent_session_tooltip_field(
-                            "agent-session-tooltip-session-id",
-                            tooltip_text.session_id_label,
-                            session_id.to_string(),
-                            theme,
-                            ui_style,
-                        ))
-                        .when_some(model.clone(), |tooltip, model| {
-                            tooltip.child(agent_session_tooltip_field(
-                                "agent-session-tooltip-model",
-                                tooltip_text.model_label,
-                                model,
+                yttt_tooltip_view(
+                    move |_, _| {
+                        div()
+                            .debug_selector(|| "agent-session-tooltip".to_string())
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .w(px(420.0))
+                            .overflow_hidden()
+                            .gap(ui_style.spacing.xs)
+                            .child(
+                                div()
+                                    .debug_selector(|| "agent-session-tooltip-title".to_string())
+                                    .min_w_0()
+                                    .w_full()
+                                    .whitespace_normal()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text)
+                                    .child(title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .w_full()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(theme.text_subtle)
+                                    .child(meta.clone()),
+                            )
+                            .child(agent_session_tooltip_field(
+                                "agent-session-tooltip-session-id",
+                                tooltip_text.session_id_label,
+                                session_id.to_string(),
                                 theme,
                                 ui_style,
                             ))
-                        })
-                        .when_some(transcript.clone(), |tooltip, transcript| {
-                            tooltip.child(agent_session_tooltip_field(
-                                "agent-session-tooltip-transcript",
-                                tooltip_text.transcript_label,
-                                transcript,
-                                theme,
-                                ui_style,
-                            ))
-                        })
-                        .child(
-                            div()
-                                .pt(ui_style.spacing.xs)
-                                .border_t(ui_style.border.hairline)
-                                .border_color(theme.border_variant)
-                                .min_w_0()
-                                .w_full()
-                                .whitespace_normal()
-                                .text_xs()
-                                .text_color(theme.text_subtle)
-                                .child(tooltip_text.resume_hint),
-                        )
-                })
-                .build(window, cx)
+                            .when_some(model.clone(), |tooltip, model| {
+                                tooltip.child(agent_session_tooltip_field(
+                                    "agent-session-tooltip-model",
+                                    tooltip_text.model_label,
+                                    model,
+                                    theme,
+                                    ui_style,
+                                ))
+                            })
+                            .when_some(transcript.clone(), |tooltip, transcript| {
+                                tooltip.child(agent_session_tooltip_field(
+                                    "agent-session-tooltip-transcript",
+                                    tooltip_text.transcript_label,
+                                    transcript,
+                                    theme,
+                                    ui_style,
+                                ))
+                            })
+                            .child(
+                                div()
+                                    .pt(ui_style.spacing.xs)
+                                    .border_t(ui_style.border.hairline)
+                                    .border_color(theme.border_variant)
+                                    .min_w_0()
+                                    .w_full()
+                                    .whitespace_normal()
+                                    .text_xs()
+                                    .text_color(theme.text_subtle)
+                                    .child(tooltip_text.resume_hint),
+                            )
+                    },
+                    window,
+                    cx,
+                )
             })
             .when(show_provider_icon, |row| {
                 row.child(agent_type_icon(

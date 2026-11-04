@@ -4,8 +4,8 @@ use gpui::{
     AnyElement, App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, SharedString, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
-use gpui_component::{Sizable as _, spinner::Spinner};
 use yttt_ui::menu::{YtttContextMenu as _, YtttMenuItem};
+use yttt_ui::primitives::spinner::yttt_spinner;
 use yttt_ui::{Icon, IconName};
 
 use crate::commands::CommandId;
@@ -510,10 +510,9 @@ fn agent_state_icon(
 ) -> AnyElement {
     let color = agent_state_color(state, theme);
     let glyph = match state {
-        AgentViewState::Starting | AgentViewState::Working => Spinner::new()
-            .with_size(gpui::px(11.0))
-            .color(color.into())
-            .into_any_element(),
+        AgentViewState::Starting | AgentViewState::Working => {
+            yttt_spinner(gpui::px(11.0), color).into_any_element()
+        }
         AgentViewState::Waiting => Icon::new(IconName::TriangleAlert)
             .size(gpui::px(11.0))
             .text_color(color)

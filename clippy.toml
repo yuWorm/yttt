@@ -1,3 +1,6 @@
+# Outside src/ui/theme and src/ui/editor, the root crate reaches gpui_component
+# only through yttt-ui. tests/ui_layering.rs enforces that; these rules point
+# the remaining constructors at their yttt-ui wrappers.
 disallowed-methods = [
     { path = "gpui_component::kbd::Kbd::new", reason = "Use yttt_ui::primitives::kbd::yttt_kbd." },
     { path = "gpui_component::init", reason = "Use yttt_ui::init." },

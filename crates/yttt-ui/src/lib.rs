@@ -16,6 +16,16 @@ pub fn init(cx: &mut gpui::App) {
     gpui_base::Root::register_plugin::<menu::MenuLayer>(cx, |_, _| menu::MenuLayer::default());
 }
 
+/// Re-registers the component keybindings after `cx.clear_key_bindings()`.
+pub fn rebind_keybindings(cx: &mut gpui::App) {
+    gpui_component::rebind_keybindings(cx);
+}
+
+/// Sets the locale of strings the component layer renders itself.
+pub fn set_locale(locale: &str) {
+    gpui_component::set_locale(locale);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectableState {
     Active,

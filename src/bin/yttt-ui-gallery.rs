@@ -15,7 +15,6 @@ use gpui::{
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
 use gpui_base::{IndexPath, input::InputState};
-use gpui_component::{Theme, select::SelectState};
 use yttt::{
     config::{
         paths::AppConfigPaths,
@@ -35,6 +34,7 @@ use yttt::{
         workbench::WorkbenchView,
     },
 };
+use yttt_ui::primitives::select::SelectState;
 use yttt_ui::{
     Icon, IconName,
     tree::{YtttTreeRowState, yttt_tree_row},
@@ -153,9 +153,7 @@ fn run(options: Options) {
             register_builtin_editor_languages();
             assets::load_ui_fonts(cx);
             let appearance = AppearanceState::new(runtime);
-            Theme::global_mut(cx).apply_config(&Rc::new(
-                appearance.runtime().to_gpui_component_theme_config(),
-            ));
+            appearance.runtime().apply_component_theme(cx);
             let theme = appearance.runtime().ui;
             let ui_style = appearance.runtime().style;
             cx.set_global(appearance);

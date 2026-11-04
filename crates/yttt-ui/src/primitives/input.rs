@@ -1,10 +1,9 @@
 #![allow(clippy::disallowed_methods)]
 
 use gpui::{Entity, Pixels, Rems, Rgba, prelude::*};
-use gpui_component::{
-    Sizable as _,
-    input::{Editor, EditorState, Input, InputState, NumberInput},
-};
+use gpui_base::input::{EditorState, InputState};
+pub use gpui_component::input::{Editor, Input, NumberInputEvent, StepAction};
+use gpui_component::{Sizable as _, input::NumberInput};
 
 use crate::{style::UiStyle, theme::WorkbenchTheme};
 
