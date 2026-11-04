@@ -771,6 +771,8 @@ fn request_fingerprint(request: &Request) -> [u8; 32] {
 const MAX_CLIENT_SESSIONS: usize = 64;
 const MAX_IDLE_CLIENT_SESSIONS: usize = 16;
 const CLIENT_SESSION_RETENTION: Duration = Duration::from_secs(300);
+/// How long a disconnected Client session keeps its terminal leases.
+const LEASE_RECONNECT_GRACE: Duration = Duration::from_secs(60);
 
 struct SessionBinding {
     authentication: yttt_transport::AuthenticatedSession,
@@ -936,6 +938,7 @@ async fn serve_client_session(
     if *replaced.borrow() {
         return Ok(());
     }
+    context.runtime.resume_client(&client_id);
     context.lifecycle.client_connected();
     let attachments = shared_terminal_attachments(context, &client_id);
     let request_journal = {
@@ -954,7 +957,24 @@ async fn serve_client_session(
         context,
     )
     .await;
-    context.runtime.release_client(&client_id);
+    // A dropped connection keeps the Client's leases for a grace period: it
+    // usually means the Client reconnects, not that it left.
+    context.runtime.suspend_client(&client_id);
+    tokio::spawn({
+        let sessions = context.sessions.clone();
+        let runtime = context.runtime.clone();
+        let client_id = client_id.clone();
+        async move {
+            tokio::time::sleep(LEASE_RECONNECT_GRACE).await;
+            let reconnected = sessions
+                .lock()
+                .get(&client_id)
+                .is_some_and(|binding| binding.generation != generation);
+            if !reconnected {
+                runtime.release_client(&client_id);
+            }
+        }
+    });
     context.projects.disconnect(&client_id);
     context.ssh.abandon_challenges(&client_id);
     attachments.lock().await.clear();
@@ -1461,6 +1481,11 @@ async fn process_control_request(
                 Response::TerminalSpawned { lease, .. }
                 | Response::TerminalAttached { lease, .. }
                 | Response::TerminalLease(lease) => Some(lease.clone()),
+                // A reconnected Client resubscribes to a terminal whose lease it
+                // kept, and keeps writing to it.
+                _ if !subscriptions.contains_key(&session_id) => {
+                    context.runtime.lease(&session_id, client_id)
+                }
                 _ => None,
             };
             let lease_epoch = granted.as_ref().map_or_else(

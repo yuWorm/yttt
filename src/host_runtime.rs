@@ -47,7 +47,9 @@ fn terminal_client_event_matches(event: &ClientEvent, session_id: &TerminalSessi
     match event {
         ClientEvent::TerminalUnavailable(unavailable) => unavailable == session_id,
         ClientEvent::ResourceCatalogUpdated(_) => true,
-        ClientEvent::Connection(ConnectionState::HostLost { .. }) => true,
+        ClientEvent::Connection(
+            ConnectionState::HostLost { .. } | ConnectionState::Ready { .. },
+        ) => true,
         ClientEvent::Server(event) => match &event.body {
             yttt_protocol::ServerEvent::TerminalExit {
                 session_id: event_session_id,
@@ -421,6 +423,21 @@ impl DesktopHostRuntime {
             }
         }
         receiver
+    }
+
+    /// Sends `request` and hands its result to `on_result` on the Client runtime.
+    pub fn request_then(
+        &self,
+        request: Request,
+        on_result: impl FnOnce(Result<Response, ClientCoreError>) + Send + 'static,
+    ) {
+        match self.client.enqueue_request(request) {
+            Ok(pending) => {
+                self.runtime
+                    .spawn(async move { on_result(pending.wait().await) });
+            }
+            Err(error) => on_result(Err(error)),
+        }
     }
 
     pub fn request_lifecycle(
@@ -929,6 +946,22 @@ mod tests {
         assert_eq!(epoch, Some(2));
         assert_eq!(latest.get(&TerminalSessionId::new("quiet")), Some(&7));
         assert_eq!(latest.get(&TerminalSessionId::new("noisy")), Some(&20));
+    }
+
+    #[test]
+    fn panes_hear_a_reconnect_to_reclaim_their_lease() {
+        let session_id = TerminalSessionId::new("pane");
+        assert!(terminal_client_event_matches(
+            &ClientEvent::Connection(ConnectionState::Ready {
+                host_epoch: 1,
+                connection_sequence: 2,
+            }),
+            &session_id,
+        ));
+        assert!(!terminal_client_event_matches(
+            &ClientEvent::Connection(ConnectionState::Connecting),
+            &session_id,
+        ));
     }
 
     #[test]

@@ -255,8 +255,12 @@ Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须
 对账规则：
 
 1. Host 在连接关闭时忘记该连接的终端流。重连后若 Host epoch 未变，Client 对自己已附加的每个
-   session 发送 `RequestCheckpoint` 重新订阅（observer 身份，不抢 lease）；Host 发送的 initial
+   session 发送 `RequestCheckpoint` 重新订阅：仍持有 Interactive lease（见 §7.4 宽限期）的终端
+   恢复为 Interactive，其余为 Observer，重新订阅本身不抢 lease；Host 发送的 initial
    snapshot 建立或替换 mirror。catalog 刷新不请求快照，也不改写现有 mirror。
+   Desktop pane 收到 `Ready` 后再以 `AcquireTerminalLease` 确认 lease、以 checkpoint 的
+   `geometry_epoch` 校准输入上下文，并补发断线期间未被接受的 resize；lease 已被其他 Client
+   取得时转为只读。
 2. 终端 sequence gap、epoch 变化或旧 Host 的 `ResyncRequired` 视为对端违约：Client 断开整条
    session 连接并重连，所有终端流以 Host 当前 snapshot 重新开流。Client 不请求 checkpoint 修补 mirror。
 3. Client cache 中存在但 catalog 不存在时，删除 mirror 并发布 `TerminalUnavailable`。
@@ -498,7 +502,12 @@ UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；re
 - `Interactive`：可输入、resize、scroll；每个 terminal 唯一 owner。
 - `Observer`：只读附加。
 - acquire 新 Interactive lease 时，Host 撤销旧 lease，并向旧 owner 发送 `TerminalLeaseRevoked`。
-- Client 断线只释放该 Client 的 lease，不终止 terminal。
+- lease 属于 Client 会话而非连接：session 连接断开后，该 Client 的 lease 挂起保留 60 s。
+  同一会话在宽限期内重连即恢复原 lease 与 `lease_epoch`；期间其他 Client 的
+  `AcquireTerminalLease`、Interactive `AttachTerminal` 或 `RequestTerminalControl` 立即接管
+  （`TerminalLeaseExpired`）。宽限期结束仍未重连才释放，不终止 terminal。
+- resize 被 Host 拒绝时，Client 把输入上下文的 `geometry_epoch` 退回 Host 仍持有的值，
+  否则此后的输入都会以 `StaleGeometry` 被拒。
 
 ### 7.5 退出
 
@@ -717,7 +726,8 @@ root PID 选择最近的已知 Agent descendant，以两个连续 miss 作为退
 - sequence gap 断开并重建整条 session 连接，不应用损坏 delta。
 - 最终帧总在 `TerminalExit` 之前到达；每个 `client_instance_id` 至多一条 session 连接，同会话替换、异会话拒绝。
 - 隐藏终端只收元数据 delta，重新可见时收到 snapshot；慢 Client 恢复读取后无 gap、无 resync。
-- Interactive lease 排他、断线释放、Observer 只读。
+- Interactive lease 排他、Observer 只读；断线后同一会话重连仍可输入和 resize，其他 Client
+  可接管挂起的 lease，宽限期结束后释放。
 - pane/tab/project close 只终止对应 terminal。
 - window close 不终止 terminal。
 - explicit Quit 走 `DrainAndStop` 并停止 Host。

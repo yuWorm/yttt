@@ -358,6 +358,83 @@ async fn disconnected_holder_transfers_to_pending_requester() {
 }
 
 #[tokio::test]
+async fn suspended_holder_keeps_its_lease_until_released_or_taken_over() {
+    let runtime = HostRuntime::new();
+    let mut events = runtime.subscribe();
+    runtime
+        .spawn(spec("suspend", "printf suspend-ready; sleep 30"))
+        .unwrap();
+    let first = ClientInstanceId::new("client-1");
+    let second = ClientInstanceId::new("client-2");
+    let session_id = TerminalSessionId::new("suspend");
+    let lease = runtime
+        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
+        .unwrap();
+
+    runtime.suspend_client(&first);
+    assert_eq!(runtime.lease(&session_id, &first), Some(lease.clone()));
+    runtime.resume_client(&first);
+    assert_eq!(
+        runtime
+            .validate_lease(&session_id, &first)
+            .unwrap()
+            .lease_epoch,
+        lease.lease_epoch
+    );
+    // A present Client still waits for a present holder.
+    assert!(
+        runtime
+            .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
+            .is_err()
+    );
+
+    runtime.suspend_client(&first);
+    runtime.release_client(&first);
+    assert!(runtime.lease(&session_id, &first).is_none());
+
+    let lease = runtime
+        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
+        .unwrap();
+    runtime.suspend_client(&first);
+    let taken = runtime
+        .acquire_lease(&session_id, &second, TerminalLeaseMode::Interactive)
+        .unwrap();
+    assert_eq!(taken.owner, second);
+    assert_ne!(taken.lease_epoch, lease.lease_epoch);
+    wait_for_event(&mut events, |event| {
+        matches!(
+            event,
+            HostTerminalEvent::LeaseExpired { session_id: expired, previous_owner }
+                if *expired == session_id && *previous_owner == first
+        )
+    })
+    .await;
+    assert!(runtime.lease(&session_id, &first).is_none());
+    runtime.terminate(&session_id).unwrap();
+}
+
+#[tokio::test]
+async fn suspended_holder_hands_its_lease_to_a_pending_requester() {
+    let runtime = HostRuntime::new();
+    runtime
+        .spawn(spec("suspend-pending", "printf suspend-ready; sleep 30"))
+        .unwrap();
+    let first = ClientInstanceId::new("client-1");
+    let second = ClientInstanceId::new("client-2");
+    let session_id = TerminalSessionId::new("suspend-pending");
+    runtime
+        .acquire_lease(&session_id, &first, TerminalLeaseMode::Interactive)
+        .unwrap();
+    runtime
+        .request_terminal_control(&session_id, &second)
+        .unwrap();
+
+    runtime.suspend_client(&first);
+    assert!(runtime.validate_lease(&session_id, &second).is_ok());
+    runtime.terminate(&session_id).unwrap();
+}
+
+#[tokio::test]
 async fn exited_terminal_remains_in_the_catalog_until_the_client_acknowledges_it() {
     let runtime = HostRuntime::new();
     let mut events = runtime.subscribe();

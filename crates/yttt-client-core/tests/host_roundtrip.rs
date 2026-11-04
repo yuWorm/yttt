@@ -5142,3 +5142,117 @@ async fn a_restarted_host_restores_its_panes_before_any_client_opens_the_workspa
     let mut observer = raw_client(&restarted_host, "pane-restore-observer").await;
     job_epoch_after(&mut observer, &mut 0, &mut pending, 0).await;
 }
+
+#[tokio::test]
+async fn a_reconnecting_client_keeps_its_interactive_lease() {
+    let host = RunningHost::start().await;
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("reconnect-lease");
+    let session_id = spec.session_id.clone();
+    let mut first = raw_client(&host, "reconnect-owner").await;
+    let spawned = raw_request(&mut first, 1, spawn_request(spec, host.host_epoch())).await;
+    let Ok(Response::TerminalSpawned {
+        lease,
+        session_epoch,
+    }) = spawned
+    else {
+        panic!("unexpected spawn response: {spawned:?}");
+    };
+    drop(first);
+
+    // A dropped connection (heartbeat timeout, App Nap) is not a departure:
+    // the same Client session resubscribes and still owns the terminal.
+    let mut second = raw_client(&host, "reconnect-owner").await;
+    let mut events = std::collections::VecDeque::new();
+    assert!(matches!(
+        raw_request_keeping_events(
+            &mut second,
+            2,
+            Request::RequestCheckpoint {
+                session_id: session_id.clone(),
+                after_sequence: None,
+            },
+            &mut events,
+        )
+        .await,
+        Ok(Response::TerminalCheckpoint(_))
+    ));
+    let context = |client_sequence, geometry_epoch| TerminalMutationContext {
+        host_epoch: host.host_epoch(),
+        session_epoch,
+        lease_epoch: lease.lease_epoch,
+        geometry_epoch,
+        client_sequence,
+    };
+    assert_eq!(
+        raw_interactive_request(
+            &mut second,
+            3,
+            Request::TerminalInput(TerminalInput {
+                session_id: session_id.clone(),
+                context: context(1, 1),
+                bytes: b"after-reconnect\r".to_vec(),
+            }),
+            &mut events,
+        )
+        .await,
+        Ok(Response::TerminalInputAccepted { client_sequence: 1 })
+    );
+    assert_eq!(
+        raw_interactive_request(
+            &mut second,
+            4,
+            Request::ResizeTerminal(ResizeTerminal {
+                session_id: session_id.clone(),
+                context: context(2, 2),
+                geometry: TerminalGeometry {
+                    cols: 132,
+                    ..geometry()
+                },
+            }),
+            &mut events,
+        )
+        .await,
+        Ok(Response::TerminalResized { geometry_epoch: 2 })
+    );
+}
+
+#[tokio::test]
+async fn another_client_takes_over_a_disconnected_owners_lease() {
+    let host = RunningHost::start().await;
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("suspended-lease");
+    let session_id = spec.session_id.clone();
+    let mut owner = raw_client(&host, "suspended-owner").await;
+    let spawned = raw_request(&mut owner, 1, spawn_request(spec, host.host_epoch())).await;
+    assert!(matches!(spawned, Ok(Response::TerminalSpawned { .. })));
+    drop(owner);
+
+    // A retained lease must not lock out a Client that is present.
+    let other = host.client("present-client").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match other
+                .request(Request::AcquireTerminalLease {
+                    session_id: session_id.clone(),
+                    mode: TerminalLeaseMode::Interactive,
+                })
+                .await
+            {
+                Ok(Response::TerminalLease(lease)) => {
+                    assert_eq!(lease.mode, TerminalLeaseMode::Interactive);
+                    break;
+                }
+                Ok(response) => panic!("unexpected lease response: {response:?}"),
+                Err(ClientCoreError::Protocol(failure))
+                    if failure.code == FailureCode::Conflict =>
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("lease takeover failed: {error:?}"),
+            }
+        }
+    })
+    .await
+    .expect("lease takeover timeout");
+}

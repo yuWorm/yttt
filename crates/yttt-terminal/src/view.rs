@@ -1197,6 +1197,10 @@ impl TerminalView {
         }
     }
 
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     /// Change observation mode without changing the authoritative terminal geometry.
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
         if self.read_only == read_only {

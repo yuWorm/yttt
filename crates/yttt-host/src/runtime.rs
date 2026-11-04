@@ -70,6 +70,9 @@ struct PendingControlRequest {
 struct ControlState {
     leases: HashMap<TerminalSessionId, LeaseState>,
     pending: HashMap<TerminalSessionId, PendingControlRequest>,
+    /// Clients whose connection dropped but whose leases are kept until they
+    /// reconnect or their grace period ends.
+    suspended: HashSet<ClientInstanceId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +158,7 @@ impl HostRuntime {
             control: Mutex::new(ControlState {
                 leases: HashMap::new(),
                 pending: HashMap::new(),
+                suspended: HashSet::new(),
             }),
             visibility: Mutex::new(HashMap::new()),
             attachments: Mutex::new(HashMap::new()),
@@ -354,15 +358,30 @@ impl HostRuntime {
         let now = self.now_millis();
         let mut control = self.control.lock();
         self.reap_session_locked(&mut control, session_id, now);
-        if let Some(current) = control.leases.get_mut(session_id) {
-            if current.holder == *client_id {
-                current.last_activity_millis = now;
-                return Ok(wire_lease(session_id, current));
+        if let Some(holder) = control
+            .leases
+            .get(session_id)
+            .map(|lease| lease.holder.clone())
+            && holder != *client_id
+        {
+            if control.suspended.contains(&holder) {
+                return Ok(self.transfer_lease_locked(
+                    &mut control,
+                    session_id,
+                    client_id.clone(),
+                    holder,
+                    TransferReason::Expired,
+                    now,
+                ));
             }
             return Err(HostRuntimeError::LeaseConflict {
                 session_id: session_id.clone(),
-                holder: current.holder.clone(),
+                holder,
             });
+        }
+        if let Some(current) = control.leases.get_mut(session_id) {
+            current.last_activity_millis = now;
+            return Ok(wire_lease(session_id, current));
         }
         Ok(self.grant_lease_locked(&mut control, session_id, client_id.clone(), now))
     }
@@ -387,7 +406,7 @@ impl HostRuntime {
                     session_id, &current,
                 )));
             }
-            if self.holder_is_idle(&current, now) {
+            if self.holder_is_idle(&current, now) || control.suspended.contains(&current.holder) {
                 let lease = self.transfer_lease_locked(
                     &mut control,
                     session_id,
@@ -495,9 +514,11 @@ impl HostRuntime {
         resolved
     }
 
+    /// Releases everything `client_id` holds, including its leases.
     pub fn release_client(&self, client_id: &ClientInstanceId) {
         let now = self.now_millis();
         let mut control = self.control.lock();
+        control.suspended.remove(client_id);
         let held = control
             .leases
             .iter()
@@ -507,10 +528,42 @@ impl HostRuntime {
         for session_id in held {
             self.yield_lease_locked(&mut control, &session_id, client_id.clone(), now);
         }
-        control
+        drop(control);
+        self.detach_client(client_id);
+    }
+
+    /// Ends the streams of a Client whose connection dropped but keeps its
+    /// leases, so the same Client session resumes them when it reconnects.
+    /// Another Client that asks for a kept lease takes it over.
+    pub fn suspend_client(&self, client_id: &ClientInstanceId) {
+        let now = self.now_millis();
+        let mut control = self.control.lock();
+        control.suspended.insert(client_id.clone());
+        let requested = control
+            .leases
+            .iter()
+            .filter(|(session_id, lease)| {
+                lease.holder == *client_id && control.pending.contains_key(*session_id)
+            })
+            .map(|(session_id, _)| session_id.clone())
+            .collect::<Vec<_>>();
+        for session_id in requested {
+            self.reap_session_locked(&mut control, &session_id, now);
+        }
+        drop(control);
+        self.detach_client(client_id);
+    }
+
+    /// Marks a suspended Client present again; its kept leases stay valid.
+    pub fn resume_client(&self, client_id: &ClientInstanceId) {
+        self.control.lock().suspended.remove(client_id);
+    }
+
+    fn detach_client(&self, client_id: &ClientInstanceId) {
+        self.control
+            .lock()
             .pending
             .retain(|_, pending| pending.requester != *client_id);
-        drop(control);
         self.visibility.lock().remove(client_id);
         let affected = {
             let mut attachments = self.attachments.lock();
@@ -631,7 +684,7 @@ impl HostRuntime {
             return false;
         };
         if let Some(lease) = control.leases.get(session_id).cloned()
-            && self.holder_is_idle(&lease, now)
+            && (self.holder_is_idle(&lease, now) || control.suspended.contains(&lease.holder))
         {
             self.transfer_lease_locked(
                 control,

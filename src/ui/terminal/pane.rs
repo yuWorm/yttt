@@ -228,6 +228,10 @@ struct HostTerminalWriter {
     session_id: TerminalSessionId,
     mutation_context: Arc<RwLock<TerminalMutationContext>>,
     next_sequence: Arc<AtomicU64>,
+    next_geometry_epoch: Arc<AtomicU64>,
+    /// The geometry epoch the Host is known to have.
+    host_geometry_epoch: Arc<AtomicU64>,
+    pending_geometry: Arc<RwLock<Option<TerminalGeometry>>>,
     locale: Arc<AtomicU8>,
 }
 
@@ -244,34 +248,59 @@ fn next_mutation_context(
     *context
 }
 
-fn submit_pending_host_resize(
-    runtime: &Arc<DesktopHostRuntime>,
-    session_id: &TerminalSessionId,
-    mutation_context: &Arc<RwLock<TerminalMutationContext>>,
-    next_mutation_sequence: &Arc<AtomicU64>,
-    next_geometry_epoch: &Arc<AtomicU64>,
-    pending_geometry: &Arc<RwLock<Option<TerminalGeometry>>>,
-) {
-    if !runtime.is_connected() {
-        pending_geometry.write().take();
-        return;
-    }
-    let Some(geometry) = pending_geometry.write().take() else {
-        return;
-    };
-    let geometry_epoch = next_geometry_epoch.fetch_add(1, Ordering::Relaxed) + 1;
-    let context = next_mutation_context(
-        mutation_context,
-        next_mutation_sequence,
-        Some(geometry_epoch),
-    );
-    let _ = runtime.request(Request::ResizeTerminal(ResizeTerminal {
-        session_id: session_id.clone(),
-        context,
-        geometry,
-    }));
-}
 impl HostTerminalWriter {
+    /// Records the geometry epoch the Host has, as input must carry it.
+    fn adopt_host_geometry_epoch(&self, geometry_epoch: u64) {
+        self.next_geometry_epoch
+            .fetch_max(geometry_epoch, Ordering::Relaxed);
+        self.host_geometry_epoch
+            .store(geometry_epoch, Ordering::Relaxed);
+        self.mutation_context.write().geometry_epoch = geometry_epoch;
+    }
+
+    fn submit_pending_resize(&self) {
+        if !self.runtime.is_connected() {
+            self.pending_geometry.write().take();
+            return;
+        }
+        let Some(geometry) = self.pending_geometry.write().take() else {
+            return;
+        };
+        let geometry_epoch = self.next_geometry_epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        let context = next_mutation_context(
+            &self.mutation_context,
+            &self.next_sequence,
+            Some(geometry_epoch),
+        );
+        let mutation_context = self.mutation_context.clone();
+        let host_geometry_epoch = self.host_geometry_epoch.clone();
+        let pending_geometry = self.pending_geometry.clone();
+        self.runtime.request_then(
+            Request::ResizeTerminal(ResizeTerminal {
+                session_id: self.session_id.clone(),
+                context,
+                geometry,
+            }),
+            move |result| match result {
+                Ok(_) => {
+                    host_geometry_epoch.fetch_max(geometry_epoch, Ordering::Relaxed);
+                }
+                // A rejected resize leaves the Host at its geometry, so input
+                // goes back to that epoch and the geometry waits for the next
+                // lease.
+                Err(ClientCoreError::Protocol(_)) => {
+                    let mut context = mutation_context.write();
+                    if context.geometry_epoch == geometry_epoch {
+                        context.geometry_epoch = host_geometry_epoch.load(Ordering::Relaxed);
+                    }
+                    drop(context);
+                    pending_geometry.write().get_or_insert(geometry);
+                }
+                Err(_) => {}
+            },
+        );
+    }
+
     fn ui_text(&self) -> UiText {
         UiText::new(match self.locale.load(Ordering::Relaxed) {
             1 => Locale::Chinese,
@@ -626,6 +655,74 @@ impl TerminalPaneView {
         }
     }
 
+    /// After a reconnect the Host still streams this terminal, but may have
+    /// kept this Client's lease or given it to another Client: asks for it
+    /// again, takes the Host's geometry epoch and resends a resize it missed.
+    fn reclaim_host_lease(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.attaching || self.lifecycle != PaneLifecycle::Running {
+            return;
+        }
+        let (Some(runtime), Some(writer)) =
+            (self.host_runtime.clone(), self.control_writer.clone())
+        else {
+            return;
+        };
+        let ConnectionState::Ready { host_epoch, .. } = runtime.state() else {
+            return;
+        };
+        // A new Host is reconciled through the catalog instead.
+        if self.host_epoch != Some(host_epoch) {
+            return;
+        }
+        let session_id = self.session_id();
+        let checkpoint = runtime.request(Request::RequestCheckpoint {
+            session_id: session_id.clone(),
+            after_sequence: None,
+        });
+        let lease = runtime.request(Request::AcquireTerminalLease {
+            session_id,
+            mode: TerminalLeaseMode::Interactive,
+        });
+        let generation = self.generation;
+        let was_interactive = self
+            .terminal
+            .as_ref()
+            .is_some_and(|terminal| !terminal.read(cx).is_read_only());
+        cx.spawn_in(window, async move |this, cx| {
+            let checkpoint = checkpoint.recv_async().await;
+            let lease = lease.recv_async().await;
+            let _ = this.update(cx, |pane, cx| {
+                if pane.generation != generation {
+                    return;
+                }
+                if let Ok(Ok(Response::TerminalCheckpoint(checkpoint))) = checkpoint {
+                    writer.adopt_host_geometry_epoch(checkpoint.viewport.geometry_epoch);
+                }
+                match lease {
+                    Ok(Ok(Response::TerminalLease(lease)))
+                        if lease.mode == TerminalLeaseMode::Interactive =>
+                    {
+                        pane.set_interactive_lease(lease.lease_epoch, cx);
+                        pane.terminal_error = None;
+                        writer.submit_pending_resize();
+                    }
+                    _ => {
+                        pane.set_interactive_lease(0, cx);
+                        if was_interactive {
+                            pane.terminal_error = Some(
+                                UiText::current(cx)
+                                    .get(UiTextKey::TerminalI18nLeaseRevoked)
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn attach_host_terminal(
         &mut self,
         host_runtime: Arc<DesktopHostRuntime>,
@@ -672,12 +769,14 @@ impl TerminalPaneView {
             client_sequence: 0,
         }));
         let pending_resize_geometry = Arc::new(RwLock::new(None::<TerminalGeometry>));
-        let resize_geometry_epoch = next_geometry_epoch.clone();
         let writer = HostTerminalWriter {
             runtime: host_runtime.clone(),
             session_id: session_id.clone(),
             mutation_context: mutation_context.clone(),
             next_sequence: next_mutation_sequence.clone(),
+            next_geometry_epoch,
+            host_geometry_epoch: Arc::new(AtomicU64::new(placement.geometry_epoch)),
+            pending_geometry: pending_resize_geometry.clone(),
             locale: Arc::new(AtomicU8::new(if ui_text.locale() == Locale::Chinese {
                 1
             } else {
@@ -686,11 +785,8 @@ impl TerminalPaneView {
         };
         self.control_writer = Some(writer.clone());
         let terminal_input_allowed = self.terminal_input_gate.shared_flag();
-        let resize_runtime = host_runtime.clone();
-        let resize_session_id = session_id.clone();
-        let resize_mutation_context = mutation_context.clone();
-        let resize_mutation_sequence = next_mutation_sequence.clone();
-        let resize_pending_geometry = pending_resize_geometry.clone();
+        let resize_writer = writer.clone();
+        let attached_writer = writer.clone();
         let scroll_runtime = host_runtime.clone();
         let scroll_session_id = session_id.clone();
         let scroll_mutation_context = mutation_context.clone();
@@ -708,28 +804,21 @@ impl TerminalPaneView {
                         || !terminal_input_allowed.load(Ordering::SeqCst)
                 })
                 .with_resize_callback(move |cols, rows, cell_width, cell_height| {
-                    if !matches!(resize_runtime.state(), ConnectionState::Ready { .. }) {
+                    if !matches!(resize_writer.runtime.state(), ConnectionState::Ready { .. }) {
                         return Err(resize_text
                             .get(UiTextKey::TerminalI18nHostConnectionNotReady)
                             .to_string());
                     }
-                    *resize_pending_geometry.write() = Some(TerminalGeometry {
+                    *resize_writer.pending_geometry.write() = Some(TerminalGeometry {
                         cols,
                         rows,
                         cell_width,
                         cell_height,
                     });
-                    if resize_mutation_context.read().lease_epoch == 0 {
+                    if resize_writer.mutation_context.read().lease_epoch == 0 {
                         return Ok(());
                     }
-                    submit_pending_host_resize(
-                        &resize_runtime,
-                        &resize_session_id,
-                        &resize_mutation_context,
-                        &resize_mutation_sequence,
-                        &resize_geometry_epoch,
-                        &resize_pending_geometry,
-                    );
+                    resize_writer.submit_pending_resize();
                     Ok(())
                 })
                 .with_semantic_scroll_callback(move |display_offset, geometry_epoch| {
@@ -820,22 +909,14 @@ impl TerminalPaneView {
                         if lease.session_id == session_id =>
                     {
                         let session_epoch = checkpoint.viewport.session_epoch;
-                        next_geometry_epoch
-                            .store(checkpoint.viewport.geometry_epoch, Ordering::Relaxed);
                         {
-                            let mut context = mutation_context.write();
+                            let mut context = attached_writer.mutation_context.write();
                             context.session_epoch = session_epoch;
                             context.lease_epoch = lease.lease_epoch;
-                            context.geometry_epoch = checkpoint.viewport.geometry_epoch;
                         }
-                        submit_pending_host_resize(
-                            &request_runtime,
-                            &session_id,
-                            &mutation_context,
-                            &next_mutation_sequence,
-                            &next_geometry_epoch,
-                            &pending_resize_geometry,
-                        );
+                        attached_writer
+                            .adopt_host_geometry_epoch(checkpoint.viewport.geometry_epoch);
+                        attached_writer.submit_pending_resize();
                         pane.host_session_epoch = Some(session_epoch);
                         let process_state = checkpoint.viewport.process_state;
                         let final_sequence = checkpoint.viewport.sequence;
@@ -1031,6 +1112,7 @@ impl TerminalPaneView {
                     session_id: released_session_id,
                     ..
                 } if released_session_id == session_id => {
+                    self.set_interactive_lease(0, cx);
                     self.terminal_error = Some(
                         ui_text
                             .get(UiTextKey::TerminalI18nLeaseReleased)
@@ -1042,6 +1124,7 @@ impl TerminalPaneView {
                     session_id: expired_session_id,
                     ..
                 } if expired_session_id == session_id => {
+                    self.set_interactive_lease(0, cx);
                     self.terminal_error =
                         Some(ui_text.get(UiTextKey::TerminalI18nLeaseExpired).to_string());
                     cx.notify();
@@ -1066,6 +1149,9 @@ impl TerminalPaneView {
             },
             ClientEvent::Connection(ConnectionState::HostLost { message }) => {
                 self.set_terminal_lost(message, cx);
+            }
+            ClientEvent::Connection(ConnectionState::Ready { .. }) => {
+                self.reclaim_host_lease(window, cx);
             }
             _ => {}
         }
