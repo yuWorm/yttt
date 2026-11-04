@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.21 - 2026-11-04
+
+- 修复远程 TLS 连接无法在已有终端中输入：同一时刻由一个客户端控制 Host 上的全部终端，新连接的客户端首次使用终端时自动接管；失去控制的客户端重连后保持只读，可以在状态栏或只读终端顶部点「接管终端」拿回控制。控制方断开超过 60 秒后，控制权交给最近连上的客户端。
+- Fix remote TLS clients being unable to type in existing terminals: one client controls every terminal on the Host, and a newly connected client takes control the first time it uses a terminal. A client that lost control stays read-only when it reconnects and can take control back from the status bar or the notice at the top of a read-only terminal. When the controlling client is gone for more than 60 seconds, control passes to the most recently connected client.
+
 ## 0.3.20 - 2026-11-04
 
 - Zed 风格的标题栏、面板分界线与 Zed 对齐。
