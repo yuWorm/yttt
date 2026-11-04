@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.20 - 2026-11-04
+
 - Zed 风格的标题栏、面板分界线与 Zed 对齐。
 - The Zed-style title bar and panel borders now match Zed.
 - Zed 风格下编辑器默认使用随附的 Lilex 字体，与 Zed 一致；Rounded 风格仍用系统等宽字体。
@@ -22,6 +24,14 @@
 - Fix Agent tabs stuck on "process starting" after a restore: a saved session from another provider now starts the pane's own command, and clients show the exit state the Host records, so the pane can be restarted.
 - 由 Agent 启动的其他 Agent 不再替换所在窗格的 Agent 身份；`claude-code`、`oh-my-pi`、`codex-*` 等命令在 Host、侧栏和通知中的判定保持一致。
 - An Agent started by another Agent no longer replaces its pane's Agent identity, and commands such as `claude-code`, `oh-my-pi`, and `codex-*` are now identified the same way by the Host, sidebar, and notifications.
+- 远程 Host 与 SSH 项目在网络切换、休眠和慢链路下采用有界退避自动重连；持续入站流量保持连接存活，Host 在负载下及时回答心跳，重连先恢复可见性再订阅终端，连接日志记录断开原因与恢复耗时。
+- Remote Hosts and SSH projects now reconnect automatically with bounded backoff across network changes, sleep, and slow links. Inbound traffic keeps a connection alive, the Host answers heartbeats under load, terminal visibility is restored before subscriptions, and connection logs record disconnect reasons and recovery time.
+- 终端控制事件改用独立通道并在积压后按 Host 当前状态对账；重连和高输出期间的 lease、退出状态与最终画面均可恢复到正确状态。
+- Terminal control events now use a separate channel and reconcile against current Host state after lag, preserving leases, exit state, and the final viewport through reconnects and heavy output.
+- 远程配置读取使用后台刷新的缓存，短暂断线时继续立即返回已读取内容；macOS 客户端保持活动优先级，远程大请求使用适合慢链路的期限。
+- Remote configuration reads now use a background-refreshed cache and continue returning previously read content immediately during brief outages. The macOS client keeps its activity priority, and large remote requests use slow-link timeouts.
+- TLS 直连加入空闲连接回收、TCP keepalive、监听自动重绑、分阶段建连期限和按来源节流；导出连接码会为通配监听地址选择可达的本机地址。
+- Direct TLS connections now reclaim idle sessions, enable TCP keepalive, rebind listeners automatically, separate connection-stage timeouts, and throttle failures per source. Exported connection codes choose a reachable local address for wildcard listeners.
 
 ## 0.3.19 - 2026-10-30
 
