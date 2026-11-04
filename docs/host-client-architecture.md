@@ -161,7 +161,8 @@ terminal-interactive、state-event 数值保留不复用，Host 不再接受。�
 
 Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`ClientCore` 的普通与交互命令队列各最多保留 256 个在途请求，并回收已取消的等待者；尚未发送就过期的请求不会再执行。断线时未完成用户请求失败，不会假定执行成功并自动重放。请求超时只表示结果未确认，已经发送的操作仍可能完成。
 
-Host 的普通控制请求使用最多 64 项的等待队列并按顺序执行；Ping、资源目录、Agent 快照和终端 checkpoint 可以在慢文件／Git 请求期间完成。这些恢复查询不进入 mutation journal。每次读取的 frame future 保留到完整读取或连接关闭，不能因其他请求完成而取消半帧。
+Host 的 session 读取在独立任务中进行，从不等待请求执行：Ping 由读任务直接回复，输入、resize、scroll
+交给交互 worker，其余请求经最多 1,024 项的缓冲交给执行端，缓冲溢出即关闭连接。Host 的普通控制请求使用最多 64 项的等待队列并按顺序执行；Ping、资源目录、Agent 快照和终端 checkpoint 可以在慢文件／Git 请求期间完成。这些恢复查询不进入 mutation journal。每次读取的 frame future 保留到完整读取或连接关闭，不能因其他请求完成而取消半帧。
 
 这是 at-most-once Client 语义。调用方若在断线后重试有副作用操作，必须携带资源 ID、epoch/revision 或幂等键。
 
@@ -683,6 +684,12 @@ Disconnected -> Connecting -> Ready
 SSH terminal 进入与本地 PTY 相同的 Host `HostedTerminal::from_io` 路径，复用同一 VTE、
 semantic snapshot/delta、16 ms 终端流 cadence、lease 和 checkpoint 语义；只有 Host 到
 远端 SSH server 的真实网络 RTT 不可消除。终端流的 16 ms 计时只在存在待发送更新时启动，空闲订阅不再周期唤醒。
+
+SSH 连接 actor 的命令循环同时监视会话，循环内每个等待都有期限（开通道、远端转发、关闭各 15 s，
+streamlocal 8 s），卡住的通道最多推迟同一连接的其他命令一个期限。Host 托管的 SSH 连接一旦建立成功，
+之后无论异常断开还是远端干净断开都由 Host 自动重连：退避 1 s 起翻倍、上限 30 s；认证、host key
+等永久错误、用户显式断开或手动重连时停止；重连成功后按 §7.0 恢复 SSH pane。首次连接失败仍交给用户。
+SSH 状态事件 lag 时，Host 按当前连接表重发状态并发 `ResourceCatalogChanged`。
 
 SSH runtime 与 connection command queue 各最多 64 项。SSH terminal 输入／输出各最多缓存 32 个 64 KiB 块，关闭使用独立信号，不受满队列阻塞。每连接最多并行 16 个 SFTP／远程命令操作；远程命令 stdout 与 stderr 合计上限 16 MiB。命令和只读 SFTP 操作总期限 110 s，写入／重命名保留已有逐操作超时及回滚过程，不在中间步骤强制取消。连接尝试总期限为 120 s。
 

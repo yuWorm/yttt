@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::project::{HostProjectError, HostProjectRuntime, RegisteredSshProject};
 use parking_lot::Mutex;
@@ -246,11 +246,98 @@ impl SshEventRouter {
     }
 }
 
+/// Longest wait between automatic reconnect attempts.
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
+fn reconnect_delay(attempt: u32) -> Duration {
+    Duration::from_secs(1u64 << attempt.min(5)).min(MAX_RECONNECT_DELAY)
+}
+
+/// A connection the Host re-establishes after it drops.
+struct ReconnectPlan {
+    spec: SshConnectSpec,
+    /// Only a connection that once came up is reconnected; a first attempt
+    /// that fails is reported to the user instead.
+    established: bool,
+    reconnecting: bool,
+    /// It dropped while a reconnect loop owned it.
+    dropped: bool,
+}
+
+/// Decides when dropped connections are reconnected.
+#[derive(Default)]
+struct ReconnectPlans {
+    plans: HashMap<String, ReconnectPlan>,
+}
+
+impl ReconnectPlans {
+    fn remember(&mut self, spec: SshConnectSpec) {
+        self.plans.insert(
+            spec.connection_id.clone(),
+            ReconnectPlan {
+                spec,
+                established: false,
+                reconnecting: false,
+                dropped: false,
+            },
+        );
+    }
+
+    fn forget(&mut self, connection_id: &str) {
+        self.plans.remove(connection_id);
+    }
+
+    /// Records a state change; `true` means a reconnect loop should start.
+    fn on_state(&mut self, connection_id: &str, state: SshConnectionState) -> bool {
+        let Some(plan) = self.plans.get_mut(connection_id) else {
+            return false;
+        };
+        match state {
+            SshConnectionState::Connected => {
+                plan.established = true;
+                false
+            }
+            // An explicit disconnect forgets the plan first, so a drop that
+            // reaches here, clean or not, was not asked for.
+            SshConnectionState::Failed | SshConnectionState::Disconnected if plan.established => {
+                if plan.reconnecting {
+                    plan.dropped = true;
+                    return false;
+                }
+                plan.reconnecting = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The spec for the next attempt; drops seen before it no longer count.
+    fn begin_attempt(&mut self, connection_id: &str) -> Option<SshConnectSpec> {
+        let plan = self.plans.get_mut(connection_id)?;
+        plan.dropped = false;
+        Some(plan.spec.clone())
+    }
+
+    /// Ends a reconnect loop unless the connection dropped again meanwhile;
+    /// `false` means the loop must try again.
+    fn finish(&mut self, connection_id: &str) -> bool {
+        let Some(plan) = self.plans.get_mut(connection_id) else {
+            return true;
+        };
+        if std::mem::take(&mut plan.dropped) {
+            return false;
+        }
+        plan.reconnecting = false;
+        true
+    }
+}
+
 pub struct HostSshRuntime {
     transport: TransportService,
     credential_store: CredentialStore,
     router: SshEventRouter,
     statuses: Mutex<HashMap<String, SshConnectionStatus>>,
+    reconnects: Mutex<ReconnectPlans>,
 }
 
 impl HostSshRuntime {
@@ -268,11 +355,12 @@ impl HostSshRuntime {
             credential_store,
             router: SshEventRouter::new(),
             statuses: Mutex::new(HashMap::new()),
+            reconnects: Mutex::default(),
         });
         let bridge = runtime.clone();
         tokio::spawn(async move {
             while let Ok(event) = transport_events.recv().await {
-                bridge.publish_transport_event(event);
+                Self::publish_transport_event(&bridge, event);
             }
         });
         Ok(runtime)
@@ -292,6 +380,11 @@ impl HostSshRuntime {
         connections
     }
 
+    /// The current state of every known connection.
+    pub fn statuses(&self) -> Vec<SshConnectionStatus> {
+        self.statuses.lock().values().cloned().collect()
+    }
+
     pub fn is_connected(&self, connection_id: &str) -> bool {
         self.statuses
             .lock()
@@ -307,18 +400,10 @@ impl HostSshRuntime {
         let connection_id = spec.connection_id.clone();
         self.router
             .remember_initiator(connection_id.clone(), initiator);
+        self.reconnects.lock().remember(spec.clone());
         let attempt = self
             .transport
-            .start_connect(ConnectRequest {
-                connection_id: ConnectionId::new(spec.connection_id),
-                endpoint: yttt_ssh::SshEndpoint {
-                    host: spec.endpoint.host,
-                    port: spec.endpoint.port,
-                    user: spec.endpoint.username,
-                },
-                authentication: authentication(spec.authentication)?,
-                reconnect: spec.reconnect,
-            })
+            .start_connect(connect_request(spec)?)
             .await
             .map_err(|error| error.to_string())?;
         Ok(Response::SshConnected {
@@ -328,6 +413,7 @@ impl HostSshRuntime {
     }
 
     pub async fn disconnect(&self, connection_id: String) -> Result<Response, String> {
+        self.reconnects.lock().forget(&connection_id);
         self.transport
             .disconnect(ConnectionId::new(connection_id))
             .await
@@ -591,7 +677,39 @@ impl HostSshRuntime {
             .sftp_project(ConnectionId::new(project.connection_id), project.root)
     }
 
-    fn publish_transport_event(&self, event: TransportEvent) {
+    /// Re-establishes a dropped connection with backoff until it comes up,
+    /// fails permanently, or the user disconnects or reconnects it.
+    async fn reconnect(self: Arc<Self>, connection_id: String) {
+        let mut attempt = 0;
+        loop {
+            tokio::time::sleep(reconnect_delay(attempt)).await;
+            let Some(mut spec) = self.reconnects.lock().begin_attempt(&connection_id) else {
+                return;
+            };
+            spec.reconnect = true;
+            let result = match connect_request(spec) {
+                Ok(request) => self.transport.connect(request).await,
+                Err(_) => Err(yttt_ssh::TransportError::Cancelled),
+            };
+            match result {
+                Ok(_)
+                | Err(yttt_ssh::TransportError::Superseded | yttt_ssh::TransportError::Cancelled) =>
+                {
+                    if self.reconnects.lock().finish(&connection_id) {
+                        return;
+                    }
+                    attempt = 0;
+                }
+                Err(error) if error.is_permanent() => {
+                    self.reconnects.lock().forget(&connection_id);
+                    return;
+                }
+                Err(_) => attempt += 1,
+            }
+        }
+    }
+
+    fn publish_transport_event(this: &Arc<Self>, event: TransportEvent) {
         let event = match event {
             TransportEvent::StateChanged(status) => {
                 let status = SshConnectionStatus {
@@ -600,22 +718,29 @@ impl HostSshRuntime {
                     state: connection_state(status.state),
                     error: status.error,
                 };
+                if this
+                    .reconnects
+                    .lock()
+                    .on_state(&status.connection_id, status.state)
+                {
+                    tokio::spawn(this.clone().reconnect(status.connection_id.clone()));
+                }
                 if status.state == SshConnectionState::Disconnected {
-                    self.router.forget_connection(&status.connection_id);
-                    self.statuses.lock().remove(&status.connection_id);
+                    this.router.forget_connection(&status.connection_id);
+                    this.statuses.lock().remove(&status.connection_id);
                 } else {
-                    self.statuses
+                    this.statuses
                         .lock()
                         .insert(status.connection_id.clone(), status.clone());
                 }
-                self.router
+                this.router
                     .publish(SshRuntimeEvent::Broadcast(ServerEvent::SshStateChanged(
                         status,
                     )));
                 return;
             }
             TransportEvent::HostKeyChallenge(challenge) => {
-                self.router.publish_host_key_challenge(challenge);
+                this.router.publish_host_key_challenge(challenge);
                 return;
             }
             TransportEvent::CredentialSaved {
@@ -628,8 +753,21 @@ impl HostSshRuntime {
                 credential: stored_credential(credential),
             }),
         };
-        self.router.publish(event);
+        this.router.publish(event);
     }
+}
+
+fn connect_request(spec: SshConnectSpec) -> Result<ConnectRequest, String> {
+    Ok(ConnectRequest {
+        connection_id: ConnectionId::new(spec.connection_id),
+        endpoint: yttt_ssh::SshEndpoint {
+            host: spec.endpoint.host,
+            port: spec.endpoint.port,
+            user: spec.endpoint.username,
+        },
+        authentication: authentication(spec.authentication)?,
+        reconnect: spec.reconnect,
+    })
 }
 
 fn authentication(authentication: SshAuthentication) -> Result<Authentication, String> {
@@ -830,6 +968,53 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(missing.code, FailureCode::NotFound);
+    }
+
+    fn spec(connection_id: &str) -> SshConnectSpec {
+        SshConnectSpec {
+            connection_id: connection_id.to_string(),
+            endpoint: yttt_protocol::ssh::SshEndpoint {
+                host: "example.invalid".to_string(),
+                port: 22,
+                username: "user".to_string(),
+            },
+            authentication: SshAuthentication::Agent,
+            reconnect: false,
+        }
+    }
+
+    #[test]
+    fn only_an_established_connection_is_reconnected_once_at_a_time() {
+        let mut plans = ReconnectPlans::default();
+        plans.remember(spec("machine"));
+        assert!(
+            !plans.on_state("machine", SshConnectionState::Failed),
+            "a first attempt that fails is the user's to retry"
+        );
+        assert!(!plans.on_state("machine", SshConnectionState::Connected));
+        assert!(plans.on_state("machine", SshConnectionState::Failed));
+        assert!(
+            !plans.on_state("machine", SshConnectionState::Failed),
+            "a reconnect loop is already running"
+        );
+        assert!(plans.begin_attempt("machine").is_some());
+        assert!(plans.finish("machine"));
+        assert!(plans.on_state("machine", SshConnectionState::Disconnected));
+        // It drops again after the attempt succeeds but before the loop ends.
+        assert!(plans.begin_attempt("machine").is_some());
+        assert!(!plans.on_state("machine", SshConnectionState::Failed));
+        assert!(!plans.finish("machine"), "the loop tries again");
+        assert!(plans.finish("machine"));
+        plans.forget("machine");
+        assert!(!plans.on_state("machine", SshConnectionState::Failed));
+        assert!(plans.begin_attempt("machine").is_none());
+    }
+
+    #[test]
+    fn reconnect_backoff_grows_to_its_cap() {
+        assert_eq!(reconnect_delay(0), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(3), Duration::from_secs(8));
+        assert_eq!(reconnect_delay(10), MAX_RECONNECT_DELAY);
     }
 
     #[test]

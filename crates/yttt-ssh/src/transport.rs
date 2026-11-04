@@ -1719,6 +1719,9 @@ struct ConnectionLoopContext {
     runtime_commands: mpsc::Sender<RuntimeCommand>,
 }
 
+/// Serves one SSH connection's commands. The loop also watches the session,
+/// so every wait inside it is bounded: a stalled channel open delays the
+/// other commands by at most `CHANNEL_OPEN_TIMEOUT`, never indefinitely.
 async fn connection_loop(
     session: client::Handle<HostKeyHandler>,
     sftp: Arc<SftpSession>,
@@ -1788,7 +1791,8 @@ async fn connection_loop(
                         &context.reverse_forward_targets,
                     )
                     .await;
-                    match session.as_ref().get_ref().channel_open_session().await {
+                    match tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, session.as_ref().get_ref().channel_open_session())
+                        .await.unwrap_or(Err(russh::Error::ConnectionTimeout)) {
                         Ok(channel) => {
                             let connection_commands = context.connection_commands.clone();
                             tasks.spawn(async move {
@@ -1837,12 +1841,12 @@ async fn connection_loop(
                     .await;
                 }
                 Some(ConnectionCommand::Disconnect) | None => {
-                    let _ = sftp.close().await;
-                    let _ = session.as_ref().get_ref().disconnect(
+                    let _ = tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, sftp.close()).await;
+                    let _ = tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, session.as_ref().get_ref().disconnect(
                         russh::Disconnect::ByApplication,
                         "yttt disconnect",
                         "en",
-                    ).await;
+                    )).await;
                     break None;
                 }
             }
@@ -1885,8 +1889,13 @@ async fn prepare_remote_agent_hook_forward(
         remove_agent_hook_environment(request);
         return None;
     };
-    let port = match session.tcpip_forward(REMOTE_FORWARD_ADDRESS, 0).await {
-        Ok(port) if port != 0 => port,
+    let port = match tokio::time::timeout(
+        CHANNEL_OPEN_TIMEOUT,
+        session.tcpip_forward(REMOTE_FORWARD_ADDRESS, 0),
+    )
+    .await
+    {
+        Ok(Ok(port)) if port != 0 => port,
         Ok(_) | Err(_) => {
             remove_agent_hook_environment(request);
             return None;
@@ -1895,9 +1904,11 @@ async fn prepare_remote_agent_hook_forward(
     if let Ok(mut targets) = targets.lock() {
         targets.insert(port, target);
     } else {
-        let _ = session
-            .cancel_tcpip_forward(REMOTE_FORWARD_ADDRESS, port)
-            .await;
+        let _ = tokio::time::timeout(
+            CHANNEL_OPEN_TIMEOUT,
+            session.cancel_tcpip_forward(REMOTE_FORWARD_ADDRESS, port),
+        )
+        .await;
         remove_agent_hook_environment(request);
         return None;
     }
@@ -1919,9 +1930,11 @@ async fn cancel_remote_agent_hook_forward(
     if let Ok(mut targets) = targets.lock() {
         targets.remove(&forward.port);
     }
-    let _ = session
-        .cancel_tcpip_forward(forward.address, forward.port)
-        .await;
+    let _ = tokio::time::timeout(
+        CHANNEL_OPEN_TIMEOUT,
+        session.cancel_tcpip_forward(forward.address, forward.port),
+    )
+    .await;
 }
 
 async fn run_remote_command(

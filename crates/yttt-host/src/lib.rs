@@ -1110,7 +1110,7 @@ async fn serve_session_connection(
 ) -> Result<(), String> {
     const MAX_QUEUED_REQUESTS: usize = 64;
     let (reader, writer) = tokio::io::split(stream);
-    let mut reader = SessionReader::new(reader);
+    let reader = SessionReader::new(reader);
     let (writer, _writer_task) = SessionWriter::spawn(writer);
     let mut streams = TerminalStreams {
         context: TerminalStreamContext {
@@ -1176,144 +1176,175 @@ async fn serve_session_connection(
         attachments.clone(),
         context.clone(),
     )));
+    // Reading never waits on request execution, so a Ping is answered even
+    // while slow requests are queued.
+    let (requests_tx, mut requests) = mpsc::channel(MAX_BUFFERED_REQUESTS);
+    let (failed_tx, mut failed) = tokio::sync::oneshot::channel();
+    let _reader = AbortOnDrop(tokio::spawn(read_session_requests(
+        reader,
+        writer.clone(),
+        client_id.clone(),
+        interactive,
+        requests_tx,
+        failed_tx,
+    )));
     let mut stop = context.stop.clone();
     let mut queued = VecDeque::<ClientRequest>::new();
     let mut running = tokio::task::JoinSet::new();
     loop {
-        let incoming = reader.receive();
-        tokio::pin!(incoming);
-        loop {
-            if running.is_empty()
-                && let Some(request) = queued.pop_front()
-            {
-                let context = context.clone();
-                let client_id = client_id.clone();
-                let attachments = attachments.clone();
-                let journal = request_journal.clone();
-                running.spawn(async move {
-                    let session_id = attached_session(&request.body).cloned();
+        if running.is_empty()
+            && let Some(request) = queued.pop_front()
+        {
+            let context = context.clone();
+            let client_id = client_id.clone();
+            let attachments = attachments.clone();
+            let journal = request_journal.clone();
+            running.spawn(async move {
+                let session_id = attached_session(&request.body).cloned();
+                let uses_attachments = request_uses_terminal_attachments(&request.body);
+                let (response, changed) =
+                    dispatch_control_request(request, &client_id, &attachments, &journal, &context)
+                        .await;
+                let attached = session_id.filter(|_| response.result.is_ok());
+                (response, changed, uses_attachments, attached)
+            });
+        }
+        tokio::select! {
+            request = requests.recv(), if queued.len() < MAX_QUEUED_REQUESTS => {
+                let Some(request) = request else {
+                    return Err("session reader stopped".to_string());
+                };
+                if recovery_request(&request.body) {
                     let uses_attachments = request_uses_terminal_attachments(&request.body);
                     let (response, changed) = dispatch_control_request(
                         request,
                         &client_id,
                         &attachments,
-                        &journal,
-                        &context,
+                        &request_journal,
+                        context,
                     )
                     .await;
-                    let attached = session_id.filter(|_| response.result.is_ok());
-                    (response, changed, uses_attachments, attached)
-                });
-            }
-            tokio::select! {
-                message = &mut incoming, if queued.len() < MAX_QUEUED_REQUESTS => {
-                    let message = match message {
-                        Ok(message) => message,
-                        Err(error) => {
-                            let request_id = error
-                                .unsupported_request_id()
-                                .ok_or_else(|| format!("read failed: {error}"))?;
-                            writer
-                                .send_reliable(&ControlMessage::Response(HostResponse::unsupported(request_id)))
-                                .map_err(|error| error.to_string())?;
-                            break;
-                        }
-                    };
-                    match message {
-                        ControlMessage::TerminalInput { input } => {
-                            let request = ClientRequest {
-                                request_id: 0,
-                                actor_device_id: Some(client_id.to_string()),
-                                lease_epoch: None,
-                                body: Request::TerminalInput(input),
-                            };
-                            interactive
-                                .try_send(InteractiveRequest::Input(request))
-                                .map_err(|_| "interactive queue overflowed".to_string())?;
-                        }
-                        ControlMessage::Request(request) => {
-                            if let Request::Ping { sent_millis } = request.body {
-                                writer
-                                    .send_interactive(&ControlMessage::Response(HostResponse {
-                                        request_id: request.request_id,
-                                        result: Ok(Response::Pong {
-                                            sent_millis,
-                                            host_millis: now_millis(),
-                                        }),
-                                    }))
-                                    .map_err(|error| error.to_string())?;
-                            } else if interactive_lane_request(&request.body) {
-                                interactive
-                                    .try_send(InteractiveRequest::Request(request))
-                                    .map_err(|_| "interactive queue overflowed".to_string())?;
-                            } else if recovery_request(&request.body) {
-                                let uses_attachments =
-                                    request_uses_terminal_attachments(&request.body);
-                                let (response, changed) = dispatch_control_request(
-                                    request,
-                                    &client_id,
-                                    &attachments,
-                                    &request_journal,
-                                    context,
-                                )
-                                .await;
-                                writer
-                                    .send_reliable(&ControlMessage::Response(response))
-                                    .map_err(|error| error.to_string())?;
-                                if uses_attachments {
-                                    streams.reconcile(&attachments, None).await;
-                                }
-                                if changed {
-                                    context.lifecycle.resource_changed();
-                                }
-                            } else {
-                                queued.push_back(request);
-                            }
-                        }
-                        ControlMessage::Response(_)
-                        | ControlMessage::Event(_)
-                        | ControlMessage::Chunk(_) => {
-                            return Err("Client sent a Host message".to_string());
-                        }
-                    }
-                    break;
-                }
-                finished = running.join_next(), if !running.is_empty() => {
-                    let (response, changed, uses_attachments, attached) =
-                        finished
-                            .ok_or("request set emptied")?
-                            .map_err(|error| format!("request task failed: {error}"))?;
                     writer
                         .send_reliable(&ControlMessage::Response(response))
                         .map_err(|error| error.to_string())?;
-                    // Streams start after the response that attached them is queued.
                     if uses_attachments {
-                        streams.reconcile(&attachments, attached.as_ref()).await;
+                        streams.reconcile(&attachments, None).await;
                     }
                     if changed {
                         context.lifecycle.resource_changed();
                     }
+                } else {
+                    queued.push_back(request);
                 }
-                () = writer.closed() => {
-                    return Err(writer
-                        .close_reason()
-                        .map_or_else(|| "writer closed".to_string(), |reason| reason.to_string()));
+            }
+            reason = &mut failed => {
+                return Err(reason.unwrap_or_else(|_| "session reader stopped".to_string()));
+            }
+            finished = running.join_next(), if !running.is_empty() => {
+                let (response, changed, uses_attachments, attached) = finished
+                    .ok_or("request set emptied")?
+                    .map_err(|error| format!("request task failed: {error}"))?;
+                writer
+                    .send_reliable(&ControlMessage::Response(response))
+                    .map_err(|error| error.to_string())?;
+                // Streams start after the response that attached them is queued.
+                if uses_attachments {
+                    streams.reconcile(&attachments, attached.as_ref()).await;
                 }
-                changed = replaced.changed() => {
-                    if changed.is_err() || *replaced.borrow() {
-                        return Ok(());
-                    }
+                if changed {
+                    context.lifecycle.resource_changed();
                 }
-                changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow() {
-                        let _ = send_host_state_event(&writer, context, ServerEvent::HostStopping);
-                        let _ = tokio::time::timeout(STOPPING_FLUSH_TIMEOUT, writer.flush()).await;
-                        return Ok(());
-                    }
+            }
+            () = writer.closed() => {
+                return Err(writer
+                    .close_reason()
+                    .map_or_else(|| "writer closed".to_string(), |reason| reason.to_string()));
+            }
+            changed = replaced.changed() => {
+                if changed.is_err() || *replaced.borrow() {
+                    return Ok(());
+                }
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    let _ = send_host_state_event(&writer, context, ServerEvent::HostStopping);
+                    let _ = tokio::time::timeout(STOPPING_FLUSH_TIMEOUT, writer.flush()).await;
+                    return Ok(());
                 }
             }
         }
     }
+}
+
+/// Requests a connection may buffer between its reader and its executor
+/// before it is closed as unresponsive; a Client keeps far fewer in flight.
+const MAX_BUFFERED_REQUESTS: usize = 1024;
+
+/// Reads a Session connection: answers Ping at once, hands terminal input,
+/// resize and scroll to the interactive worker and every other request to
+/// the connection's executor. Reports why it stopped through `failed`.
+async fn read_session_requests(
+    mut reader: SessionReader<tokio::io::ReadHalf<TransportStream>>,
+    writer: SessionWriter,
+    client_id: ClientInstanceId,
+    interactive: mpsc::Sender<InteractiveRequest>,
+    requests: mpsc::Sender<ClientRequest>,
+    failed: tokio::sync::oneshot::Sender<String>,
+) {
+    let reason = loop {
+        let message = match reader.receive().await {
+            Ok(message) => message,
+            Err(error) => {
+                let Some(request_id) = error.unsupported_request_id() else {
+                    break format!("read failed: {error}");
+                };
+                if let Err(error) = writer.send_reliable(&ControlMessage::Response(
+                    HostResponse::unsupported(request_id),
+                )) {
+                    break error.to_string();
+                }
+                continue;
+            }
+        };
+        let queued = match message {
+            ControlMessage::TerminalInput { input } => interactive
+                .try_send(InteractiveRequest::Input(ClientRequest {
+                    request_id: 0,
+                    actor_device_id: Some(client_id.to_string()),
+                    lease_epoch: None,
+                    body: Request::TerminalInput(input),
+                }))
+                .map_err(|_| "interactive queue overflowed".to_string()),
+            ControlMessage::Request(ClientRequest {
+                request_id,
+                body: Request::Ping { sent_millis },
+                ..
+            }) => writer
+                .send_interactive(&ControlMessage::Response(HostResponse {
+                    request_id,
+                    result: Ok(Response::Pong {
+                        sent_millis,
+                        host_millis: now_millis(),
+                    }),
+                }))
+                .map_err(|error| error.to_string()),
+            ControlMessage::Request(request) if interactive_lane_request(&request.body) => {
+                interactive
+                    .try_send(InteractiveRequest::Request(request))
+                    .map_err(|_| "interactive queue overflowed".to_string())
+            }
+            ControlMessage::Request(request) => requests
+                .try_send(request)
+                .map_err(|_| "request queue overflowed".to_string()),
+            ControlMessage::Response(_) | ControlMessage::Event(_) | ControlMessage::Chunk(_) => {
+                Err("Client sent a Host message".to_string())
+            }
+        };
+        if let Err(reason) = queued {
+            break reason;
+        }
+    };
+    let _ = failed.send(reason);
 }
 
 /// The terminal a successful request attaches anew; its stream restarts with a Snapshot.
@@ -1764,15 +1795,25 @@ async fn forward_state_events(
                 }
             }
             event = ssh_events.recv() => {
-                let body = match event {
+                let bodies = match event {
                     Ok(event) => match event.for_client(&client_id) {
-                        Some(body) => body.clone(),
+                        Some(body) => vec![body.clone()],
                         None => continue,
                     },
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    // Replay current states; the catalog refresh also drops
+                    // connections whose disconnect was missed.
+                    Err(broadcast::error::RecvError::Lagged(_)) => context
+                        .ssh
+                        .statuses()
+                        .into_iter()
+                        .map(ServerEvent::SshStateChanged)
+                        .chain([ServerEvent::ResourceCatalogChanged])
+                        .collect(),
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
-                send_host_state_event(&writer, context, body)?;
+                for body in bodies {
+                    send_host_state_event(&writer, context, body)?;
+                }
             }
             event = project_events.recv() => {
                 match event {

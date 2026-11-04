@@ -5301,3 +5301,81 @@ async fn a_subscribe_only_resubscription_streams_without_a_checkpoint_reply() {
             if viewport.session_id == session_id
     ));
 }
+
+#[tokio::test]
+async fn ping_is_answered_while_slow_requests_fill_the_queue() {
+    let host = RunningHost::start().await;
+    let mut client = raw_client(&host, "queued-ping-client").await;
+    let project_root = host._temp.path().join("slow-project");
+    fs::create_dir_all(&project_root).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let fsmonitor = project_root.join("slow-fsmonitor.sh");
+    fs::write(&fsmonitor, "#!/bin/sh\nsleep 1\nprintf '/\\n'\n").unwrap();
+    let mut permissions = fs::metadata(&fsmonitor).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fsmonitor, permissions).unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&project_root)
+            .args(["config", "core.fsmonitor"])
+            .arg(&fsmonitor)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let project_id = ProjectId::new("slow-project");
+    assert!(matches!(
+        raw_request(
+            &mut client,
+            1,
+            Request::Project(ProjectRequest::Register {
+                view_id: "test-view".to_string(),
+                project_id: project_id.clone(),
+                root: host_path(&project_root),
+            }),
+        )
+        .await,
+        Ok(Response::Project(ProjectResponse::Registered { .. }))
+    ));
+    // More slow requests than the Host queues for execution.
+    for request_id in 2..80 {
+        send_control(
+            &mut client,
+            &ControlMessage::Request(ClientRequest::new(
+                request_id,
+                Request::Project(ProjectRequest::Git {
+                    project_id: project_id.clone(),
+                    operation: ProjectGitOperation::Status { work_tree: None },
+                }),
+            )),
+        )
+        .await
+        .unwrap();
+    }
+    send_control(
+        &mut client,
+        &ControlMessage::Request(ClientRequest::new(1_000, Request::Ping { sent_millis: 1 })),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let ControlMessage::Response(response) = raw_receive(&mut client).await
+                && response.request_id == 1_000
+            {
+                assert!(matches!(response.result, Ok(Response::Pong { .. })));
+                break;
+            }
+        }
+    })
+    .await
+    .expect("Ping waited behind queued requests");
+}
