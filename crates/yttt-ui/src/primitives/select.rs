@@ -3,7 +3,11 @@
 use gpui::{Entity, Pixels, Rems, Rgba, prelude::*};
 use gpui_component::{
     Sizable as _,
-    select::{Select, SelectDelegate, SelectItem, SelectState},
+    select::{SelectDelegate, SelectItem},
+};
+pub use gpui_component::{
+    searchable_list::{SearchableListDelegate, SearchableListItem},
+    select::{SearchableVec, Select, SelectEvent, SelectState},
 };
 
 use crate::{

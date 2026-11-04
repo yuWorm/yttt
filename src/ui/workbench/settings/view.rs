@@ -2984,11 +2984,8 @@ fn settings_keybinding_rows(
         .w(px(232.0))
         .flex_none()
         .child(
-            TabBar::new("settings-keybinding-profile-tabs")
-                .segmented()
-                .xsmall()
+            yttt_segmented_control("settings-keybinding-profile-tabs", selected_profile_index)
                 .w_full()
-                .selected_index(selected_profile_index)
                 .on_click(cx.listener(|this, selected_index: &usize, _window, cx| {
                     let profile = if *selected_index == 0 {
                         KeybindingProfile::Base
@@ -2999,16 +2996,14 @@ fn settings_keybinding_rows(
                     cx.notify();
                 }))
                 .child(
-                    Tab::new()
+                    yttt_segment(text.get(UiTextKey::SettingsKeybindingProfileBase))
                         .debug_selector(|| "settings-keybinding-profile-base".to_string())
-                        .flex_1()
-                        .label(text.get(UiTextKey::SettingsKeybindingProfileBase)),
+                        .flex_1(),
                 )
                 .child(
-                    Tab::new()
+                    yttt_segment(text.get(UiTextKey::SettingsKeybindingProfileVim))
                         .debug_selector(|| "settings-keybinding-profile-vim".to_string())
-                        .flex_1()
-                        .label(text.get(UiTextKey::SettingsKeybindingProfileVim)),
+                        .flex_1(),
                 ),
         );
     let profile_toolbar = div()

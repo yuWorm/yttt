@@ -1,10 +1,8 @@
 use std::ops::Range;
 
 use gpui::HighlightStyle;
-use gpui_component::{
-    highlighter::{HighlightTheme, SyntaxHighlighter},
-    input::{DisplayMap, FoldRange, Rope},
-};
+use gpui_base::input::{DisplayMap, FoldRange, Rope};
+use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use yttt::ui::editor::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
     EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,

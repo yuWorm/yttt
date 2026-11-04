@@ -1,7 +1,8 @@
 #![allow(clippy::disallowed_methods)]
 
 use gpui::{Div, ElementId, Pixels, Rems, Rgba, div, prelude::*};
-use gpui_component::{alert::Alert, notification::Notification};
+use gpui_component::alert::Alert;
+pub use gpui_component::notification::Notification;
 
 use crate::{
     style::UiStyle,

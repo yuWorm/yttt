@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use gpui::{Entity, Subscription, Task};
-use gpui_component::input::InputState;
+use gpui_base::input::InputState;
 
 use crate::{
     config::default_layout::BuiltinAgent, model::ids::ProjectId,

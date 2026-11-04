@@ -149,6 +149,14 @@ M2 结束时，`src/` 不再出现 `gpui_component`，由编译器而不是 lint
 
 `gpui-component` 能否从 `yttt-ui` 彻底移除，等 P9 按剩余用量决定，不预先承诺。
 
+**P9 结论（2026-11-04，用户决定）：** 根 crate 保留 `gpui-component` 依赖，由 `tests/ui_layering.rs` 代替编译器把关：
+
+- `src/ui/theme` 和 `src/ui/editor` 是白名单。前者把 `ThemeRuntime` 映射成组件主题和高亮主题，后者持有 tree-sitter 高亮引擎和代码编辑器元素。把它们搬进 `yttt-ui` 基本只是改名，引擎也不是控件。
+- 其余业务代码不再出现 `gpui_component`。控件经 `yttt-ui` 的封装或按名导出使用，没有通配导出。
+- 业务代码直接使用 `gpui_base` 的状态和引擎类型：`InputState`、`EditorState`、`Rope`、`TreeState`、`IndexPath`、虚拟列表。这些原本就是 `gpui_component` 对 `gpui_base` 的转手导出，外观决策仍全部在 `yttt-ui`，与 D3 的目的一致。
+
+`yttt-ui` 继续依赖 `gpui-component`。剩余用量约 40 个类型，都是没有 `gpui_base` 等价物或重写不划算的控件：`Select` 与 `SearchableList`、分区 `List`、`Input` 与 `NumberInput`、`Notification` 与 `Alert`、`Tooltip`、`Kbd`、`Spinner`、`RadioGroup`、分段 `TabBar`、`TitleBar`、对话框 `WindowExt`、`Icon`，以及 `init`、`rebind_keybindings`、`set_locale`。移除它们需要逐个重写，收益只是少一个依赖，不做。
+
 ## 6. 目标架构
 
 ```text

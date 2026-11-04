@@ -1,4 +1,3 @@
-// Modified for yttt; see vendor/PATCHES.md.
 mod clear_button;
 mod content_type;
 mod input;
@@ -40,7 +39,6 @@ pub use gpui_base::input::{
     TabSize, TextDecoration, TextDecorationCollection, TextareaState, ToggleCodeActions, Undo,
     WrappingIndent, highlight_characters, highlight_contains, highlight_prefix,
 };
-pub use gpui_base::input::InputCursorShape;
 pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
 #[doc(hidden)]
 mod editor;

@@ -1,6 +1,7 @@
 mod breadcrumbs;
 mod document;
 mod file_io;
+mod highlight;
 mod language;
 mod language_catalog;
 pub(crate) mod preview;
@@ -21,6 +22,7 @@ pub use file_io::{
     ProjectFileIoError, SaveMode, SaveProjectFileOutcome, project_relative_path, read_project_file,
     save_project_file,
 };
+pub use highlight::{HighlightTheme, current_highlight_theme, highlight_lines};
 pub use language::register_builtin_editor_languages;
 pub use language_catalog::{
     EditorLanguageCatalog, EditorLanguageDefinition, EditorLanguageId, EditorLanguageResolution,

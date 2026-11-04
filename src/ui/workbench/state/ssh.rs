@@ -4,16 +4,13 @@ use gpui::{
     App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _,
 };
-use gpui_component::{
-    ActiveTheme as _, IndexPath,
-    input::InputState,
-    list::{ListDelegate, ListItem, ListState},
-};
+use gpui_base::{IndexPath, input::InputState};
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
     project::RemotePathBuf,
 };
 pub(in super::super) use yttt_protocol::ssh::SshConnectionState as ConnectionState;
+use yttt_ui::primitives::list::{ListDelegate, ListItem, ListState};
 use yttt_ui::{Icon, IconName};
 
 use crate::{
@@ -21,7 +18,7 @@ use crate::{
         paths::AppConfigPaths,
         ssh::{SshAuthPreference, SshConnectionConfig, SshConnectionsConfig, load_ssh_connections},
     },
-    ui::theme::UiStyle,
+    ui::theme::{UiStyle, current_workbench_theme},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -420,9 +417,10 @@ impl ListDelegate for SshConnectionListDelegate {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
+        let theme = current_workbench_theme(cx);
         let entry = self.entry(index)?.clone();
         let status_color = match entry.tone {
-            SshConnectionListTone::Neutral => cx.theme().muted_foreground,
+            SshConnectionListTone::Neutral => theme.text_muted,
         };
         let icon = match &entry.action {
             SshConnectionListAction::New => IconName::Plus,
@@ -469,7 +467,7 @@ impl ListDelegate for SshConnectionListDelegate {
                                         .child(
                                             Icon::new(icon)
                                                 .size(ui_style.palette.icon_size)
-                                                .text_color(cx.theme().muted_foreground),
+                                                .text_color(theme.text_muted),
                                         ),
                                 )
                                 .child(
@@ -485,7 +483,7 @@ impl ListDelegate for SshConnectionListDelegate {
                                                 div()
                                                     .truncate()
                                                     .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
+                                                    .text_color(theme.text_muted)
                                                     .child(entry.subtitle),
                                             )
                                         }),
@@ -512,16 +510,17 @@ impl ListDelegate for SshConnectionListDelegate {
         if title.is_empty() {
             return None;
         }
+        let theme = current_workbench_theme(cx);
         let ui_style = self.ui_style;
         Some(
             div()
                 .w_full()
                 .px(ui_style.rows.palette_padding_x)
                 .border_t_1()
-                .border_color(cx.theme().border)
+                .border_color(theme.border)
                 .py(ui_style.spacing.sm)
                 .text_sm()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(theme.text_muted)
                 .child(title),
         )
     }
@@ -531,6 +530,7 @@ impl ListDelegate for SshConnectionListDelegate {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
+        let theme = current_workbench_theme(cx);
         div()
             .size_full()
             .flex()
@@ -539,7 +539,7 @@ impl ListDelegate for SshConnectionListDelegate {
             .px_4()
             .text_center()
             .text_sm()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(theme.text_muted)
             .child(self.empty_message.clone())
     }
 

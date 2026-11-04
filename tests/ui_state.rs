@@ -2086,7 +2086,7 @@ fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppCont
     });
     document.update_in(cx, |document, window, document_cx| {
         document.focus(window, document_cx);
-        window.dispatch_action(Box::new(gpui_component::input::Search), document_cx);
+        window.dispatch_action(Box::new(gpui_base::input::Search), document_cx);
     });
     cx.run_until_parked();
     cx.refresh().unwrap();
@@ -3068,7 +3068,7 @@ fn focusing_a_real_editor_document_does_not_reenter_root_render(cx: &mut gpui::T
     let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let other_input = cx.update(|window, app| {
-        app.new(|input_cx| gpui_component::input::InputState::new(window, input_cx))
+        app.new(|input_cx| gpui_base::input::InputState::new(window, input_cx))
     });
     other_input.update_in(cx, |input, window, input_cx| {
         input.focus(window, input_cx);
@@ -8089,7 +8089,7 @@ fn global_vim_navigation_and_leader_work_while_editor_is_focused(cx: &mut gpui::
     });
     document.update_in(cx, |document, window, document_cx| {
         document.focus(window, document_cx);
-        window.dispatch_action(Box::new(gpui_component::input::Search), document_cx);
+        window.dispatch_action(Box::new(gpui_base::input::Search), document_cx);
     });
     cx.run_until_parked();
     cx.refresh().unwrap();
@@ -8793,10 +8793,10 @@ fn platform_keystroke(key: &str) -> String {
 }
 
 fn replace_editor_value(
-    input: &mut gpui_component::input::EditorState,
+    input: &mut gpui_base::input::EditorState,
     value: &str,
     window: &mut gpui::Window,
-    cx: &mut gpui::Context<gpui_component::input::EditorState>,
+    cx: &mut gpui::Context<gpui_base::input::EditorState>,
 ) {
     input.set_value("", window, cx);
     input.replace(value, window, cx);

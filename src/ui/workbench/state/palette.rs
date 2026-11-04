@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{Entity, ScrollHandle, Subscription, UniformListScrollHandle};
-use gpui_component::input::InputState;
+use gpui_base::input::InputState;
 
 use crate::{
     model::{ids::ProjectId, project::ProjectLocation},

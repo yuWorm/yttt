@@ -5,10 +5,8 @@ use gpui::{
     InteractiveElement as _, IntoElement, KeystrokeEvent, MouseButton, ParentElement as _, Render,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
 };
-use gpui_component::{
-    ActiveTheme as _,
-    input::{EditorState, InputEvent, Position, Rope, Search},
-};
+use gpui_base::input::{EditorState, InputEvent, Position, Rope, Search};
+use gpui_component::ActiveTheme as _;
 use gpui_markdown_editor::{
     MarkdownEditor, MarkdownEditorEnvironment, MarkdownEditorEvent, MarkdownEditorMode,
     MarkdownEditorOptions, MarkdownEditorStrings, MarkdownEditorTheme,
@@ -1005,7 +1003,7 @@ impl ProjectEditorDocument {
     }
 
     fn update_code_bar_selection(&mut self, input: &EditorState) -> bool {
-        use gpui_component::RopeExt as _;
+        use gpui_base::input::RopeExt as _;
 
         let range = input.selected_range();
         let next = (!range.is_empty()).then(|| {

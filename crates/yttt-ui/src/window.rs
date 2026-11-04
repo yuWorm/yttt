@@ -1,5 +1,7 @@
-use gpui::{Entity, Render, Window};
-use gpui_component::Root;
+use gpui::{Entity, Render, TitlebarOptions, Window};
+/// Opens dialogs and notifications on a window.
+pub use gpui_component::WindowExt;
+use gpui_component::{Root, TitleBar};
 
 /// Wraps a window's view in the component root.
 ///
@@ -12,4 +14,14 @@ pub fn yttt_root<V: Render + 'static>(
     cx: &mut gpui::Context<Root>,
 ) -> Root {
     Root::new(view, window, cx)
+}
+
+/// The window title bar, with platform window controls.
+pub fn yttt_titlebar() -> TitleBar {
+    TitleBar::new()
+}
+
+/// Window options that hand the title bar area to [`yttt_titlebar`].
+pub fn yttt_titlebar_options() -> TitlebarOptions {
+    TitleBar::title_bar_options()
 }

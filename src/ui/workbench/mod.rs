@@ -5,15 +5,9 @@ use gpui::{
     PathPromptOptions, Pixels, Point, Render, Rgba, ScrollHandle, SharedString, Stateful,
     Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rems, rgba,
 };
-use gpui_component::{
-    ActiveTheme as _, IndexPath, Sizable as _, Theme as ComponentTheme, WindowExt as _,
-    dialog::DialogFooter,
-    highlighter::SyntaxHighlighter,
-    input::{Input, InputEvent, InputState, NumberInputEvent, Rope, StepAction},
-    scroll::ScrollableElement as _,
-    searchable_list::{SearchableListDelegate, SearchableListItem},
-    select::{SearchableVec, Select, SelectEvent, SelectState},
-    tab::{Tab, TabBar},
+use gpui_base::{
+    IndexPath,
+    input::{InputEvent, InputState},
     v_virtual_list,
 };
 use yttt_agent_core::{
@@ -25,6 +19,20 @@ use yttt_protocol::{ServerEvent, project::ProjectChange};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 use yttt_ui::{Icon, IconName};
+use yttt_ui::{
+    primitives::{
+        Sizable as _,
+        dialog::DialogFooter,
+        input::{Input, NumberInputEvent, StepAction},
+        scroll::ScrollableElement as _,
+        select::{
+            SearchableListDelegate, SearchableListItem, SearchableVec, Select, SelectEvent,
+            SelectState,
+        },
+        tabs::{yttt_segment, yttt_segmented_control},
+    },
+    window::WindowExt as _,
+};
 
 mod action_handlers;
 mod agent_process_monitor;
@@ -208,10 +216,11 @@ use crate::{
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, CurrentDiskState,
             EditorAppearance, EditorDiagnostic, EditorDiagnosticSeverity, EditorLanguageCatalog,
-            EditorLanguageId, LoadedProjectFile, MarkdownDocumentConfig, ProjectEditorDocument,
-            ProjectEditorDocumentEvent, ProjectEditorModel, ProjectEditorRuntime,
-            ProjectEditorSaveState, ProjectFileIoError, ProjectFileLoadRequest, ReadonlyCodeRow,
-            ReadonlyCodeView, SaveProjectFileOutcome, SaveRequest, code_editor_input_state,
+            EditorLanguageId, HighlightTheme, LoadedProjectFile, MarkdownDocumentConfig,
+            ProjectEditorDocument, ProjectEditorDocumentEvent, ProjectEditorModel,
+            ProjectEditorRuntime, ProjectEditorSaveState, ProjectFileIoError,
+            ProjectFileLoadRequest, ReadonlyCodeRow, ReadonlyCodeView, SaveProjectFileOutcome,
+            SaveRequest, code_editor_input_state, current_highlight_theme, highlight_lines,
             styled_code_editor_input,
         },
         i18n::{Locale, UiText, UiTextKey},

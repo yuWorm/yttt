@@ -4,7 +4,7 @@ pub mod surface;
 use gpui::{
     AnyElement, App, ClickEvent, Entity, IntoElement, MouseDownEvent, ScrollHandle, Window,
 };
-use gpui_component::input::InputState;
+use gpui_base::input::InputState;
 use yttt_ui::{
     IconName,
     picker::{PickerFooterAction, PickerText, query_match},

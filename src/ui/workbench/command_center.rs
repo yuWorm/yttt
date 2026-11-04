@@ -6,10 +6,7 @@ use std::{
 use yttt_ui::primitives::button::YtttButtonExt as _;
 
 use gpui::{App, Context, Entity, FontWeight, Subscription, Task, Window, div, px, relative};
-use gpui_component::{
-    input::{InputEvent, InputState},
-    spinner::Spinner,
-};
+use gpui_base::input::{InputEvent, InputState};
 use yttt_agent_core::{
     AgentBoardCommand, AgentBoardTask, AgentExecutionRecord, AgentExecutionTelemetry,
     AgentExitReason, AgentMessageRole, AgentPlanStatus, AgentProcessState, AgentQuestionAnswer,
@@ -20,6 +17,7 @@ use yttt_protocol::{
     Request, Response,
     agent::{AgentCommandRequest, AgentHookScope, AgentSnapshotUpdate},
 };
+use yttt_ui::primitives::spinner::yttt_spinner;
 
 use crate::ui::i18n::{Locale, UiText};
 
@@ -1218,10 +1216,7 @@ impl WorkbenchView {
                     .items_center()
                     .justify_center()
                     .child(if animate {
-                        Spinner::new()
-                            .with_size(px(11.0))
-                            .color(theme.accent.into())
-                            .into_any_element()
+                        yttt_spinner(px(11.0), theme.accent).into_any_element()
                     } else {
                         Icon::new(command_center_plan_icon(task.item.status))
                             .size(px(11.0))
@@ -4095,10 +4090,7 @@ fn command_center_state_icon(
 ) -> gpui::AnyElement {
     let color = command_center_turn_color(state, theme);
     let glyph = if animate && state == AgentTurnState::Working {
-        Spinner::new()
-            .with_size(px(11.0))
-            .color(color.into())
-            .into_any_element()
+        yttt_spinner(px(11.0), color).into_any_element()
     } else {
         Icon::new(match state {
             AgentTurnState::Working => IconName::LoaderCircle,

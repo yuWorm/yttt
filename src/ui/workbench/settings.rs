@@ -1981,10 +1981,8 @@ impl WorkbenchView {
         }
     }
 
-    pub(super) fn sync_gpui_component_theme(&self, cx: &mut Context<Self>) {
-        ComponentTheme::global_mut(cx).apply_config(&Rc::new(
-            self.appearance.runtime().to_gpui_component_theme_config(),
-        ));
+    pub(super) fn sync_component_theme(&self, cx: &mut Context<Self>) {
+        self.appearance.runtime().apply_component_theme(cx);
     }
 
     fn invalidate_appearance_caches(&mut self) {
@@ -1998,7 +1996,7 @@ impl WorkbenchView {
 
     pub fn apply_appearance_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.invalidate_appearance_caches();
-        self.sync_gpui_component_theme(cx);
+        self.sync_component_theme(cx);
         self.sync_terminal_pane_configs(cx);
         self.sync_editor_document_appearances(window, cx);
         cx.refresh_windows();

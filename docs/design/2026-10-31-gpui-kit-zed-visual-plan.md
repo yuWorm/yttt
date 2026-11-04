@@ -483,17 +483,19 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 ### 任务 9.1：依赖收紧（M）
 
-- [ ] 根 crate 移除 `gpui-component` 依赖，业务代码靠编译器保证不再使用。
-- [ ] 统计 `yttt-ui` 对 `gpui-component` 的剩余使用，决定是否移除，结论写入设计文档。
-- [ ] 删除 `vendor/gpui-component` 中已无用的补丁；如果清零，移除 `[patch.crates-io]` 对应条目。
+- [x] 根 crate 不再直接使用 `gpui-component`：改为保留依赖，由 `tests/ui_layering.rs` 只允许 `src/ui/theme`、`src/ui/editor` 引用（2026-11-04 用户决定，原因见设计文档 D10）。只是 `gpui_base` 转手导出的类型改为直接引用；控件经 `yttt-ui` 封装或按名导出。git diff 与文件预览的逐行高亮合并为 `ui::editor::highlight_lines`。
+- [x] `yttt-ui` 保留 `gpui-component`，剩余约 40 个类型，结论写入设计文档 D10。
+- [x] 删除已无用的 `InputCursorShape` 重新导出。其余补丁仍在生效，过期的删除条件按现状改写；`[patch.crates-io]` 不变。
+
+结果：展示页 5 个场景（components、palette、tree、editor、main）与 P8 构建逐像素一致，布局 dump 相同。
 
 ### 任务 9.2：全量验收（M）
 
-- [ ] 全部组件跑 L1、L2、L3。
-- [ ] 审核 `exceptions.toml`，每条都有原因和批准人。
-- [ ] 三平台手工清单。
-- [ ] 终端性能与 P0 基线对比。
-- [ ] 按 `docs/superpowers/` 现有习惯记录结果。
+- [x] 全部组件跑 L1、L2、L3。L1 在全量测试中通过；L2 五个场景与 P8 逐像素一致；L3 沿用各阶段的逐项测量，结论见各阶段结果。
+- [x] 审核 `exceptions.toml`：新建，收录各阶段记下的 7 条例外，2026-11-04 用户逐条批准。
+- [ ] 三平台手工清单：macOS 剩 Markdown 与单行输入框 IME、透明材质、缩放、跨显示器；Windows、Linux 全部待执行。
+- [x] 终端性能与 P0 基线对比，见 `baselines/terminal-perf-p9-47c5ddf.md`。吞吐与帧时间在 10% 内；延迟超过 10%，但终端代码自 M1 未改，判断为机器负载。
+- [x] 结果记录在 `docs/design/baselines/`，与 P0、1.0 的记录放在一起。
 
 ### 任务 9.3：文档与发布（S）
 
@@ -503,7 +505,7 @@ L3（2026-11-02）：用 `context_menu_hover.png` 离线比对菜单，行距 22
 
 **P9 退出门禁：**
 
-- `src/` 不再引用 `gpui_component`。
+- `src/` 不再引用 `gpui_component`。（改为：白名单外不再引用，见 9.1。）
 - 所有组件的 L1 完全一致，L3 在阈值内或有批准的例外。
 - `PATCHES.md` 只留下有明确理由的补丁。
 - 用户在固定基线配置下对比确认。

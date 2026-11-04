@@ -45,7 +45,7 @@ impl UiText {
 
     pub fn activate(self, cx: &mut gpui::App) {
         if cx.try_global::<Self>() != Some(&self) {
-            gpui_component::set_locale(match self.locale {
+            yttt_ui::set_locale(match self.locale {
                 Locale::English => "en",
                 Locale::Chinese => "zh-CN",
             });

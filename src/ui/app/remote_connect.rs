@@ -11,11 +11,11 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
     relative, size,
 };
-use gpui_component::{Sizable as _, scroll::ScrollableElement as _, spinner::Spinner};
 use yttt_ui::primitives::{
     button::{YtttButtonVariant, yttt_button},
     input::{YtttInputKind, yttt_input},
 };
+use yttt_ui::primitives::{scroll::ScrollableElement as _, spinner::yttt_small_spinner};
 use yttt_ui::{Icon, IconName};
 
 use crate::{
@@ -81,7 +81,7 @@ struct RemoteConnectView {
     connecting: bool,
     cancelled: bool,
     connected: Rc<Cell<bool>>,
-    replacement_credentials: Option<gpui::Entity<gpui_component::input::InputState>>,
+    replacement_credentials: Option<gpui::Entity<gpui_base::input::InputState>>,
     remember_replacement: bool,
     event_sender: Option<flume::Sender<RemoteConnectEvent>>,
     cancellation: Option<RemoteConnectCancellation>,
@@ -408,7 +408,7 @@ impl RemoteConnectView {
                             _ => UiTextKey::SshKeyPassphrase,
                         });
                     self.replacement_credentials = Some(cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        gpui_base::input::InputState::new(window, cx)
                             .masked(true)
                             .placeholder(placeholder)
                     }));
@@ -682,7 +682,7 @@ impl Render for RemoteConnectView {
             .flex()
             .items_center()
             .gap(style.spacing.sm)
-            .when(pending, |row| row.child(Spinner::new().small()))
+            .when(pending, |row| row.child(yttt_small_spinner()))
             .child(
                 div()
                     .text_sm()

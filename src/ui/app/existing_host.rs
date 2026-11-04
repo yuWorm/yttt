@@ -22,14 +22,12 @@ use gpui::{
     ParentElement as _, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
     Subscription, Window, div, px,
 };
-use gpui_component::{
-    input::{InputEvent, InputState},
-    scroll::ScrollableElement as _,
-};
+use gpui_base::input::{InputEvent, InputState};
 use serde::{Deserialize, Serialize};
 use std::io::{Read as _, Write as _};
 use yttt_core::model::ids::CredentialId;
 use yttt_protocol::remote_access::RemoteConnectionInfo;
+use yttt_ui::primitives::scroll::ScrollableElement as _;
 use zeroize::Zeroizing;
 
 pub(super) fn save_replacement_credential(

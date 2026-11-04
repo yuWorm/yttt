@@ -14,7 +14,7 @@ use gpui::{
     AnyElement, App, Bounds, Div, Entity, Pixels, Render, SharedString, Window, WindowBounds,
     WindowOptions, canvas, div, point, prelude::*, px, rems, size,
 };
-use gpui_component::{IndexPath, Theme, input::InputState, select::SelectState};
+use gpui_base::{IndexPath, input::InputState};
 use yttt::{
     config::{
         paths::AppConfigPaths,
@@ -34,6 +34,7 @@ use yttt::{
         workbench::WorkbenchView,
     },
 };
+use yttt_ui::primitives::select::SelectState;
 use yttt_ui::{
     Icon, IconName,
     tree::{YtttTreeRowState, yttt_tree_row},
@@ -152,9 +153,7 @@ fn run(options: Options) {
             register_builtin_editor_languages();
             assets::load_ui_fonts(cx);
             let appearance = AppearanceState::new(runtime);
-            Theme::global_mut(cx).apply_config(&Rc::new(
-                appearance.runtime().to_gpui_component_theme_config(),
-            ));
+            appearance.runtime().apply_component_theme(cx);
             let theme = appearance.runtime().ui;
             let ui_style = appearance.runtime().style;
             cx.set_global(appearance);
@@ -299,7 +298,7 @@ struct Gallery {
     tooltip: gpui::AnyView,
     palette_input: Entity<InputState>,
     palette_scroll: gpui::ScrollHandle,
-    editor: Entity<gpui_component::input::EditorState>,
+    editor: Entity<gpui_base::input::EditorState>,
     editor_appearance: EditorAppearance,
 }
 
@@ -336,7 +335,7 @@ impl Gallery {
         let palette_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Execute a command..."));
         let editor = cx.new(|cx| {
-            gpui_component::input::EditorState::new(window, cx)
+            gpui_base::input::EditorState::new(window, cx)
                 .default_value("# Fixture\n")
                 .language("markdown")
                 .line_number(true)

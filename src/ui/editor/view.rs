@@ -1,5 +1,6 @@
 use gpui::{Context, Entity, Styled as _, Window, px, relative};
-use gpui_component::input::{Editor, EditorState, TabSize};
+use gpui_base::input::{EditorState, TabSize};
+use gpui_component::input::Editor;
 use yttt_ui::primitives::input::yttt_borderless_editor;
 
 use super::{CodeEditorState, EditorAppearance, document::ZED_GUTTER_PADDING};

@@ -1,5 +1,4 @@
 use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
-use gpui_component::IconName;
 use std::{cell::Cell, mem::discriminant, rc::Rc, time::Duration};
 use yttt::config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore};
 use yttt::model::{
@@ -55,6 +54,7 @@ use yttt::{
     model::{ids::ProjectId, layout::SplitDirection},
     ui::workbench::WorkbenchView,
 };
+use yttt_ui::IconName;
 
 #[test]
 fn root_view_uses_loaded_theme_runtime() {
@@ -189,11 +189,11 @@ fn tab_context_close_scopes_follow_visible_mixed_order() {
 fn tab_project_tree_toggle_reflects_panel_state() {
     assert_eq!(
         discriminant(&project_tree_toggle_icon(false)),
-        discriminant(&gpui_component::IconName::PanelRightOpen)
+        discriminant(&IconName::PanelRightOpen)
     );
     assert_eq!(
         discriminant(&project_tree_toggle_icon(true)),
-        discriminant(&gpui_component::IconName::PanelRightClose)
+        discriminant(&IconName::PanelRightClose)
     );
     assert_eq!(project_tree_toggle_tooltip(false), "Show Project Panel");
     assert_eq!(project_tree_toggle_tooltip(true), "Hide Project Panel");
@@ -592,14 +592,12 @@ fn switch_toggles_with_pointer_and_keyboard(cx: &mut gpui::TestAppContext) {
     cx.update(yttt_ui::init);
     let changes = Rc::new(Cell::new(0));
     let view_changes = changes.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|_| SwitchHarness {
-                changes: view_changes,
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|_| SwitchHarness {
+            changes: view_changes,
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -695,19 +693,17 @@ fn open_harness_menu_at(
     let view_activated = activated.clone();
     let focus = Rc::new(std::cell::RefCell::new(None));
     let view_focus = focus.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|cx| {
-                let focus = cx.focus_handle();
-                view_focus.replace(Some(focus.clone()));
-                MenuHarness {
-                    activated: view_activated,
-                    focus,
-                }
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            view_focus.replace(Some(focus.clone()));
+            MenuHarness {
+                activated: view_activated,
+                focus,
+            }
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     let focus = focus.borrow().clone().unwrap();
     cx.update(|window, cx| {
         focus.focus(window, cx);
@@ -849,16 +845,14 @@ fn tab_stays_inside_a_dialog_overlay(cx: &mut gpui::TestAppContext) {
     cx.update(yttt_ui::init);
     let focus = Rc::new(std::cell::RefCell::new(None));
     let view_focus = focus.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|cx| {
-                let focus = cx.focus_handle();
-                view_focus.replace(Some(focus.clone()));
-                DialogTrapHarness { focus }
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            view_focus.replace(Some(focus.clone()));
+            DialogTrapHarness { focus }
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     let focus = focus.borrow().clone().unwrap();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -885,16 +879,14 @@ fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
     cx.update(yttt_ui::init);
     let focus = Rc::new(std::cell::RefCell::new(None));
     let view_focus = focus.clone();
-    let (_root, cx) = cx.add_window_view(
-        move |window, cx: &mut gpui::Context<gpui_component::Root>| {
-            let view = cx.new(|cx| {
-                let focus = cx.focus_handle();
-                view_focus.replace(Some(focus.clone()));
-                DialogTrapHarness { focus }
-            });
-            yttt_ui::window::yttt_root(view, window, cx)
-        },
-    );
+    let (_root, cx) = cx.add_window_view(move |window, cx: &mut gpui::Context<gpui_base::Root>| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            view_focus.replace(Some(focus.clone()));
+            DialogTrapHarness { focus }
+        });
+        yttt_ui::window::yttt_root(view, window, cx)
+    });
     let focus = focus.borrow().clone().unwrap();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -917,7 +909,7 @@ fn clicking_a_dialog_backdrop_keeps_focus(cx: &mut gpui::TestAppContext) {
 struct LongPicker {
     rows: usize,
     selected: usize,
-    input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    input: Option<gpui::Entity<gpui_base::input::InputState>>,
     scroll: gpui::ScrollHandle,
 }
 
@@ -932,7 +924,7 @@ impl gpui::Render for LongPicker {
 
         let input = self
             .input
-            .get_or_insert_with(|| cx.new(|cx| gpui_component::input::InputState::new(window, cx)))
+            .get_or_insert_with(|| cx.new(|cx| gpui_base::input::InputState::new(window, cx)))
             .clone();
         let rows = (0..self.rows)
             .map(|index| PickerOverlayRow {
@@ -970,7 +962,7 @@ fn long_picker_renders_only_rows_near_the_selection(cx: &mut gpui::TestAppContex
     use gpui::AppContext as _;
 
     cx.update(yttt_ui::init);
-    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
+    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_base::Root>| {
         let view = cx.new(|_| LongPicker {
             rows: 2000,
             selected: 1500,
@@ -999,16 +991,16 @@ fn long_picker_renders_only_rows_near_the_selection(cx: &mut gpui::TestAppContex
 /// entrance and dismissal, and waits for the entrance animation to finish.
 fn show_notification(
     cx: &mut gpui::TestAppContext,
-    notification: impl FnOnce() -> gpui_component::notification::Notification + 'static,
+    notification: impl FnOnce() -> yttt_ui::primitives::notification::Notification + 'static,
 ) -> &mut gpui::VisualTestContext {
     use gpui::AppContext as _;
 
-    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_component::Root>| {
+    let (_root, cx) = cx.add_window_view(|window, cx: &mut gpui::Context<gpui_base::Root>| {
         let view = cx.new(|_| gpui::EmptyView);
         yttt_ui::window::yttt_root(view, window, cx)
     });
     cx.update(|window, cx| {
-        gpui_component::WindowExt::push_notification(window, notification(), cx);
+        yttt_ui::window::WindowExt::push_notification(window, notification(), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -1233,11 +1225,11 @@ fn yttt_tabbar_style_uses_passed_theme() {
 fn tab_toolbar_icons_match_split_orientation() {
     assert_eq!(
         discriminant(&tab_toolbar_icon(SplitDirection::Vertical)),
-        discriminant(&gpui_component::IconName::PanelBottom)
+        discriminant(&IconName::PanelBottom)
     );
     assert_eq!(
         discriminant(&tab_toolbar_icon(SplitDirection::Horizontal)),
-        discriminant(&gpui_component::IconName::PanelRight)
+        discriminant(&IconName::PanelRight)
     );
 }
 

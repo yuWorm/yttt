@@ -6,8 +6,9 @@ pub mod zed;
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{App, Edges, Global, Rgba, px};
+pub use gpui_component::ThemeMode;
 use gpui_component::{
-    ThemeConfig, ThemeConfigColors, ThemeMode,
+    ThemeConfig, ThemeConfigColors,
     highlighter::{HighlightThemeStyle, SyntaxColors, ThemeStyle},
 };
 use yttt_terminal::{ColorPalette, TerminalConfig, TerminalLineHeightBasis};
@@ -374,6 +375,12 @@ impl ThemeRuntime {
             terminal,
             terminal_settings: settings.terminal.clone(),
         }
+    }
+
+    /// Pushes this runtime's colors into the component layer's theme global.
+    pub fn apply_component_theme(&self, cx: &mut App) {
+        gpui_component::Theme::global_mut(cx)
+            .apply_config(&Rc::new(self.to_gpui_component_theme_config()));
     }
 
     pub fn to_gpui_component_theme_config(&self) -> ThemeConfig {

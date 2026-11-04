@@ -20,23 +20,22 @@
 | 光标形状：`InputCursorShape` | `src/input/base/yttt_ext.rs`、`src/input/base/state.rs`、`src/input/base/element.rs` | B | vim 普通模式显示块状光标 | 上游支持光标形状 |
 | `ScrollBounce::enabled_by_default` 恒为 false | `src/scroll_bounce.rs` | C | 0.8 起 macOS 默认回弹，Zed 不回弹。各组件默认值都经过这里，`Sidebar`、设置页、`TextView` 没有单独开关 | 有全局配置，或 yttt 决定采用回弹 |
 | `Button` disabled 时清除 hover、active 样式 | `src/button.rs` | B | disabled 按钮不应有指针反馈 | 上游提供，或 `ButtonStyles` 支持 |
-| `TreeState::focus_handle` | `src/tree.rs` | B | 判断焦点是否在文件树内 | P6 改用 `gpui_base::TreeState` 的公开焦点接口 |
+| `TreeState::focus_handle` | `src/tree.rs` | B | 判断焦点是否在文件树内。P6 改用 `gpui_base::Tree` 后仍需要 | 上游提供公开焦点接口 |
 | 行号栏留白：`set_gutter_padding`、`gutter_padding` | `src/input/base/yttt_ext.rs`、`src/input/base/state.rs`、`src/input/base/layout.rs`、`src/input/base/element.rs`、`src/input/editor/display_map/text_wrapper.rs` | C | 行号前后的间距写死在常量里，对不齐 Zed 的 gutter。用内边距绕开会让当前行高亮缺一截 | 上游提供 gutter 尺寸配置 |
 
 ## gpui-component
 
 | 补丁 | 文件 | 分类 | 原因 | 删除条件 |
 |---|---|---|---|---|
-| 重新导出 `InputCursorShape` | `src/input/mod.rs` | A | 业务代码经 component 使用 | 随 gpui-base 的光标补丁删除 |
 | `rebind_keybindings` | `src/lib.rs` | B | `cx.clear_key_bindings()` 之后恢复组件快捷键，用户改键时需要 | 上游提供重绑接口 |
 | 搜索面板 debug selector | `src/input/search.rs` | E | 测试定位面板 | 测试不再依赖该 selector |
-| 搜索面板紧凑样式 | `src/input/search.rs` | C | 替代旧的 `flush_search_panel`。0.8.1 面板已贴边，只需还原样式 | P7 对齐编辑器时重做 |
+| 搜索面板紧凑样式 | `src/input/search.rs` | C | 替代旧的 `flush_search_panel`。0.8.1 面板已贴边，只需还原样式 | 上游提供搜索面板样式配置 |
 | 搜索框回显判断去掉 anchor 条件 | `src/input/overlay.rs` | E | 上游 bug：输入首字符后面板重新全选，下一键覆盖它 | 上游修复。适合提 PR |
 | `Notification::always_show_close_button`，图标和关闭按钮内联布局，正文 muted 色，关闭按钮 selector | `src/notification.rs` | C | 错误通知要始终显示关闭按钮，长文本换行不与按钮重叠 | 上游提供关闭按钮和布局配置。自绘通知要复制 `NotificationList` 的堆叠、去重、暂停和系统通知，不值得。适合提 PR |
-| 各分区标题独立测量 | `src/list/list.rs`、`src/list/cache.rs`、`src/list/delegate.rs` | C | SSH 列表有多个分区 | 上游支持，或 P5 不再使用 `List` |
+| 各分区标题独立测量 | `src/list/list.rs`、`src/list/cache.rs`、`src/list/delegate.rs` | C | SSH 列表有多个分区。P5 评估过，`Picker` 只有扁平列表，接不了 | 上游支持多分区测量 |
 | `Select` 触发器 hover | `src/select.rs` | C | 触发器悬停时显示 hover 背景，0.8.1 去掉了 | 上游提供 hover 配置 |
-| 中号和大号输入框内边距 12、16 | `src/sizing.rs` | C | 0.8.1 改成 10、12，文字左移 2px | P3 用 token 定义 |
-| 主题 `placeholder_foreground` | `src/theme/schema.rs`、`src/theme/theme_color.rs`、`src/input/input.rs` | C | 占位符颜色独立于 muted 文本 | P3 自有 input |
+| 中号和大号输入框内边距 12、16 | `src/sizing.rs` | C | 0.8.1 改成 10、12，文字左移 2px | 上游恢复原值，或 `yttt_input` 自带内边距 |
+| 主题 `placeholder_foreground` | `src/theme/schema.rs`、`src/theme/theme_color.rs`、`src/input/input.rs` | C | 占位符颜色独立于 muted 文本 | 上游提供占位符颜色 |
 
 ## 待重放
 
@@ -56,6 +55,7 @@ dockerfile、hcl、nix、scss、vue 和 JSX 高亮由 `src/ui/editor/language.rs
 | `PopupMenuStyle`、`MenuItemAppearance` | 菜单都改由 `yttt_ui::menu::MenuLayer` 渲染，文件树也已接入 |
 | `ListItem::hover_matches_selected` 与选中背景 | 文件树改用 `yttt_tree_row`。选中背景只是挪了位置，上游已用 `list_active` |
 | `DropdownMenu` 接受 `gpui_base::Button` | 下拉菜单都改走 `YtttDropdownMenu` |
+| 重新导出 `InputCursorShape` | 业务代码改为直接使用 `gpui_base::input` |
 
 ## 不重放
 

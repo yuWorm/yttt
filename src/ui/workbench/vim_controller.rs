@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gpui::{App, Context, Entity, Keystroke, KeystrokeEvent, Window};
-use gpui_component::kbd::Kbd;
+use yttt_ui::primitives::kbd::format_keystroke;
 
 use crate::{
     config::settings::VimModeSetting,
@@ -142,7 +142,7 @@ impl WorkbenchView {
                 );
             }
         }
-        Some(Kbd::format(keystroke))
+        Some(format_keystroke(keystroke))
     }
 
     fn schedule_vim_key_feedback_expiration(
@@ -280,7 +280,7 @@ impl WorkbenchView {
 
     pub(super) fn settings_text_input_is_focused(&self, window: &Window, cx: &App) -> bool {
         fn focused(
-            input: &Entity<gpui_component::input::InputState>,
+            input: &Entity<gpui_base::input::InputState>,
             window: &Window,
             cx: &App,
         ) -> bool {

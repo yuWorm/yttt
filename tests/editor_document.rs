@@ -247,7 +247,7 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
     let input = cx.read(|app| document.read(app).input().clone());
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
+        input.set_cursor_position(gpui_base::input::Position::new(1, 4), window, input_cx);
     });
     cx.run_until_parked();
     cx.background_executor
@@ -325,7 +325,7 @@ fn breadcrumb_parsing_debounces_edits_and_uses_the_latest_cursor(cx: &mut gpui::
         "stale"
     );
     input.update_in(cx, |input, window, input_cx| {
-        input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
+        input.set_cursor_position(gpui_base::input::Position::new(1, 4), window, input_cx);
     });
     cx.run_until_parked();
     for _ in 0..2 {
@@ -396,7 +396,7 @@ fn breadcrumb_parsing_ignores_stale_language_and_disk_results(cx: &mut gpui::Tes
         );
     });
     input.update_in(cx, |input, window, input_cx| {
-        input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
+        input.set_cursor_position(gpui_base::input::Position::new(1, 4), window, input_cx);
     });
     cx.run_until_parked();
     for _ in 0..2 {
@@ -463,7 +463,7 @@ fn vim_mode_blocks_normal_input_and_handles_unicode_edits(cx: &mut gpui::TestApp
         assert!(!input.read(app).text_input_enabled());
         assert_eq!(
             input.read(app).cursor_shape(),
-            gpui_component::input::InputCursorShape::Block
+            gpui_base::input::InputCursorShape::Block
         );
     });
 
@@ -482,7 +482,7 @@ fn vim_mode_blocks_normal_input_and_handles_unicode_edits(cx: &mut gpui::TestApp
         assert!(input.read(app).text_input_enabled());
         assert_eq!(
             input.read(app).cursor_shape(),
-            gpui_component::input::InputCursorShape::Bar
+            gpui_base::input::InputCursorShape::Bar
         );
     });
 
@@ -631,7 +631,7 @@ fn vim_distinguishes_logical_and_soft_wrapped_display_lines(cx: &mut gpui::TestA
     assert!(display_line_position.character > 0);
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_cursor_position(gpui_component::input::Position::new(0, 0), window, input_cx);
+        input.set_cursor_position(gpui_base::input::Position::new(0, 0), window, input_cx);
     });
     cx.simulate_keystrokes("j");
     assert_eq!(cx.read(|app| input.read(app).cursor_position().line), 1);
@@ -810,8 +810,7 @@ fn vim_bindings_are_inert_outside_editor_context(cx: &mut gpui::TestAppContext) 
     let input_slot = Rc::new(RefCell::new(None));
     let input_slot_for_window = input_slot.clone();
     let (_root, cx) = cx.add_window_view(move |window, entity_cx| {
-        let input =
-            entity_cx.new(|input_cx| gpui_component::input::InputState::new(window, input_cx));
+        let input = entity_cx.new(|input_cx| gpui_base::input::InputState::new(window, input_cx));
         *input_slot_for_window.borrow_mut() = Some(input.clone());
         yttt_ui::window::yttt_root(input, window, entity_cx)
     });

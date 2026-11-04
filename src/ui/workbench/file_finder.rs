@@ -153,7 +153,7 @@ impl WorkbenchView {
         self.palette.file_preview_horizontal_scroll = ScrollHandle::new();
         let preview_path = candidate.relative_path.clone();
         let executor = cx.background_executor().clone();
-        let highlight_theme = cx.theme().highlight_theme.clone();
+        let highlight_theme = current_highlight_theme(cx);
         let editor_theme = self.theme_runtime().editor;
         let task = cx.background_spawn(async move {
             executor.timer(FILE_PREVIEW_DEBOUNCE).await;
@@ -374,7 +374,7 @@ impl WorkbenchView {
 fn highlighted_file_preview_rows(
     path: &Path,
     text: &str,
-    theme: &gpui_component::highlighter::HighlightTheme,
+    theme: &HighlightTheme,
     editor_theme: EditorTheme,
 ) -> Vec<ReadonlyCodeRow> {
     let mut source = String::new();
@@ -388,25 +388,18 @@ fn highlighted_file_preview_rows(
     }
 
     let resolution = EditorLanguageCatalog::builtin().resolve_for_path(path, Some(&source));
-    let rope = Rope::from(source.as_str());
-    let mut highlighter = SyntaxHighlighter::new(&resolution.highlighter_name);
-    highlighter.update(None, &rope, None);
+    let highlights = highlight_lines(
+        &resolution.highlighter_name,
+        &source,
+        lines.iter().map(|(_, range)| range.clone()),
+        theme,
+    );
 
     lines
         .into_iter()
+        .zip(highlights)
         .enumerate()
-        .map(|(index, (line, range))| {
-            let line_start = range.start;
-            let line_end = range.end;
-            let highlights = highlighter
-                .styles(&(line_start..line_end), theme)
-                .into_iter()
-                .filter_map(|(style_range, style)| {
-                    let start = style_range.start.max(line_start) - line_start;
-                    let end = style_range.end.min(line_end).saturating_sub(line_start);
-                    (start < end).then_some((start..end, style))
-                })
-                .collect();
+        .map(|(index, ((line, _), highlights))| {
             ReadonlyCodeRow::code(
                 [Some(index + 1), None],
                 "",
@@ -425,7 +418,7 @@ mod tests {
 
     #[test]
     fn rust_file_preview_rows_include_syntax_colors() {
-        let theme = gpui_component::highlighter::HighlightTheme::default_dark();
+        let theme = HighlightTheme::default_dark();
         let rows = highlighted_file_preview_rows(
             Path::new("src/main.rs"),
             "fn main() {\n    let answer = 42;\n}\n",

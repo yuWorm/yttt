@@ -1,5 +1,5 @@
 use gpui::{IntoElement, Window, div, prelude::*, px};
-use gpui_component::TitleBar;
+use yttt_ui::window::yttt_titlebar;
 
 use crate::ui::theme::{UiStyle, UiStyleId, WorkbenchTheme};
 
@@ -19,7 +19,7 @@ pub fn workbench_titlebar(
     ui_style: UiStyle,
     window: &Window,
 ) -> impl IntoElement {
-    TitleBar::new()
+    yttt_titlebar()
         .bg(if window.is_window_active() {
             theme.titlebar_background
         } else {
@@ -29,12 +29,12 @@ pub fn workbench_titlebar(
             this.h(if cfg!(target_os = "windows") {
                 px(32.0)
             } else {
-                // Zed's 34px bar sits above its border; TitleBar's height
+                // Zed's 34px bar sits above its border; the bar's height
                 // includes the border.
                 (window.rem_size() * 1.75).max(px(34.0)) + ui_style.border.hairline
             })
             // Zed 1.26.2 starts the title 74px in, past the traffic lights;
-            // TitleBar reserves 80px before our own padding.
+            // the title bar reserves 80px before our own padding.
             .when(cfg!(target_os = "macos"), |this| {
                 this.pl(px(74.0)
                     - ui_style

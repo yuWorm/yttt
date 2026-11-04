@@ -1,8 +1,6 @@
 use gpui::{App, SharedString, Task, Window};
-use gpui_component::{
-    IndexPath,
-    searchable_list::{SearchableListDelegate, SearchableListItem},
-};
+use gpui_base::IndexPath;
+use yttt_ui::primitives::select::{SearchableListDelegate, SearchableListItem};
 
 pub const SYSTEM_FONT_FAMILY_LABEL: &str = "System default";
 
@@ -199,7 +197,7 @@ mod tests {
         AppContext as _, Context, InteractiveElement as _, IntoElement, Modifiers,
         ParentElement as _, Render, Styled as _, TestAppContext, Window, div, px,
     };
-    use gpui_component::select::SelectState;
+    use yttt_ui::primitives::select::SelectState;
     use yttt_ui::{primitives::select::yttt_select, style::UiStyle, theme::WorkbenchTheme};
 
     use super::*;
