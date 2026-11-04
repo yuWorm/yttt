@@ -22,7 +22,7 @@ use crate::{
         i18n::{UiText, UiTextKey},
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
         terminal::status::{agent_status_label, project_agent_status},
-        theme::{UiStyle, WorkbenchTheme, current_ui_style, current_workbench_theme},
+        theme::{UiStyle, UiStyleId, WorkbenchTheme, current_ui_style, current_workbench_theme},
         vim::{VimStatus, WorkbenchVimMode},
         workbench::shell::bar::{BarHost, BarSections},
     },
@@ -1466,7 +1466,11 @@ fn render_bar_module(
         .gap(ui_style.spacing.xs)
         .whitespace_nowrap()
         .text_color(color)
-        .when(view.emphasized, |element| element.font_semibold())
+        // Zed sets the project name at regular weight.
+        .when(
+            view.emphasized && ui_style.id != UiStyleId::Zed,
+            |element| element.font_semibold(),
+        )
         .when(view.highlighted, |element| {
             element.px(ui_style.spacing.xs).bg(color.alpha(0.18))
         })

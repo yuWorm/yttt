@@ -76,7 +76,8 @@ impl WorkbenchTheme {
             border_strong: rgb(0x464b57),
             border_variant: rgb(0x363c46),
             border_focused: rgb(0x47679e),
-            split_line: rgb(0x363c46),
+            // Zed falls back to `border` for `pane_group.border`.
+            split_line: rgb(0x464b57),
             split_line_active: rgb(0x47679e),
             text: rgb(0xdce0e5),
             text_muted: rgb(0xa9afbc),
@@ -161,7 +162,7 @@ impl WorkbenchTheme {
         theme.border_strong = rgb(border);
         theme.border_variant = rgb(variant);
         theme.border_focused = rgb(focused);
-        theme.split_line = rgb(variant);
+        theme.split_line = rgb(border);
         theme.split_line_active = rgb(focused);
         theme.focus_ring = rgb(focused);
         theme.focused_pane_border = rgb(focused);

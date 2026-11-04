@@ -118,7 +118,9 @@ impl WorkbenchView {
             .bottom_0()
             .flex()
             .items_center()
-            .justify_center()
+            // Keep the line on the panel's edge, as Zed draws its border.
+            .when(side == SidebarSide::Left, |handle| handle.justify_end())
+            .when(side == SidebarSide::Right, |handle| handle.justify_start())
             .w(px(SIDEBAR_RESIZE_HIT_AREA_WIDTH))
             .cursor_ew_resize()
             .on_mouse_down(
