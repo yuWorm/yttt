@@ -952,6 +952,23 @@ impl WorkspaceService {
             .next()
     }
 
+    /// The file or terminal tab a project shows in a workspace's work area.
+    pub(crate) fn active_work_item(
+        &self,
+        workspace_id: &WorkspaceId,
+        project_id: &yttt_core::model::ids::ProjectId,
+    ) -> Option<yttt_core::model::editor::WorkItemId> {
+        self.state
+            .lock()
+            .workspaces
+            .get(workspace_id)?
+            .layout
+            .editor()
+            .session(project_id)?
+            .active_work_item()
+            .cloned()
+    }
+
     /// Every pane `keep` accepts, those in workspaces open in a window first.
     pub(crate) fn panes_where(
         &self,

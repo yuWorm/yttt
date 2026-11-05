@@ -101,7 +101,11 @@ yttt ctl agents close --agent TERMINAL
 ```
 
 `spawn` opens a new Agent tab in the orchestrator's project and answers with the worker's
-handle, its terminal session ID. An orchestrator may list and close only workers it
+handle, its terminal session ID. The tab opens in the background: what the project showed stays
+shown, so a person's typing does not land in the new worker. Provider options that skip or
+pre-grant approvals (for example Claude Code's `--dangerously-skip-permissions`,
+`--permission-mode` or `--allowedTools`, and Codex's `--yolo`, `--full-auto`, `-a`, `-s` or `-c`)
+are refused with `forbidden`: approvals stay with a person, who can start such a worker directly. An orchestrator may list and close only workers it
 started or that a person assigned to it; anything else is `forbidden`. Closing a worker's
 only pane closes its tab, and a project's last terminal tab is never closed. In any other
 pane these commands fail with `forbidden`. A person hands an existing Agent to an
@@ -139,7 +143,9 @@ Code or Codex worker and reports whether its turn ended within `--timeout` (defa
 `yttt_interrupt`, `yttt_release`, `yttt_close`). Register it with the orchestrator's provider,
 for example `claude mcp add yttt -- yttt mcp`; the provider starts it inside the orchestrator
 pane, so it inherits that pane's credential. Outside an orchestrator pane every tool except
-`yttt_whoami` fails with `forbidden`. Tool waits default to 120 seconds, below the Host's limit,
+`yttt_whoami` fails with `forbidden`. Some clients pass only selected environment variables to MCP servers; if
+`yttt_whoami` reports `external` inside an orchestrator pane, configure the client to pass
+`YTTT_SELF`, `YTTT_AGENT_HOOK_ENDPOINT` and `YTTT_AGENT_CONTROL_TOKEN` through. Tool waits default to 120 seconds, below the Host's limit,
 because MCP clients may end long calls. [`docs/skills/yttt-orchestrator/SKILL.md`](skills/yttt-orchestrator/SKILL.md)
 is a skill that teaches an orchestrator the loop, the use of `--after-turn`, and what to do when a
 person steps in; copy it into the provider's skills directory.
@@ -147,8 +153,9 @@ person steps in; copy it into the provider's skills directory.
 ### Handing a worker between a person and its orchestrator
 
 A worker is driven by its orchestrator (`auto`), by a person (`human`), or `paused`.
-Typing in a worker the orchestrator drives takes it over: the Host counts every input a
-desktop sends to it, including `panes send`, as a person's. The orchestrator's `send` and
+Typing in a worker the orchestrator drives takes it over: the Host counts keys and pastes a
+desktop sends to it, including `panes send`, as a person's. Replies the terminal sends by itself,
+such as focus and mouse reports and cursor or color answers, do not take it over. The orchestrator's `send` and
 `interrupt` then fail with `human_control`, and a `wait` in progress returns
 `control_changed`. Anything the orchestrator had queued for the worker is dropped, because
 the person may have changed the task.
@@ -161,7 +168,9 @@ yttt ctl agents control --project PROJECT_ID --tab TAB_ID --pane PANE_ID --set a
 
 `--queue` holds up to 32 messages while the worker is busy, taken over or paused, and the
 Host writes them in order once the worker is `auto` and ready, one per turn. The queue lives
-in the Host's memory and is lost if the Host restarts. `release` hands the worker to a person.
+in the Host's memory and is lost if the Host restarts. If a worker starts no turn within
+30 seconds of a write (input such as a local slash command), the Host stops waiting for one.
+An orchestrator cannot `close` a worker a person drives or paused. `release` hands the worker to a person.
 A person hands it back, takes it over or pauses it with `agents control`, or with the
 **Take Over Agent**, **Pause Agent** and **Hand Agent Back** commands on the focused pane;
 the worker's tab shows who drives it. Orchestrators cannot answer approval prompts or

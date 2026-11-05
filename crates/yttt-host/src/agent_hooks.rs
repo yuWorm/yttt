@@ -66,6 +66,8 @@ const ENVIRONMENT_VARIABLES: [&str; 5] = HOST_TERMINAL_IDENTITY_ENVIRONMENT;
 /// Keeps a control token from ever equalling the hook token for the same scope.
 const CONTROL_TOKEN_DOMAIN: &str = "control:";
 const MAX_BLOCKING_CONTROL_REQUESTS: usize = 32;
+/// One orchestrator cannot take every slot by abandoning its waits.
+const MAX_BLOCKING_CONTROL_REQUESTS_PER_CALLER: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct AgentAddress {
@@ -164,8 +166,8 @@ struct AgentState {
     bindings: Mutex<HashMap<AgentHookScope, TerminalSessionId>>,
     /// Bound scopes whose pane was started as an orchestrator.
     orchestrators: Mutex<HashSet<AgentHookScope>>,
-    /// Waits and interrupts in progress, each on its own thread.
-    blocking_requests: std::sync::atomic::AtomicUsize,
+    /// Waits and interrupts in progress by orchestrator, each on its own thread.
+    blocking_requests: Mutex<HashMap<TerminalSessionId, usize>>,
     /// Serves authenticated control requests other than `whoami`; set once
     /// the Host services it needs exist.
     control_handler: std::sync::OnceLock<Arc<dyn AgentControlHandler>>,
@@ -223,7 +225,7 @@ impl HostAgentHookRuntime {
             bindings: Mutex::new(HashMap::new()),
             orchestrators: Mutex::new(HashSet::new()),
             control_handler: std::sync::OnceLock::new(),
-            blocking_requests: std::sync::atomic::AtomicUsize::new(0),
+            blocking_requests: Mutex::new(HashMap::new()),
             records: Mutex::new(HashMap::new()),
             terminal_exits: Mutex::new(HashMap::new()),
             process_observations: Mutex::new(HashMap::new()),
@@ -974,23 +976,69 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<AgentState>) {
 /// A wait or interrupt may block for minutes, so it gets its own thread
 /// instead of holding one of the few workers that hooks depend on.
 fn serve_blocking_control(stream: TcpStream, state: &Arc<AgentState>, request: HttpRequest) {
-    if state.blocking_requests.fetch_add(1, Ordering::AcqRel) >= MAX_BLOCKING_CONTROL_REQUESTS {
-        state.blocking_requests.fetch_sub(1, Ordering::AcqRel);
+    let caller = match authenticate_control(state, &request) {
+        Ok(identity) => identity.terminal_session_id,
+        Err(error) => {
+            respond(stream, Err(error));
+            return;
+        }
+    };
+    let Some(slot) = BlockingSlot::claim(state, caller) else {
         respond(stream, Err(HttpRequestError::Unavailable));
         return;
-    }
+    };
     let state = state.clone();
     let spawned = thread::Builder::new()
         .name("yttt-agent-control".into())
         .spawn(move || {
+            let _slot = slot;
             let outcome = control_request(&state, request)
                 .map(|(status, body)| HookIngestOutcome::Control { status, body });
             respond(stream, outcome);
-            state.blocking_requests.fetch_sub(1, Ordering::AcqRel);
         });
     if spawned.is_err() {
-        // The stream went with the closure; the caller sees a closed connection.
+        // The closure, with the stream and the slot, was dropped: the caller
+        // sees a closed connection and the slot is free again.
         eprintln!("an Agent control request was dropped: no thread could be started");
+    }
+}
+
+/// A claim on one of the blocking-request slots, released when dropped.
+struct BlockingSlot {
+    state: Arc<AgentState>,
+    caller: TerminalSessionId,
+}
+
+impl BlockingSlot {
+    fn claim(state: &Arc<AgentState>, caller: TerminalSessionId) -> Option<Self> {
+        let mut requests = state.blocking_requests.lock();
+        let total = requests.values().sum::<usize>();
+        let own = requests.entry(caller.clone()).or_default();
+        if total >= MAX_BLOCKING_CONTROL_REQUESTS
+            || *own >= MAX_BLOCKING_CONTROL_REQUESTS_PER_CALLER
+        {
+            if *own == 0 {
+                requests.remove(&caller);
+            }
+            return None;
+        }
+        *own += 1;
+        Some(Self {
+            state: state.clone(),
+            caller,
+        })
+    }
+}
+
+impl Drop for BlockingSlot {
+    fn drop(&mut self) {
+        let mut requests = self.state.blocking_requests.lock();
+        if let Some(count) = requests.get_mut(&self.caller) {
+            *count -= 1;
+            if *count == 0 {
+                requests.remove(&self.caller);
+            }
+        }
     }
 }
 
@@ -2641,6 +2689,40 @@ mod tests {
         for wait in waits {
             assert!(wait.join().unwrap().starts_with("HTTP/1.1 200"));
         }
+    }
+
+    #[test]
+    fn one_orchestrator_cannot_take_every_blocking_slot() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut lead = spec("lead", "lead");
+        runtime.secure_terminal_environment(&mut lead, 1, PaneRole::Orchestrator);
+        let mut other = spec("other", "other");
+        runtime.secure_terminal_environment(&mut other, 1, PaneRole::Orchestrator);
+        let lead_session = TerminalSessionId::new("lead");
+        let held = (0..MAX_BLOCKING_CONTROL_REQUESTS_PER_CALLER)
+            .map(|_| BlockingSlot::claim(&runtime.state, lead_session.clone()).unwrap())
+            .collect::<Vec<_>>();
+        assert!(BlockingSlot::claim(&runtime.state, lead_session.clone()).is_none());
+        let other_slot = BlockingSlot::claim(&runtime.state, TerminalSessionId::new("other"));
+        assert!(
+            other_slot.is_some(),
+            "another orchestrator still gets a slot"
+        );
+        drop(held);
+        drop(other_slot);
+        assert!(runtime.state.blocking_requests.lock().is_empty());
+        assert!(BlockingSlot::claim(&runtime.state, lead_session).is_some());
+
+        // An unauthenticated blocking request is refused before it gets a thread.
+        let refused = control_http_request(
+            yttt_protocol::agent::AGENT_CONTROL_WAIT_PATH,
+            environment_value(&lead, AGENT_SELF_ENV).unwrap(),
+            "forged",
+        );
+        assert!(matches!(
+            authenticate_control(&runtime.state, &refused),
+            Err(HttpRequestError::Unauthorized)
+        ));
     }
 
     #[test]

@@ -2263,8 +2263,10 @@ async fn handle_request(
                 true,
             )?;
             runtime.validate_lease(&input.session_id, client_id)?;
+            context
+                .agent_control
+                .person_typed(&input.session_id, &input.bytes);
             terminal.input(input.bytes)?;
-            context.agent_control.person_typed(&input.session_id);
             accept_terminal_mutation(
                 attachments,
                 &input.session_id,

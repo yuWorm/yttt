@@ -57,6 +57,9 @@ const MAX_WAIT_AGENTS: usize = 16;
 /// How often a wait looks at the Agents again.
 const WAIT_POLL: Duration = Duration::from_millis(200);
 const DEFAULT_INTERRUPT_SECONDS: u32 = 10;
+/// How long a write may go without the worker starting a turn before the
+/// Host stops waiting for one.
+const WRITE_CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often queued messages are checked against their workers.
 const DELIVERY_POLL: Duration = Duration::from_millis(300);
 
@@ -76,17 +79,19 @@ pub(crate) struct AgentControl {
 #[derive(Default)]
 struct Deliveries {
     queued: VecDeque<String>,
-    /// The worker's turn number when the Host last wrote to it. Nothing more
-    /// is written until a later turn ends, so two messages never share one.
-    written_after_turn: Option<u64>,
+    /// The worker's turn number when the Host last wrote to it, and when.
+    /// Nothing more is written until a later turn ends, so two messages never
+    /// share one, unless no turn started within `WRITE_CONFIRM_TIMEOUT`: input
+    /// such as a local slash command starts none.
+    written_after_turn: Option<(u64, Instant)>,
 }
 
 impl Deliveries {
     fn may_write(&self, snapshot: &AgentSnapshot) -> bool {
         accepts_input(snapshot)
-            && self
-                .written_after_turn
-                .is_none_or(|turn| snapshot.turn_seq > turn)
+            && self.written_after_turn.is_none_or(|(turn, at)| {
+                snapshot.turn_seq > turn || at.elapsed() >= WRITE_CONFIRM_TIMEOUT
+            })
     }
 }
 
@@ -131,7 +136,12 @@ impl AgentControl {
     /// Called for every terminal input a Client sends. A person typing in a
     /// worker the orchestrator drives takes it over, and what the
     /// orchestrator queued is dropped: the person may have changed the task.
-    pub(crate) fn person_typed(&self, session_id: &TerminalSessionId) {
+    pub(crate) fn person_typed(&self, session_id: &TerminalSessionId, bytes: &[u8]) {
+        // A terminal answers its program on its own: focus and mouse reports,
+        // cursor and device replies. Only keys and pastes are a person's.
+        if is_terminal_report(bytes) {
+            return;
+        }
         match take_over(&self.workspaces, session_id) {
             Ok(true) => {
                 self.deliveries.lock().remove(session_id);
@@ -173,7 +183,7 @@ impl AgentControl {
                 let Some(text) = entry.queued.pop_front() else {
                     continue;
                 };
-                entry.written_after_turn = Some(snapshot.turn_seq);
+                entry.written_after_turn = Some((snapshot.turn_seq, Instant::now()));
                 text
             };
             if let Err(error) = self.paste_and_enter(&agent, &text) {
@@ -239,8 +249,10 @@ impl AgentControl {
         request: AgentSpawnRequest,
     ) -> Result<AgentControlResponse, AgentControlError> {
         let orchestrator = caller_pane(&self.workspaces, caller)?;
-        let (intent, address) = spawn_intent(caller, &orchestrator, request)?;
-        self.apply(&orchestrator.workspace_id, intent)?;
+        let (intents, address) = spawn_intents(&self.workspaces, caller, &orchestrator, request)?;
+        for intent in intents {
+            self.apply(&orchestrator.workspace_id, intent)?;
+        }
         let worker = self
             .workspaces
             .locate_pane(&address.terminal_session_id())
@@ -285,7 +297,7 @@ impl AgentControl {
         let entry = deliveries.entry(request.agent.clone()).or_default();
         match send_decision(worker.config.controller, entry, snapshot, request.queue) {
             SendDecision::Write => {
-                entry.written_after_turn = Some(turn_seq_before);
+                entry.written_after_turn = Some((turn_seq_before, Instant::now()));
                 drop(deliveries);
                 if let Err(error) = self.paste_and_enter(&request.agent, &request.text) {
                     if let Some(entry) = self.deliveries.lock().get_mut(&request.agent) {
@@ -348,7 +360,7 @@ impl AgentControl {
             .ok_or_else(|| not_ready("the Agent has not reported a turn yet"))?;
         let key = interrupt_key(snapshot.provider_id.as_str()).ok_or_else(|| {
             invalid(format!(
-                "interrupting {} is not supported; use panes send for its own keys",
+                "interrupting {} is not supported; ask a person to stop its turn",
                 snapshot.provider_id.as_str()
             ))
         })?;
@@ -556,6 +568,12 @@ fn spawn_intent(
     {
         return Err(invalid("provider arguments are too long or contain NUL"));
     }
+    if let Some(arg) = loosening_argument(&request.provider, &request.args) {
+        return Err(forbidden(format!(
+            "{arg} would let the worker skip approvals a person must give; \
+             start such a worker yourself instead"
+        )));
+    }
     let title = match request.title {
         Some(title) if title.trim().is_empty() || title.len() > MAX_TITLE_BYTES => {
             return Err(invalid("title must be 1 to 256 bytes"));
@@ -589,6 +607,11 @@ fn close_intent(
     workspaces: &WorkspaceService,
     worker: &LocatedPane,
 ) -> Result<WorkspaceIntent, AgentControlError> {
+    if worker.config.controller != PaneController::Auto {
+        return Err(human_control(
+            "a person is driving or paused this Agent; it is theirs to close",
+        ));
+    }
     let project =
         workspaces.panes_where(|address, _| address.project_id == worker.address.project_id);
     let in_workspace = |pane: &&LocatedPane| pane.workspace_id == worker.workspace_id;
@@ -618,6 +641,132 @@ fn close_intent(
         project_id: worker.address.project_id.clone(),
         tab_ids: vec![worker.address.tab_id.clone()],
     })
+}
+
+/// Provider options that skip, pre-grant or reconfigure approvals. An
+/// orchestrator may not start a worker with them: approvals are a person's
+/// (K5). Options providers add later are not known here.
+fn loosening_argument<'a>(provider: &str, args: &'a [String]) -> Option<&'a str> {
+    let options: &[&str] = match provider {
+        "claude" => &[
+            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "--allowedTools",
+            "--allowed-tools",
+            "--settings",
+            "--mcp-config",
+        ],
+        "codex" => &[
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--yolo",
+            "--full-auto",
+            "--ask-for-approval",
+            "-a",
+            "--sandbox",
+            "-s",
+            "--config",
+            "-c",
+            "--profile",
+            "-p",
+        ],
+        _ => &[],
+    };
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .map(String::as_str)
+        .find(|arg| {
+            options.iter().any(|option| {
+                *arg == *option
+                    || arg.strip_prefix(option).is_some_and(|rest| {
+                        rest.starts_with('=') || (option.len() == 2 && !rest.is_empty())
+                    })
+            })
+        })
+}
+
+/// Whether input holds only replies a terminal sends its program by itself.
+fn is_terminal_report(bytes: &[u8]) -> bool {
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != 0x1b {
+            return false;
+        }
+        match bytes.get(index + 1) {
+            Some(b'[') if bytes.get(index + 2) == Some(&b'M') => {
+                // X10 mouse: ESC [ M and three coordinate bytes.
+                if index + 6 > bytes.len() {
+                    return false;
+                }
+                index += 6;
+            }
+            Some(b'[') => {
+                let start = index + 2;
+                let mut end = start;
+                if matches!(bytes.get(end), Some(b'<' | b'?' | b'>')) {
+                    end += 1;
+                }
+                while bytes
+                    .get(end)
+                    .is_some_and(|byte| byte.is_ascii_digit() || matches!(byte, b';' | b':'))
+                {
+                    end += 1;
+                }
+                let Some(&last) = bytes.get(end) else {
+                    return false;
+                };
+                let parameters = &bytes[start..end];
+                let report = match last {
+                    b'I' | b'O' => parameters.is_empty(),
+                    b'M' | b'm' => parameters.first() == Some(&b'<') || parameters.contains(&b';'),
+                    b'R' | b't' => parameters.contains(&b';'),
+                    b'c' => matches!(parameters.first(), Some(b'?' | b'>')),
+                    b'n' => !parameters.is_empty(),
+                    _ => false,
+                };
+                if !report {
+                    return false;
+                }
+                index = end + 1;
+            }
+            Some(b']' | b'P' | b'_') => {
+                // OSC, DCS and APC replies end with BEL or ESC \.
+                let body = &bytes[index + 2..];
+                let Some(end) = body
+                    .iter()
+                    .enumerate()
+                    .find_map(|(offset, byte)| match byte {
+                        0x07 => Some(offset + 1),
+                        0x1b if body.get(offset + 1) == Some(&b'\\') => Some(offset + 2),
+                        _ => None,
+                    })
+                else {
+                    return false;
+                };
+                index += 2 + end;
+            }
+            _ => return false,
+        }
+    }
+    !bytes.is_empty()
+}
+
+/// The intents that create a worker tab and then show again what the project
+/// showed: creating a tab selects it, and a person's view and keys stay put.
+fn spawn_intents(
+    workspaces: &WorkspaceService,
+    caller: &AgentControlIdentity,
+    orchestrator: &LocatedPane,
+    request: AgentSpawnRequest,
+) -> Result<(Vec<WorkspaceIntent>, PaneAddress), AgentControlError> {
+    let (create, address) = spawn_intent(caller, orchestrator, request)?;
+    let shown =
+        workspaces.active_work_item(&orchestrator.workspace_id, &orchestrator.address.project_id);
+    let mut intents = vec![create];
+    intents.extend(shown.map(|item| WorkspaceIntent::ActivateItem {
+        project_id: orchestrator.address.project_id.clone(),
+        item,
+    }));
+    Ok((intents, address))
 }
 
 /// The caller's own pane, which must still be an orchestrator: a role
@@ -1108,10 +1257,12 @@ mod tests {
         request: AgentSpawnRequest,
     ) -> Result<LocatedPane, AgentControlError> {
         let orchestrator = caller_pane(workspaces, caller)?;
-        let (intent, address) = spawn_intent(caller, &orchestrator, request)?;
-        workspaces
-            .apply(orchestrator.workspace_id.clone(), intent, None)
-            .unwrap();
+        let (intents, address) = spawn_intents(workspaces, caller, &orchestrator, request)?;
+        for intent in intents {
+            workspaces
+                .apply(orchestrator.workspace_id.clone(), intent, None)
+                .unwrap();
+        }
         Ok(workspaces
             .locate_pane(&address.terminal_session_id())
             .unwrap())
@@ -1127,7 +1278,14 @@ mod tests {
         let workspaces = workspaces(root.path());
         let lead = caller("lead");
 
+        let shown = workspaces.active_work_item(&workspace_id(), &ProjectId::new("project"));
+        assert!(shown.is_some());
         let worker = spawn(&workspaces, &lead, spawn_request("codex", None)).unwrap();
+        assert_eq!(
+            workspaces.active_work_item(&workspace_id(), &ProjectId::new("project")),
+            shown,
+            "spawning keeps what the person was looking at"
+        );
         assert_eq!(worker.address.project_id, ProjectId::new("project"));
         assert_eq!(worker.config.command, "codex");
         assert_eq!(worker.config.args, ["Review the parser"]);
@@ -1491,7 +1649,7 @@ mod tests {
         // Written after turn 2: the snapshot still says turn 2 completed
         // until the worker reports the new turn, so nothing else is written.
         let written = Deliveries {
-            written_after_turn: Some(2),
+            written_after_turn: Some((2, Instant::now())),
             ..Deliveries::default()
         };
         assert_eq!(
@@ -1501,6 +1659,21 @@ mod tests {
         let next = agent_snapshot("codex", AgentTurnState::Completed, 3);
         assert_eq!(
             decide(PaneController::Auto, &written, Some(&next), false),
+            "write"
+        );
+        // Input that started no turn, such as a slash command, does not block
+        // the worker forever.
+        let unanswered = Deliveries {
+            written_after_turn: Some((
+                2,
+                Instant::now()
+                    .checked_sub(WRITE_CONFIRM_TIMEOUT + Duration::from_secs(1))
+                    .unwrap(),
+            )),
+            ..Deliveries::default()
+        };
+        assert_eq!(
+            decide(PaneController::Auto, &unanswered, Some(&ready), false),
             "write"
         );
 
@@ -1549,6 +1722,96 @@ mod tests {
             (AgentWaitReason::ControlChanged, Some(agent))
         );
         person.join().unwrap();
+    }
+
+    #[test]
+    fn terminal_reports_are_not_a_person_typing() {
+        for report in [
+            &b"\x1b[I"[..],
+            b"\x1b[O",
+            b"\x1b[<0;12;5M\x1b[<0;12;5m",
+            b"\x1b[<64;3;4M",
+            b"\x1b[M !!",
+            b"\x1b[32;10;5M",
+            b"\x1b[12;40R",
+            b"\x1b[?62;22c",
+            b"\x1b[>1;10;0c",
+            b"\x1b[0n",
+            b"\x1b]11;rgb:0000/0000/0000\x1b\\",
+            b"\x1b]10;rgb:ffff/ffff/ffff\x07",
+            b"\x1bP1$r0m\x1b\\",
+            b"\x1b[8;24;80t",
+        ] {
+            assert!(is_terminal_report(report), "{report:?}");
+        }
+        for input in [
+            &b"y"[..],
+            b"\r",
+            b"\x1b",
+            b"\x1b[A",
+            b"\x1b[1;5C",
+            b"\x1b[2~",
+            b"\x1b[200~text\x1b[201~",
+            b"\x1b[Ia",
+            b"\x1b[<0;12",
+            b"\x1b]11;unterminated",
+            b"",
+        ] {
+            assert!(!is_terminal_report(input), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn an_orchestrator_cannot_start_a_worker_that_skips_approvals() {
+        let root = tempdir().unwrap();
+        let workspaces = workspaces(root.path());
+        let lead = caller("lead");
+        let with_args = |provider: &str, args: &[&str]| AgentSpawnRequest {
+            provider: provider.into(),
+            args: args.iter().map(|arg| arg.to_string()).collect(),
+            title: None,
+        };
+        for (provider, args) in [
+            ("claude", &["--dangerously-skip-permissions", "task"][..]),
+            ("claude", &["--permission-mode=bypassPermissions"]),
+            ("claude", &["--allowedTools", "Bash"]),
+            ("codex", &["--yolo"]),
+            ("codex", &["-c", "approval_policy=never"]),
+            ("codex", &["-capproval_policy=never"]),
+            ("codex", &["--sandbox=danger-full-access"]),
+        ] {
+            assert_eq!(
+                code(spawn(&workspaces, &lead, with_args(provider, args))),
+                AgentControlErrorCode::Forbidden,
+                "{provider} {args:?}"
+            );
+        }
+        // Words after `--` are the prompt, and look-alikes are not options.
+        for (provider, args) in [
+            ("codex", &["--", "explain --yolo in the docs"][..]),
+            ("codex", &["--cd", "crates"]),
+            ("claude", &["--model", "sonnet", "Fix -c handling"]),
+        ] {
+            assert!(
+                spawn(&workspaces, &lead, with_args(provider, args)).is_ok(),
+                "{provider} {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_worker_a_person_drives_is_theirs_to_close() {
+        let root = tempdir().unwrap();
+        let workspaces = workspaces(root.path());
+        let worker = spawn(&workspaces, &caller("lead"), spawn_request("codex", None)).unwrap();
+        set_controller(&workspaces, &worker, PaneController::Human).unwrap();
+        let taken = workspaces
+            .locate_pane(&worker.address.terminal_session_id())
+            .unwrap();
+        assert_eq!(
+            code(close_intent(&workspaces, &taken)),
+            AgentControlErrorCode::HumanControl
+        );
     }
 
     #[test]

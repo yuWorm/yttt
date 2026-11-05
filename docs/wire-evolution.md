@@ -72,7 +72,10 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `ServerEvent::DocumentChanged(DocumentUpdate { workspace_id, state })`。
   v22 内追加(未升版本):`AgentSnapshot.turn_seq`(`#[serde(default)]`,旧端读作 0),Agent 每开始一轮加一;
   `PaneConfig` 追加 `role`(省略即 worker)与 `spawned_by`(省略即无),`NewTab::Agent` 追加同名字段,
-  `WorkspaceIntent::SetPaneOwner` 新意图(旧 Host 拒绝该意图)。编排者与 Host 之间的
+  `WorkspaceIntent::SetPaneOwner` 新意图(旧 Host 拒绝该意图);`PaneConfig` 追加 `controller`(省略即 auto)与
+  `WorkspaceIntent::SetPaneController` 新意图(旧 Host 拒绝,旧 Client 收到含 `controller` 的布局时按 auto 显示)。
+  桌面 socket 的 `DesktopControlCommand` 追加 `CreateAgent.role`、`AssignAgent`、`SetAgentController`:
+  旧桌面会忽略 `role`(静默创建 worker),新 CLI 搭配旧桌面时 `--role orchestrator` 不生效。编排者与 Host 之间的
   `/control/v1/*` 是 hook listener 上的本机 HTTP JSON 接口,不经过 session 连接,不属于本样本。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
