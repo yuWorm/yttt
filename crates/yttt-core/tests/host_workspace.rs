@@ -11,7 +11,9 @@ use yttt_core::model::{
         PaneLaunchTarget, ProjectPanel, WorkspaceIntent,
     },
     ids::ProjectId,
-    layout::{PaneKind, ProjectLayout, SplitDirection, TerminalExecutionMode},
+    layout::{
+        PaneConfig, PaneKind, PaneRole, ProjectLayout, SplitDirection, TerminalExecutionMode,
+    },
     project::{ProjectDescriptor, ProjectLocation},
     work_area::{TabGroupId, WorkAreaDropPlacement},
     workspace::{OpenedProject, PaneProcessState, WorkspaceError},
@@ -463,6 +465,7 @@ fn creating_an_agent_tab_keeps_its_resume_arguments_and_agent_semantics() {
                     title: "Restore auth session".into(),
                     command: "codex".into(),
                     args: vec!["resume".into(), "session-1".into()],
+                    role: PaneRole::Worker,
                 },
                 tab_id: None,
             },
@@ -481,6 +484,51 @@ fn creating_an_agent_tab_keeps_its_resume_arguments_and_agent_semantics() {
     assert_eq!(pane.kind, PaneKind::Agent);
     assert_eq!(pane.execution_mode, TerminalExecutionMode::Command);
     assert!(pane.notify_on_exit);
+    assert_eq!(pane.role, PaneRole::Worker);
+    let serialized = serde_json::to_value(pane).unwrap();
+    assert!(
+        serialized.get("role").is_none(),
+        "worker panes keep their earlier serialized shape: {serialized}"
+    );
+}
+
+#[test]
+fn an_orchestrator_agent_tab_keeps_its_role_across_a_snapshot() {
+    let mut workspace = migrated();
+
+    let outcome = workspace
+        .apply(
+            WorkspaceIntent::CreateTab {
+                project_id: project_id(),
+                tab: NewTab::Agent {
+                    title: "Lead".into(),
+                    command: "claude".into(),
+                    args: Vec::new(),
+                    role: PaneRole::Orchestrator,
+                },
+                tab_id: None,
+            },
+            None,
+        )
+        .unwrap();
+
+    let [added] = outcome.panes.added.as_slice() else {
+        panic!("expected one added pane: {:?}", outcome.panes.added);
+    };
+    let restored = serde_json::from_value::<PaneConfig>(
+        serde_json::to_value(
+            project(&workspace)
+                .layout
+                .tab(&added.tab_id)
+                .unwrap()
+                .layout
+                .find_pane(&added.pane_id)
+                .unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored.role, PaneRole::Orchestrator);
 }
 
 #[test]

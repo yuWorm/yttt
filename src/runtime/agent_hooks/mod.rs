@@ -11,11 +11,8 @@ use crate::host_runtime::DesktopHostRuntime;
 
 pub mod installer;
 
-pub const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
-    "YTTT_AGENT_HOOK_ENDPOINT",
-    "YTTT_AGENT_HOOK_TOKEN",
-    "YTTT_AGENT_HOOK_SCOPE",
-];
+pub const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 5] =
+    yttt_protocol::agent::HOST_TERMINAL_IDENTITY_ENVIRONMENT;
 
 #[derive(Debug)]
 pub enum AgentSnapshotEvent {

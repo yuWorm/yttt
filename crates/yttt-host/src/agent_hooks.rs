@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     io::{self, Read as _, Write as _},
     net::{TcpListener, TcpStream},
     path::Path,
@@ -26,12 +26,15 @@ use yttt_agent_providers::{
     CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, OMP_PROVIDER_ID, OPENCODE_PROVIDER_ID, builtin_providers,
     sessions::{GrokSessionKind, grok_session_kind},
 };
-use yttt_core::model::ids::TerminalSessionId;
+use yttt_core::model::{ids::TerminalSessionId, layout::PaneRole};
 use yttt_protocol::{
     FailureCode, ProtocolFailure,
     agent::{
-        AGENT_HOOK_DELIVERY_PROTOCOL, AgentCommandRequest, AgentHookAcknowledgement,
-        AgentHookDelivery, AgentHookScope, AgentSnapshotCursor, AgentSnapshotUpdate,
+        AGENT_CONTROL_SCOPE_HEADER, AGENT_CONTROL_TOKEN_ENV, AGENT_CONTROL_TOKEN_HEADER,
+        AGENT_CONTROL_WHOAMI_PATH, AGENT_HOOK_DELIVERY_PROTOCOL, AGENT_HOOK_ENDPOINT_ENV,
+        AGENT_HOOK_SCOPE_ENV, AGENT_HOOK_TOKEN_ENV, AGENT_SELF_ENV, AgentCommandRequest,
+        AgentControlIdentity, AgentHookAcknowledgement, AgentHookDelivery, AgentHookScope,
+        AgentSnapshotCursor, AgentSnapshotUpdate, HOST_TERMINAL_IDENTITY_ENVIRONMENT,
     },
     terminal::TerminalSpawnSpec,
 };
@@ -58,11 +61,9 @@ const TOKEN_HEADER: &str = "x-yttt-agent-hook-token";
 const SCOPE_HEADER: &str = "x-yttt-agent-hook-scope";
 const SCRIPT_DELIVERY_ID_HEADER: &str = "x-yttt-agent-hook-delivery-id";
 const QUESTION_POLL_FRESH_MILLIS: u64 = 5_000;
-const ENVIRONMENT_VARIABLES: [&str; 3] = [
-    "YTTT_AGENT_HOOK_ENDPOINT",
-    "YTTT_AGENT_HOOK_TOKEN",
-    "YTTT_AGENT_HOOK_SCOPE",
-];
+const ENVIRONMENT_VARIABLES: [&str; 5] = HOST_TERMINAL_IDENTITY_ENVIRONMENT;
+/// Keeps a control token from ever equalling the hook token for the same scope.
+const CONTROL_TOKEN_DOMAIN: &str = "control:";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct AgentAddress {
@@ -159,6 +160,8 @@ struct AgentState {
     secret: Arc<[u8; 32]>,
     providers: HashMap<String, Arc<dyn AgentProvider>>,
     bindings: Mutex<HashMap<AgentHookScope, TerminalSessionId>>,
+    /// Bound scopes whose pane was started as an orchestrator.
+    orchestrators: Mutex<HashSet<AgentHookScope>>,
     records: Mutex<HashMap<AgentAddress, AgentRecord>>,
     terminal_exits: Mutex<HashMap<AgentHookScope, AgentProcessExit>>,
     process_observations: Mutex<HashMap<TerminalSessionId, AgentProcessObservation>>,
@@ -211,6 +214,7 @@ impl HostAgentHookRuntime {
             secret,
             providers,
             bindings: Mutex::new(HashMap::new()),
+            orchestrators: Mutex::new(HashSet::new()),
             records: Mutex::new(HashMap::new()),
             terminal_exits: Mutex::new(HashMap::new()),
             process_observations: Mutex::new(HashMap::new()),
@@ -249,6 +253,7 @@ impl HostAgentHookRuntime {
         &self,
         spec: &mut TerminalSpawnSpec,
         session_epoch: u64,
+        role: PaneRole,
     ) -> AgentHookScope {
         spec.environment
             .retain(|(name, _)| !ENVIRONMENT_VARIABLES.contains(&name.as_str()));
@@ -261,17 +266,22 @@ impl HostAgentHookRuntime {
             pane_id: spec.session_id.as_str().to_string(),
             generation: session_epoch,
         };
-        let encoded_scope = serde_json::to_vec(&scope)
-            .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
-            .expect("Agent hook scope must serialize");
+        let encoded_scope = scope.encode();
         let token = scope_token(&self.state.secret, &encoded_scope);
+        if role == PaneRole::Orchestrator {
+            spec.environment.push((
+                AGENT_CONTROL_TOKEN_ENV.to_string(),
+                control_token(&self.state.secret, &encoded_scope),
+            ));
+        }
         spec.environment.extend([
             (
-                ENVIRONMENT_VARIABLES[0].to_string(),
+                AGENT_HOOK_ENDPOINT_ENV.to_string(),
                 self.endpoint.to_string(),
             ),
-            (ENVIRONMENT_VARIABLES[1].to_string(), token),
-            (ENVIRONMENT_VARIABLES[2].to_string(), encoded_scope),
+            (AGENT_HOOK_TOKEN_ENV.to_string(), token),
+            (AGENT_HOOK_SCOPE_ENV.to_string(), encoded_scope.clone()),
+            (AGENT_SELF_ENV.to_string(), encoded_scope),
         ]);
 
         let address = AgentAddress::from(&scope);
@@ -295,6 +305,12 @@ impl HostAgentHookRuntime {
             .process_observations
             .lock()
             .remove(&spec.session_id);
+        let mut orchestrators = self.state.orchestrators.lock();
+        orchestrators.retain(|candidate| AgentAddress::from(candidate) != address);
+        if role == PaneRole::Orchestrator {
+            orchestrators.insert(scope.clone());
+        }
+        drop(orchestrators);
         let mut bindings = self.state.bindings.lock();
         bindings.retain(|candidate, _| AgentAddress::from(candidate) != address);
         bindings.insert(scope.clone(), spec.session_id.clone());
@@ -303,6 +319,7 @@ impl HostAgentHookRuntime {
 
     pub fn cancel_terminal(&self, scope: &AgentHookScope) {
         self.state.bindings.lock().remove(scope);
+        self.state.orchestrators.lock().remove(scope);
         self.state.terminal_exits.lock().remove(scope);
         self.state
             .process_observations
@@ -887,6 +904,7 @@ enum HookIngestOutcome {
         pending: bool,
     },
     QuestionPoll(Value),
+    Control(Vec<u8>),
 }
 
 struct DeliveryApplication {
@@ -910,10 +928,14 @@ fn handle_connection(mut stream: TcpStream, state: &AgentState) {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(CLIENT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(CLIENT_TIMEOUT));
-    let request = read_http_request(&mut stream)
-        .and_then(|request| decode_request(request, &state.secret))
-        .and_then(|request| ingest_request(state, request));
+    let request = read_http_request(&mut stream).and_then(|request| {
+        if request.path.starts_with("/control/") {
+            return control_request(state, request).map(HookIngestOutcome::Control);
+        }
+        decode_request(request, &state.secret).and_then(|request| ingest_request(state, request))
+    });
     let (status, reason, body) = match request {
+        Ok(HookIngestOutcome::Control(body)) => (200, "OK", body),
         Ok(HookIngestOutcome::Unsequenced) => (204, "No Content", Vec::new()),
         Ok(HookIngestOutcome::QuestionPoll(response)) => (
             200,
@@ -1970,6 +1992,54 @@ fn valid_script_delivery_id(delivery_id: &str) -> Result<String, HttpRequestErro
     Ok(delivery_id.to_string())
 }
 
+/// Answers a request presenting an orchestrator's control credential. The
+/// caller is whoever the scope names; nothing in the body can change that.
+fn control_request(state: &AgentState, request: HttpRequest) -> Result<Vec<u8>, HttpRequestError> {
+    let identity = authenticate_control(state, &request)?;
+    match request.path.as_str() {
+        AGENT_CONTROL_WHOAMI_PATH => {
+            Ok(serde_json::to_vec(&identity).expect("control identity must serialize"))
+        }
+        _ => Err(HttpRequestError::NotFound),
+    }
+}
+
+fn authenticate_control(
+    state: &AgentState,
+    request: &HttpRequest,
+) -> Result<AgentControlIdentity, HttpRequestError> {
+    let encoded_scope = request
+        .headers
+        .get(AGENT_CONTROL_SCOPE_HEADER)
+        .ok_or(HttpRequestError::Invalid)?;
+    let scope = AgentHookScope::decode(encoded_scope).ok_or(HttpRequestError::Invalid)?;
+    let expected = control_token(&state.secret, encoded_scope);
+    if !request
+        .headers
+        .get(AGENT_CONTROL_TOKEN_HEADER)
+        .is_some_and(|token| constant_time_equal(token.as_bytes(), expected.as_bytes()))
+        || !state.orchestrators.lock().contains(&scope)
+    {
+        return Err(HttpRequestError::Unauthorized);
+    }
+    let terminal_session_id = state
+        .bindings
+        .lock()
+        .get(&scope)
+        .cloned()
+        .ok_or(HttpRequestError::Unauthorized)?;
+    Ok(AgentControlIdentity {
+        project_id: scope.project_id,
+        terminal_session_id,
+        generation: scope.generation,
+        role: PaneRole::Orchestrator,
+    })
+}
+
+fn control_token(secret: &[u8; 32], encoded_scope: &str) -> String {
+    scope_token(secret, &format!("{CONTROL_TOKEN_DOMAIN}{encoded_scope}"))
+}
+
 fn scope_token(secret: &[u8; 32], scope: &str) -> String {
     let mut inner_pad = [0x36_u8; 64];
     let mut outer_pad = [0x5c_u8; 64];
@@ -2118,7 +2188,7 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let runtime = HostAgentHookRuntime::start_in(7, state.path()).unwrap();
         let mut terminal = spec("usage-terminal", "usage-terminal");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut updates = runtime.subscribe_token_usage();
         let usage = serde_json::json!({
             "sessionId": "session-a",
@@ -2161,7 +2231,7 @@ mod tests {
     fn recognized_unsupported_session_is_partial_before_exit() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("unsupported-usage", "unsupported-usage");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut updates = runtime.subscribe_token_usage();
         ingest_request(
             &runtime.state,
@@ -2184,7 +2254,11 @@ mod tests {
     fn omp_child_without_stable_billing_identity_keeps_project_partial() {
         let state = tempfile::tempdir().unwrap();
         let runtime = HostAgentHookRuntime::start_in(7, state.path()).unwrap();
-        let scope = runtime.secure_terminal_environment(&mut spec("omp-child-usage", "pane"), 1);
+        let scope = runtime.secure_terminal_environment(
+            &mut spec("omp-child-usage", "pane"),
+            1,
+            PaneRole::Worker,
+        );
         for (event, payload) in [
             (
                 "session_start",
@@ -2275,9 +2349,9 @@ mod tests {
     fn host_replaces_forged_hook_environment_and_scopes_each_terminal() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut first = spec("first", "first");
-        let first_scope = runtime.secure_terminal_environment(&mut first, 1);
+        let first_scope = runtime.secure_terminal_environment(&mut first, 1, PaneRole::Worker);
         let mut second = spec("second", "second");
-        let second_scope = runtime.secure_terminal_environment(&mut second, 1);
+        let second_scope = runtime.secure_terminal_environment(&mut second, 1, PaneRole::Worker);
 
         assert_ne!(first_scope, second_scope);
         assert!(first.removed_environment.is_empty());
@@ -2287,9 +2361,136 @@ mod tests {
                 .iter()
                 .filter(|(name, _)| ENVIRONMENT_VARIABLES.contains(&name.as_str()))
                 .count(),
-            3
+            4
         );
         assert!(first.environment.iter().all(|(_, value)| value != "forged"));
+    }
+
+    fn environment_value<'a>(spec: &'a TerminalSpawnSpec, name: &str) -> Option<&'a str> {
+        spec.environment
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn control_http_request(path: &str, scope: &str, token: &str) -> HttpRequest {
+        HttpRequest {
+            path: path.to_string(),
+            headers: BTreeMap::from([
+                (AGENT_CONTROL_SCOPE_HEADER.to_string(), scope.to_string()),
+                (AGENT_CONTROL_TOKEN_HEADER.to_string(), token.to_string()),
+            ]),
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn every_terminal_learns_its_scope_and_only_orchestrators_get_a_control_token() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut worker = spec("worker", "worker");
+        worker
+            .environment
+            .push((AGENT_CONTROL_TOKEN_ENV.to_string(), "forged".to_string()));
+        let worker_scope = runtime.secure_terminal_environment(&mut worker, 1, PaneRole::Worker);
+        let mut lead = spec("lead", "lead");
+        let lead_scope = runtime.secure_terminal_environment(&mut lead, 1, PaneRole::Orchestrator);
+
+        assert_eq!(
+            environment_value(&worker, AGENT_SELF_ENV)
+                .and_then(AgentHookScope::decode)
+                .as_ref(),
+            Some(&worker_scope)
+        );
+        assert_eq!(environment_value(&worker, AGENT_CONTROL_TOKEN_ENV), None);
+        assert_eq!(
+            environment_value(&lead, AGENT_SELF_ENV),
+            Some(lead_scope.encode().as_str())
+        );
+        let control = environment_value(&lead, AGENT_CONTROL_TOKEN_ENV).unwrap();
+        assert_ne!(
+            Some(control),
+            environment_value(&lead, AGENT_HOOK_TOKEN_ENV)
+        );
+    }
+
+    #[test]
+    fn the_hook_listener_routes_control_requests_over_http() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut lead = spec("lead", "lead");
+        runtime.secure_terminal_environment(&mut lead, 1, PaneRole::Orchestrator);
+        let scope = environment_value(&lead, AGENT_SELF_ENV)
+            .unwrap()
+            .to_string();
+        let post = |token: &str| {
+            let mut stream =
+                TcpStream::connect(runtime.endpoint.strip_prefix("http://").unwrap()).unwrap();
+            write!(
+                stream,
+                "POST {AGENT_CONTROL_WHOAMI_PATH} HTTP/1.1\r\n{AGENT_CONTROL_SCOPE_HEADER}: {scope}\r\n{AGENT_CONTROL_TOKEN_HEADER}: {token}\r\nContent-Length: 0\r\n\r\n"
+            )
+            .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        };
+
+        let accepted = post(environment_value(&lead, AGENT_CONTROL_TOKEN_ENV).unwrap());
+        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+        assert!(accepted.contains(r#""role":"orchestrator""#), "{accepted}");
+        let refused = post(environment_value(&lead, AGENT_HOOK_TOKEN_ENV).unwrap());
+        assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+    }
+
+    #[test]
+    fn whoami_answers_only_the_current_orchestrator_credential() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut lead = spec("lead", "lead");
+        let lead_scope = runtime.secure_terminal_environment(&mut lead, 1, PaneRole::Orchestrator);
+        let mut worker = spec("worker", "worker");
+        runtime.secure_terminal_environment(&mut worker, 1, PaneRole::Worker);
+        let encoded = environment_value(&lead, AGENT_SELF_ENV)
+            .unwrap()
+            .to_string();
+        let control = environment_value(&lead, AGENT_CONTROL_TOKEN_ENV)
+            .unwrap()
+            .to_string();
+        let ask = |scope: &str, token: &str| {
+            control_request(
+                &runtime.state,
+                control_http_request(AGENT_CONTROL_WHOAMI_PATH, scope, token),
+            )
+        };
+
+        let identity: AgentControlIdentity =
+            serde_json::from_slice(&ask(&encoded, &control).unwrap()).unwrap();
+        assert_eq!(identity.terminal_session_id, TerminalSessionId::new("lead"));
+        assert_eq!(identity.generation, lead_scope.generation);
+        assert_eq!(identity.role, PaneRole::Orchestrator);
+
+        let hook_token = environment_value(&lead, AGENT_HOOK_TOKEN_ENV).unwrap();
+        assert!(matches!(
+            ask(&encoded, hook_token),
+            Err(HttpRequestError::Unauthorized)
+        ));
+        let worker_scope = environment_value(&worker, AGENT_SELF_ENV).unwrap();
+        assert!(matches!(
+            ask(worker_scope, &control),
+            Err(HttpRequestError::Unauthorized)
+        ));
+        // A worker scope signed with the right key is still not an orchestrator.
+        assert!(matches!(
+            ask(
+                worker_scope,
+                &control_token(&runtime.state.secret, worker_scope)
+            ),
+            Err(HttpRequestError::Unauthorized)
+        ));
+
+        runtime.secure_terminal_environment(&mut spec("lead", "lead"), 2, PaneRole::Worker);
+        assert!(matches!(
+            ask(&encoded, &control),
+            Err(HttpRequestError::Unauthorized)
+        ));
     }
 
     #[test]
@@ -2410,7 +2611,7 @@ mod tests {
     fn native_grok_snake_case_hooks_supersede_imported_claude_compatibility_hooks() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-provider", "grok-provider");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut updates = runtime.subscribe();
         let session = serde_json::json!({
             "hookEventName": "session_start",
@@ -2478,7 +2679,7 @@ mod tests {
     fn a_new_agent_session_replaces_an_exited_session_in_the_same_shell() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("sequential-agent", "sequential-agent");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut updates = runtime.subscribe();
 
         ingest_request(
@@ -2511,7 +2712,7 @@ mod tests {
     fn child_agent_hook_cannot_take_over_a_running_agent_pane() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("omp-pane", "omp-pane");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let roots = vec![(TerminalSessionId::new("omp-pane"), 100)];
         runtime.reconcile_process_scan(
             &roots,
@@ -2537,7 +2738,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("process-scan", "process-scan");
         let session_id = terminal.session_id.clone();
-        runtime.secure_terminal_environment(&mut terminal, 1);
+        runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let roots = vec![(session_id.clone(), 10)];
         let mut updates = runtime.subscribe();
 
@@ -2581,7 +2782,7 @@ mod tests {
     fn activity_reports_confirm_idle_without_overwriting_waiting_or_completion() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("activity", "activity");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut sequence = 0;
         let mut emit = |event: &str, payload: Value| {
             sequence += 1;
@@ -2634,7 +2835,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("rediscovered", "rediscovered");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let roots = vec![(session_id.clone(), 10)];
         let detected = HashMap::from([(
             session_id,
@@ -2696,7 +2897,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("process-script-retry", "process-script-retry");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let roots = vec![(session_id.clone(), 10)];
 
         ingest_request(
@@ -2765,7 +2966,7 @@ mod tests {
     fn sequenced_hooks_buffer_gaps_and_ignore_retries() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("ordered", "ordered");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut updates = runtime.subscribe();
 
         let pending = ingest_request(
@@ -2834,7 +3035,7 @@ mod tests {
     fn initial_stream_with_a_valid_root_batch_is_not_discarded_for_later_foreign_events() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("mixed-initial-stream", "mixed-initial-stream");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         let pending = ingest_request(
             &runtime.state,
@@ -2904,7 +3105,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("final-exit", "final-exit");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut updates = runtime.subscribe();
 
         ingest_request(
@@ -2943,7 +3144,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("pre-hook-exit", "pre-hook-exit");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let mut updates = runtime.subscribe();
 
         runtime.terminal_exited(&session_id, 1, Some(0));
@@ -2969,7 +3170,8 @@ mod tests {
         );
 
         let mut restarted = spec("pre-hook-exit", "pre-hook-exit");
-        let restarted_scope = runtime.secure_terminal_environment(&mut restarted, 2);
+        let restarted_scope =
+            runtime.secure_terminal_environment(&mut restarted, 2, PaneRole::Worker);
         assert!(restarted_scope.generation > scope.generation);
         assert!(
             runtime.snapshots_after(&[]).is_empty(),
@@ -2990,8 +3192,8 @@ mod tests {
     fn late_terminal_exit_does_not_stop_a_reopened_agent() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("reopened-agent", "reopened-agent");
-        let old_scope = runtime.secure_terminal_environment(&mut terminal, 1);
-        let new_scope = runtime.secure_terminal_environment(&mut terminal, 2);
+        let old_scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
+        let new_scope = runtime.secure_terminal_environment(&mut terminal, 2, PaneRole::Worker);
         assert!(new_scope.generation > old_scope.generation);
         ingest_request(
             &runtime.state,
@@ -3016,7 +3218,7 @@ mod tests {
     fn stalled_hook_connection_does_not_block_another_delivery() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("concurrent", "concurrent");
-        runtime.secure_terminal_environment(&mut terminal, 1);
+        runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let endpoint = runtime.endpoint.strip_prefix("http://").unwrap();
         let stalled = TcpStream::connect(endpoint).unwrap();
         thread::sleep(Duration::from_millis(25));
@@ -3080,7 +3282,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-switch", "grok-switch");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let root = grok_session_payload(temp.path(), "root", false);
         let child = grok_session_payload(temp.path(), "child", true);
         for (event, payload) in [
@@ -3146,7 +3348,7 @@ mod tests {
     fn grok_known_child_cannot_restart_an_ended_root() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-late-child", "grok-late-child");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         for (event, payload) in [
             ("session_start", session_payload("root")),
             (
@@ -3187,7 +3389,7 @@ mod tests {
     fn grok_child_start_without_parent_cannot_replace_the_active_root() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-child", "grok-child");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         for (event, session) in [
             ("session_start", "root"),
             ("user_prompt_submit", "root"),
@@ -3217,7 +3419,7 @@ mod tests {
     fn grok_native_subagent_hooks_preserve_root_ownership() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-native-child", "grok-native-child");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         for (event, payload) in [
             ("session_start", session_payload("root")),
             (
@@ -3267,7 +3469,7 @@ mod tests {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("live-process", "live-process");
         let session_id = terminal.session_id.clone();
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         let roots = vec![(session_id.clone(), 10)];
         let detected = HashMap::from([(
             session_id,
@@ -3323,7 +3525,7 @@ mod tests {
     fn foreign_child_lifecycle_and_activity_do_not_mutate_the_root_session() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("root-ownership", "root-ownership");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         ingest_request(
             &runtime.state,
@@ -3396,7 +3598,7 @@ mod tests {
     fn foreign_idle_does_not_complete_an_active_root_session() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("foreign-idle", "foreign-idle");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         ingest_request(
             &runtime.state,
@@ -3448,7 +3650,7 @@ mod tests {
     fn root_session_switch_and_resume_update_ownership() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("session-switch", "session-switch");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         for (event, session_id) in [
             ("session_start", "first-session"),
@@ -3480,7 +3682,7 @@ mod tests {
     fn sequenced_events_are_gated_after_a_reordered_session_switch() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("ordered-switch", "ordered-switch");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         ingest_request(
             &runtime.state,
@@ -3542,7 +3744,7 @@ mod tests {
     fn ignored_sequenced_foreign_events_still_advance_acknowledgement() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("sequenced-foreign", "sequenced-foreign");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         for (sequence, event) in [(1, "session_start"), (2, "agent_start")] {
             ingest_request(
@@ -3577,7 +3779,7 @@ mod tests {
     fn ignored_child_stream_does_not_retire_the_active_root_stream() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("isolated-streams", "isolated-streams");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         for (sequence, event) in [(1, "session_start"), (2, "agent_start")] {
             ingest_request(
@@ -3674,7 +3876,7 @@ mod tests {
     fn idless_legacy_hooks_and_explicit_subagent_events_remain_supported() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("legacy-hooks", "legacy-hooks");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         for event in ["session_start", "agent_start", "agent_end"] {
             ingest_request(
@@ -3734,7 +3936,7 @@ mod tests {
     fn duplicate_script_delivery_survives_same_scope_lifecycle_restart() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("script-retry", "script-retry");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         ingest_request(
             &runtime.state,
@@ -3799,7 +4001,7 @@ mod tests {
     fn scoped_child_board_events_preserve_root_isolation_and_session_fences() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("native-child-hooks", "native-child-hooks");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
 
         ingest_request(
             &runtime.state,
@@ -3961,7 +4163,7 @@ mod tests {
 
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("unscoped-child-board", "unscoped-child-board");
-        let scope = runtime.secure_terminal_environment(&mut terminal, 1);
+        let scope = runtime.secure_terminal_environment(&mut terminal, 1, PaneRole::Worker);
         ingest_request(
             &runtime.state,
             unsequenced_request(

@@ -16,7 +16,7 @@ use yttt_agent_core::AgentSnapshot;
 use crate::model::{
     editor::{DocumentId, ProjectEditorWorkspaceSnapshot, ProjectEditorWorkspaceState, WorkItemId},
     ids::ProjectId,
-    layout::{PaneConfig, ProjectLayout, SplitDirection},
+    layout::{PaneConfig, PaneRole, ProjectLayout, SplitDirection},
     project::{ProjectDescriptor, ProjectLocation},
     split_tree::{FocusDirection, ResizeDirection},
     work_area::{TabGroupId, WorkAreaDropPlacement, WorkAreaSplitId},
@@ -64,6 +64,8 @@ pub enum NewTab {
         title: String,
         command: String,
         args: Vec<String>,
+        #[serde(default, skip_serializing_if = "PaneRole::is_worker")]
+        role: PaneRole,
     },
 }
 
@@ -642,7 +644,8 @@ impl IntentExecutor {
                         title,
                         command,
                         args,
-                    } => agent_tab_config(tab_id, title, command, args),
+                        role,
+                    } => agent_tab_config(tab_id, title, command, args, role),
                 };
                 let tab_id = project.add_tab(config)?;
                 self.activate_item(&project_id, WorkItemId::Terminal(tab_id))?;

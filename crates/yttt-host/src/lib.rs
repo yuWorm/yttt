@@ -2983,7 +2983,11 @@ fn spawn_terminal(
         Some(context.ssh.transport()),
         local_cwd,
         |spec, epoch| {
-            scope = Some(context.agent_hooks.secure_terminal_environment(spec, epoch));
+            scope = Some(context.agent_hooks.secure_terminal_environment(
+                spec,
+                epoch,
+                yttt_core::model::layout::PaneRole::Worker,
+            ));
         },
     ) {
         Ok(terminal) => {

@@ -501,6 +501,7 @@ impl WorkbenchView {
                     provider,
                     args,
                     title,
+                    role,
                 } => {
                     let agent = crate::config::default_layout::BuiltinAgent::from_id(provider)
                         .expect("validated provider");
@@ -517,6 +518,7 @@ impl WorkbenchView {
                                     .unwrap_or_else(|| agent.display_name().to_string()),
                                 command: program.to_string(),
                                 args: args.clone(),
+                                role: *role,
                             },
                             Some(uuid::Uuid::new_v4().to_string()),
                         )

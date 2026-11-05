@@ -71,6 +71,24 @@ from multiple windows: `--window` selects the layout, not a separate copy of tha
 `--window WINDOW_ID` when the same project is open in multiple windows. Ambiguous
 mutations fail rather than choosing whichever window currently has focus.
 
+## Identity and roles
+
+```sh
+yttt ctl whoami --json
+yttt ctl agents create --project PROJECT_ID --provider claude --role orchestrator --title Lead
+```
+
+Every terminal the Host starts receives `YTTT_SELF`, its own encoded project, terminal
+and generation. `whoami` reads it without contacting the desktop and reports `external`
+outside a yttt terminal. A pane created with `--role orchestrator` also receives
+`YTTT_AGENT_CONTROL_TOKEN`; `whoami` then asks the Host to verify it and reports
+`verified`, `rejected` (the pane restarted or its role changed) or `unavailable`.
+Worker panes report `not_granted`. The role takes effect when the pane's process starts,
+is kept with the layout, and is never copied from a personal layout template. Inherited
+identity variables are replaced at launch, so a process cannot pass its identity to a
+terminal it opens. Roles guard against Agent mistakes; they are not a boundary against
+other processes of the same user, which can still reach the desktop socket.
+
 ## Creating tabs
 
 ```sh

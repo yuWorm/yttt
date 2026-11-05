@@ -456,6 +456,8 @@ impl From<StrictPaneConfig> for PaneConfig {
             kind: value.kind,
             notify_on_exit: value.notify_on_exit,
             detector: value.detector,
+            // A personal layout is a template; roles are granted per pane.
+            role: yttt_core::model::layout::PaneRole::Worker,
         }
     }
 }

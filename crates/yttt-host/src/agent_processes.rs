@@ -539,7 +539,11 @@ mod tests {
             };
             let terminal = runtime
                 .spawn_with_transport(spec, None, None, |spec, epoch| {
-                    agent_hooks.secure_terminal_environment(spec, epoch);
+                    agent_hooks.secure_terminal_environment(
+                        spec,
+                        epoch,
+                        yttt_core::model::layout::PaneRole::Worker,
+                    );
                 })
                 .unwrap();
             let mut updates = agent_hooks.subscribe();

@@ -1913,6 +1913,7 @@ mod tests {
                 kind: PaneKind::Shell,
                 notify_on_exit: false,
                 detector: None,
+                role: yttt_core::model::layout::PaneRole::Worker,
             },
             is_focused: true,
             terminal_input_gate: TerminalInputGate::default(),

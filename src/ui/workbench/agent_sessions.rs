@@ -530,6 +530,7 @@ impl WorkbenchView {
                 title,
                 command: resume.program.into(),
                 args: resume.arguments,
+                role: yttt_core::model::layout::PaneRole::Worker,
             },
             None,
         )

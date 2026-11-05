@@ -97,6 +97,7 @@ mod tests {
             kind,
             notify_on_exit: false,
             detector: None,
+            role: yttt_core::model::layout::PaneRole::Worker,
         }
     }
 

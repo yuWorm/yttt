@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use yttt_agent_core::{AgentQuestionAnswer, AgentSnapshot};
+use yttt_core::model::layout::PaneRole;
 
 pub const MAX_CONTROL_TEXT_BYTES: usize = 64 * 1024;
 
@@ -28,6 +29,8 @@ pub enum DesktopControlCommand {
         provider: String,
         args: Vec<String>,
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "PaneRole::is_worker")]
+        role: PaneRole,
     },
     Split {
         direction: ControlSplitDirection,
@@ -225,6 +228,7 @@ impl DesktopControlRequest {
                 provider,
                 args,
                 title,
+                ..
             } => {
                 validate_title(title.as_deref())?;
                 if provider.is_empty()

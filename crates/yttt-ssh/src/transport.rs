@@ -39,12 +39,9 @@ use crate::terminal::{
     terminal_error_output,
 };
 
-const AGENT_HOOK_ENDPOINT_ENV: &str = "YTTT_AGENT_HOOK_ENDPOINT";
-const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
-    AGENT_HOOK_ENDPOINT_ENV,
-    "YTTT_AGENT_HOOK_TOKEN",
-    "YTTT_AGENT_HOOK_SCOPE",
-];
+use yttt_protocol::agent::{
+    AGENT_HOOK_ENDPOINT_ENV, HOST_TERMINAL_IDENTITY_ENVIRONMENT as AGENT_HOOK_ENVIRONMENT_VARIABLES,
+};
 const REMOTE_FORWARD_ADDRESS: &str = "127.0.0.1";
 const REMOTE_OPERATION_TIMEOUT: Duration = Duration::from_secs(110);
 const MAX_REMOTE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024 * 1024;

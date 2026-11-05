@@ -1,7 +1,8 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 pub use yttt_agent_core::ProjectTokenUsage;
 use yttt_agent_core::{AgentBoardCommand, AgentInstanceId, AgentSnapshot};
-use yttt_core::model::ids::TerminalSessionId;
+use yttt_core::model::{ids::TerminalSessionId, layout::PaneRole};
 
 pub const AGENT_HOOK_DELIVERY_PROTOCOL: u16 = 1;
 
@@ -22,12 +23,64 @@ pub struct AgentHookAcknowledgement {
     pub next_sequence: u64,
 }
 
+pub const AGENT_HOOK_ENDPOINT_ENV: &str = "YTTT_AGENT_HOOK_ENDPOINT";
+pub const AGENT_HOOK_TOKEN_ENV: &str = "YTTT_AGENT_HOOK_TOKEN";
+pub const AGENT_HOOK_SCOPE_ENV: &str = "YTTT_AGENT_HOOK_SCOPE";
+/// The pane's own encoded scope, readable by anything running in it.
+pub const AGENT_SELF_ENV: &str = "YTTT_SELF";
+/// Present only in panes a person made orchestrators.
+pub const AGENT_CONTROL_TOKEN_ENV: &str = "YTTT_AGENT_CONTROL_TOKEN";
+
+/// Every variable the Host injects into a terminal. Inherited values are
+/// removed before launch so a child cannot pass its identity on.
+pub const HOST_TERMINAL_IDENTITY_ENVIRONMENT: [&str; 5] = [
+    AGENT_HOOK_ENDPOINT_ENV,
+    AGENT_HOOK_TOKEN_ENV,
+    AGENT_HOOK_SCOPE_ENV,
+    AGENT_SELF_ENV,
+    AGENT_CONTROL_TOKEN_ENV,
+];
+
+pub const AGENT_CONTROL_TOKEN_HEADER: &str = "x-yttt-agent-control-token";
+pub const AGENT_CONTROL_SCOPE_HEADER: &str = "x-yttt-agent-control-scope";
+pub const AGENT_CONTROL_WHOAMI_PATH: &str = "/control/v1/whoami";
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentHookScope {
     pub project_id: String,
     pub tab_id: String,
     pub pane_id: String,
     pub generation: u64,
+}
+
+impl AgentHookScope {
+    /// The form carried in `YTTT_AGENT_HOOK_SCOPE`, `YTTT_SELF` and the
+    /// scope headers; tokens are computed over exactly these bytes.
+    pub fn encode(&self) -> String {
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(self).expect("Agent hook scope must serialize"))
+    }
+
+    /// Decodes and checks the shape only; it proves nothing about who sent it.
+    pub fn decode(encoded: &str) -> Option<Self> {
+        if encoded.len() > 4096 {
+            return None;
+        }
+        let scope: Self = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).ok()?).ok()?;
+        (scope.generation != 0
+            && !scope.project_id.trim().is_empty()
+            && !scope.tab_id.trim().is_empty()
+            && !scope.pane_id.trim().is_empty())
+        .then_some(scope)
+    }
+}
+
+/// What the Host knows about the pane presenting a control credential.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentControlIdentity {
+    pub project_id: String,
+    pub terminal_session_id: TerminalSessionId,
+    pub generation: u64,
+    pub role: PaneRole,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

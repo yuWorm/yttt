@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, ffi::OsString, io::Read as _, path::PathBuf};
+use yttt_core::model::layout::PaneRole;
 use yttt_protocol::desktop_control::*;
 
 use crate::{
+    agent_control_client::{PaneCredentials, WhoAmI},
     config::{profile::AppProfile, scope::read_device_language_setting, settings::LanguageSetting},
     desktop_shell::{DesktopShellError, control_desktop},
     ui::{
@@ -114,6 +116,13 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
             })?,
             args: std::mem::take(&mut trailing),
             title: options.remove("--title"),
+            role: match options.remove("--role").as_deref() {
+                None | Some("worker") => PaneRole::Worker,
+                Some("orchestrator") => PaneRole::Orchestrator,
+                Some(_) => {
+                    return Err(text.get(UiTextKey::CliLocalizationRoleInvalid).to_string());
+                }
+            },
         },
         ("panes", "split") => DesktopControlCommand::Split {
             direction: match options.remove("--direction").as_deref() {
@@ -255,6 +264,61 @@ fn error_code_label(code: &DesktopControlErrorCode, text: UiText) -> &'static st
     })
 }
 
+/// A protocol value as it appears in JSON, shown untranslated in text output.
+fn protocol_word(value: &impl serde::Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// Answers from the calling process's own terminal; the desktop is not involved.
+fn whoami(args: &[OsString], text: UiText) -> i32 {
+    let json = match args {
+        [] => false,
+        [flag] if flag == "--json" => true,
+        [other, ..] => {
+            eprintln!(
+                "{}: {}",
+                error_code_label(&DesktopControlErrorCode::InvalidRequest, text),
+                text.get(UiTextKey::CliLocalizationUnexpectedArgument)
+                    .replace("{argument}", &other.to_string_lossy())
+            );
+            return 2;
+        }
+    };
+    let whoami = PaneCredentials::from_env().map_or(WhoAmI::External, |pane| pane.whoami());
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&whoami).expect("whoami serializes")
+        );
+        return 0;
+    }
+    println!(
+        "{}",
+        match &whoami {
+            WhoAmI::External => text
+                .get(UiTextKey::CliLocalizationWhoamiExternal)
+                .to_string(),
+            WhoAmI::Pane {
+                project_id,
+                terminal_session_id,
+                generation,
+                role,
+                control,
+            } => text
+                .get(UiTextKey::CliLocalizationWhoamiPane)
+                .replace("{terminal}", terminal_session_id)
+                .replace("{project}", project_id)
+                .replace("{generation}", &generation.to_string())
+                .replace("{role}", &protocol_word(role))
+                .replace("{control}", &protocol_word(control)),
+        }
+    );
+    0
+}
+
 pub fn run(profile: AppProfile, args: &[OsString]) -> i32 {
     let text = ui_text_for_profile(&profile);
     if args.is_empty()
@@ -264,6 +328,9 @@ pub fn run(profile: AppProfile, args: &[OsString]) -> i32 {
     {
         println!("{}", help(text));
         return 0;
+    }
+    if args.first().is_some_and(|arg| arg == "whoami") {
+        return whoami(&args[1..], text);
     }
     let json = args
         .iter()

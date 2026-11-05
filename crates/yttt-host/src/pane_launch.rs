@@ -52,11 +52,8 @@ const DEFAULT_GEOMETRY: TerminalGeometry = TerminalGeometry {
     cell_height: 0,
 };
 /// Inherited values must not reach the child; the Host injects its own.
-const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
-    "YTTT_AGENT_HOOK_ENDPOINT",
-    "YTTT_AGENT_HOOK_TOKEN",
-    "YTTT_AGENT_HOOK_SCOPE",
-];
+const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 5] =
+    yttt_protocol::agent::HOST_TERMINAL_IDENTITY_ENVIRONMENT;
 
 /// Host-scoped `[terminal]` settings read at each launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -583,6 +580,7 @@ mod tests {
             kind: PaneKind::default(),
             notify_on_exit: false,
             detector: None,
+            role: yttt_core::model::layout::PaneRole::Worker,
         }
     }
 

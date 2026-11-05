@@ -5,8 +5,8 @@ use yttt_agent_core::AgentSnapshot;
 use crate::model::{
     ids::{ProjectId, ProjectInstanceId},
     layout::{
-        LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectLayout, SplitConfig,
-        SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
+        LayoutNode, PaneConfig, PaneKind, PaneRole, ProcessExitBehavior, ProjectLayout,
+        SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
     },
     project::{ProjectDescriptor, ProjectLocation},
     split_tree::{FocusDirection, ResizeDirection},
@@ -814,6 +814,7 @@ impl OpenedProject {
             kind: PaneKind::Shell,
             notify_on_exit: false,
             detector: None,
+            role: PaneRole::Worker,
         };
         if !split_pane_node(tab_layout, target_pane_id, direction, new_pane) {
             return Err(WorkspaceError::PaneNotFound(target_pane_id.to_string()));
@@ -917,6 +918,7 @@ pub(crate) fn shell_tab_config(id: String, title: String, command: String) -> Ta
             kind: PaneKind::Shell,
             notify_on_exit: false,
             detector: None,
+            role: PaneRole::Worker,
         }),
     }
 }
@@ -926,6 +928,7 @@ pub(crate) fn agent_tab_config(
     title: String,
     command: String,
     args: Vec<String>,
+    role: PaneRole,
 ) -> TabConfig {
     TabConfig {
         id,
@@ -942,6 +945,7 @@ pub(crate) fn agent_tab_config(
             kind: PaneKind::Agent,
             notify_on_exit: true,
             detector: None,
+            role,
         }),
     }
 }

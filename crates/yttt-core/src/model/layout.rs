@@ -165,6 +165,9 @@ pub struct PaneConfig {
     pub notify_on_exit: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detector: Option<String>,
+    /// Set only by a person; takes effect when the pane's process next starts.
+    #[serde(default, skip_serializing_if = "PaneRole::is_worker")]
+    pub role: PaneRole,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
@@ -188,6 +191,24 @@ pub enum PaneKind {
     #[default]
     Shell,
     Agent,
+}
+
+/// An orchestrator pane receives a control credential and may drive the
+/// Agents it starts; every other pane is a worker.
+#[derive(
+    Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq, Hash,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneRole {
+    #[default]
+    Worker,
+    Orchestrator,
+}
+
+impl PaneRole {
+    pub fn is_worker(&self) -> bool {
+        *self == Self::Worker
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]

@@ -328,12 +328,16 @@ impl PaneRuntime {
             ProjectLocation::Ssh { .. } => None,
         };
         let mut scope = None;
+        let role = target.pane.role;
         let spawned = self.runtime.spawn_with_transport(
             planned.spec,
             Some(self.ssh.transport()),
             local_cwd,
             |spec, epoch| {
-                scope = Some(self.agent_hooks.secure_terminal_environment(spec, epoch));
+                scope = Some(
+                    self.agent_hooks
+                        .secure_terminal_environment(spec, epoch, role),
+                );
                 if let Some(pane) = self.launched.lock().get_mut(&session_id) {
                     pane.session_epoch = Some(epoch);
                 }
@@ -626,6 +630,7 @@ mod tests {
                 kind: PaneKind::Agent,
                 notify_on_exit: false,
                 detector: None,
+                role: yttt_core::model::layout::PaneRole::Worker,
             },
             agent_snapshot: Some(snapshot),
             restore: true,

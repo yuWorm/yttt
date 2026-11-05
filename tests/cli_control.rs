@@ -4,6 +4,7 @@ use yttt::{
     desktop_shell::{DesktopShellClaim, DesktopShellCommand, DesktopShellRuntime, control_desktop},
     ui::i18n::UiText,
 };
+use yttt_core::model::layout::PaneRole;
 use yttt_protocol::desktop_control::*;
 
 fn parse(words: &[&str]) -> Result<cli::CliInvocation, String> {
@@ -80,6 +81,7 @@ fn cli_preserves_provider_arguments_and_terminal_text_without_shell_expansion() 
             provider: "codex".into(),
             args: vec!["Review $HOME and `x`".into(), "--remote-client".into()],
             title: None,
+            role: PaneRole::Worker,
         }
     );
     let invocation = parse(&[
@@ -103,6 +105,39 @@ fn cli_preserves_provider_arguments_and_terminal_text_without_shell_expansion() 
             raw: false,
             agent_only: true,
         }
+    );
+}
+
+#[test]
+fn cli_grants_the_orchestrator_role_only_when_asked_and_rejects_unknown_roles() {
+    let role = |extra: &[&str]| {
+        let mut words = vec!["agents", "create", "--project", "p", "--provider", "claude"];
+        words.extend_from_slice(extra);
+        parse(&words).map(|invocation| match invocation.request.command {
+            DesktopControlCommand::CreateAgent { role, .. } => role,
+            other => panic!("unexpected command {other:?}"),
+        })
+    };
+    assert_eq!(role(&[]).unwrap(), PaneRole::Worker);
+    assert_eq!(
+        role(&["--role", "orchestrator"]).unwrap(),
+        PaneRole::Orchestrator
+    );
+    assert!(
+        role(&["--role", "lead"])
+            .unwrap_err()
+            .contains("worker or orchestrator")
+    );
+    let wire = serde_json::to_value(DesktopControlCommand::CreateAgent {
+        provider: "claude".into(),
+        args: Vec::new(),
+        title: None,
+        role: PaneRole::Worker,
+    })
+    .unwrap();
+    assert!(
+        wire["create_agent"].get("role").is_none(),
+        "requests from older CLIs and newer ones agree on workers: {wire}"
     );
 }
 
