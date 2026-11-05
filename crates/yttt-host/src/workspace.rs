@@ -114,6 +114,15 @@ impl Drop for WorkspaceSubscription {
 }
 
 /// An accepted layout intent.
+/// A pane found by [`WorkspaceService::locate_pane`] or [`WorkspaceService::panes_where`].
+#[derive(Clone, Debug)]
+pub(crate) struct LocatedPane {
+    pub(crate) workspace_id: WorkspaceId,
+    pub(crate) address: PaneAddress,
+    pub(crate) config: yttt_core::model::layout::PaneConfig,
+    pub(crate) state: yttt_core::model::workspace::PaneState,
+}
+
 pub(crate) struct AppliedIntent {
     pub(crate) revision: u64,
     /// Panes the intent removed; their terminals must be terminated.
@@ -931,6 +940,51 @@ impl WorkspaceService {
                 })
             })
             .collect()
+    }
+
+    /// The pane running a terminal, preferring workspaces open in a window.
+    pub(crate) fn locate_pane(
+        &self,
+        session_id: &yttt_core::model::ids::TerminalSessionId,
+    ) -> Option<LocatedPane> {
+        self.panes_where(|address, _| address.terminal_session_id() == *session_id)
+            .into_iter()
+            .next()
+    }
+
+    /// Every pane `keep` accepts, those in workspaces open in a window first.
+    pub(crate) fn panes_where(
+        &self,
+        keep: impl Fn(&PaneAddress, &yttt_core::model::layout::PaneConfig) -> bool,
+    ) -> Vec<LocatedPane> {
+        let state = self.state.lock();
+        let mut records = state.workspaces.iter().collect::<Vec<_>>();
+        records.sort_by_key(|(id, record)| (!record.restore_on_startup, id.as_str().to_string()));
+        let mut found = Vec::new();
+        for (workspace_id, record) in records {
+            for project in record.layout.workspace().opened_projects() {
+                for tab in &project.tab_states {
+                    for pane in &tab.pane_states {
+                        let address = PaneAddress {
+                            project_id: project.id.clone(),
+                            tab_id: tab.tab_id.clone(),
+                            pane_id: pane.pane_id.clone(),
+                        };
+                        if let Some((config, state)) = record.layout.pane(&address)
+                            && keep(&address, config)
+                        {
+                            found.push(LocatedPane {
+                                workspace_id: workspace_id.clone(),
+                                address,
+                                config: config.clone(),
+                                state: state.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        found
     }
 
     /// Records that a pane's process exited or did not start. Returns the

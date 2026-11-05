@@ -33,8 +33,9 @@ use yttt_protocol::{
         AGENT_CONTROL_SCOPE_HEADER, AGENT_CONTROL_TOKEN_ENV, AGENT_CONTROL_TOKEN_HEADER,
         AGENT_CONTROL_WHOAMI_PATH, AGENT_HOOK_DELIVERY_PROTOCOL, AGENT_HOOK_ENDPOINT_ENV,
         AGENT_HOOK_SCOPE_ENV, AGENT_HOOK_TOKEN_ENV, AGENT_SELF_ENV, AgentCommandRequest,
-        AgentControlIdentity, AgentHookAcknowledgement, AgentHookDelivery, AgentHookScope,
-        AgentSnapshotCursor, AgentSnapshotUpdate, HOST_TERMINAL_IDENTITY_ENVIRONMENT,
+        AgentControlError, AgentControlErrorCode, AgentControlIdentity, AgentControlResponse,
+        AgentHookAcknowledgement, AgentHookDelivery, AgentHookScope, AgentSnapshotCursor,
+        AgentSnapshotUpdate, HOST_TERMINAL_IDENTITY_ENVIRONMENT,
     },
     terminal::TerminalSpawnSpec,
 };
@@ -162,6 +163,9 @@ struct AgentState {
     bindings: Mutex<HashMap<AgentHookScope, TerminalSessionId>>,
     /// Bound scopes whose pane was started as an orchestrator.
     orchestrators: Mutex<HashSet<AgentHookScope>>,
+    /// Serves authenticated control requests other than `whoami`; set once
+    /// the Host services it needs exist.
+    control_handler: std::sync::OnceLock<Arc<dyn AgentControlHandler>>,
     records: Mutex<HashMap<AgentAddress, AgentRecord>>,
     terminal_exits: Mutex<HashMap<AgentHookScope, AgentProcessExit>>,
     process_observations: Mutex<HashMap<TerminalSessionId, AgentProcessObservation>>,
@@ -215,6 +219,7 @@ impl HostAgentHookRuntime {
             providers,
             bindings: Mutex::new(HashMap::new()),
             orchestrators: Mutex::new(HashSet::new()),
+            control_handler: std::sync::OnceLock::new(),
             records: Mutex::new(HashMap::new()),
             terminal_exits: Mutex::new(HashMap::new()),
             process_observations: Mutex::new(HashMap::new()),
@@ -315,6 +320,10 @@ impl HostAgentHookRuntime {
         bindings.retain(|candidate, _| AgentAddress::from(candidate) != address);
         bindings.insert(scope.clone(), spec.session_id.clone());
         scope
+    }
+
+    pub fn set_control_handler(&self, handler: Arc<dyn AgentControlHandler>) {
+        let _ = self.state.control_handler.set(handler);
     }
 
     pub fn cancel_terminal(&self, scope: &AgentHookScope) {
@@ -904,7 +913,20 @@ enum HookIngestOutcome {
         pending: bool,
     },
     QuestionPoll(Value),
-    Control(Vec<u8>),
+    Control {
+        status: u16,
+        body: Vec<u8>,
+    },
+}
+
+/// Carries out what an authenticated orchestrator asks; see `agent_control`.
+pub trait AgentControlHandler: Send + Sync {
+    fn handle(
+        &self,
+        caller: &AgentControlIdentity,
+        path: &str,
+        body: &[u8],
+    ) -> Result<AgentControlResponse, AgentControlError>;
 }
 
 struct DeliveryApplication {
@@ -930,12 +952,23 @@ fn handle_connection(mut stream: TcpStream, state: &AgentState) {
     let _ = stream.set_write_timeout(Some(CLIENT_TIMEOUT));
     let request = read_http_request(&mut stream).and_then(|request| {
         if request.path.starts_with("/control/") {
-            return control_request(state, request).map(HookIngestOutcome::Control);
+            return control_request(state, request)
+                .map(|(status, body)| HookIngestOutcome::Control { status, body });
         }
         decode_request(request, &state.secret).and_then(|request| ingest_request(state, request))
     });
     let (status, reason, body) = match request {
-        Ok(HookIngestOutcome::Control(body)) => (200, "OK", body),
+        Ok(HookIngestOutcome::Control { status, body }) => (
+            status,
+            match status {
+                200 => "OK",
+                400 => "Bad Request",
+                403 => "Forbidden",
+                404 => "Not Found",
+                _ => "Internal Server Error",
+            },
+            body,
+        ),
         Ok(HookIngestOutcome::Unsequenced) => (204, "No Content", Vec::new()),
         Ok(HookIngestOutcome::QuestionPoll(response)) => (
             200,
@@ -1994,14 +2027,38 @@ fn valid_script_delivery_id(delivery_id: &str) -> Result<String, HttpRequestErro
 
 /// Answers a request presenting an orchestrator's control credential. The
 /// caller is whoever the scope names; nothing in the body can change that.
-fn control_request(state: &AgentState, request: HttpRequest) -> Result<Vec<u8>, HttpRequestError> {
+fn control_request(
+    state: &AgentState,
+    request: HttpRequest,
+) -> Result<(u16, Vec<u8>), HttpRequestError> {
     let identity = authenticate_control(state, &request)?;
-    match request.path.as_str() {
-        AGENT_CONTROL_WHOAMI_PATH => {
-            Ok(serde_json::to_vec(&identity).expect("control identity must serialize"))
-        }
-        _ => Err(HttpRequestError::NotFound),
+    if request.path == AGENT_CONTROL_WHOAMI_PATH {
+        return Ok((
+            200,
+            serde_json::to_vec(&identity).expect("control identity must serialize"),
+        ));
     }
+    let handler = state
+        .control_handler
+        .get()
+        .ok_or(HttpRequestError::Unavailable)?;
+    Ok(
+        match handler.handle(&identity, &request.path, &request.body) {
+            Ok(response) => (
+                200,
+                serde_json::to_vec(&response).expect("control response must serialize"),
+            ),
+            Err(error) => (
+                match error.code {
+                    AgentControlErrorCode::InvalidRequest => 400,
+                    AgentControlErrorCode::Forbidden => 403,
+                    AgentControlErrorCode::NotFound => 404,
+                    AgentControlErrorCode::Failed => 500,
+                },
+                serde_json::to_vec(&error).expect("control error must serialize"),
+            ),
+        },
+    )
 }
 
 fn authenticate_control(
@@ -2441,6 +2498,47 @@ mod tests {
         assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
     }
 
+    struct RefusingHandler;
+
+    impl AgentControlHandler for RefusingHandler {
+        fn handle(
+            &self,
+            caller: &AgentControlIdentity,
+            path: &str,
+            _body: &[u8],
+        ) -> Result<AgentControlResponse, AgentControlError> {
+            Err(AgentControlError::new(
+                AgentControlErrorCode::Forbidden,
+                format!("{} may not {path}", caller.terminal_session_id.as_str()),
+            ))
+        }
+    }
+
+    #[test]
+    fn control_requests_reach_the_handler_with_the_authenticated_caller() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut lead = spec("lead", "lead");
+        runtime.secure_terminal_environment(&mut lead, 1, PaneRole::Orchestrator);
+        let request = || {
+            control_http_request(
+                "/control/v1/agents/list",
+                environment_value(&lead, AGENT_SELF_ENV).unwrap(),
+                environment_value(&lead, AGENT_CONTROL_TOKEN_ENV).unwrap(),
+            )
+        };
+
+        assert!(matches!(
+            control_request(&runtime.state, request()),
+            Err(HttpRequestError::Unavailable)
+        ));
+        runtime.set_control_handler(Arc::new(RefusingHandler));
+        let (status, body) = control_request(&runtime.state, request()).unwrap();
+        assert_eq!(status, 403);
+        let error: AgentControlError = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error.code, AgentControlErrorCode::Forbidden);
+        assert_eq!(error.message, "lead may not /control/v1/agents/list");
+    }
+
     #[test]
     fn whoami_answers_only_the_current_orchestrator_credential() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
@@ -2459,6 +2557,7 @@ mod tests {
                 &runtime.state,
                 control_http_request(AGENT_CONTROL_WHOAMI_PATH, scope, token),
             )
+            .map(|(_, body)| body)
         };
 
         let identity: AgentControlIdentity =

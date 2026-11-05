@@ -466,6 +466,7 @@ fn creating_an_agent_tab_keeps_its_resume_arguments_and_agent_semantics() {
                     command: "codex".into(),
                     args: vec!["resume".into(), "session-1".into()],
                     role: PaneRole::Worker,
+                    spawned_by: None,
                 },
                 tab_id: None,
             },
@@ -505,6 +506,7 @@ fn an_orchestrator_agent_tab_keeps_its_role_across_a_snapshot() {
                     command: "claude".into(),
                     args: Vec::new(),
                     role: PaneRole::Orchestrator,
+                    spawned_by: None,
                 },
                 tab_id: None,
             },
@@ -529,6 +531,66 @@ fn an_orchestrator_agent_tab_keeps_its_role_across_a_snapshot() {
     )
     .unwrap();
     assert_eq!(restored.role, PaneRole::Orchestrator);
+}
+
+#[test]
+fn a_spawned_agent_records_its_owner_and_a_person_can_reassign_it() {
+    let mut workspace = migrated();
+    let outcome = workspace
+        .apply(
+            WorkspaceIntent::CreateTab {
+                project_id: project_id(),
+                tab: NewTab::Agent {
+                    title: "Worker".into(),
+                    command: "codex".into(),
+                    args: Vec::new(),
+                    role: PaneRole::Worker,
+                    spawned_by: Some("lead-terminal".into()),
+                },
+                tab_id: Some("worker-tab".into()),
+            },
+            None,
+        )
+        .unwrap();
+    let [added] = outcome.panes.added.as_slice() else {
+        panic!("expected one added pane: {:?}", outcome.panes.added);
+    };
+    let owner = |workspace: &HostWorkspace| {
+        workspace
+            .pane(added)
+            .and_then(|(config, _)| config.spawned_by.clone())
+    };
+    assert_eq!(owner(&workspace).as_deref(), Some("lead-terminal"));
+
+    workspace
+        .apply(
+            WorkspaceIntent::SetPaneOwner {
+                project_id: project_id(),
+                tab_id: added.tab_id.clone(),
+                pane_id: added.pane_id.clone(),
+                owner: Some("other-lead".into()),
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(owner(&workspace).as_deref(), Some("other-lead"));
+
+    let revision = workspace.revision();
+    assert!(
+        workspace
+            .apply(
+                WorkspaceIntent::SetPaneOwner {
+                    project_id: project_id(),
+                    tab_id: added.tab_id.clone(),
+                    pane_id: "missing".into(),
+                    owner: None,
+                },
+                None,
+            )
+            .is_err()
+    );
+    assert_eq!(workspace.revision(), revision);
+    assert_eq!(owner(&workspace).as_deref(), Some("other-lead"));
 }
 
 #[test]

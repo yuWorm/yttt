@@ -1914,6 +1914,7 @@ mod tests {
                 notify_on_exit: false,
                 detector: None,
                 role: yttt_core::model::layout::PaneRole::Worker,
+                spawned_by: None,
             },
             is_focused: true,
             terminal_input_gate: TerminalInputGate::default(),

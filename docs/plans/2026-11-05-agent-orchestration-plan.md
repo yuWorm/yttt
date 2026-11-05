@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** P0-1～P0-3 已实现（见 §6 记录）；P0-4 并入 P1。§4 的开放问题已于 2026-11-05 按建议默认确认。
+**状态：** P0、P1 已实现（见 §6 记录；推迟项在各条目中注明）；下一步 P2。§4 的开放问题已于 2026-11-05 按建议默认确认。
 
 **依据：** 2026-11-05 对 `yttt ctl`、Agent hook、调度中心与 C4 之后 Host 布局的代码梳理；`docs/cli-control.md`、`docs/host-client-architecture.md`、`docs/plans/2026-10-28-c4-host-owned-layout-design.md`。同类设计参考：Claude Code agent teams（lead + teammate，各占一个 pane，人可直接进入 teammate）、Codex app-server（`turn/start`、`turn/interrupt`、`turn/completed{status}`）、ACP（`session/prompt`、`session/cancel`、`session/update`）、cmux（终端 socket/CLI + hook 通知）。
 
@@ -129,19 +129,19 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 
 - [x] 测试：未授予角色的 pane 没有 `YTTT_AGENT_CONTROL_TOKEN`；授予后重启 pane 才获得；用 A 的 token 带 B 的 scope 被拒；generation 过期被拒；hook token 调用控制入口被拒。
 - [x] 实现：pane 状态新增 `role: worker | orchestrator`（默认 worker，随 Host 布局持久化）；Host 用独立密钥派生控制 token；角色只能由 Human 主体设置（`agents create --role orchestrator` 仅经桌面 socket 可用；pane 菜单开关随 P3-4）。
-- [ ] 验收：真实冒烟中，worker pane 里调用 `agents spawn` 得 `forbidden`。
+- [x] 验收：真实冒烟中，worker pane 里调用 `agents spawn` 得 `forbidden`。
 
 ## P0-3：Host 控制入口与路由
 
-- [ ] 测试：loopback 入口只接受带有效控制 token 的请求；请求主体从 token 派生，自报字段被忽略；桌面 socket 转发的请求主体为 Human/External。（已完成前两条；桌面 socket 主体随 P1 的 `AgentControl` 入口）
-- [ ] 实现（`/control/v1` 与 whoami 已完成，`AgentControl::handle` 随 P1）：在 hook HTTP listener 上增加 `/control/v1` 路径（理由：SSH 托管项目已为该 endpoint 建立反向转发，控制入口随之可达）；`yttt ctl` 检测到控制 token 时直连 Host，否则保持桌面 socket；两条路径进入同一 `AgentControl::handle(principal, request)`。
+- [ ] 测试：loopback 入口只接受带有效控制 token 的请求；请求主体从 token 派生，自报字段被忽略；桌面 socket 转发的请求主体为 Human/External。（已完成前两条；桌面 socket 路径仍按 External 执行、不携带 pane 身份，推迟到 P2 与 send/interrupt 一起处理）
+- [ ] 实现（`/control/v1`、whoami 与 Host `AgentControl` 已完成；桌面 socket 路径并入同一入口推迟到 P2）：在 hook HTTP listener 上增加 `/control/v1` 路径（理由：SSH 托管项目已为该 endpoint 建立反向转发，控制入口随之可达）；`yttt ctl` 检测到控制 token 时直连 Host，否则保持桌面 socket；两条路径进入同一 `AgentControl::handle(principal, request)`。
 - [ ] 验证项：SSH 托管项目的 Agent 进程运行在远端，确认 hook 回报的现有转发方式，控制入口沿用同一方式；不可达时 `whoami` 明确报告 `control_unavailable`。
 - [ ] 验收：同一命令从编排者 pane 与 pane 外执行，审计记录的主体不同。
 
 ## P0-4：审计带主体（并入 P1：P0 只有只读的 `whoami`）
 
-- [ ] 测试：每个控制请求（含被拒绝的）写一条审计，含 principal、目标句柄、命令、结果、delivery/turn ID。
-- [ ] 实现：扩展 `AuditEntry`；新增按 Worker/编排者查询的有界接口。
+- [ ] 测试：每个控制请求（含被拒绝的）写一条审计，含 principal、目标句柄、命令、结果、delivery/turn ID。（P1：`AgentControl` 对 spawn/list/close 记录 `agent:<terminal>`、动作、目标与 Allowed/Denied，尚无自动化测试；delivery/turn 随 P2）
+- [ ] 实现：扩展 `AuditEntry`；新增按 Worker/编排者查询的有界接口。（查询接口随 P3-4 时间线）
 
 ---
 
@@ -153,18 +153,18 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 
 ## P1-1：`agents spawn`
 
-- [ ] 测试：编排者 spawn 返回 `{agent, generation, delivery?}`；Worker 记录 `spawned_by` = 编排者句柄并随布局持久化，Host 重启后保留；默认放在编排者所在项目，`--placement split` 拆分编排者所在 tab。
-- [ ] 实现：Host 内用现有 `WorkspaceIntent` 创建 tab/pane 与 Agent `PaneConfig`，由 `pane_runtime::ensure` 启动；带初始 prompt 时同时创建一个投递记录（P2 之前标 `unconfirmed`）。
-- [ ] 选项：`--worktree NAME` 复用现有 `WorktreeLaunch` 启动路径；若该路径不能由 Host 独立完成，本项推迟到 P4 并在状态行注明。
+- [x] 测试：编排者 spawn 返回 Worker 句柄（`ControlledAgent`）；Worker 记录 `spawned_by` = 编排者终端并随布局持久化，Host 重启后保留（真实冒烟验证）；放在编排者所在项目的新 tab。
+- [x] 实现：Host 内用现有 `WorkspaceIntent::CreateTab` 创建 Agent tab，由 `pane_runtime::ensure` 启动。
+- [ ] 推迟：响应中的 generation 与初始 prompt 的投递记录随 P2；`--placement split` 需要 Agent 版拆分意图，随 P2；`--worktree NAME` 随 P4。
 
 ## P1-2：权限检查
 
-- [ ] 测试：编排者对非自有 pane 执行 send/interrupt/close/read 得 `forbidden`；人通过 `agents assign --agent W --to O`（Human 主体）分配后允许；Worker 退出后句柄失效得 `gone`。
-- [ ] 实现：`AgentControl::authorize(principal, action, target)` 单一入口；Human/External 不受归属限制，仍受控制权约束。
+- [x] 测试：编排者对非自有 pane 执行 close 得 `forbidden`；人通过 `agents assign --project --tab --pane --to TERMINAL`（经桌面，`SetPaneOwner` 意图）分配后允许，`--clear` 收回；句柄不存在得 `not_found`；角色被移除的 pane 即使持有凭证也得 `forbidden`。send/interrupt/read 随 P2 用同一检查。
+- [x] 实现：`owned_worker` / `caller_pane` 作为单一检查入口；Human/External 经桌面 socket，不受归属限制。
 
 ## P1-3：精简列表
 
-- [ ] 测试：`agents list --mine` 每个 Worker 一行：句柄、provider、process/turn 状态、controller、最近一轮 turn_seq 与 outcome、等待原因；不含 board 历史；输出大小与 Worker 数线性相关。
+- [x] 测试：`agents list --mine` 每个 Worker 一行：句柄、标题、终端状态、Agent 的 provider/process/turn/等待原因/任务；不含 board 历史。controller 随 P3，turn_seq 与 outcome 随 P2。
 
 ---
 
@@ -282,3 +282,4 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 | 日期 | 阶段 | 内容 |
 |---|---|---|
 | 2026-11-05 | P0-1～P0-3 | `yttt-protocol::agent` 集中定义 Host 注入的 5 个变量（替换 Host、pane_launch、SSH、桌面 4 处副本）与 `AgentHookScope::encode/decode`；每个终端注入 `YTTT_SELF`；`PaneConfig.role`（worker 不序列化，旧形状不变）、`NewTab::Agent.role`、`CreateAgent.role`；`pane_runtime` 按 pane 角色签发控制 token（HMAC，`control:` 域前缀与 hook token 区分），Host 记录编排者 scope，重启或角色变更即失效；hook listener 新增 `/control/v1/whoami`；`yttt ctl whoami [--json]` 与 `agents create --role`。个人布局模板不携带角色。测试：`agent_hooks` 新增 3 例（注入、凭证鉴权含重启失效、真实 HTTP 路由），`agent_control_client` 4 例，`cli_control` 与 `host_workspace` 各 1 例；CI 同款 16 个包 `cargo test` 1648 通过、0 失败，clippy `-D warnings` 与 fmt 通过（`--workspace` 下 vendor `gpui-markdown-editor` 的 lib test 在 master 上即无法编译，与本改动无关）。真实桌面冒烟（隔离 `YTTT_PROFILE_ROOT`；profile 放在 worktree `tmp/`，放 scratchpad 时路径超过 Unix socket 长度上限）：ctl 新建 shell tab，pane 内环境含 `YTTT_SELF`，`whoami --json` 返回 pane、worker、`not_granted`，中文文本输出正常；pane 外返回 `external`；provider 配置文件前后校验和一致。未做：编排者 pane 的端到端冒烟——Agent pane 启动会安装 provider hook，P1 冒烟按 AGENTS.md 记录并还原 hook 后再做；P0-2/P0-3 的两条验收依赖 P1 的 spawn 与审计。 |
+| 2026-11-05 | P1 | `PaneConfig.spawned_by` 与 `NewTab::Agent.spawned_by`、`WorkspaceIntent::SetPaneOwner`；Host `agent_control`（hook listener 鉴权后经 `AgentControlHandler` 转入，进入 Host tokio 上下文执行）：`/control/v1/agents/spawn`、`/list`、`/close`，按 `spawned_by` 检查归属并写审计；关闭唯一 pane 时关闭其 tab，项目最后一个终端 tab 拒绝关闭。`WorkspaceService::locate_pane`/`panes_where`。CLI：`agents spawn`、`agents list --mine`、`agents close --agent`（编排者 pane 直连 Host，非编排者得 `forbidden`），`agents assign --to/--clear`（经桌面）。测试：`agent_control` 4 例、hook 转发 1 例、客户端 1 例、CLI 解析 2 例、`host_workspace` 1 例、桌面 `cli_control_creates_splits…` 增加 assign 断言。真实桌面冒烟（隔离 profile；临时 `HOME`，`PATH` 前置假 `claude`/`codex` 脚本以免 provider hook 写入真实配置）：编排者 `whoami` 得 `verified`；spawn 出 W1，pane 内可见假 codex 收到参数；worker pane 内 spawn 得 `forbidden`；关闭人创建的 Agent 得 `forbidden`，人 assign 后出现在 `list --mine`；重启桌面与 Host 后角色、归属保留，`whoami` 仍 `verified`，close W1 后 tab 移除、Host 子进程 4→3。真实 provider 配置校验和前后一致；hook 只写入临时 HOME，随冒烟目录删除。观察：重启后约数秒内 pane 列表为 `starting`、`panes send` 得 `not_ready`，之后恢复，与本改动无关，未深究。 |

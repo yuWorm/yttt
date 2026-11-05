@@ -249,6 +249,7 @@ fn agent_pane(agent: BuiltinAgent) -> PaneConfig {
         notify_on_exit: true,
         detector: None,
         role: yttt_core::model::layout::PaneRole::Worker,
+        spawned_by: None,
     }
 }
 
@@ -264,6 +265,7 @@ fn shell_pane() -> PaneConfig {
         notify_on_exit: false,
         detector: None,
         role: yttt_core::model::layout::PaneRole::Worker,
+        spawned_by: None,
     }
 }
 

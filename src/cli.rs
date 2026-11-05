@@ -1,6 +1,14 @@
 use std::{collections::BTreeMap, ffi::OsString, io::Read as _, path::PathBuf};
+use yttt_core::model::ids::TerminalSessionId;
 use yttt_core::model::layout::PaneRole;
-use yttt_protocol::desktop_control::*;
+use yttt_protocol::{
+    agent::{
+        AGENT_CONTROL_CLOSE_PATH, AGENT_CONTROL_LIST_PATH, AGENT_CONTROL_SPAWN_PATH,
+        AgentControlError, AgentControlErrorCode, AgentControlResponse, AgentSpawnRequest,
+        AgentTargetRequest, ControlledAgent,
+    },
+    desktop_control::*,
+};
 
 use crate::{
     agent_control_client::{PaneCredentials, WhoAmI},
@@ -28,7 +36,18 @@ pub struct CliInvocation {
     pub json: bool,
 }
 
-pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
+/// A command line split into resource, action, `--option value` pairs and
+/// the words after `--`.
+struct CommandWords {
+    resource: String,
+    action: String,
+    options: BTreeMap<String, String>,
+    trailing: Vec<String>,
+}
+
+const FLAG_OPTIONS: [&str; 6] = ["--json", "--enter", "--raw", "--stdin", "--mine", "--clear"];
+
+fn split_command(args: &[OsString], text: UiText) -> Result<CommandWords, String> {
     let words = args
         .iter()
         .map(|arg| {
@@ -60,7 +79,7 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
                 .get(UiTextKey::CliLocalizationUnexpectedArgument)
                 .replace("{argument}", key));
         }
-        let value = if matches!(key.as_str(), "--json" | "--enter" | "--raw" | "--stdin") {
+        let value = if FLAG_OPTIONS.contains(&key.as_str()) {
             String::new()
         } else {
             index += 1;
@@ -79,6 +98,85 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         }
         index += 1;
     }
+    Ok(CommandWords {
+        resource: resource.clone(),
+        action: action.clone(),
+        options,
+        trailing,
+    })
+}
+
+/// A request an orchestrator pane sends straight to the Host.
+#[derive(Debug)]
+pub struct AgentControlInvocation {
+    pub path: &'static str,
+    pub body: serde_json::Value,
+    pub json: bool,
+}
+
+/// Recognizes the commands served by the Host for orchestrators; any other
+/// command line is left to [`parse`].
+pub fn parse_agent_control(
+    args: &[OsString],
+    text: UiText,
+) -> Result<Option<AgentControlInvocation>, String> {
+    let Ok(CommandWords {
+        resource,
+        action,
+        mut options,
+        trailing,
+    }) = split_command(args, text)
+    else {
+        return Ok(None);
+    };
+    let path = match (resource.as_str(), action.as_str()) {
+        ("agents", "spawn") => AGENT_CONTROL_SPAWN_PATH,
+        ("agents", "list") if options.contains_key("--mine") => AGENT_CONTROL_LIST_PATH,
+        ("agents", "close") => AGENT_CONTROL_CLOSE_PATH,
+        _ => return Ok(None),
+    };
+    let json = options.remove("--json").is_some();
+    let body = match path {
+        AGENT_CONTROL_SPAWN_PATH => serde_json::to_value(AgentSpawnRequest {
+            provider: options.remove("--provider").ok_or_else(|| {
+                text.get(UiTextKey::CliLocalizationProviderRequired)
+                    .to_string()
+            })?,
+            args: trailing.clone(),
+            title: options.remove("--title"),
+        }),
+        AGENT_CONTROL_CLOSE_PATH => serde_json::to_value(AgentTargetRequest {
+            agent: TerminalSessionId::new(options.remove("--agent").ok_or_else(|| {
+                text.get(UiTextKey::CliLocalizationAgentRequired)
+                    .to_string()
+            })?),
+        }),
+        _ => {
+            options.remove("--mine");
+            Ok(serde_json::json!({}))
+        }
+    }
+    .expect("control requests serialize");
+    if let Some((key, _)) = options.first_key_value() {
+        return Err(text
+            .get(UiTextKey::CliLocalizationUnknownOption)
+            .replace("{option}", key));
+    }
+    if path != AGENT_CONTROL_SPAWN_PATH && !trailing.is_empty() {
+        return Err(text
+            .get(UiTextKey::CliLocalizationProviderArgumentsOnly)
+            .to_string());
+    }
+    Ok(Some(AgentControlInvocation { path, body, json }))
+}
+
+pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
+    let CommandWords {
+        resource,
+        action,
+        mut options,
+        mut trailing,
+    } = split_command(args, text)?;
     let json = options.remove("--json").is_some();
     let window = options.remove("--window");
     let project = options.remove("--project");
@@ -91,6 +189,15 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         ("panes", "list") => DesktopControlCommand::Panes,
         ("agents", "list") => DesktopControlCommand::Agents,
         ("board", "show") => DesktopControlCommand::ShowCommandCenter,
+        ("agents", "assign") => DesktopControlCommand::AssignAgent {
+            owner: match (options.remove("--to"), options.remove("--clear")) {
+                (Some(owner), None) => Some(owner),
+                (None, Some(_)) => None,
+                _ => {
+                    return Err(text.get(UiTextKey::CliLocalizationAssignTarget).to_string());
+                }
+            },
+        },
         ("board", "answer") => DesktopControlCommand::AnswerAgentQuestion {
             request_id: options.remove("--request").ok_or_else(|| {
                 text.get(UiTextKey::CliLocalizationRequestRequired)
@@ -213,8 +320,8 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         _ => {
             return Err(text
                 .get(UiTextKey::CliLocalizationUnknownCommand)
-                .replace("{resource}", resource)
-                .replace("{action}", action));
+                .replace("{resource}", &resource)
+                .replace("{action}", &action));
         }
     };
     if let Some((key, _)) = options.first_key_value() {
@@ -262,6 +369,97 @@ fn error_code_label(code: &DesktopControlErrorCode, text: UiText) -> &'static st
         DesktopControlErrorCode::OutcomeUnknown => UiTextKey::CliLocalizationErrorOutcomeUnknown,
         DesktopControlErrorCode::Failed => UiTextKey::CliLocalizationErrorFailed,
     })
+}
+
+/// Sends an orchestrator's request to the Host; the desktop is not involved.
+fn run_agent_control(invocation: &AgentControlInvocation, text: UiText) -> i32 {
+    let output_text = if invocation.json {
+        UiText::english()
+    } else {
+        text
+    };
+    let pane = PaneCredentials::from_env().filter(PaneCredentials::has_control_token);
+    let Some(pane) = pane else {
+        return report_agent_control_error(
+            &AgentControlError::new(
+                AgentControlErrorCode::Forbidden,
+                output_text.get(UiTextKey::CliLocalizationOrchestratorRequired),
+            ),
+            invocation.json,
+            text,
+        );
+    };
+    match pane.control(invocation.path, &invocation.body) {
+        Ok(response) => {
+            if invocation.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&response).expect("control response serializes")
+                );
+            } else {
+                println!("{}", format_agent_control(&response, text));
+            }
+            0
+        }
+        Err(Some(error)) => report_agent_control_error(&error, invocation.json, text),
+        Err(None) => {
+            eprintln!(
+                "{}: {}",
+                error_code_label(&DesktopControlErrorCode::OutcomeUnknown, text),
+                text.get(UiTextKey::CliLocalizationControlUnreachable)
+            );
+            1
+        }
+    }
+}
+
+fn report_agent_control_error(error: &AgentControlError, json: bool, text: UiText) -> i32 {
+    if json {
+        eprintln!(
+            "{}",
+            serde_json::to_string(error).expect("control error serializes")
+        );
+    } else {
+        let code = match error.code {
+            AgentControlErrorCode::InvalidRequest => DesktopControlErrorCode::InvalidRequest,
+            AgentControlErrorCode::Forbidden => DesktopControlErrorCode::PermissionDenied,
+            AgentControlErrorCode::NotFound => DesktopControlErrorCode::NotFound,
+            AgentControlErrorCode::Failed => DesktopControlErrorCode::Failed,
+        };
+        eprintln!("{}: {}", error_code_label(&code, text), error.message);
+    }
+    if error.code == AgentControlErrorCode::InvalidRequest {
+        2
+    } else {
+        1
+    }
+}
+
+fn format_agent_control(response: &AgentControlResponse, text: UiText) -> String {
+    let line = |agent: &ControlledAgent| {
+        format!(
+            "{}\t{}\t{}\t{}",
+            agent.agent.as_str(),
+            agent.title,
+            agent.pane_state,
+            agent
+                .agent_state
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |state| protocol_word(&state.turn))
+        )
+    };
+    match response {
+        AgentControlResponse::Spawned { agent } => line(agent),
+        AgentControlResponse::Agents { agents } if agents.is_empty() => text
+            .get(UiTextKey::CliLocalizationNoControlledAgents)
+            .to_string(),
+        AgentControlResponse::Agents { agents } => {
+            agents.iter().map(line).collect::<Vec<_>>().join("\n")
+        }
+        AgentControlResponse::Closed { agent } => text
+            .get(UiTextKey::CliLocalizationAgentClosed)
+            .replace("{agent}", agent.as_str()),
+    }
 }
 
 /// A protocol value as it appears in JSON, shown untranslated in text output.
@@ -331,6 +529,21 @@ pub fn run(profile: AppProfile, args: &[OsString]) -> i32 {
     }
     if args.first().is_some_and(|arg| arg == "whoami") {
         return whoami(&args[1..], text);
+    }
+    let json = args
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--json");
+    match parse_agent_control(args, if json { UiText::english() } else { text }) {
+        Ok(Some(invocation)) => return run_agent_control(&invocation, text),
+        Ok(None) => {}
+        Err(message) => {
+            return report_agent_control_error(
+                &AgentControlError::new(AgentControlErrorCode::InvalidRequest, message),
+                json,
+                text,
+            );
+        }
     }
     let json = args
         .iter()

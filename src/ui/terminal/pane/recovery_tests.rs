@@ -201,6 +201,7 @@ fn open_pane_with_command<'a>(
         notify_on_exit: false,
         detector: None,
         role: yttt_core::model::layout::PaneRole::Worker,
+        spawned_by: None,
     };
     let layout = ProjectLayout {
         project: ProjectConfig {

@@ -89,6 +89,32 @@ identity variables are replaced at launch, so a process cannot pass its identity
 terminal it opens. Roles guard against Agent mistakes; they are not a boundary against
 other processes of the same user, which can still reach the desktop socket.
 
+## Orchestrating Agents
+
+Inside an orchestrator pane these commands go straight to the Host, so they also work
+for projects on a Host-managed SSH connection:
+
+```sh
+yttt ctl agents spawn --provider codex --title Parser -- 'Fix the parser tests'
+yttt ctl agents list --mine --json
+yttt ctl agents close --agent TERMINAL
+```
+
+`spawn` opens a new Agent tab in the orchestrator's project and answers with the worker's
+handle, its terminal session ID. An orchestrator may list and close only workers it
+started or that a person assigned to it; anything else is `forbidden`. Closing a worker's
+only pane closes its tab, and a project's last terminal tab is never closed. In any other
+pane these commands fail with `forbidden`. A person hands an existing Agent to an
+orchestrator, or takes it back, from outside it:
+
+```sh
+yttt ctl agents assign --project PROJECT_ID --tab TAB_ID --pane PANE_ID --to TERMINAL
+yttt ctl agents assign --project PROJECT_ID --tab TAB_ID --pane PANE_ID --clear
+```
+
+Ownership is kept with the layout and survives a Host restart. Every orchestrator request,
+allowed or refused, is recorded in the Host's audit log with the orchestrator's terminal.
+
 ## Creating tabs
 
 ```sh

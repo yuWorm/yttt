@@ -66,6 +66,8 @@ pub enum NewTab {
         args: Vec<String>,
         #[serde(default, skip_serializing_if = "PaneRole::is_worker")]
         role: PaneRole,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spawned_by: Option<String>,
     },
 }
 
@@ -151,6 +153,13 @@ pub enum WorkspaceIntent {
         tab_id: String,
         pane_id: String,
         title: String,
+    },
+    /// Names the orchestrator terminal that may drive a pane, or none.
+    SetPaneOwner {
+        project_id: ProjectId,
+        tab_id: String,
+        pane_id: String,
+        owner: Option<String>,
     },
     /// Replaces a whole project layout; requires an expected revision.
     ReplaceProjectLayout {
@@ -645,7 +654,8 @@ impl IntentExecutor {
                         command,
                         args,
                         role,
-                    } => agent_tab_config(tab_id, title, command, args, role),
+                        spawned_by,
+                    } => agent_tab_config(tab_id, title, command, args, role, spawned_by),
                 };
                 let tab_id = project.add_tab(config)?;
                 self.activate_item(&project_id, WorkItemId::Terminal(tab_id))?;
@@ -738,6 +748,15 @@ impl IntentExecutor {
                 .workspace
                 .project_mut(&project_id)?
                 .rename_pane(&tab_id, &pane_id, &title)?,
+            WorkspaceIntent::SetPaneOwner {
+                project_id,
+                tab_id,
+                pane_id,
+                owner,
+            } => self
+                .workspace
+                .project_mut(&project_id)?
+                .set_pane_owner(&tab_id, &pane_id, owner)?,
             WorkspaceIntent::ReplaceProjectLayout { project_id, layout } => {
                 self.workspace
                     .project_mut(&project_id)?

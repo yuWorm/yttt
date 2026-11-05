@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod agent_control;
 mod agent_hooks;
 mod agent_processes;
 mod audit;
@@ -350,6 +351,14 @@ where
         &bootstrap.config_root,
     );
     pane_runtime.start(stop_rx.clone());
+    agent_hooks.set_control_handler(Arc::new(agent_control::AgentControl::new(
+        workspaces.clone(),
+        projects.clone(),
+        runtime.clone(),
+        pane_runtime.clone(),
+        audit.clone(),
+        tokio::runtime::Handle::current(),
+    )));
     if bootstrap.lifetime == HostLifetime::Independent {
         let startup = pane_runtime.clone();
         tokio::task::spawn_blocking(move || startup.ensure_all());

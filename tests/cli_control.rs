@@ -141,6 +141,106 @@ fn cli_grants_the_orchestrator_role_only_when_asked_and_rejects_unknown_roles() 
     );
 }
 
+fn parse_control(words: &[&str]) -> Result<Option<cli::AgentControlInvocation>, String> {
+    cli::parse_agent_control(
+        &words.iter().map(OsString::from).collect::<Vec<_>>(),
+        UiText::english(),
+    )
+}
+
+#[test]
+fn orchestrator_commands_go_to_the_host_and_others_to_the_desktop() {
+    let spawn = parse_control(&[
+        "agents",
+        "spawn",
+        "--provider",
+        "codex",
+        "--title",
+        "Parser",
+        "--json",
+        "--",
+        "Fix $HOME parsing",
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(spawn.path, "/control/v1/agents/spawn");
+    assert!(spawn.json);
+    assert_eq!(
+        spawn.body,
+        serde_json::json!({"provider": "codex", "args": ["Fix $HOME parsing"], "title": "Parser"})
+    );
+    let mine = parse_control(&["agents", "list", "--mine"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(mine.path, "/control/v1/agents/list");
+    let close = parse_control(&["agents", "close", "--agent", "p:t:agent"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(close.body, serde_json::json!({"agent": "p:t:agent"}));
+
+    assert!(
+        parse_control(&["agents", "list", "--project", "p"])
+            .unwrap()
+            .is_none()
+    );
+    assert!(parse_control(&["tabs", "close"]).unwrap().is_none());
+    assert!(
+        parse_control(&["agents", "close"])
+            .unwrap_err()
+            .contains("--agent")
+    );
+    assert!(
+        parse_control(&["agents", "spawn", "--provider", "codex", "--project", "p"])
+            .unwrap_err()
+            .contains("--project")
+    );
+    assert!(parse_control(&["agents", "close", "--agent", "a", "--", "extra"]).is_err());
+}
+
+#[test]
+fn assigning_an_agent_names_one_orchestrator_or_clears_it() {
+    let assign = |extra: &[&str]| {
+        let mut words = vec![
+            "agents",
+            "assign",
+            "--project",
+            "p",
+            "--tab",
+            "t",
+            "--pane",
+            "agent",
+        ];
+        words.extend_from_slice(extra);
+        parse(&words).map(|invocation| invocation.request.command)
+    };
+    assert_eq!(
+        assign(&["--to", "p:lead:lead"]).unwrap(),
+        DesktopControlCommand::AssignAgent {
+            owner: Some("p:lead:lead".into())
+        }
+    );
+    assert_eq!(
+        assign(&["--clear"]).unwrap(),
+        DesktopControlCommand::AssignAgent { owner: None }
+    );
+    assert!(assign(&[]).is_err());
+    assert!(assign(&["--to", "x", "--clear"]).is_err());
+    assert!(
+        parse(&[
+            "agents",
+            "assign",
+            "--project",
+            "p",
+            "--tab",
+            "t",
+            "--to",
+            "x"
+        ])
+        .unwrap_err()
+        .contains("--pane")
+    );
+}
+
 #[test]
 fn cli_bounds_prompt_files_and_rejects_ambiguous_input_sources() {
     let root = tempfile::tempdir().unwrap();

@@ -168,6 +168,10 @@ pub struct PaneConfig {
     /// Set only by a person; takes effect when the pane's process next starts.
     #[serde(default, skip_serializing_if = "PaneRole::is_worker")]
     pub role: PaneRole,
+    /// The orchestrator terminal that may drive this pane: the one that
+    /// started it, or one a person assigned it to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_by: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]

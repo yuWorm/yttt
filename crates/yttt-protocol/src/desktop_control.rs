@@ -57,6 +57,11 @@ pub enum DesktopControlCommand {
         request_id: String,
         answers: Vec<AgentQuestionAnswer>,
     },
+    /// Lets an orchestrator, named by its terminal, drive the target pane;
+    /// `None` takes the pane back.
+    AssignAgent {
+        owner: Option<String>,
+    },
 }
 
 impl DesktopControlCommand {
@@ -247,6 +252,11 @@ impl DesktopControlRequest {
                 validate_title(Some(title))?;
                 None
             }
+            DesktopControlCommand::AssignAgent { owner: Some(owner) }
+                if owner.trim().is_empty() || owner.len() > 512 =>
+            {
+                return Err(invalid("--to must name an orchestrator's terminal"));
+            }
             DesktopControlCommand::Resize { percent, .. } if !(1..=90).contains(percent) => {
                 return Err(invalid("Resize percent must be between 1 and 90"));
             }
@@ -309,6 +319,7 @@ impl DesktopControlRequest {
                 | DesktopControlCommand::Resize { .. }
                 | DesktopControlCommand::Send { .. }
                 | DesktopControlCommand::AnswerAgentQuestion { .. }
+                | DesktopControlCommand::AssignAgent { .. }
                 | DesktopControlCommand::Read
         ) && self.pane.is_none()
         {

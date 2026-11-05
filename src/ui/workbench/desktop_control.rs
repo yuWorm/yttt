@@ -519,6 +519,7 @@ impl WorkbenchView {
                                 command: program.to_string(),
                                 args: args.clone(),
                                 role: *role,
+                                spawned_by: None,
                             },
                             Some(uuid::Uuid::new_v4().to_string()),
                         )
@@ -583,6 +584,16 @@ impl WorkbenchView {
                         },
                     };
                     self.apply_workspace_intent(intent).map_err(failed)?;
+                    DesktopControlResponse::Updated { target }
+                }
+                DesktopControlCommand::AssignAgent { owner } => {
+                    self.apply_workspace_intent(WorkspaceIntent::SetPaneOwner {
+                        project_id,
+                        tab_id: target.tab.clone(),
+                        pane_id: target.pane.clone().expect("validated pane"),
+                        owner: owner.clone(),
+                    })
+                    .map_err(failed)?;
                     DesktopControlResponse::Updated { target }
                 }
                 DesktopControlCommand::Resize { direction, percent } => {
@@ -766,6 +777,29 @@ mod tests {
                     .is_some_and(|item| item == &WorkItemId::Terminal(target.tab.clone()))
             );
         });
+        let owner = |root: &WorkbenchView| {
+            root.workspace
+                .project(&ProjectId::new(&project))
+                .unwrap()
+                .layout
+                .tab(&target.tab)
+                .unwrap()
+                .layout
+                .find_pane(second.pane.as_deref().unwrap())
+                .unwrap()
+                .spawned_by
+                .clone()
+        };
+        rename.command = DesktopControlCommand::AssignAgent {
+            owner: Some("lead-terminal".into()),
+        };
+        send(rename.clone(), cx).unwrap();
+        root.read_with(cx, |root, _| {
+            assert_eq!(owner(root).as_deref(), Some("lead-terminal"));
+        });
+        rename.command = DesktopControlCommand::AssignAgent { owner: None };
+        send(rename.clone(), cx).unwrap();
+        root.read_with(cx, |root, _| assert_eq!(owner(root), None));
         rename.command = DesktopControlCommand::Close;
         send(rename, cx).unwrap();
         root.read_with(cx, |root, _| {

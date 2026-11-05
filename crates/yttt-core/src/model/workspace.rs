@@ -815,6 +815,7 @@ impl OpenedProject {
             notify_on_exit: false,
             detector: None,
             role: PaneRole::Worker,
+            spawned_by: None,
         };
         if !split_pane_node(tab_layout, target_pane_id, direction, new_pane) {
             return Err(WorkspaceError::PaneNotFound(target_pane_id.to_string()));
@@ -864,6 +865,21 @@ impl OpenedProject {
             .find_pane_mut(pane_id)
             .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
         pane.title = title;
+        Ok(())
+    }
+
+    pub(crate) fn set_pane_owner(
+        &mut self,
+        tab_id: &str,
+        pane_id: &str,
+        owner: Option<String>,
+    ) -> Result<(), WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        let pane = self.layout.tabs[tab_index]
+            .layout
+            .find_pane_mut(pane_id)
+            .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
+        pane.spawned_by = owner;
         Ok(())
     }
 
@@ -919,6 +935,7 @@ pub(crate) fn shell_tab_config(id: String, title: String, command: String) -> Ta
             notify_on_exit: false,
             detector: None,
             role: PaneRole::Worker,
+            spawned_by: None,
         }),
     }
 }
@@ -929,6 +946,7 @@ pub(crate) fn agent_tab_config(
     command: String,
     args: Vec<String>,
     role: PaneRole,
+    spawned_by: Option<String>,
 ) -> TabConfig {
     TabConfig {
         id,
@@ -946,6 +964,7 @@ pub(crate) fn agent_tab_config(
             notify_on_exit: true,
             detector: None,
             role,
+            spawned_by,
         }),
     }
 }

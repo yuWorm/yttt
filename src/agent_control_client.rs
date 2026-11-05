@@ -12,8 +12,8 @@ use serde::Serialize;
 use yttt_core::model::layout::PaneRole;
 use yttt_protocol::agent::{
     AGENT_CONTROL_SCOPE_HEADER, AGENT_CONTROL_TOKEN_ENV, AGENT_CONTROL_TOKEN_HEADER,
-    AGENT_CONTROL_WHOAMI_PATH, AGENT_HOOK_ENDPOINT_ENV, AGENT_SELF_ENV, AgentControlIdentity,
-    AgentHookScope,
+    AGENT_CONTROL_WHOAMI_PATH, AGENT_HOOK_ENDPOINT_ENV, AGENT_SELF_ENV, AgentControlError,
+    AgentControlErrorCode, AgentControlIdentity, AgentControlResponse, AgentHookScope,
 };
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
@@ -75,15 +75,13 @@ impl PaneCredentials {
     pub fn whoami(&self) -> WhoAmI {
         let (role, control) = match &self.control_token {
             None => (PaneRole::Worker, ControlAccess::NotGranted),
-            Some(_) => match self.post(AGENT_CONTROL_WHOAMI_PATH) {
-                Ok(ControlReply::Ok(body)) => {
-                    match serde_json::from_slice::<AgentControlIdentity>(&body) {
-                        Ok(identity) => (identity.role, ControlAccess::Verified),
-                        Err(_) => (PaneRole::Orchestrator, ControlAccess::Unavailable),
-                    }
-                }
-                Ok(ControlReply::Refused) => (PaneRole::Orchestrator, ControlAccess::Rejected),
-                Err(()) => (PaneRole::Orchestrator, ControlAccess::Unavailable),
+            Some(_) => match self.post(AGENT_CONTROL_WHOAMI_PATH, &[]) {
+                Ok((200, body)) => match serde_json::from_slice::<AgentControlIdentity>(&body) {
+                    Ok(identity) => (identity.role, ControlAccess::Verified),
+                    Err(_) => (PaneRole::Orchestrator, ControlAccess::Unavailable),
+                },
+                Ok((403, _)) => (PaneRole::Orchestrator, ControlAccess::Rejected),
+                Ok(_) | Err(()) => (PaneRole::Orchestrator, ControlAccess::Unavailable),
             },
         };
         WhoAmI::Pane {
@@ -95,7 +93,39 @@ impl PaneCredentials {
         }
     }
 
-    fn post(&self, path: &str) -> Result<ControlReply, ()> {
+    /// Whether this pane holds an orchestrator credential at all; only the
+    /// Host can say whether it is still valid.
+    pub fn has_control_token(&self) -> bool {
+        self.control_token.is_some()
+    }
+
+    /// Sends one control request. `Err(None)` means no answer arrived, so the
+    /// request may or may not have been carried out.
+    pub fn control(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<AgentControlResponse, Option<AgentControlError>> {
+        let body = serde_json::to_vec(body).expect("control request serializes");
+        let (status, body) = self.post(path, &body).map_err(|()| None)?;
+        if status == 200 {
+            return serde_json::from_slice(&body).map_err(|_| None);
+        }
+        Err(Some(
+            serde_json::from_slice::<AgentControlError>(&body).unwrap_or_else(|_| {
+                AgentControlError::new(
+                    if status == 403 {
+                        AgentControlErrorCode::Forbidden
+                    } else {
+                        AgentControlErrorCode::Failed
+                    },
+                    format!("the Host answered {status}"),
+                )
+            }),
+        ))
+    }
+
+    fn post(&self, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), ()> {
         let address = self
             .endpoint
             .as_deref()
@@ -113,10 +143,12 @@ impl PaneCredentials {
             .map_err(|_| ())?;
         write!(
             stream,
-            "POST {path} HTTP/1.1\r\nHost: {address}\r\n{AGENT_CONTROL_SCOPE_HEADER}: {}\r\n{AGENT_CONTROL_TOKEN_HEADER}: {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            self.encoded_scope
+            "POST {path} HTTP/1.1\r\nHost: {address}\r\n{AGENT_CONTROL_SCOPE_HEADER}: {}\r\n{AGENT_CONTROL_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            self.encoded_scope,
+            body.len()
         )
         .map_err(|_| ())?;
+        stream.write_all(body).map_err(|_| ())?;
         let mut response = Vec::new();
         stream
             .take(MAX_RESPONSE_BYTES as u64 + 1)
@@ -126,12 +158,7 @@ impl PaneCredentials {
     }
 }
 
-enum ControlReply {
-    Ok(Vec<u8>),
-    Refused,
-}
-
-fn parse_response(response: &[u8]) -> Result<ControlReply, ()> {
+fn parse_response(response: &[u8]) -> Result<(u16, Vec<u8>), ()> {
     if response.len() > MAX_RESPONSE_BYTES {
         return Err(());
     }
@@ -145,11 +172,7 @@ fn parse_response(response: &[u8]) -> Result<ControlReply, ()> {
         .nth(1)
         .and_then(|status| status.parse::<u16>().ok())
         .ok_or(())?;
-    match status {
-        200 => Ok(ControlReply::Ok(response[header_end + 4..].to_vec())),
-        403 => Ok(ControlReply::Refused),
-        _ => Err(()),
-    }
+    Ok((status, response[header_end + 4..].to_vec()))
 }
 
 #[cfg(test)]
@@ -279,5 +302,97 @@ mod tests {
                 pane(PaneRole::Orchestrator, ControlAccess::Unavailable)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use std::{net::TcpListener, thread};
+
+    use yttt_core::model::ids::TerminalSessionId;
+
+    use super::*;
+
+    /// Answers one request with `status` and `body` after checking that the
+    /// request carried `expected_body`.
+    fn host(status: &'static str, body: String, expected_body: &'static str) -> String {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !String::from_utf8_lossy(&request).ends_with(expected_body) {
+                let count = stream.read(&mut chunk).unwrap();
+                assert!(count > 0, "request ended before its body");
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        });
+        format!("http://{address}")
+    }
+
+    fn orchestrator(endpoint: String) -> PaneCredentials {
+        let scope = AgentHookScope {
+            project_id: "project".into(),
+            tab_id: "project:lead:lead".into(),
+            pane_id: "project:lead:lead".into(),
+            generation: 1,
+        };
+        let variables = [
+            (AGENT_SELF_ENV, scope.encode()),
+            (AGENT_HOOK_ENDPOINT_ENV, endpoint),
+            (AGENT_CONTROL_TOKEN_ENV, "token".to_string()),
+        ];
+        PaneCredentials::from_lookup(|name| {
+            variables
+                .iter()
+                .find(|(candidate, _)| *candidate == name)
+                .map(|(_, value)| value.clone())
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_control_request_returns_the_hosts_typed_answer_or_refusal() {
+        let closed = AgentControlResponse::Closed {
+            agent: TerminalSessionId::new("project:w:agent"),
+        };
+        let pane = orchestrator(host(
+            "200 OK",
+            serde_json::to_string(&closed).unwrap(),
+            r#"{"agent":"project:w:agent"}"#,
+        ));
+        assert_eq!(
+            pane.control(
+                "/control/v1/agents/close",
+                &serde_json::json!({"agent": "project:w:agent"})
+            )
+            .unwrap(),
+            closed
+        );
+
+        let refusal = AgentControlError::new(AgentControlErrorCode::Forbidden, "not yours");
+        let pane = orchestrator(host(
+            "403 Forbidden",
+            serde_json::to_string(&refusal).unwrap(),
+            "{}",
+        ));
+        assert_eq!(
+            pane.control("/control/v1/agents/list", &serde_json::json!({}))
+                .unwrap_err(),
+            Some(refusal)
+        );
+
+        let pane = orchestrator(host("503 Service Unavailable", String::new(), "{}"));
+        let error = pane
+            .control("/control/v1/agents/list", &serde_json::json!({}))
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(error.code, AgentControlErrorCode::Failed);
     }
 }
