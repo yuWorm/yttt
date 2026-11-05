@@ -17,6 +17,7 @@ members = [
     "crates/yttt-ssh",
     "crates/yttt-terminal",
     "crates/yttt-ui",
+    "crates/yttt-agent-panel",
 ]
 exclude = ["vendor/gpui-base", "vendor/gpui-component", "vendor/gpui-markdown-editor", "vendor/alacritty_terminal", "vendor/vte-graphics"]
 resolver = "3"
@@ -51,6 +52,11 @@ harness = false
 [[bin]]
 name = "yttt-ui-gallery"
 path = "src/bin/yttt-ui-gallery.rs"
+required-features = ["ui-gallery"]
+
+[[bin]]
+name = "yttt-agent-panel-demo"
+path = "src/bin/yttt-agent-panel-demo.rs"
 required-features = ["ui-gallery"]
 
 [dependencies]
@@ -119,6 +125,7 @@ yttt-ssh = { path = "crates/yttt-ssh" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 yttt-terminal = { path = "crates/yttt-terminal" }
 yttt-ui = { path = "crates/yttt-ui" }
+yttt-agent-panel = { path = "crates/yttt-agent-panel" }
 serde = { version = "1", features = ["derive"] }
 semver = "1"
 serde_json = "1"

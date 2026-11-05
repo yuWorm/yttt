@@ -11055,6 +11055,7 @@ dependencies = [
  "winreg 0.56.0",
  "winresource",
  "yttt-agent-core",
+ "yttt-agent-panel",
  "yttt-agent-providers",
  "yttt-agent-runtime",
  "yttt-client-core",
@@ -11079,6 +11080,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "yttt-agent-panel"
+version = "0.3.21"
+dependencies = [
+ "gpui-base",
+ "gpui-component",
+ "gpui-pre",
+ "serde",
+ "serde_json",
+ "similar",
+ "yttt-ui",
 ]
 
 [[package]]
