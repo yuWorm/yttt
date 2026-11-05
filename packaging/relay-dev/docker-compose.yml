@@ -1,0 +1,13 @@
+# A local iroh relay for P2P development and tests. Plain HTTP, local only:
+# never expose this port, and never use dev mode for real traffic.
+#
+#   docker compose -f packaging/relay-dev/docker-compose.yml up -d
+#   YTTT_TEST_RELAY_URL=http://127.0.0.1:3340 \
+#     cargo test -p yttt-client-core --test p2p_pairing -- --ignored
+services:
+  iroh-relay:
+    image: n0computer/iroh-relay:v1.4.1
+    command: ["--dev"]
+    ports:
+      - "127.0.0.1:3340:3340"
+    restart: unless-stopped

@@ -32,7 +32,7 @@ relay 作为付费服务出售：按账号限制 relay 带宽和月流量，支�
 | D3 | Host 身份只来自扫码配对，Client 固定保存，永不接受控制面修改 | 控制面被攻破也不能把 Client 指向假 Host |
 | D4 | Host ACL 只能在本机修改；控制面登记设备仅为单向通知 | 控制面被攻破也不能往 Host 加设备 |
 | D5 | 应用层握手中 Host 和 Client **双方**都用自己的 EndpointId 私钥签名 transcript | 纵深防御，防 iroh 实现缺陷或配置错误（不防私钥泄露） |
-| D6 | 商业 relay 为自研二进制 `yttt-relay`，嵌入 `iroh-relay` 库并做小范围 fork | 现成 relay 没有按账号限速、计量、到期断开 |
+| D6 | 商业 relay 为自研二进制 `yttt-relay`，通过 `iroh-relay` 1.4 的公开嵌入接口实现，不 fork（见 §9.2） | 现成 relay 没有按账号限速、计量、到期断开 |
 | D7 | 每个账号固定分配一个节点；`RelayMap` 只含该节点 | 满足“只在同节点连接”，无需地址发现 |
 | D8 | relay 准入用控制面签发、节点离线验签的短期 ticket，节点在 ticket 到期时主动断开 | 鉴权不依赖每连接回调；过期和封停对已建立的连接同样生效 |
 | D9 | 计费只针对 relay 流量，以节点计数为唯一口径；P2P 直连不经过服务器，不计量 | 技术事实，产品定价须据此设计 |
@@ -159,10 +159,10 @@ last_seen = "2026-11-05T12:30:00Z"
 
 | 预设 | 允许 |
 |---|---|
-| `full` | `TerminalInteractive`、`ProjectRead`、`ProjectMutate`、`GitRead`、`GitMutate`、`WorkspaceRead`、`WorkspaceMutate`；可请求接管控制权 |
+| `full` | 全部 capability，与 TLS 工作会话相同；可请求接管控制权 |
 | `observe` | `ProjectRead`、`GitRead`、`WorkspaceRead`；只能观察终端，不能请求接管 |
 
-`SshConnect`、`RemoteCommandPrivileged`、`CredentialAnswer` 第一期对 P2P 入口一律不开放，后续按需评估。上位文档 §9.3 的点分名称（`terminal.observe` 等）只作为概念描述，代码以枚举为准。
+实现时 `full` 改为包含 `SshConnect`、`RemoteCommandPrivileged`、`CredentialAnswer`：`TerminalInteractive` 已等价于 Host 账号的 shell，再禁止这三项不增加安全性，却会让 P2P 设备无法打开 SSH 项目。上位文档 §9.3 的点分名称（`terminal.observe` 等）只作为概念描述，代码以枚举为准。
 
 TLS 入口沿用现有行为（等同 `full`），不受设备 ACL 约束（见 §4.3）。
 
@@ -173,14 +173,14 @@ TLS 入口沿用现有行为（等同 `full`），不受设备 ACL 约束（见 
 不使用 URL 形态，避免系统相机把含秘密的内容交给浏览器或记入历史：
 
 ```text
-yttt-pair:1:<base32(cbor{host, relay, direct_hint, inv, s, env, profile})>
+YTTT-PAIR:1:<BASE32(cbor{host, relay, direct_hint, inv, s, env, profile})>
 ```
 
-字段：Host EndpointId、relay URL、Host 当前直连地址提示、16B 邀请 ID、32B 邀请秘密、EnvironmentId、ProfileId。二维码只在应用内扫描；不写入剪贴板，不注册为系统 URL handler（遵守现有设计中“秘密不进 argv 或 deep-link”的约束）。桌面 Client 没有摄像头时，在应用内粘贴同一字符串；也可以经 `RemoteLaunch` 的私有 stdin 传入。
+全部使用大写字母、数字和 `:`、`-`，二维码可以使用更紧凑的字母数字模式；解析时不区分大小写。字段：Host EndpointId、relay URL、Host 当前直连地址提示、16B 邀请 ID、32B 邀请秘密、EnvironmentId、ProfileId。二维码只在应用内扫描；不写入剪贴板，不注册为系统 URL handler（遵守现有设计中“秘密不进 argv 或 deep-link”的约束）。桌面 Client 没有摄像头时，在应用内粘贴同一字符串；也可以经 `RemoteLaunch` 的私有 stdin 传入。
 
 ### 7.2 消息流程
 
-Client 用 `yttt/pair/1` 拨号 Host EndpointId 后，QUIC 握手已确认双方 EndpointId。随后：
+Client 用 `yttt/pair/1` 拨号 Host EndpointId 后，QUIC 握手已确认双方 EndpointId。配对流由 **Host 打开**：Host 先发言，而 QUIC 对端只有在打开方写入数据后才能看到新流。随后：
 
 1. **Host → `PairHello { host_nonce_commit }`**：`commit = H(host_nonce)`。先承诺、后公开，防止 Host 一方（或冒充者）挑选 nonce 来凑 SAS。
 2. **Client → `PairRequest { inv, device_label, client_nonce, mac }`**：`mac = HMAC(s, transcript)`，transcript 包含协议域与版本、`inv`、双方 EndpointId、EnvironmentId、ProfileId、`host_nonce_commit`、`client_nonce`。
@@ -235,7 +235,9 @@ Client 用 `yttt/pair/1` 拨号 Host EndpointId 后，QUIC 握手已确认双方
 | 新连接速率 | `accept_conn_limit`、`accept_conn_burst` 注释写明尚未实现（已核实） | 在外层（防火墙或 L4）处理 |
 | 转发点钩子 | 无（部分核实） | 跨账号检查需要改转发路径本身，推迟到 P4 |
 
-### 9.2 fork 范围
+### 9.2 嵌入方式（原“fork 范围”）
+
+实现前核对 iroh-relay 1.4.1 源码后确认不需要 fork：`protos::handshake::serverside`、`RelayedStream::new`、`server::Clients::register` / `Clients::disconnect` 与 `server::streams::Bucket` 均为公开接口，供在自建 HTTP 服务上挂载 relay 协议的嵌入方使用。`yttt-relay` 自建 HTTP/WebSocket 服务，在帧层用按账号的 `Bucket` 限速并计数，到期或封停时调用 `Clients::disconnect`。下面四项需求不变，只是实现方式从改源码变为包装：
 
 第一期补丁：
 

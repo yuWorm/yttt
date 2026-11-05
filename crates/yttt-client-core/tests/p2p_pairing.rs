@@ -359,3 +359,53 @@ async fn a_client_refuses_a_host_that_is_not_the_paired_one() {
             .all(|session| session.device.is_none())
     );
 }
+
+/// Needs a relay, e.g. `packaging/relay-dev/docker-compose.yml`, at `YTTT_TEST_RELAY_URL`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a local iroh relay"]
+async fn a_device_pairs_and_works_with_only_the_relay_as_a_hint() {
+    let relay_url = std::env::var("YTTT_TEST_RELAY_URL").expect("set YTTT_TEST_RELAY_URL");
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetP2p {
+            enabled: true,
+            relay_url: Some(relay_url.clone()),
+        },
+    )
+    .await;
+    let mut code = invitation(&admin).await;
+    assert_eq!(code.relay_url.as_deref(), Some(relay_url.as_str()));
+    code.direct_addrs.clear();
+
+    let secret = [28; 32];
+    let endpoint = IrohEndpoint::bind(EndpointConfig {
+        secret,
+        relay: Some(yttt_transport_iroh::RelayTarget {
+            url: relay_url,
+            token: None,
+        }),
+        alpns: Vec::new(),
+        gate: Arc::new(OpenGate),
+        bind_addr: None,
+    })
+    .await
+    .unwrap();
+    let device = endpoint.clone();
+    let pairing = tokio::spawn(async move { pair(&device, &code, "relay device", |_| {}).await });
+    let (endpoint_id, _) = awaiting_confirmation(&admin).await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::ConfirmPairing {
+            endpoint_id,
+            preset: DevicePreset::Full,
+        },
+    )
+    .await;
+    let paired = pairing.await.unwrap().unwrap();
+    assert!(paired.direct_addrs.is_empty());
+
+    let client = connect_device(endpoint, &paired, secret).await;
+    client.request(Request::ListResources).await.unwrap();
+}
