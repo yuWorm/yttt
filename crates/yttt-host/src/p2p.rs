@@ -423,7 +423,9 @@ async fn serve_pairing_connection(
     shared: &P2pShared,
     context: &ConnectionContext,
 ) {
-    let Some(mut stream) = connection.accept_stream().await else {
+    // The Host speaks first, and a QUIC peer only learns of a stream once its
+    // opener writes, so the Host opens the pairing stream.
+    let Ok(mut stream) = connection.open_stream().await else {
         return;
     };
     let mut stop = context.stop.clone();

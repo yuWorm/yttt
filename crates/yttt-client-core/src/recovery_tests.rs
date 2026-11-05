@@ -200,7 +200,7 @@ async fn interrupted_handshake_is_retryable() {
     let result = establish(
         &SharedConnector::new(connector),
         &identity(),
-        &AuthToken::from_bytes([7; 32]),
+        &Credential::from(yttt_transport::AuthToken::from_bytes([7; 32])),
     )
     .await;
     server.await.unwrap();
@@ -221,7 +221,7 @@ async fn handshake_timeout_is_retryable() {
     let result = establish(
         &SharedConnector::new(connector),
         &identity(),
-        &AuthToken::from_bytes([7; 32]),
+        &Credential::from(yttt_transport::AuthToken::from_bytes([7; 32])),
     )
     .await;
     server.abort();
@@ -255,7 +255,7 @@ async fn permanent_transport_rejection_is_fatal() {
         establish(
             &SharedConnector::new(PermanentConnector),
             &identity(),
-            &AuthToken::from_bytes([7; 32]),
+            &Credential::from(yttt_transport::AuthToken::from_bytes([7; 32])),
         )
         .await,
         Err(ConnectFailure::Fatal(_))
@@ -568,7 +568,7 @@ async fn stalled_connector_has_a_deadline() {
         establish(
             &SharedConnector::new(connector),
             &identity(),
-            &AuthToken::from_bytes([7; 32]),
+            &Credential::from(yttt_transport::AuthToken::from_bytes([7; 32])),
         ),
     )
     .await;

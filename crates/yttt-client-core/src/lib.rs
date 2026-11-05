@@ -2,6 +2,7 @@
 
 mod diagnostics;
 mod mirror;
+pub mod p2p;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -32,9 +33,9 @@ use yttt_protocol::{
     workspace::{WorkspaceId, WorkspaceLayoutUpdate, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport::{
-    AuthToken, AuthenticatedHost, ClientIdentity, HandshakeError, LinkProfile, SessionReader,
+    AuthenticatedHost, ClientIdentity, Credential, HandshakeError, LinkProfile, SessionReader,
     SessionWriter, SessionWriterTask, SharedConnector, TransportConnector, TransportError,
-    TransportStream, client_handshake,
+    TransportStream, client_handshake_with,
 };
 
 const COMMAND_CAPACITY: usize = 256;
@@ -223,11 +224,14 @@ struct ClientSessionContext {
 }
 
 impl ClientCore {
+    /// `credential` is the shared secret of a TLS, SSH or local Host, or the device
+    /// key of a paired P2P device.
     pub async fn connect(
         connector: impl TransportConnector,
         identity: ClientIdentity,
-        token: AuthToken,
+        credential: impl Into<Credential>,
     ) -> Result<Self, ClientCoreError> {
+        let token: Credential = credential.into();
         let connector = SharedConnector::new(connector);
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (interactive_tx, interactive_rx) = mpsc::channel(COMMAND_CAPACITY);
@@ -542,7 +546,7 @@ fn request_timeout(request: &Request, link: LinkProfile) -> Duration {
 async fn run_supervisor(
     connector: SharedConnector,
     mut identity: ClientIdentity,
-    token: AuthToken,
+    token: Credential,
     mut commands: mpsc::Receiver<ClientCommand>,
     mut interactive_commands: mpsc::Receiver<ClientCommand>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
@@ -753,7 +757,7 @@ struct SessionConnection {
 async fn establish_session(
     connector: &SharedConnector,
     identity: &ClientIdentity,
-    token: &AuthToken,
+    token: &Credential,
 ) -> Result<SessionConnection, ConnectFailure> {
     const BIND_REQUEST_ID: u64 = u64::MAX;
     let mut session_identity = identity.clone();
@@ -802,7 +806,7 @@ async fn establish_session(
 async fn establish(
     connector: &SharedConnector,
     identity: &ClientIdentity,
-    token: &AuthToken,
+    token: &Credential,
 ) -> Result<(TransportStream, AuthenticatedHost), ConnectFailure> {
     let mut stream = tokio::time::timeout(
         connector.link_profile().connect_timeout,
@@ -814,7 +818,7 @@ async fn establish(
         TransportError::Permanent(message) => ConnectFailure::Fatal(message),
         error => ConnectFailure::Retry(error.to_string()),
     })?;
-    let host = client_handshake(&mut stream, identity, token)
+    let host = client_handshake_with(&mut stream, identity, token)
         .await
         .map_err(ConnectFailure::from)?;
     Ok((stream, host))

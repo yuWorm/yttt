@@ -12481,9 +12481,13 @@ dependencies = [
 name = "yttt-client-core"
 version = "0.3.21"
 dependencies = [
+ "hmac 0.12.1",
  "parking_lot",
+ "rand 0.8.6",
  "rcgen",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -12492,6 +12496,7 @@ dependencies = [
  "yttt-host",
  "yttt-protocol",
  "yttt-transport",
+ "yttt-transport-iroh",
  "yttt-transport-local",
  "yttt-transport-tls",
 ]

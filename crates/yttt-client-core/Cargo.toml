@@ -6,13 +6,18 @@ license = "MIT OR Apache-2.0"
 description = "Headless YTTT Host client supervisor and terminal mirrors"
 
 [dependencies]
+hmac = "0.12"
 parking_lot = "0.12"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
 yttt-agent-core = { path = "../yttt-agent-core" }
 yttt-core = { path = "../yttt-core" }
 yttt-protocol = { path = "../yttt-protocol" }
 yttt-transport = { path = "../yttt-transport" }
+yttt-transport-iroh = { path = "../yttt-transport-iroh" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
