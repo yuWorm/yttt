@@ -614,6 +614,9 @@ impl HandshakePenalties {
         address: IpAddr,
         now: tokio::time::Instant,
     ) -> Option<tokio::time::Instant> {
+        if is_shared_address(address) {
+            return Some(now);
+        }
         let Some(penalty) = self.addresses.get_mut(&address) else {
             return Some(now);
         };
@@ -628,6 +631,9 @@ impl HandshakePenalties {
     }
 
     fn record_failure(&mut self, address: IpAddr, now: tokio::time::Instant) {
+        if is_shared_address(address) {
+            return;
+        }
         if self.addresses.len() >= MAX_PENALIZED_ADDRESSES {
             self.addresses
                 .retain(|_, penalty| now < penalty.until + HANDSHAKE_PENALTY_MEMORY);
@@ -655,6 +661,13 @@ impl HandshakePenalties {
     fn forgive(&mut self, address: IpAddr) {
         self.addresses.remove(&address);
     }
+}
+
+/// Loopback stands for every peer a port forward or tunnel relays, so its
+/// failures cannot single out the misbehaving one. Such peers are bounded
+/// only by the pending-handshake limit and the handshake deadline.
+fn is_shared_address(address: IpAddr) -> bool {
+    address.to_canonical().is_loopback()
 }
 
 fn failure(message: impl Into<String>) -> ProtocolFailure {
@@ -732,6 +745,26 @@ mod tests {
             penalties.admit(address(2), later),
             Some(later + FIRST_HANDSHAKE_PENALTY)
         );
+    }
+
+    #[test]
+    fn loopback_peers_are_never_delayed_or_refused() {
+        // Everything a tunnel forwards arrives from loopback, so its failures
+        // say nothing about the next peer.
+        let mut penalties = HandshakePenalties::default();
+        let now = tokio::time::Instant::now();
+        for loopback in [
+            IpAddr::from([127, 0, 0, 1]),
+            IpAddr::from(std::net::Ipv6Addr::LOCALHOST),
+            IpAddr::from(std::net::Ipv4Addr::LOCALHOST.to_ipv6_mapped()),
+        ] {
+            for _ in 0..8 {
+                penalties.record_failure(loopback, now);
+            }
+            assert_eq!(penalties.admit(loopback, now), Some(now));
+            assert_eq!(penalties.admit(loopback, now), Some(now));
+        }
+        assert!(penalties.addresses.is_empty());
     }
 
     #[test]
