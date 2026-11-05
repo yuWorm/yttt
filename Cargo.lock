@@ -12517,6 +12517,7 @@ dependencies = [
  "chrono",
  "flume",
  "fs2",
+ "hmac 0.12.1",
  "libproc",
  "notify 7.0.0",
  "parking_lot",
@@ -12543,6 +12544,7 @@ dependencies = [
  "yttt-ssh",
  "yttt-terminal-core",
  "yttt-transport",
+ "yttt-transport-iroh",
  "yttt-transport-tls",
  "zeroize",
 ]

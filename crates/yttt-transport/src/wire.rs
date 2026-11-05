@@ -4,6 +4,7 @@ use yttt_protocol::{
     ControlMessage, DecodedFrame, DesktopShellMessage, FrameKind, HEADER_LEN, HandshakeMessage,
     HostResponse, LifecycleMessage, MAX_DESKTOP_SHELL_FRAME_BYTES, MAX_FRAME_BYTES,
     ProtocolCodecError, Unrecognized, decode_frame, decode_header, decode_message, encode_message,
+    p2p::{MAX_PAIR_MESSAGE_BYTES, PairMessage},
 };
 
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -153,6 +154,32 @@ pub async fn receive_handshake(
 ) -> Result<HandshakeMessage, WireError> {
     let (frame, _) =
         receive_frame(stream, FrameKind::Handshake, MAX_FRAME_BYTES + HEADER_LEN).await?;
+    Ok(decode_message(&frame)?)
+}
+
+pub async fn send_pairing(
+    stream: &mut (impl AsyncWrite + Unpin),
+    message: &PairMessage,
+) -> Result<(), WireError> {
+    send_bounded(
+        stream,
+        FrameKind::Pairing,
+        message,
+        MAX_PAIR_MESSAGE_BYTES + HEADER_LEN,
+    )
+    .await
+}
+
+/// Pairing runs before the peer is trusted, so its frames are kept small.
+pub async fn receive_pairing(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<PairMessage, WireError> {
+    let (frame, _) = receive_frame(
+        stream,
+        FrameKind::Pairing,
+        MAX_PAIR_MESSAGE_BYTES + HEADER_LEN,
+    )
+    .await?;
     Ok(decode_message(&frame)?)
 }
 

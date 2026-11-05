@@ -6,6 +6,7 @@ mod audit;
 mod device_settings;
 pub mod diagnostics;
 mod lifecycle;
+mod p2p;
 mod pane_launch;
 mod pane_runtime;
 mod project;
@@ -72,7 +73,7 @@ use yttt_protocol::{
 };
 use yttt_transport::{
     AuthToken, HostIdentity, SessionReader, SessionWriter, TransportListener, TransportStream,
-    receive_lifecycle, send_lifecycle, server_handshake,
+    receive_lifecycle, send_lifecycle,
 };
 
 const HOST_DIAGNOSTICS_INTERVAL: Duration = Duration::from_secs(5);
@@ -379,6 +380,7 @@ where
         device_settings: device_settings.clone(),
         remote_access,
         network_admission: None,
+        device: None,
         handshake_permit: None,
         handshake_deadline: None,
         request_journals: request_journals.clone(),
@@ -426,9 +428,9 @@ where
                 let stream = accepted?;
                 let mut context = connection_context.clone();
                 context.identity.connection_sequence = next_connection.fetch_add(1, Ordering::Relaxed);
-                let token = token.clone();
+                let credential = Arc::new(yttt_transport::Credential::SharedSecret((*token).clone()));
                 tokio::spawn(async move {
-                    let _ = serve_connection(stream, token, context).await;
+                    let _ = serve_connection(stream, credential, context).await;
                 });
             }
         }
@@ -460,8 +462,8 @@ async fn serve_remote_work(
                 let Ok(stream) = accepted else { break };
                 let mut context = context.clone();
                 context.identity.connection_sequence = sequence.fetch_add(1, Ordering::Relaxed);
-                let token = work.token.clone();
-                tasks.spawn(async move { let _ = serve_connection(stream, token, context).await; });
+                let credential = Arc::new(yttt_transport::Credential::SharedSecret((*work.token).clone()));
+                tasks.spawn(async move { let _ = serve_connection(stream, credential, context).await; });
             }
         }
     }
@@ -501,6 +503,13 @@ type SharedTerminalAttachments =
     Arc<tokio::sync::Mutex<HashMap<TerminalSessionId, TerminalAttachment>>>;
 
 #[derive(Clone)]
+struct PairedPeer {
+    key: yttt_protocol::EndpointKey,
+    preset: yttt_protocol::p2p::DevicePreset,
+    devices: Arc<p2p::DeviceRegistry>,
+}
+
+#[derive(Clone)]
 struct ConnectionContext {
     identity: HostIdentity,
     profile_id: ProfileId,
@@ -514,6 +523,8 @@ struct ConnectionContext {
     device_settings: Arc<Mutex<device_settings::DeviceSettingsStore>>,
     remote_access: remote_access::RemoteAccessHandle,
     network_admission: Option<Arc<remote_access::NetworkAdmission>>,
+    /// The paired device on the other end of a P2P connection.
+    device: Option<PairedPeer>,
     handshake_permit: Option<Arc<Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>>,
     handshake_deadline: Option<tokio::time::Instant>,
     request_journals:
@@ -720,7 +731,17 @@ fn request_is_journalable(request: &Request) -> bool {
 fn authorize_ingress(
     request: &Request,
     ingress: yttt_transport::IngressKind,
+    device: Option<&PairedPeer>,
 ) -> Result<(), ProtocolFailure> {
+    if let Some(device) = device
+        && !device.preset.allows(request.required_capability())
+    {
+        return Err(ProtocolFailure::new(
+            FailureCode::PermissionDenied,
+            "this paired device may only observe",
+            false,
+        ));
+    }
     if ingress != yttt_transport::IngressKind::LocalAdmin
         && matches!(
             request,
@@ -852,7 +873,7 @@ impl Drop for SessionConnectionGuard {
 
 async fn serve_connection(
     mut stream: TransportStream,
-    token: Arc<AuthToken>,
+    credential: Arc<yttt_transport::Credential>,
     mut context: ConnectionContext,
 ) -> Result<(), ()> {
     let mut handshake_stop = context.stop.clone();
@@ -864,14 +885,31 @@ async fn serve_connection(
         .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(5));
     let authenticated = tokio::select! {
         _ = handshake_stop.changed() => return Err(()),
-        result = tokio::time::timeout_at(deadline, server_handshake(&mut stream, &context.identity, token.as_ref())) =>
+        result = tokio::time::timeout_at(deadline, yttt_transport::server_handshake_with(&mut stream, &context.identity, credential.as_ref())) =>
             result.map_err(|_| ())?.map_err(|_| ())?,
     };
     if let Some(permit) = context.handshake_permit.take() {
         permit.lock().take();
     }
     let _network_session = if let Some(admission) = &context.network_admission {
-        let session = admission.admit(&authenticated.client_instance_id)?;
+        let principal = match &context.device {
+            Some(device) => remote_access::Principal::Device(device.key),
+            None => remote_access::Principal::Session(authenticated.client_instance_id.clone()),
+        };
+        let session = admission.admit(
+            context.identity.ingress,
+            principal,
+            &authenticated.client_instance_id,
+            || {
+                context
+                    .device
+                    .as_ref()
+                    .is_none_or(|device| device.devices.contains(device.key))
+            },
+        )?;
+        if let Some(device) = &context.device {
+            device.devices.touch(device.key);
+        }
         context.stop = session.stop.clone();
         Some(session)
     } else {
@@ -1473,7 +1511,11 @@ async fn process_control_request(
     subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
     request_journal: &Arc<tokio::sync::Mutex<RequestJournal>>,
 ) -> HostResponse {
-    if let Err(failure) = authorize_ingress(&request.body, context.identity.ingress) {
+    if let Err(failure) = authorize_ingress(
+        &request.body,
+        context.identity.ingress,
+        context.device.as_ref(),
+    ) {
         return HostResponse {
             request_id: request.request_id,
             result: Err(failure),
@@ -1706,7 +1748,11 @@ async fn run_interactive_requests(
             InteractiveRequest::Request(request) => (request, true),
         };
         let mut attachments = attachments.lock().await;
-        let response = match authorize_ingress(&request.body, context.identity.ingress) {
+        let response = match authorize_ingress(
+            &request.body,
+            context.identity.ingress,
+            context.device.as_ref(),
+        ) {
             Ok(()) => {
                 handle_request(
                     request,
@@ -2154,7 +2200,9 @@ async fn handle_request(
         body,
         ..
     } = request;
-    if let Err(failure) = authorize_ingress(&body, context.identity.ingress) {
+    if let Err(failure) =
+        authorize_ingress(&body, context.identity.ingress, context.device.as_ref())
+    {
         record_audit(
             audit,
             request_id,

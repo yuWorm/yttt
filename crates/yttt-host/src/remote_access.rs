@@ -1,16 +1,20 @@
-use super::{ConnectionContext, device_settings::DeviceSettingsStore};
+use super::{
+    ConnectionContext,
+    device_settings::DeviceSettingsStore,
+    p2p::{self, Decision, DeviceRegistry, HostGate, P2pGeneration, P2pShared, PairingSlot},
+};
 use parking_lot::Mutex;
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs, io,
     net::{IpAddr, SocketAddr},
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -19,8 +23,16 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 use yttt_core::model::ids::ClientInstanceId;
-use yttt_protocol::{FailureCode, ProtocolFailure, remote_access::*};
-use yttt_transport::{AuthToken, IngressKind};
+use yttt_protocol::{
+    EndpointKey, FailureCode, ProtocolFailure,
+    p2p::{
+        MAX_DIRECT_ADDRS, MAX_RELAY_URL_BYTES, PAIR_ALPN, PairRejectReason, PairedDevice,
+        PairingCode, WORK_ALPN,
+    },
+    remote_access::*,
+};
+use yttt_transport::{AuthToken, Credential, IngressKind};
+use yttt_transport_iroh::{EndpointConfig, IrohEndpoint, RelayTarget};
 use yttt_transport_tls::TlsListener;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -51,79 +63,121 @@ impl RemoteAccessHandle {
 }
 
 struct ClientStreams {
+    ingress: IngressKind,
+    client_id: ClientInstanceId,
     connected_millis: u64,
     streams: usize,
     cancel: watch::Sender<bool>,
 }
 
+/// Who a remote session belongs to. TLS sessions share one secret, so only their
+/// Client id tells them apart; P2P sessions are keyed by the authenticated device.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Principal {
+    Session(ClientInstanceId),
+    Device(EndpointKey),
+}
+
+#[derive(Default)]
+struct AdmissionState {
+    open: HashSet<IngressKind>,
+    clients: HashMap<Principal, ClientStreams>,
+}
+
+/// Remote sessions of every network ingress, which share the client limit.
 pub(crate) struct NetworkAdmission {
-    accepting: AtomicBool,
-    clients: Mutex<HashMap<ClientInstanceId, ClientStreams>>,
+    state: Mutex<AdmissionState>,
 }
 impl NetworkAdmission {
-    fn new() -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            accepting: AtomicBool::new(true),
-            clients: Mutex::new(HashMap::new()),
+            state: Mutex::new(AdmissionState::default()),
         })
     }
-    pub fn admit(self: &Arc<Self>, client: &ClientInstanceId) -> Result<NetworkSession, ()> {
-        let mut clients = self.clients.lock();
-        if !self.accepting.load(Ordering::Acquire) {
+    fn open(&self, ingress: IngressKind) {
+        self.state.lock().open.insert(ingress);
+    }
+    /// Stops admitting through `ingress` and cancels its sessions only.
+    fn close(&self, ingress: IngressKind) {
+        let mut state = self.state.lock();
+        state.open.remove(&ingress);
+        for streams in state.clients.values() {
+            if streams.ingress == ingress {
+                streams.cancel.send_replace(true);
+            }
+        }
+    }
+    /// `still_allowed` runs under the admission lock, so a revocation that removes
+    /// the device and then cancels its sessions cannot miss this one.
+    pub fn admit(
+        self: &Arc<Self>,
+        ingress: IngressKind,
+        principal: Principal,
+        client_id: &ClientInstanceId,
+        still_allowed: impl FnOnce() -> bool,
+    ) -> Result<NetworkSession, ()> {
+        let mut state = self.state.lock();
+        if !state.open.contains(&ingress) || !still_allowed() {
             return Err(());
         }
-        if !clients.contains_key(client) && clients.len() >= MAX_REMOTE_CLIENTS {
+        if !state.clients.contains_key(&principal) && state.clients.len() >= MAX_REMOTE_CLIENTS {
             return Err(());
         }
-        let streams = clients
-            .entry(client.clone())
+        let streams = state
+            .clients
+            .entry(principal.clone())
             .or_insert_with(|| ClientStreams {
+                ingress,
+                client_id: client_id.clone(),
                 connected_millis: super::now_millis(),
                 streams: 0,
                 cancel: watch::channel(false).0,
             });
-        if *streams.cancel.borrow() {
+        if streams.ingress != ingress || *streams.cancel.borrow() {
             return Err(());
         }
+        streams.client_id = client_id.clone();
         streams.streams += 1;
         Ok(NetworkSession {
             admission: self.clone(),
-            client: client.clone(),
+            principal,
             stop: streams.cancel.subscribe(),
         })
     }
     fn summaries(&self) -> Vec<RemoteClientSummary> {
         let mut clients = self
-            .clients
+            .state
             .lock()
+            .clients
             .iter()
-            .map(|(client, streams)| RemoteClientSummary {
-                client_id: client.clone(),
+            .map(|(principal, streams)| RemoteClientSummary {
+                client_id: streams.client_id.clone(),
                 connected_millis: streams.connected_millis,
                 streams: streams.streams,
-                device: None,
+                device: match principal {
+                    Principal::Device(device) => Some(*device),
+                    Principal::Session(_) => None,
+                },
             })
             .collect::<Vec<_>>();
         clients.sort_by(|a, b| a.client_id.as_str().cmp(b.client_id.as_str()));
         clients
     }
-    fn cancel(&self, client: Option<&ClientInstanceId>) {
-        for (id, streams) in self.clients.lock().iter() {
-            if client.is_none_or(|client| client == id) {
+    fn cancel(&self, selects: impl Fn(&Principal, &ClientStreams) -> bool) {
+        for (principal, streams) in self.state.lock().clients.iter() {
+            if selects(principal, streams) {
                 streams.cancel.send_replace(true);
             }
         }
     }
-    fn close(&self) {
-        self.accepting.store(false, Ordering::Release);
-        self.cancel(None);
-    }
-    async fn drain(&self, client: Option<&ClientInstanceId>) {
+    async fn drain(&self, selects: impl Fn(&Principal, &ClientStreams) -> bool) {
         loop {
-            let done = {
-                let clients = self.clients.lock();
-                client.map_or(clients.is_empty(), |client| !clients.contains_key(client))
-            };
+            let done = !self
+                .state
+                .lock()
+                .clients
+                .iter()
+                .any(|(principal, streams)| selects(principal, streams));
             if done {
                 return;
             }
@@ -133,16 +187,16 @@ impl NetworkAdmission {
 }
 pub(crate) struct NetworkSession {
     admission: Arc<NetworkAdmission>,
-    client: ClientInstanceId,
+    principal: Principal,
     pub stop: watch::Receiver<bool>,
 }
 impl Drop for NetworkSession {
     fn drop(&mut self) {
-        let mut clients = self.admission.clients.lock();
-        if let Some(streams) = clients.get_mut(&self.client) {
+        let mut state = self.admission.state.lock();
+        if let Some(streams) = state.clients.get_mut(&self.principal) {
             streams.streams -= 1;
             if streams.streams == 0 {
-                clients.remove(&self.client);
+                state.clients.remove(&self.principal);
             }
         }
     }
@@ -218,7 +272,6 @@ impl Credentials {
 struct NetworkGeneration {
     address: SocketAddr,
     cancel: watch::Sender<bool>,
-    admission: Arc<NetworkAdmission>,
     task: JoinHandle<()>,
 }
 /// How long the manager waits before rebinding a listener that failed to
@@ -241,16 +294,26 @@ struct Manager {
     next_connection: Arc<AtomicU64>,
     /// A pending attempt to restore the enabled listener without user action.
     rebind: Option<Rebind>,
+    /// Sessions and streams of both network ingresses.
+    admission: Arc<NetworkAdmission>,
+    streams: Arc<Semaphore>,
+    p2p: Option<P2pGeneration>,
+    p2p_effective: RemoteAccessState,
+    p2p_error: Option<String>,
+    devices: Option<Arc<DeviceRegistry>>,
+    pairing: Arc<Mutex<PairingSlot>>,
 }
 
 pub(crate) async fn run(
-    context: ConnectionContext,
+    mut context: ConnectionContext,
     mut commands: mpsc::Receiver<Command>,
     next_connection: Arc<AtomicU64>,
 ) {
     let store = context.device_settings.clone();
     let desired = store.lock().settings().clone();
     let mut stop = context.stop.clone();
+    let admission = NetworkAdmission::new();
+    context.network_admission = Some(admission.clone());
     let mut manager = Manager {
         store,
         context,
@@ -260,11 +323,23 @@ pub(crate) async fn run(
         error: None,
         next_connection,
         rebind: None,
+        admission,
+        streams: Arc::new(Semaphore::new(MAX_REMOTE_STREAMS)),
+        p2p: None,
+        p2p_effective: RemoteAccessState::Disabled,
+        p2p_error: None,
+        devices: None,
+        pairing: Arc::new(Mutex::new(PairingSlot::default())),
     };
     if desired.enabled
         && let Err(error) = manager.enable(desired.listen_address, true).await
     {
         manager.listener_failed(error.message);
+    }
+    if desired.p2p.enabled
+        && let Err(error) = manager.start_p2p(desired.p2p.relay_url.clone()).await
+    {
+        manager.p2p_failed(error.message);
     }
     let mut health = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -283,10 +358,15 @@ pub(crate) async fn run(
                 if manager.rebind.as_ref().is_some_and(|rebind| rebind.at <= tokio::time::Instant::now()) {
                     manager.rebind().await;
                 }
+                if manager.p2p.as_ref().is_some_and(|p2p| p2p.task.is_finished()) {
+                    manager.stop_p2p().await;
+                    manager.p2p_failed("P2P endpoint stopped unexpectedly".to_string());
+                }
             }
         }
     }
     manager.stop_network().await;
+    manager.stop_p2p().await;
 }
 
 impl Manager {
@@ -302,6 +382,10 @@ impl Manager {
         self.effective = RemoteAccessState::Failed;
         self.error = Some(format!("{error}; retrying in {} s", delay.as_secs()));
     }
+    fn p2p_failed(&mut self, error: String) {
+        self.p2p_effective = RemoteAccessState::Failed;
+        self.p2p_error = Some(error);
+    }
     async fn rebind(&mut self) {
         let settings = self.store.lock().settings().clone();
         if !settings.enabled || self.network.is_some() {
@@ -314,18 +398,29 @@ impl Manager {
         }
     }
     fn status(&self) -> RemoteAccessStatus {
+        let now = super::now_millis();
         RemoteAccessStatus {
             settings: self.store.lock().settings().clone(),
             effective: self.effective,
             bound_address: self.network.as_ref().map(|network| network.address),
             error: self.error.clone(),
-            clients: self
-                .network
-                .as_ref()
-                .map(|network| network.admission.summaries())
-                .unwrap_or_default(),
-            p2p: P2pStatus::default(),
+            clients: self.admission.summaries(),
+            p2p: P2pStatus {
+                effective: self.p2p_effective,
+                endpoint_id: self.p2p.as_ref().map(|p2p| p2p.shared.endpoint.id()),
+                error: self.p2p_error.clone(),
+                pairing: self.pairing.lock().state(now),
+            },
         }
+    }
+    fn devices(&mut self) -> Result<Arc<DeviceRegistry>, ProtocolFailure> {
+        if let Some(devices) = &self.devices {
+            return Ok(devices.clone());
+        }
+        let root = self.store.lock().root().to_path_buf();
+        let devices = Arc::new(DeviceRegistry::load(&root).map_err(io_failure)?);
+        self.devices = Some(devices.clone());
+        Ok(devices)
     }
     async fn handle(
         &mut self,
@@ -388,57 +483,192 @@ impl Manager {
                     credentials.connection_info(&self.context),
                 ));
             }
-            RemoteAccessRequest::ResetCredentials => {
-                self.stop_network().await;
-                let root = self.store.lock().root().to_path_buf();
-                let mut credentials = Credentials::load(&root)
-                    .map_err(io_failure)?
-                    .ok_or_else(|| failure("remote credentials have not been created"))?;
-                credentials.generation = credentials
-                    .generation
-                    .checked_add(1)
-                    .ok_or_else(|| failure("credential generation is exhausted"))?;
-                rand::rngs::OsRng.fill_bytes(&mut credentials.work_secret);
-                if let Err(error) = credentials.persist(&root) {
-                    self.effective = RemoteAccessState::Failed;
-                    self.error = Some(format!(
-                        "Network is closed, but credential rotation could not be saved; old credentials may return after restart: {error}"
-                    ));
-                    return Err(io_failure(error));
-                }
-                self.credentials = Some(credentials);
-                let settings = self.store.lock().settings().clone();
-                if settings.enabled {
-                    self.enable(settings.listen_address, true).await?;
-                }
-            }
+            RemoteAccessRequest::ResetCredentials => self.reset_credentials().await?,
             RemoteAccessRequest::DisconnectClient { client_id } => {
-                if let Some(network) = &self.network {
-                    network.admission.cancel(Some(&client_id));
-                    network.admission.drain(Some(&client_id)).await;
-                }
+                let selects =
+                    |_: &Principal, streams: &ClientStreams| streams.client_id == client_id;
+                self.admission.cancel(selects);
+                self.admission.drain(selects).await;
             }
             RemoteAccessRequest::DisconnectAll => {
-                if let Some(network) = &self.network {
-                    network.admission.cancel(None);
-                    network.admission.drain(None).await;
+                self.admission.cancel(|_, _| true);
+                self.admission.drain(|_, _| true).await;
+            }
+            RemoteAccessRequest::SetP2p { enabled, relay_url } => {
+                if let Some(url) = &relay_url
+                    && (url.len() > MAX_RELAY_URL_BYTES || !url.starts_with("http"))
+                {
+                    return Err(failure("the relay URL must be an http or https URL"));
+                }
+                let mut settings = self.store.lock().settings().clone();
+                settings.p2p = P2pSettings {
+                    enabled,
+                    relay_url: relay_url.clone(),
+                };
+                self.stop_p2p().await;
+                self.store.lock().save(settings).map_err(io_failure)?;
+                if enabled && let Err(error) = self.start_p2p(relay_url).await {
+                    self.p2p_failed(error.message.clone());
+                    return Err(error);
                 }
             }
-            RemoteAccessRequest::SetP2p { .. }
-            | RemoteAccessRequest::StartPairing
-            | RemoteAccessRequest::ConfirmPairing { .. }
-            | RemoteAccessRequest::CancelPairing
-            | RemoteAccessRequest::ListDevices
-            | RemoteAccessRequest::RevokeDevice { .. } => {
-                return Err(failure("P2P remote access is not available yet"));
+            RemoteAccessRequest::StartPairing => return self.start_pairing(),
+            RemoteAccessRequest::ConfirmPairing {
+                endpoint_id,
+                preset,
+            } => {
+                let devices = self.devices()?;
+                let host_label = self.context.identity.environment_id.clone();
+                let mut pairing = self.pairing.lock();
+                let label = pairing
+                    .claimed_label(endpoint_id)
+                    .ok_or_else(|| failure("no device with that key is waiting to pair"))?;
+                // Saved before the device hears it was accepted.
+                devices
+                    .insert(PairedDevice {
+                        endpoint_id,
+                        label,
+                        preset,
+                        paired_at_millis: super::now_millis(),
+                        last_seen_millis: None,
+                    })
+                    .map_err(io_failure)?;
+                pairing.decide(Decision::Accept { host_label });
+            }
+            RemoteAccessRequest::CancelPairing => {
+                let mut pairing = self.pairing.lock();
+                pairing.close(PairRejectReason::Declined);
+                *pairing = PairingSlot::default();
+            }
+            RemoteAccessRequest::ListDevices => {
+                return Ok(RemoteAccessResponse::Devices(self.devices()?.list()));
+            }
+            RemoteAccessRequest::RevokeDevice {
+                endpoint_id,
+                reset_tls,
+            } => {
+                // The gate and the admission check both read the registry, so after
+                // this no new connection, stream or session of the device starts.
+                self.devices()?.remove(endpoint_id).map_err(io_failure)?;
+                if let Some(p2p) = &self.p2p {
+                    p2p.shared.endpoint.close_peer(endpoint_id);
+                }
+                let selects = |principal: &Principal, _: &ClientStreams| {
+                    *principal == Principal::Device(endpoint_id)
+                };
+                self.admission.cancel(selects);
+                self.admission.drain(selects).await;
+                if reset_tls {
+                    self.reset_credentials().await?;
+                }
             }
         }
         Ok(RemoteAccessResponse::Status(self.status()))
     }
+    async fn reset_credentials(&mut self) -> Result<(), ProtocolFailure> {
+        self.stop_network().await;
+        let root = self.store.lock().root().to_path_buf();
+        let Some(mut credentials) = Credentials::load(&root).map_err(io_failure)? else {
+            // Nothing to rotate: TLS remote access was never set up.
+            return Ok(());
+        };
+        credentials.generation = credentials
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| failure("credential generation is exhausted"))?;
+        rand::rngs::OsRng.fill_bytes(&mut credentials.work_secret);
+        if let Err(error) = credentials.persist(&root) {
+            self.effective = RemoteAccessState::Failed;
+            self.error = Some(format!(
+                "Network is closed, but credential rotation could not be saved; old credentials may return after restart: {error}"
+            ));
+            return Err(io_failure(error));
+        }
+        self.credentials = Some(credentials);
+        let settings = self.store.lock().settings().clone();
+        if settings.enabled {
+            self.enable(settings.listen_address, true).await?;
+        }
+        Ok(())
+    }
+    fn start_pairing(&mut self) -> Result<RemoteAccessResponse, ProtocolFailure> {
+        let p2p = self
+            .p2p
+            .as_ref()
+            .ok_or_else(|| failure("turn on P2P remote access before pairing a device"))?;
+        let endpoint = &p2p.shared.endpoint;
+        let invitation = self.pairing.lock().open(super::now_millis());
+        let mut direct_addrs = endpoint.direct_addrs();
+        direct_addrs.truncate(MAX_DIRECT_ADDRS);
+        let code = PairingCode {
+            host: endpoint.id(),
+            relay_url: self.store.lock().settings().p2p.relay_url.clone(),
+            direct_addrs,
+            invitation_id: invitation.id,
+            secret: *invitation.secret,
+            environment_id: self.context.identity.environment_id.clone(),
+            profile_id: self.context.profile_id.clone(),
+        };
+        Ok(RemoteAccessResponse::PairingInvitation {
+            code: SecretText(code.encode()),
+            expires_millis: invitation.expires_millis,
+        })
+    }
+    async fn start_p2p(&mut self, relay_url: Option<String>) -> Result<(), ProtocolFailure> {
+        self.p2p_effective = RemoteAccessState::Starting;
+        self.p2p_error = None;
+        let root = self.store.lock().root().to_path_buf();
+        let secret = Arc::new(p2p::load_or_create_host_key(&root).map_err(io_failure)?);
+        let devices = self.devices()?;
+        let endpoint = IrohEndpoint::bind(EndpointConfig {
+            secret: **secret,
+            relay: relay_url.map(|url| RelayTarget { url, token: None }),
+            alpns: vec![WORK_ALPN.to_vec(), PAIR_ALPN.to_vec()],
+            gate: Arc::new(HostGate {
+                devices: devices.clone(),
+                pairing: self.pairing.clone(),
+            }),
+            bind_addr: None,
+        })
+        .await
+        .map_err(|error| failure(format!("cannot open the P2P endpoint: {error}")))?;
+        let (cancel, stop) = watch::channel(false);
+        let mut context = self.context.clone();
+        context.stop = stop;
+        let shared = P2pShared {
+            endpoint,
+            secret,
+            devices,
+            pairing: self.pairing.clone(),
+            streams: self.streams.clone(),
+            sequence: self.next_connection.clone(),
+        };
+        self.admission.open(IngressKind::P2pWork);
+        let task = tokio::spawn(p2p::accept_loop(shared.clone(), context));
+        self.p2p = Some(P2pGeneration {
+            shared,
+            cancel,
+            task,
+        });
+        self.p2p_effective = RemoteAccessState::Listening;
+        Ok(())
+    }
+    async fn stop_p2p(&mut self) {
+        if let Some(p2p) = self.p2p.take() {
+            self.p2p_effective = RemoteAccessState::Stopping;
+            self.pairing
+                .lock()
+                .close(PairRejectReason::InvitationClosed);
+            self.admission.close(IngressKind::P2pWork);
+            p2p.cancel.send_replace(true);
+            let _ = p2p.task.await;
+        }
+        self.p2p_effective = RemoteAccessState::Disabled;
+    }
     async fn stop_network(&mut self) {
         if let Some(network) = self.network.take() {
             self.effective = RemoteAccessState::Stopping;
-            network.admission.close();
+            self.admission.close(IngressKind::TlsWork);
             network.cancel.send_replace(true);
             let _ = network.task.await;
         }
@@ -487,20 +717,25 @@ impl Manager {
         settings.enabled = true;
         settings.listen_address = address;
         self.store.lock().save(settings).map_err(io_failure)?;
-        let token = Arc::new(AuthToken::from_bytes(credentials.work_secret));
+        let credential = Arc::new(Credential::SharedSecret(AuthToken::from_bytes(
+            credentials.work_secret,
+        )));
         let (cancel, stop) = watch::channel(false);
-        let admission = NetworkAdmission::new();
         let mut context = self.context.clone();
         context.identity.ingress = IngressKind::TlsWork;
         context.identity.credential_generation = credentials.generation;
         context.stop = stop;
-        context.network_admission = Some(admission.clone());
-        let sequence = self.next_connection.clone();
-        let task = tokio::spawn(network_loop(listener, token, context, sequence));
+        self.admission.open(IngressKind::TlsWork);
+        let task = tokio::spawn(network_loop(
+            listener,
+            credential,
+            context,
+            self.next_connection.clone(),
+            self.streams.clone(),
+        ));
         self.network = Some(NetworkGeneration {
             address,
             cancel,
-            admission,
             task,
         });
         self.effective = RemoteAccessState::Listening;
@@ -515,12 +750,12 @@ const MAX_ACCEPT_BACKOFF: Duration = Duration::from_secs(1);
 
 async fn network_loop(
     listener: TlsListener,
-    token: Arc<AuthToken>,
+    credential: Arc<Credential>,
     context: ConnectionContext,
     sequence: Arc<AtomicU64>,
+    streams: Arc<Semaphore>,
 ) {
     let handshakes = Arc::new(Semaphore::new(MAX_PENDING_HANDSHAKES));
-    let streams = Arc::new(Semaphore::new(MAX_REMOTE_STREAMS));
     let mut tasks = JoinSet::new();
     let mut stop = context.stop.clone();
     let mut next_accept = tokio::time::Instant::now();
@@ -563,7 +798,7 @@ async fn network_loop(
                 let deadline = start + NETWORK_HANDSHAKE_TIMEOUT;
                 connection.handshake_deadline = Some(deadline);
                 let acceptor = listener.acceptor();
-                let token = token.clone();
+                let credential = credential.clone();
                 let mut stop = connection.stop.clone();
                 tasks.spawn(async move {
                     let _slot = slot;
@@ -575,7 +810,7 @@ async fn network_loop(
                         } => stream,
                     };
                     if let Ok(Ok(stream)) = stream {
-                        let _ = super::serve_connection(Box::new(stream), token, connection).await;
+                        let _ = super::serve_connection(Box::new(stream), credential, connection).await;
                     }
                     let authenticated = permit.lock().is_none();
                     Some((peer, authenticated))
@@ -584,11 +819,6 @@ async fn network_loop(
         }
     }
     drop(listener);
-    context
-        .network_admission
-        .as_ref()
-        .expect("network admission")
-        .close();
     while tasks.join_next().await.is_some() {}
 }
 

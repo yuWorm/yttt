@@ -24,6 +24,6 @@ pub use stream::{
 };
 pub use wire::{
     WireError, WireReceiveDiagnostics, receive_control, receive_desktop_shell, receive_handshake,
-    receive_lifecycle, send_control, send_control_bounded, send_desktop_shell, send_frame,
-    send_handshake, send_lifecycle,
+    receive_lifecycle, receive_pairing, send_control, send_control_bounded, send_desktop_shell,
+    send_frame, send_handshake, send_lifecycle, send_pairing,
 };
