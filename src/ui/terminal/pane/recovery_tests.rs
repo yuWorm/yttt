@@ -443,3 +443,59 @@ fn a_pane_another_client_took_offers_to_take_control_back(cx: &mut TestAppContex
     laptop.shutdown_client();
     runtime.shutdown_client();
 }
+
+#[gpui::test]
+fn taking_control_back_after_another_client_resized_restores_input_and_size(
+    cx: &mut TestAppContext,
+) {
+    let host = RecoveryHost::start();
+    let runtime = host.client("desk");
+    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
+    let observes =
+        |cx: &mut VisualTestContext| cx.read(|app| pane.read(app).observes_another_controller(app));
+    pump_until(cx, "writable terminal", |cx| {
+        cx.read(|app| pane.read(app).is_running()) && !observes(cx)
+    });
+    let desk = catalog(&runtime).terminals.remove(0);
+
+    // Another Client sits down: attaching takes control and sizes the
+    // terminal to its own window, as a remote Client does on connect.
+    let laptop = host.client("laptop");
+    let laptop_geometry = TerminalGeometry {
+        cols: desk.geometry.cols + 17,
+        rows: desk.geometry.rows + 9,
+        cell_width: 0,
+        cell_height: 0,
+    };
+    assert!(matches!(
+        laptop.request_blocking_typed(Request::AttachTerminal(AttachTerminal {
+            session_id: desk.session_id.clone(),
+            known_session_epoch: Some(desk.session_epoch),
+            after_sequence: None,
+            mode: TerminalLeaseMode::Interactive,
+            geometry: laptop_geometry,
+            geometry_epoch: desk.geometry_epoch + 1,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+        })),
+        Ok(Response::TerminalAttached { .. })
+    ));
+    pump_until(cx, "control notice", observes);
+    assert_eq!(
+        catalog(&runtime).terminals[0].geometry.cols,
+        laptop_geometry.cols
+    );
+    laptop.shutdown_client();
+
+    cx.update(|_window, cx| pane.update(cx, |pane, cx| pane.take_terminal_control(cx)));
+    pump_until(cx, "control taken back", |cx| !observes(cx));
+    send_input(&pane, cx);
+    pump_until(cx, "input after taking control", |_| {
+        received_input_count(host.root.path(), "x") == 1
+    });
+    pump_until(cx, "the desk's size restored", |_| {
+        let geometry = catalog(&runtime).terminals[0].geometry;
+        (geometry.cols, geometry.rows) == (desk.geometry.cols, desk.geometry.rows)
+    });
+    runtime.shutdown_client();
+}

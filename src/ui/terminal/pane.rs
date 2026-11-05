@@ -182,6 +182,9 @@ pub struct TerminalPaneView {
     /// A `TakeTerminalController` sent from this pane's read-only notice.
     taking_control: bool,
     take_control_error: Option<String>,
+    /// A lease the Host granted that waits for its current geometry epoch
+    /// before input may use it; a revocation meanwhile cancels it.
+    pending_grant: Option<u64>,
     exit_emitted: bool,
     terminal_input_gate: TerminalInputGate,
     generation: u64,
@@ -235,6 +238,9 @@ struct HostTerminalWriter {
     /// The geometry epoch the Host is known to have.
     host_geometry_epoch: Arc<AtomicU64>,
     pending_geometry: Arc<RwLock<Option<TerminalGeometry>>>,
+    /// This pane's own size, which the terminal returns to when this Client
+    /// regains its lease after another one resized it.
+    local_geometry: Arc<RwLock<TerminalGeometry>>,
     locale: Arc<AtomicU8>,
 }
 
@@ -259,6 +265,17 @@ impl HostTerminalWriter {
         self.host_geometry_epoch
             .store(geometry_epoch, Ordering::Relaxed);
         self.mutation_context.write().geometry_epoch = geometry_epoch;
+    }
+
+    /// With the lease (re)gained, takes the Host's geometry epoch and sizes
+    /// the terminal back to this pane if another Client resized it meanwhile.
+    fn reclaim_geometry(&self, host_geometry: TerminalGeometry, host_geometry_epoch: u64) {
+        self.adopt_host_geometry_epoch(host_geometry_epoch);
+        let local = *self.local_geometry.read();
+        if (host_geometry.cols, host_geometry.rows) != (local.cols, local.rows) {
+            self.pending_geometry.write().get_or_insert(local);
+        }
+        self.submit_pending_resize();
     }
 
     fn submit_pending_resize(&self) {
@@ -480,6 +497,7 @@ impl TerminalPaneView {
             terminal_error: None,
             taking_control: false,
             take_control_error: None,
+            pending_grant: None,
             exit_emitted: false,
             terminal_input_gate,
             generation: 0,
@@ -650,6 +668,7 @@ impl TerminalPaneView {
     /// Records a granted (`lease_epoch > 0`) or revoked (`0`) Interactive lease:
     /// input and resize need one.
     fn set_interactive_lease(&mut self, lease_epoch: u64, cx: &mut Context<Self>) {
+        self.pending_grant = None;
         if let Some(writer) = &self.control_writer {
             writer.mutation_context.write().lease_epoch = lease_epoch;
         }
@@ -715,20 +734,83 @@ impl TerminalPaneView {
                 if pane.generation != generation {
                     return;
                 }
-                if let Ok(Ok(Response::TerminalCheckpoint(checkpoint))) = checkpoint {
-                    writer.adopt_host_geometry_epoch(checkpoint.viewport.geometry_epoch);
-                }
+                let host_geometry = match checkpoint {
+                    Ok(Ok(Response::TerminalCheckpoint(checkpoint))) => {
+                        writer.adopt_host_geometry_epoch(checkpoint.viewport.geometry_epoch);
+                        Some((
+                            checkpoint.viewport.geometry,
+                            checkpoint.viewport.geometry_epoch,
+                        ))
+                    }
+                    _ => None,
+                };
                 match lease {
                     Ok(Ok(Response::TerminalLease(lease)))
                         if lease.mode == TerminalLeaseMode::Interactive =>
                     {
                         pane.set_interactive_lease(lease.lease_epoch, cx);
                         pane.terminal_error = None;
-                        writer.submit_pending_resize();
+                        match host_geometry {
+                            Some((geometry, epoch)) => writer.reclaim_geometry(geometry, epoch),
+                            None => writer.submit_pending_resize(),
+                        }
                     }
                     // Another Client controls the terminals; the workbench
                     // status says so.
                     _ => pane.set_interactive_lease(0, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Makes a granted lease usable. Whoever held control may have resized the
+    /// terminal meanwhile, so input waits for the Host's geometry epoch rather
+    /// than sending keystrokes the Host would reject as stale.
+    fn accept_control_grant(
+        &mut self,
+        lease_epoch: u64,
+        runtime: &DesktopHostRuntime,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let writer = match &self.control_writer {
+            Some(writer) if !self.attaching && self.lifecycle == PaneLifecycle::Running => {
+                writer.clone()
+            }
+            // An attach in flight takes the geometry from its own reply.
+            _ => {
+                self.set_interactive_lease(lease_epoch, cx);
+                return;
+            }
+        };
+        self.pending_grant = Some(lease_epoch);
+        let checkpoint = runtime.request(Request::RequestCheckpoint {
+            session_id: self.session_id(),
+            after_sequence: None,
+            subscribe_only: false,
+        });
+        let generation = self.generation;
+        cx.spawn_in(window, async move |this, cx| {
+            let checkpoint = checkpoint.recv_async().await;
+            let _ = this.update(cx, |pane, cx| {
+                if pane.generation != generation || pane.pending_grant != Some(lease_epoch) {
+                    return;
+                }
+                let host_geometry = match checkpoint {
+                    Ok(Ok(Response::TerminalCheckpoint(checkpoint))) => {
+                        writer.adopt_host_geometry_epoch(checkpoint.viewport.geometry_epoch);
+                        Some((
+                            checkpoint.viewport.geometry,
+                            checkpoint.viewport.geometry_epoch,
+                        ))
+                    }
+                    _ => None,
+                };
+                pane.set_interactive_lease(lease_epoch, cx);
+                if let Some((geometry, epoch)) = host_geometry {
+                    writer.reclaim_geometry(geometry, epoch);
                 }
                 cx.notify();
             });
@@ -790,6 +872,7 @@ impl TerminalPaneView {
             next_geometry_epoch,
             host_geometry_epoch: Arc::new(AtomicU64::new(placement.geometry_epoch)),
             pending_geometry: pending_resize_geometry.clone(),
+            local_geometry: Arc::new(RwLock::new(geometry)),
             locale: Arc::new(AtomicU8::new(if ui_text.locale() == Locale::Chinese {
                 1
             } else {
@@ -817,17 +900,19 @@ impl TerminalPaneView {
                         || !terminal_input_allowed.load(Ordering::SeqCst)
                 })
                 .with_resize_callback(move |cols, rows, cell_width, cell_height| {
+                    let geometry = TerminalGeometry {
+                        cols,
+                        rows,
+                        cell_width,
+                        cell_height,
+                    };
+                    *resize_writer.local_geometry.write() = geometry;
                     if !matches!(resize_writer.runtime.state(), ConnectionState::Ready { .. }) {
                         return Err(resize_text
                             .get(UiTextKey::TerminalI18nHostConnectionNotReady)
                             .to_string());
                     }
-                    *resize_writer.pending_geometry.write() = Some(TerminalGeometry {
-                        cols,
-                        rows,
-                        cell_width,
-                        cell_height,
-                    });
+                    *resize_writer.pending_geometry.write() = Some(geometry);
                     if resize_writer.mutation_context.read().lease_epoch == 0 {
                         return Ok(());
                     }
@@ -1161,8 +1246,8 @@ impl TerminalPaneView {
                     cx.notify();
                 }
                 ServerEvent::TerminalControlGranted { lease } if lease.session_id == session_id => {
-                    self.set_interactive_lease(lease.lease_epoch, cx);
                     self.terminal_error = None;
+                    self.accept_control_grant(lease.lease_epoch, runtime, window, cx);
                     cx.notify();
                 }
                 _ => {}

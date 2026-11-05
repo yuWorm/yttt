@@ -267,8 +267,8 @@ Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须
    恢复为 Interactive，其余为 Observer，重新订阅本身不抢 lease；Host 发送的 initial
    snapshot 建立或替换 mirror。catalog 刷新不请求快照，也不改写现有 mirror。
    Desktop pane 收到 `Ready` 后再以 `AcquireTerminalLease` 确认 lease、以 checkpoint 的
-   `geometry_epoch` 校准输入上下文，并补发断线期间未被接受的 resize；lease 已被其他 Client
-   取得时转为只读。
+   `geometry_epoch` 校准输入上下文，并补发断线期间未被接受的 resize；终端尺寸与本 pane
+   不同（其他 Client 改过）时按本 pane 尺寸 resize 回来；lease 已被其他 Client 取得时转为只读。
 2. 终端 sequence gap、epoch 变化或旧 Host 的 `ResyncRequired` 视为对端违约：Client 断开整条
    session 连接并重连，所有终端流以 Host 当前 snapshot 重新开流。Client 不请求 checkpoint 修补 mirror。
 3. Client cache 中存在但 catalog 不存在时，删除 mirror 并发布 `TerminalUnavailable`。
@@ -535,6 +535,10 @@ UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；re
   把控制权交给最近连上、且附加了终端的 Client，没有则 controller 置空。
 - resize 被 Host 拒绝时，Client 把输入上下文的 `geometry_epoch` 退回 Host 仍持有的值，
   否则此后的输入都会以 `StaleGeometry` 被拒。
+- 输入必须携带终端当前的 `geometry_epoch`。控制权回到本 Client（`TerminalControlGranted`）时，
+  pane 保持只读，先请求 checkpoint 取 Host 当前的 `geometry_epoch`，再启用 lease 并像重连一样按本 pane
+  尺寸 resize 回来；期间收到撤销则放弃这次授予。
+  只设置 lease 会让此后的输入因离开期间其他 Client 的 resize 全部以 `StaleGeometry` 被拒。
 
 ### 7.5 退出
 

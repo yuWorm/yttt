@@ -1226,7 +1226,11 @@ async fn serve_session_connection(
         tokio::select! {
             request = requests.recv(), if queued.len() < MAX_QUEUED_REQUESTS => {
                 let Some(request) = request else {
-                    return Err("session reader stopped".to_string());
+                    // The reader reports why it stopped before it drops its
+                    // sender, so the reason is waiting even when this branch won.
+                    return Err(failed
+                        .try_recv()
+                        .unwrap_or_else(|_| "session reader stopped".to_string()));
                 };
                 if recovery_request(&request.body) {
                     let uses_attachments = request_uses_terminal_attachments(&request.body);
