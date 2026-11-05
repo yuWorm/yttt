@@ -4,6 +4,7 @@
 
 pub use yttt_core::commands;
 pub mod agent_control_client;
+pub mod agent_mcp;
 pub mod cli;
 #[cfg(target_os = "macos")]
 mod cli_registration;

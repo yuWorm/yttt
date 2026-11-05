@@ -733,6 +733,21 @@ root PID 选择最近的已知 Agent descendant，以两个连续 miss 作为退
 且父 shell 继续运行时仍会发布最终快照；SSH terminal 不读取远端进程表，继续以 provider hook
 为准。
 
+### 11.1 Agent 控制入口
+
+编排者 Agent 不是 Client，不经 session 连接：它在 hook listener 上的 `/control/v1/*`（本机 HTTP JSON）
+发请求，由 Host `agent_control` 处理；SSH 托管项目沿用 hook endpoint 的反向转发。
+
+- 主体由入口与凭证决定：Client 会话（人）、桌面 socket（`yttt ctl`，按 External 执行）、编排者 pane。
+  编排者凭证 `YTTT_AGENT_CONTROL_TOKEN` 是 Host 密钥对 pane scope 的 HMAC，带 `control:` 域前缀，
+  与 hook token 不可互换；只签发给 `PaneConfig.role = orchestrator` 的 pane，pane 重启（generation 变化）
+  或角色被取消即失效。每个终端都注入 `YTTT_SELF`（只读身份，不是凭证），继承的同名变量在启动前清除。
+- 编排者只能操作 `spawned_by` 指向自己的 Worker；`controller`（auto / human / paused）存于 Host 布局。
+  任何通过 lease 校验的 Client `TerminalInput` 都视为人的输入，落到 `auto` Worker 时 Host 置为 `human`。
+  编排者的写入由 Host 直接写 PTY，不经 lease，因此不会触发接管。
+- `wait`、`interrupt` 可能阻塞，各占独立线程（上限 32），不占用 hook worker；排队消息只在 Host 内存。
+- 这些规则约束 Agent 的误操作，不是对同 UID 进程的安全边界：同 UID 进程仍可经桌面 socket 调用 ctl。
+
 远程网络断开只改变对应 SSH resource 状态，不得使 Host 或本地 terminal runtime 崩溃。Relay 只能转发端到端加密帧，不能获得 SSH credential、项目内容或 auth token。
 
 ## 12. 可观测性与错误

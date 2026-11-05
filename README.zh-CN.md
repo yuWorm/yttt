@@ -105,7 +105,9 @@
 并从右侧文件树打开项目文件。远端连接与会话恢复的步骤见[完整使用文档](docs/usage.md)。
 
 要通过脚本操作已启动的桌面，请从 `yttt ctl --help` 或
-[CLI 示例](docs/cli-control.md)开始。
+[CLI 示例](docs/cli-control.md)开始。用 `--role orchestrator` 创建的 Agent 可以在你看得见、随时能接管的
+标签页中启动其他 Agent、发送指令并等待结果，见[编排 Agent](docs/cli-control.md#orchestrating-agents)、
+`yttt mcp` 与[编排者 skill](docs/skills/yttt-orchestrator/SKILL.md)。
 
 ## 文档
 

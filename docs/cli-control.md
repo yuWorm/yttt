@@ -132,6 +132,18 @@ last reply from its provider's transcript (Claude Code and Codex); for other pro
 before a reply exists, `source` is `unavailable`. `interrupt` presses Esc in a working Claude
 Code or Codex worker and reports whether its turn ended within `--timeout` (default 10 s).
 
+### MCP server and skill
+
+`yttt mcp` serves the same operations as Model Context Protocol tools on stdio (`yttt_whoami`,
+`yttt_spawn_agent`, `yttt_list_agents`, `yttt_send`, `yttt_wait`, `yttt_result`,
+`yttt_interrupt`, `yttt_release`, `yttt_close`). Register it with the orchestrator's provider,
+for example `claude mcp add yttt -- yttt mcp`; the provider starts it inside the orchestrator
+pane, so it inherits that pane's credential. Outside an orchestrator pane every tool except
+`yttt_whoami` fails with `forbidden`. Tool waits default to 120 seconds, below the Host's limit,
+because MCP clients may end long calls. [`docs/skills/yttt-orchestrator/SKILL.md`](skills/yttt-orchestrator/SKILL.md)
+is a skill that teaches an orchestrator the loop, the use of `--after-turn`, and what to do when a
+person steps in; copy it into the provider's skills directory.
+
 ### Handing a worker between a person and its orchestrator
 
 A worker is driven by its orchestrator (`auto`), by a person (`human`), or `paused`.
@@ -265,7 +277,9 @@ Responses are limited to 16 MiB to include bounded Agent board histories; narrow
 
 Layout mutations are rejected while a dialog or palette owns the window's input,
 so pending UI actions cannot accidentally apply to a different project or tab.
-Writes execute through the desktop's existing Host connection and control lease.
-An observing or disconnected desktop cannot mutate state, and the CLI never takes
-control from another Client. Headless Host control and automatic multi-turn Agent
-scheduling are not provided by this interface.
+Writes execute through the desktop's existing Host connection. Any connected desktop may
+change the layout; terminal input and `panes send` need the terminal controller, which the
+CLI never takes from another Client, and a disconnected desktop cannot write at all.
+Orchestrator commands do not use the desktop: they go to the Host directly and follow the
+rules in [Orchestrating Agents](#orchestrating-agents). The Host does not plan or schedule
+work across turns by itself; an orchestrator Agent or a script decides what to send next.

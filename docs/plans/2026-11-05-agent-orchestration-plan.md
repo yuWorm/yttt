@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** P0–P3 已实现（P3-4 为最小呈现；推迟项在各条目中注明，见 §6 记录）；下一步 P4。§4 的开放问题已于 2026-11-05 按建议默认确认。
+**状态：** P0–P4 已实现（P3-4 为最小呈现；推迟与未做项在各条目中注明，见 §6 记录）。§3 的验收冒烟以模拟 provider 完成，真实 Claude/Codex 与 SSH 项目未验证。§4 的开放问题已于 2026-11-05 按建议默认确认。
 
 **依据：** 2026-11-05 对 `yttt ctl`、Agent hook、调度中心与 C4 之后 Host 布局的代码梳理；`docs/cli-control.md`、`docs/host-client-architecture.md`、`docs/plans/2026-10-28-c4-host-owned-layout-design.md`。同类设计参考：Claude Code agent teams（lead + teammate，各占一个 pane，人可直接进入 teammate）、Codex app-server（`turn/start`、`turn/interrupt`、`turn/completed{status}`）、ACP（`session/prompt`、`session/cancel`、`session/update`）、cmux（终端 socket/CLI + hook 通知）。
 
@@ -235,16 +235,18 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 
 ## P4-1：`yttt mcp`
 
-- [ ] stdio MCP server，工具与 §2.2 一一对应，复用同一 `AgentControl` 客户端；工具描述写明前置条件与错误码。
-- [ ] 测试：工具 schema 快照；在编排者 pane 内调用 `spawn → wait → result` 的集成测试。
+- [x] stdio MCP server（按行 JSON-RPC：`initialize`、`ping`、`tools/list`、`tools/call`），9 个工具与 CLI 一一对应，参数直接反序列化为同一请求类型后经同一客户端发送；`structuredContent` 与文本内容同时返回，拒绝和超时以 `isError` 表示；`wait` 默认 120 s。
+- [x] 测试：初始化、通知不回复、未知方法 -32601、工具列表与 schema；工具调用生成的请求与 CLI 一致（含 `wait` 默认值）；参数错误不发往 Host；`human_control`、`outcome_unknown`、pane 外 `forbidden`。真实二进制经 stdio 冒烟见 §6。
+- [ ] 未做：在编排者 pane 内经真实 provider 调用工具的冒烟（工具与 CLI 走同一客户端，CLI 已冒烟）。
 
 ## P4-2：编排 skill
 
-- [ ] 提供一个编排者 skill：任务拆分格式、结果文件约定（`.yttt/runs/<delivery>/result.md`）、遇到 `human_control` / `needs_human` 时的行为、何时 `release`。
+- [x] `docs/skills/yttt-orchestrator/SKILL.md`：先 `whoami`；按不重叠文件拆分；用初始 prompt 交付完整任务并要求写 `.yttt/runs/` 摘要；`wait`/`result`/`--after-turn` 循环；`control_changed`、`human_control`、排队被丢弃、`release` 时的做法；不能回答审批；错误码表。
+- [ ] 未做：随应用自动安装到 provider 的 skills 目录（目前需手动复制）。
 
 ## P4-3：文档
 
-- [ ] 更新 `docs/cli-control.md`（含 C4-6 后的控制权描述更正）、`docs/usage.md` 调度中心章节、`docs/host-client-architecture.md` 主体与入口章节、README。
+- [x] `docs/cli-control.md`（编排章节、MCP 与 skill、更正 C4-6 之后的写入与控制权描述）、`docs/usage.md`、`docs/host-client-architecture.md` §11.1、README 中英文。
 
 ---
 
@@ -287,3 +289,4 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 | 2026-11-05 | P1 | `PaneConfig.spawned_by` 与 `NewTab::Agent.spawned_by`、`WorkspaceIntent::SetPaneOwner`；Host `agent_control`（hook listener 鉴权后经 `AgentControlHandler` 转入，进入 Host tokio 上下文执行）：`/control/v1/agents/spawn`、`/list`、`/close`，按 `spawned_by` 检查归属并写审计；关闭唯一 pane 时关闭其 tab，项目最后一个终端 tab 拒绝关闭。`WorkspaceService::locate_pane`/`panes_where`。CLI：`agents spawn`、`agents list --mine`、`agents close --agent`（编排者 pane 直连 Host，非编排者得 `forbidden`），`agents assign --to/--clear`（经桌面）。测试：`agent_control` 4 例、hook 转发 1 例、客户端 1 例、CLI 解析 2 例、`host_workspace` 1 例、桌面 `cli_control_creates_splits…` 增加 assign 断言。真实桌面冒烟（隔离 profile；临时 `HOME`，`PATH` 前置假 `claude`/`codex` 脚本以免 provider hook 写入真实配置）：编排者 `whoami` 得 `verified`；spawn 出 W1，pane 内可见假 codex 收到参数；worker pane 内 spawn 得 `forbidden`；关闭人创建的 Agent 得 `forbidden`，人 assign 后出现在 `list --mine`；重启桌面与 Host 后角色、归属保留，`whoami` 仍 `verified`，close W1 后 tab 移除、Host 子进程 4→3。真实 provider 配置校验和前后一致；hook 只写入临时 HOME，随冒烟目录删除。观察：重启后约数秒内 pane 列表为 `starting`、`panes send` 得 `not_ready`，之后恢复，与本改动无关，未深究。 |
 | 2026-11-05 | P2 | `AgentSnapshot.turn_seq`；Host `/control/v1/agents/send`、`/wait`、`/result`、`/interrupt`（后两类阻塞请求在 hook listener 上各占独立线程，上限 32）；`agent_control/transcript.rs` 读取 Claude/Codex 会话记录末尾的最后回复；新错误码 `not_ready`（HTTP 409，CLI 显示为忙碌）。CLI：`agents send --agent`（不带 `--agent` 仍走桌面）、`agents wait`、`agents result`、`agents interrupt`。测试：reducer 1 例、`agent_control` 4 例、transcript 3 例、hook 线程 1 例（已确认去掉修复后失败）、CLI 解析 1 例。真实桌面冒烟（隔离 profile、临时 HOME）：用 Python 写的模拟 Claude（向真实 hook endpoint 发送 Claude 格式的 SessionStart/UserPromptSubmit/Stop，写 Claude 格式 transcript，读 bracketed paste，Esc 视为打断）作 Worker，编排者为 shell。spawn 带初始任务 → `wait` 得 `completed #1` → `result` 得 "Done: fix the parser" → `send` 返回 `turn_seq_before: 1` → `wait --after-turn 1` 得 `completed #2` → `result` 得第二轮回复；长任务进行中 `send` 得忙碌；`interrupt` 得 `confirmed: true`，状态 `interrupted #3`。Worker 终端可见全部 prompt、回复与打断。真实 provider 配置前后一致。未做：真实 Claude/Codex 的验证（需在真实 HOME 安装开发版 hook，会覆盖正式版写入的 hook 配置，需先备份并征得同意）。 |
 | 2026-11-05 | P3 | `PaneConfig.controller` 与 `WorkspaceIntent::SetPaneController`（`SetPaneOwner` 重置为 auto）；Host 在每个通过 Lease 校验的 Client `TerminalInput` 后调用 `AgentControl::person_typed`；`send` 改为 `send_decision`（写入 / 排队 / 拒绝），记录 `written_after_turn` 防止同一轮写两次；排队投递任务；`release`；`wait` 新增 `control_changed`；错误码 `human_control`。CLI：`agents send --queue`、`agents release`、`agents control --set`；`list` 增加控制权与排队条数两列。界面：Worker tab 状态显示控制权；命令面板三条命令（中英文）。测试：`agent_control` 3 例、`host_workspace` 控制权断言、`commands_keybindings` 1 例、CLI 解析 2 处。真实桌面冒烟（模拟 Claude，隔离 profile 与 HOME）：编排者等待中，人经桌面 `panes send` 向 Worker 输入 → `wait` 返回 `control_changed`、Worker `controller: human`；编排者直接 `send` 得"有人正在驱动"，`--queue` 得排队，列表显示 `human 1`；人执行 `agents control --set auto` 后排队消息自动写出为第 3 轮，`result` 得其回复；长任务中排队 1 条后人输入 → `human 0`（队列被丢弃）；`--set paused` 生效；编排者 `release` 后为 `human`。真实 provider 配置前后一致。界面上的 tab 标签与命令面板只有自动化测试，未在 GUI 中目视确认（本机无辅助功能/录屏权限）。 |
+| 2026-11-05 | P4 | `yttt mcp`（`src/agent_mcp.rs`，`main` 在 `ctl` 之前分派）；编排者 skill；文档。测试：`agent_mcp` 3 例。真实二进制冒烟：经 stdio 依次发送 initialize、initialized 通知、tools/list、两次 tools/call 与一行非 JSON，得到协议版本与 serverInfo、9 个工具、pane 外 `whoami` 为 `external`、`list` 为 `forbidden`、非 JSON 为 -32700，进程在 stdin 关闭后以 0 退出。 |

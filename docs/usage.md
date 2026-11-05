@@ -31,6 +31,12 @@ and splits; manage panes; send terminal input; and read visible terminal content
 It controls an already running local desktop and supports `--json` for scripts.
 See [CLI Control](cli-control.md) for commands, targets, and result semantics.
 
+An Agent tab created with `yttt ctl agents create --role orchestrator` can orchestrate: it starts
+worker Agents in new tabs, sends them instructions, waits for their turns and reads their replies,
+through `yttt ctl agents …` or the `yttt mcp` tools. Every worker is an ordinary terminal tab. Typing
+in one takes it over from the orchestrator, and its tab then shows **you drive**; use **Hand Agent
+Back** from the command palette to return it. See [Orchestrating Agents](cli-control.md#orchestrating-agents).
+
 ## First Launch
 
 The first launch opens onboarding before the empty workspace. Choose the interface language and

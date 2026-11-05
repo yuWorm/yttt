@@ -464,6 +464,10 @@ fn run_installer_host_preflight(profile: AppProfile, report: PathBuf) -> i32 {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| arg == "mcp") {
+        // Speaks MCP on the pipes its client opened; no console is attached.
+        std::process::exit(yttt::agent_mcp::run());
+    }
     if args.get(1).is_some_and(|arg| arg == "ctl") {
         #[cfg(windows)]
         unsafe {

@@ -112,7 +112,10 @@ Agent tabs, split a tab into panes, and open project files from the right-hand t
 access and session restoration, follow the [usage guide](docs/usage.md).
 
 To drive an already-running desktop from a script, start with `yttt ctl --help` or the
-[CLI examples](docs/cli-control.md).
+[CLI examples](docs/cli-control.md). An Agent created with `--role orchestrator` can start,
+instruct and wait for other Agents in tabs you can watch and take over at any time; see
+[Orchestrating Agents](docs/cli-control.md#orchestrating-agents), the `yttt mcp` server and the
+[orchestrator skill](docs/skills/yttt-orchestrator/SKILL.md).
 
 ## Documentation
 
