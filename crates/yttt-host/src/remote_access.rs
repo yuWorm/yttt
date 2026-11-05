@@ -101,6 +101,7 @@ impl NetworkAdmission {
                 client_id: client.clone(),
                 connected_millis: streams.connected_millis,
                 streams: streams.streams,
+                device: None,
             })
             .collect::<Vec<_>>();
         clients.sort_by(|a, b| a.client_id.as_str().cmp(b.client_id.as_str()));
@@ -323,6 +324,7 @@ impl Manager {
                 .as_ref()
                 .map(|network| network.admission.summaries())
                 .unwrap_or_default(),
+            p2p: P2pStatus::default(),
         }
     }
     async fn handle(
@@ -421,6 +423,14 @@ impl Manager {
                     network.admission.cancel(None);
                     network.admission.drain(None).await;
                 }
+            }
+            RemoteAccessRequest::SetP2p { .. }
+            | RemoteAccessRequest::StartPairing
+            | RemoteAccessRequest::ConfirmPairing { .. }
+            | RemoteAccessRequest::CancelPairing
+            | RemoteAccessRequest::ListDevices
+            | RemoteAccessRequest::RevokeDevice { .. } => {
+                return Err(failure("P2P remote access is not available yet"));
             }
         }
         Ok(RemoteAccessResponse::Status(self.status()))

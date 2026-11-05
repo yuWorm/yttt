@@ -13,6 +13,8 @@ pub enum FrameKind {
     Control = 2,
     Lifecycle = 3,
     DesktopShell = 4,
+    /// Values 5 and 6 belonged to removed terminal lanes and stay unused.
+    Pairing = 7,
 }
 
 impl TryFrom<u16> for FrameKind {
@@ -24,6 +26,7 @@ impl TryFrom<u16> for FrameKind {
             2 => Ok(Self::Control),
             3 => Ok(Self::Lifecycle),
             4 => Ok(Self::DesktopShell),
+            7 => Ok(Self::Pairing),
             other => Err(ProtocolCodecError::UnknownFrameKind(other)),
         }
     }

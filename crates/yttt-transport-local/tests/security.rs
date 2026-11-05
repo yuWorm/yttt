@@ -272,6 +272,7 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
             can_force_stop: false,
             nonce: yttt_protocol::Nonce([8; 32]),
             channel: ConnectionChannel::Session,
+            endpoint_id: None,
         };
         yttt_transport_local::send_handshake(
             &mut client_stream,
@@ -295,6 +296,7 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
                     client_nonce: hello.nonce,
                     host_nonce: challenge.host_nonce,
                     proof: yttt_protocol::AuthMac([0; 32]),
+                    signature: None,
                 },
             ),
         )

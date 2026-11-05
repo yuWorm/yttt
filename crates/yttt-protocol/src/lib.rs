@@ -7,6 +7,7 @@ pub mod desktop;
 pub mod desktop_control;
 pub mod handshake;
 pub mod lifecycle;
+pub mod p2p;
 pub mod path;
 pub mod project;
 pub mod remote_access;
@@ -30,8 +31,9 @@ pub use desktop::{
     DesktopShellRequestEnvelope, DesktopShellResponse, DesktopShellResponseEnvelope,
 };
 pub use handshake::{
-    AuthMac, BuildIdentity, ClientAuthenticate, ClientHello, ConnectionChannel, HandshakeMessage,
-    HostChallenge, HostReady, Nonce, ProtocolRange, RejectReason,
+    AuthMac, BuildIdentity, ClientAuthenticate, ClientHello, ConnectionChannel, EndpointKey,
+    HandshakeMessage, HostChallenge, HostReady, InvalidEndpointKey, Nonce, ProtocolRange,
+    RejectReason, Signature,
 };
 pub use lifecycle::{
     HostLifecycleState, HostLifecycleStatus, LifecycleMessage, LifecycleRequest,

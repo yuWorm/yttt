@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use zeroize::Zeroize;
 
+use crate::{
+    EndpointKey,
+    p2p::{DevicePreset, PairedDevice},
+};
+
 pub const DEFAULT_REMOTE_ADDRESS: &str = "127.0.0.1:43123";
 pub const MAX_CONNECTION_INFO_BYTES: usize = 8 * 1024;
 pub const TLS_SERVER_NAME: &str = "yttt-host.local";
@@ -18,6 +23,16 @@ pub struct RemoteAccessSettings {
     pub enabled: bool,
     pub listen_address: SocketAddr,
     pub login_startup_consent_granted: bool,
+    pub p2p: P2pSettings,
+}
+
+/// The P2P ingress, independent of the TLS listener.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct P2pSettings {
+    pub enabled: bool,
+    /// The one relay the Host keeps a home connection to; `None` allows only direct paths.
+    pub relay_url: Option<String>,
 }
 
 impl Default for RemoteAccessSettings {
@@ -26,6 +41,7 @@ impl Default for RemoteAccessSettings {
             enabled: false,
             listen_address: "127.0.0.1:43123".parse().expect("constant socket address"),
             login_startup_consent_granted: false,
+            p2p: P2pSettings::default(),
         }
     }
 }
@@ -60,8 +76,9 @@ impl Drop for RemoteConnectionInfo {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RemoteAccessState {
+    #[default]
     Disabled,
     Starting,
     Listening,
@@ -74,6 +91,49 @@ pub struct RemoteClientSummary {
     pub client_id: ClientInstanceId,
     pub connected_millis: u64,
     pub streams: usize,
+    /// The paired device behind a P2P session; `None` for TLS sessions.
+    #[serde(default)]
+    pub device: Option<EndpointKey>,
+}
+
+/// Text that grants access, such as a pairing code; redacted from debug output.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretText(pub String);
+
+impl fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretText([redacted])")
+    }
+}
+
+impl Drop for SecretText {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PairingState {
+    /// Waiting for a device to scan the code.
+    Open { expires_millis: u64 },
+    /// A device proved it holds the code; the Host user compares `short_code`.
+    AwaitingConfirmation {
+        endpoint_id: EndpointKey,
+        device_label: String,
+        short_code: u32,
+        expires_millis: u64,
+    },
+    /// A second device presented the same code; the invitation was withdrawn.
+    Compromised,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct P2pStatus {
+    pub effective: RemoteAccessState,
+    pub endpoint_id: Option<EndpointKey>,
+    pub error: Option<String>,
+    pub pairing: Option<PairingState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +143,8 @@ pub struct RemoteAccessStatus {
     pub bound_address: Option<SocketAddr>,
     pub error: Option<String>,
     pub clients: Vec<RemoteClientSummary>,
+    #[serde(default)]
+    pub p2p: P2pStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,10 +161,34 @@ pub enum RemoteAccessRequest {
         client_id: ClientInstanceId,
     },
     DisconnectAll,
+    SetP2p {
+        enabled: bool,
+        relay_url: Option<String>,
+    },
+    /// Opens a single-use invitation, replacing any open one.
+    StartPairing,
+    ConfirmPairing {
+        endpoint_id: EndpointKey,
+        preset: DevicePreset,
+    },
+    CancelPairing,
+    ListDevices,
+    /// Removes the device and closes its connections. `reset_tls` also rotates the TLS
+    /// secret, which a revoked device may have imported separately.
+    RevokeDevice {
+        endpoint_id: EndpointKey,
+        reset_tls: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RemoteAccessResponse {
     Status(RemoteAccessStatus),
     ConnectionInfo(RemoteConnectionInfo),
+    /// Carries the invitation secret; shown on screen only.
+    PairingInvitation {
+        code: SecretText,
+        expires_millis: u64,
+    },
+    Devices(Vec<PairedDevice>),
 }

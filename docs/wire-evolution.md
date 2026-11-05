@@ -70,6 +70,13 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `GetDocumentDraft`、`ReleaseDocument` 请求,`Document`/`DocumentDraft` 响应,
   `DocumentState { document, draft, lease }`、`DocumentLease { holder, epoch }` 与
   `ServerEvent::DocumentChanged(DocumentUpdate { workspace_id, state })`。
+  v22 内追加(未升版本):P2P 入口。握手 `ClientHello.endpoint_id`、`HostChallenge.endpoint_id`/`signature`、
+  `ClientAuthenticate.signature`(均 `#[serde(default)]`,旧端读作 `None`):P2P 入口用设备 Ed25519 密钥双向签名,
+  `proof` 填全零;TLS、SSH 与本机入口不设这些字段,transcript 与 `-v3` 标签不变。仅本机管理入口可用的
+  `RemoteAccessRequest` 追加 `SetP2p`、`StartPairing`、`ConfirmPairing`、`CancelPairing`、`ListDevices`、`RevokeDevice`,
+  `RemoteAccessResponse` 追加 `PairingInvitation`、`Devices`;`RemoteAccessSettings.p2p`、`RemoteAccessStatus.p2p`、
+  `RemoteClientSummary.device` 带缺省。配对使用独立 ALPN 与新帧类型 `FrameKind::Pairing = 7`(5、6 保留不复用),
+  消息 `p2p::PairMessage` 不进入握手枚举。
   v22 内追加(未升版本):`AgentSnapshot.turn_seq`(`#[serde(default)]`,旧端读作 0),Agent 每开始一轮加一;
   `PaneConfig` 追加 `role`(省略即 worker)与 `spawned_by`(省略即无),`NewTab::Agent` 追加同名字段,
   `WorkspaceIntent::SetPaneOwner` 新意图(旧 Host 拒绝该意图);`PaneConfig` 追加 `controller`(省略即 auto)与

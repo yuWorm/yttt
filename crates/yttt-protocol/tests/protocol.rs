@@ -31,6 +31,7 @@ fn client_hello() -> ClientHello {
         can_force_stop: false,
         channel: ConnectionChannel::Session,
         nonce: Nonce([7; 32]),
+        endpoint_id: None,
     }
 }
 
@@ -137,11 +138,14 @@ fn auth_proofs_are_redacted_from_debug_output() {
         client_nonce: Nonce([1; 32]),
         host_nonce: Nonce([2; 32]),
         proof: AuthMac([3; 32]),
+        endpoint_id: None,
+        signature: Some(yttt_protocol::Signature([4; 64])),
     };
 
     let debug = format!("{challenge:?}");
     assert!(debug.contains("[redacted]"));
     assert!(!debug.contains("3, 3, 3"));
+    assert!(!debug.contains("4, 4, 4"));
 }
 
 #[test]

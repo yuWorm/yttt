@@ -180,6 +180,7 @@ where
         can_force_stop: identity.can_force_stop,
         nonce: client_nonce,
         channel: identity.channel,
+        endpoint_id: None,
     };
     send_handshake(stream, &HandshakeMessage::ClientHello(hello.clone())).await?;
     let challenge = match receive_handshake(stream).await? {
@@ -212,6 +213,7 @@ where
         client_nonce,
         host_nonce: challenge.host_nonce,
         proof: sign(token, &client_proof_bytes(&hello, &challenge)),
+        signature: None,
     };
     send_handshake(stream, &HandshakeMessage::ClientAuthenticate(authenticate)).await?;
     let ready = match receive_handshake(stream).await? {
@@ -314,6 +316,8 @@ where
         client_nonce: hello.nonce,
         host_nonce: random_nonce(),
         proof: AuthMac([0; 32]),
+        endpoint_id: None,
+        signature: None,
     };
     challenge.proof = sign(token, &host_proof_bytes(&hello, &challenge));
     send_handshake(stream, &HandshakeMessage::HostChallenge(challenge.clone())).await?;

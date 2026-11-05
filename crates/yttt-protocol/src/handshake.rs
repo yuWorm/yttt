@@ -49,6 +49,55 @@ impl fmt::Debug for AuthMac {
     }
 }
 
+/// An Ed25519 public key; on the P2P ingress it is also the peer's iroh EndpointId.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct EndpointKey(#[serde(with = "serde_bytes")] pub [u8; 32]);
+
+impl fmt::Debug for EndpointKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "EndpointKey({})", self)
+    }
+}
+
+impl fmt::Display for EndpointKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::str::FromStr for EndpointKey {
+    type Err = InvalidEndpointKey;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.len() != 64 || !text.is_ascii() {
+            return Err(InvalidEndpointKey);
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)
+                .map_err(|_| InvalidEndpointKey)?;
+        }
+        Ok(Self(bytes))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("endpoint key must be 64 hexadecimal characters")]
+pub struct InvalidEndpointKey;
+
+/// An Ed25519 signature over a handshake transcript.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Signature(#[serde(with = "serde_bytes")] pub [u8; 64]);
+
+impl fmt::Debug for Signature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Signature(..)")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub supported: ProtocolRange,
@@ -63,6 +112,9 @@ pub struct ClientHello {
     pub nonce: Nonce,
     #[serde(default)]
     pub channel: ConnectionChannel,
+    /// The Client's device key; set only on the P2P ingress.
+    #[serde(default)]
+    pub endpoint_id: Option<EndpointKey>,
 }
 
 /// One authenticated Client session uses one `Session` connection for requests,
@@ -86,7 +138,13 @@ pub struct HostChallenge {
     pub host_epoch: u64,
     pub client_nonce: Nonce,
     pub host_nonce: Nonce,
+    /// All zero when the Host proves itself with `signature` instead.
     pub proof: AuthMac,
+    /// The Host's device key; set only on the P2P ingress.
+    #[serde(default)]
+    pub endpoint_id: Option<EndpointKey>,
+    #[serde(default)]
+    pub signature: Option<Signature>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,7 +153,10 @@ pub struct ClientAuthenticate {
     pub host_epoch: u64,
     pub client_nonce: Nonce,
     pub host_nonce: Nonce,
+    /// All zero when the Client proves itself with `signature` instead.
     pub proof: AuthMac,
+    #[serde(default)]
+    pub signature: Option<Signature>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

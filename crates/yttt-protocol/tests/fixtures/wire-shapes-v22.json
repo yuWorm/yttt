@@ -282,7 +282,8 @@
       "client_nonce",
       "host_epoch",
       "host_nonce",
-      "proof"
+      "proof",
+      "signature"
     ]
   },
   "ClientHello": {
@@ -292,6 +293,7 @@
       "channel",
       "client_instance_id",
       "credential_generation",
+      "endpoint_id",
       "host_epoch_hint",
       "nonce",
       "profile_id",
@@ -363,6 +365,10 @@
     "Block": [],
     "HollowBlock": [],
     "Underline": []
+  },
+  "DevicePreset": {
+    "Full": [],
+    "Observe": []
   },
   "DocumentId": {
     "": [
@@ -463,13 +469,15 @@
       "build",
       "client_nonce",
       "credential_generation",
+      "endpoint_id",
       "environment_id",
       "host_epoch",
       "host_id",
       "host_nonce",
       "profile_id",
       "proof",
-      "selected_version"
+      "selected_version",
+      "signature"
     ]
   },
   "HostEvent": {
@@ -577,6 +585,41 @@
       "location",
       "selected_tab_id",
       "tab_states"
+    ]
+  },
+  "P2pSettings": {
+    "": [
+      "enabled",
+      "relay_url"
+    ]
+  },
+  "P2pStatus": {
+    "": [
+      "effective",
+      "endpoint_id",
+      "error",
+      "pairing"
+    ]
+  },
+  "PairedDevice": {
+    "": [
+      "endpoint_id",
+      "label",
+      "last_seen_millis",
+      "paired_at_millis",
+      "preset"
+    ]
+  },
+  "PairingState": {
+    "AwaitingConfirmation": [
+      "device_label",
+      "endpoint_id",
+      "expires_millis",
+      "short_code"
+    ],
+    "Compromised": [],
+    "Open": [
+      "expires_millis"
     ]
   },
   "PaneProcessState": {
@@ -866,28 +909,49 @@
     ]
   },
   "RemoteAccessRequest": {
+    "CancelPairing": [],
+    "ConfirmPairing": [
+      "endpoint_id",
+      "preset"
+    ],
     "DisconnectAll": [],
     "DisconnectClient": [
       "client_id"
     ],
     "ExportConnectionInfo": [],
+    "ListDevices": [],
     "ResetCredentials": [],
+    "RevokeDevice": [
+      "endpoint_id",
+      "reset_tls"
+    ],
     "SetEnabled": [
       "confirm_non_loopback",
       "enabled",
       "listen_address"
     ],
+    "SetP2p": [
+      "enabled",
+      "relay_url"
+    ],
+    "StartPairing": [],
     "Status": []
   },
   "RemoteAccessResponse": {
     "ConnectionInfo": [],
+    "Devices": [],
+    "PairingInvitation": [
+      "code",
+      "expires_millis"
+    ],
     "Status": []
   },
   "RemoteAccessSettings": {
     "": [
       "enabled",
       "listen_address",
-      "login_startup_consent_granted"
+      "login_startup_consent_granted",
+      "p2p"
     ]
   },
   "RemoteAccessState": {
@@ -903,6 +967,7 @@
       "clients",
       "effective",
       "error",
+      "p2p",
       "settings"
     ]
   },
@@ -910,6 +975,7 @@
     "": [
       "client_id",
       "connected_millis",
+      "device",
       "streams"
     ]
   },
