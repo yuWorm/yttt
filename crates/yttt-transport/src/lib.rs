@@ -9,8 +9,8 @@ mod wire;
 
 pub use auth::{
     AuthToken, AuthenticatedClient, AuthenticatedHost, AuthenticatedSession, ClientIdentity,
-    HandshakeError, HostIdentity, IngressKind, client_handshake, new_session_nonce,
-    server_handshake,
+    Credential, DeviceKeyCredential, HandshakeError, HostIdentity, IngressKind, client_handshake,
+    client_handshake_with, new_session_nonce, server_handshake, server_handshake_with,
 };
 pub use error::TransportError;
 pub use memory::{MemoryConnector, MemoryListener, memory_pair};

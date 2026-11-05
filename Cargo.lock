@@ -11301,6 +11301,7 @@ dependencies = [
 name = "yttt-transport"
 version = "0.3.21"
 dependencies = [
+ "ed25519-dalek",
  "hmac 0.12.1",
  "parking_lot",
  "rand 0.8.6",

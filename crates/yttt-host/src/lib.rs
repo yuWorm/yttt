@@ -3411,6 +3411,7 @@ mod session_retention_tests {
                         ingress: yttt_transport::IngressKind::LocalAdmin,
                         credential_generation: 0,
                         nonce: yttt_transport::new_session_nonce(),
+                        peer: None,
                     },
                     connection: (index == 0).then(|| watch::channel(false).0),
                     generation: 1,

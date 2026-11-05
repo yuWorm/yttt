@@ -6,8 +6,8 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncWrite};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
 use yttt_protocol::{
-    AuthMac, BuildIdentity, ClientAuthenticate, ClientHello, ConnectionChannel, HandshakeMessage,
-    HostChallenge, HostReady, Nonce, ProtocolRange, RejectReason,
+    AuthMac, BuildIdentity, ClientAuthenticate, ClientHello, ConnectionChannel, EndpointKey,
+    HandshakeMessage, HostChallenge, HostReady, Nonce, ProtocolRange, RejectReason, Signature,
 };
 use zeroize::Zeroize;
 
@@ -49,6 +49,66 @@ impl fmt::Debug for AuthToken {
 impl Drop for AuthToken {
     fn drop(&mut self) {
         self.0.zeroize();
+    }
+}
+
+/// An Ed25519 device key and, once known, the peer key it must talk to.
+#[derive(Clone)]
+pub struct DeviceKeyCredential {
+    signing: ed25519_dalek::SigningKey,
+    peer: Option<EndpointKey>,
+}
+
+impl DeviceKeyCredential {
+    pub fn new(secret: [u8; 32]) -> Self {
+        Self {
+            signing: ed25519_dalek::SigningKey::from_bytes(&secret),
+            peer: None,
+        }
+    }
+
+    pub fn local(&self) -> EndpointKey {
+        EndpointKey(self.signing.verifying_key().to_bytes())
+    }
+
+    /// A Client passes the Host key pinned at pairing; a Host passes the key the
+    /// transport authenticated for this connection.
+    pub fn with_peer(mut self, peer: EndpointKey) -> Self {
+        self.peer = Some(peer);
+        self
+    }
+
+    pub fn peer(&self) -> Option<EndpointKey> {
+        self.peer
+    }
+
+    fn sign(&self, payload: &[u8]) -> Signature {
+        use ed25519_dalek::Signer as _;
+        Signature(self.signing.sign(payload).to_bytes())
+    }
+}
+
+impl fmt::Debug for DeviceKeyCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeviceKeyCredential")
+            .field("local", &self.local())
+            .field("peer", &self.peer)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How a handshake proves both sides. Each ingress accepts exactly one kind, so a
+/// peer cannot pick the weaker one.
+#[derive(Clone, Debug)]
+pub enum Credential {
+    SharedSecret(AuthToken),
+    DeviceKey(Box<DeviceKeyCredential>),
+}
+
+impl From<AuthToken> for Credential {
+    fn from(token: AuthToken) -> Self {
+        Self::SharedSecret(token)
     }
 }
 
@@ -119,6 +179,8 @@ pub enum IngressKind {
     LocalAdmin,
     TlsWork,
     SshWork,
+    /// A paired device over iroh; the only ingress that takes device keys.
+    P2pWork,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +188,8 @@ pub struct AuthenticatedSession {
     pub ingress: IngressKind,
     pub credential_generation: u64,
     pub nonce: Nonce,
+    /// The paired device's key on the P2P ingress.
+    pub peer: Option<EndpointKey>,
 }
 
 impl IngressKind {
@@ -152,9 +216,20 @@ pub async fn client_handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    client_handshake_with(stream, identity, &Credential::SharedSecret(token.clone())).await
+}
+
+pub async fn client_handshake_with<S>(
+    stream: &mut S,
+    identity: &ClientIdentity,
+    credential: &Credential,
+) -> Result<AuthenticatedHost, HandshakeError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
-        client_handshake_inner(stream, identity, token),
+        client_handshake_inner(stream, identity, credential),
     )
     .await
     .map_err(|_| HandshakeError::Timeout)?
@@ -163,7 +238,7 @@ where
 async fn client_handshake_inner<S>(
     stream: &mut S,
     identity: &ClientIdentity,
-    token: &AuthToken,
+    credential: &Credential,
 ) -> Result<AuthenticatedHost, HandshakeError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -180,7 +255,10 @@ where
         can_force_stop: identity.can_force_stop,
         nonce: client_nonce,
         channel: identity.channel,
-        endpoint_id: None,
+        endpoint_id: match credential {
+            Credential::SharedSecret(_) => None,
+            Credential::DeviceKey(device) => Some(device.local()),
+        },
     };
     send_handshake(stream, &HandshakeMessage::ClientHello(hello.clone())).await?;
     let challenge = match receive_handshake(stream).await? {
@@ -202,18 +280,37 @@ where
     {
         return Err(HandshakeError::IdentityMismatch);
     }
-    verify_mac(
-        token,
-        &host_proof_bytes(&hello, &challenge),
-        &challenge.proof,
-    )?;
+    let (proof, signature) = match credential {
+        Credential::SharedSecret(token) => {
+            verify_mac(
+                token,
+                &host_proof_bytes(&hello, &challenge),
+                &challenge.proof,
+            )?;
+            (sign(token, &client_proof_bytes(&hello, &challenge)), None)
+        }
+        Credential::DeviceKey(device) => {
+            // Only the Host key pinned at pairing is trusted, whatever the Host claims.
+            let host = device.peer().ok_or(HandshakeError::IdentityMismatch)?;
+            if challenge.endpoint_id != Some(host) {
+                return Err(HandshakeError::IdentityMismatch);
+            }
+            verify_signature(
+                &host,
+                &host_device_proof_bytes(&hello, &challenge),
+                challenge.signature.as_ref(),
+            )?;
+            let signature = device.sign(&client_device_proof_bytes(&hello, &challenge));
+            (AuthMac([0; 32]), Some(signature))
+        }
+    };
     let authenticate = ClientAuthenticate {
         client_instance_id: identity.client_instance_id.clone(),
         host_epoch: challenge.host_epoch,
         client_nonce,
         host_nonce: challenge.host_nonce,
-        proof: sign(token, &client_proof_bytes(&hello, &challenge)),
-        signature: None,
+        proof,
+        signature,
     };
     send_handshake(stream, &HandshakeMessage::ClientAuthenticate(authenticate)).await?;
     let ready = match receive_handshake(stream).await? {
@@ -243,9 +340,22 @@ pub async fn server_handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    server_handshake_with(stream, identity, &Credential::SharedSecret(token.clone())).await
+}
+
+/// On the P2P ingress `credential` must be a device key whose peer is the key the
+/// transport authenticated; every other ingress takes the shared secret.
+pub async fn server_handshake_with<S>(
+    stream: &mut S,
+    identity: &HostIdentity,
+    credential: &Credential,
+) -> Result<AuthenticatedClient, HandshakeError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
-        server_handshake_inner(stream, identity, token),
+        server_handshake_inner(stream, identity, credential),
     )
     .await
     .map_err(|_| HandshakeError::Timeout)?
@@ -254,7 +364,7 @@ where
 async fn server_handshake_inner<S>(
     stream: &mut S,
     identity: &HostIdentity,
-    token: &AuthToken,
+    credential: &Credential,
 ) -> Result<AuthenticatedClient, HandshakeError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -273,7 +383,17 @@ where
         reject(stream, RejectReason::PermissionDenied).await;
         return Err(HandshakeError::Rejected(RejectReason::PermissionDenied));
     }
-    if hello.credential_generation != identity.credential_generation {
+    let credential_fits = match credential {
+        Credential::SharedSecret(_) => {
+            identity.ingress != IngressKind::P2pWork && hello.endpoint_id.is_none()
+        }
+        Credential::DeviceKey(device) => {
+            identity.ingress == IngressKind::P2pWork
+                && device.peer().is_some()
+                && hello.endpoint_id == device.peer()
+        }
+    };
+    if !credential_fits || hello.credential_generation != identity.credential_generation {
         reject(stream, RejectReason::AuthenticationFailed).await;
         return Err(HandshakeError::AuthenticationFailed);
     }
@@ -319,7 +439,15 @@ where
         endpoint_id: None,
         signature: None,
     };
-    challenge.proof = sign(token, &host_proof_bytes(&hello, &challenge));
+    match credential {
+        Credential::SharedSecret(token) => {
+            challenge.proof = sign(token, &host_proof_bytes(&hello, &challenge));
+        }
+        Credential::DeviceKey(device) => {
+            challenge.endpoint_id = Some(device.local());
+            challenge.signature = Some(device.sign(&host_device_proof_bytes(&hello, &challenge)));
+        }
+    }
     send_handshake(stream, &HandshakeMessage::HostChallenge(challenge.clone())).await?;
     let authenticate = match receive_handshake(stream).await? {
         HandshakeMessage::ClientAuthenticate(authenticate) => authenticate,
@@ -332,14 +460,19 @@ where
         && authenticate.host_epoch == identity.host_epoch
         && authenticate.client_nonce == hello.nonce
         && authenticate.host_nonce == challenge.host_nonce;
-    if !identity_matches
-        || verify_mac(
+    let proven = match credential {
+        Credential::SharedSecret(token) => verify_mac(
             token,
             &client_proof_bytes(&hello, &challenge),
             &authenticate.proof,
-        )
-        .is_err()
-    {
+        ),
+        Credential::DeviceKey(device) => verify_signature(
+            &device.peer().expect("checked before the challenge"),
+            &client_device_proof_bytes(&hello, &challenge),
+            authenticate.signature.as_ref(),
+        ),
+    };
+    if !identity_matches || proven.is_err() {
         reject(stream, RejectReason::AuthenticationFailed).await;
         return Err(HandshakeError::AuthenticationFailed);
     }
@@ -362,6 +495,7 @@ where
             ingress: identity.ingress,
             credential_generation: identity.credential_generation,
             nonce: hello.session_nonce,
+            peer: hello.endpoint_id,
         },
     })
 }
@@ -387,6 +521,35 @@ fn verify_mac(token: &AuthToken, payload: &[u8], proof: &AuthMac) -> Result<(), 
     mac.update(payload);
     mac.verify_slice(&proof.0)
         .map_err(|_| HandshakeError::AuthenticationFailed)
+}
+
+fn verify_signature(
+    key: &EndpointKey,
+    payload: &[u8],
+    signature: Option<&Signature>,
+) -> Result<(), HandshakeError> {
+    let signature = signature.ok_or(HandshakeError::AuthenticationFailed)?;
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&key.0)
+        .map_err(|_| HandshakeError::AuthenticationFailed)?;
+    key.verify_strict(payload, &ed25519_dalek::Signature::from_bytes(&signature.0))
+        .map_err(|_| HandshakeError::AuthenticationFailed)
+}
+
+fn host_device_proof_bytes(hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
+    device_transcript(b"yttt-host-proof-device-v1", hello, challenge)
+}
+
+fn client_device_proof_bytes(hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
+    device_transcript(b"yttt-client-proof-device-v1", hello, challenge)
+}
+
+/// The shared-secret transcript plus both device keys.
+fn device_transcript(label: &[u8], hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
+    let mut bytes = transcript(label, hello, challenge);
+    for key in [hello.endpoint_id, challenge.endpoint_id] {
+        push_field(&mut bytes, key.as_ref().map_or(&[][..], |key| &key.0[..]));
+    }
+    bytes
 }
 
 fn host_proof_bytes(hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
