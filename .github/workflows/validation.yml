@@ -127,7 +127,7 @@ jobs:
 
   macos:
     name: macOS UI and watchers
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Check out source
         uses: actions/checkout@v7
