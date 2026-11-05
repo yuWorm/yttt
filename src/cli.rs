@@ -1,14 +1,14 @@
 use std::{collections::BTreeMap, ffi::OsString, io::Read as _, path::PathBuf};
 use yttt_core::model::ids::TerminalSessionId;
-use yttt_core::model::layout::PaneRole;
+use yttt_core::model::layout::{PaneController, PaneRole};
 use yttt_protocol::{
     agent::{
         AGENT_CONTROL_CLOSE_PATH, AGENT_CONTROL_INTERRUPT_PATH, AGENT_CONTROL_LIST_PATH,
-        AGENT_CONTROL_RESULT_PATH, AGENT_CONTROL_SEND_PATH, AGENT_CONTROL_SPAWN_PATH,
-        AGENT_CONTROL_WAIT_PATH, AgentControlError, AgentControlErrorCode, AgentControlResponse,
-        AgentInterruptRequest, AgentSendRequest, AgentSpawnRequest, AgentTargetRequest,
-        AgentWaitCondition, AgentWaitReason, AgentWaitRequest, ControlledAgent,
-        MAX_AGENT_WAIT_SECONDS,
+        AGENT_CONTROL_RELEASE_PATH, AGENT_CONTROL_RESULT_PATH, AGENT_CONTROL_SEND_PATH,
+        AGENT_CONTROL_SPAWN_PATH, AGENT_CONTROL_WAIT_PATH, AgentControlError,
+        AgentControlErrorCode, AgentControlResponse, AgentInterruptRequest, AgentSendRequest,
+        AgentSpawnRequest, AgentTargetRequest, AgentWaitCondition, AgentWaitReason,
+        AgentWaitRequest, ControlledAgent, MAX_AGENT_WAIT_SECONDS,
     },
     desktop_control::*,
 };
@@ -48,7 +48,9 @@ struct CommandWords {
     trailing: Vec<String>,
 }
 
-const FLAG_OPTIONS: [&str; 6] = ["--json", "--enter", "--raw", "--stdin", "--mine", "--clear"];
+const FLAG_OPTIONS: [&str; 7] = [
+    "--json", "--enter", "--raw", "--stdin", "--mine", "--clear", "--queue",
+];
 
 fn split_command(args: &[OsString], text: UiText) -> Result<CommandWords, String> {
     let words = args
@@ -203,6 +205,7 @@ pub fn parse_agent_control(
         ("agents", "wait") => AGENT_CONTROL_WAIT_PATH,
         ("agents", "result") => AGENT_CONTROL_RESULT_PATH,
         ("agents", "interrupt") => AGENT_CONTROL_INTERRUPT_PATH,
+        ("agents", "release") => AGENT_CONTROL_RELEASE_PATH,
         _ => return Ok(None),
     };
 
@@ -216,16 +219,18 @@ pub fn parse_agent_control(
             args: trailing.clone(),
             title: options.remove("--title"),
         }),
-        AGENT_CONTROL_CLOSE_PATH | AGENT_CONTROL_RESULT_PATH => {
+        AGENT_CONTROL_CLOSE_PATH | AGENT_CONTROL_RESULT_PATH | AGENT_CONTROL_RELEASE_PATH => {
             serde_json::to_value(AgentTargetRequest {
                 agent: take_agent(&mut options, text)?,
             })
         }
         AGENT_CONTROL_SEND_PATH => {
             let agent = take_agent(&mut options, text)?;
+            let queue = options.remove("--queue").is_some();
             serde_json::to_value(AgentSendRequest {
                 agent,
                 text: input_text(&mut options, text)?,
+                queue,
             })
         }
         AGENT_CONTROL_WAIT_PATH => {
@@ -302,6 +307,18 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
         ("panes", "list") => DesktopControlCommand::Panes,
         ("agents", "list") => DesktopControlCommand::Agents,
         ("board", "show") => DesktopControlCommand::ShowCommandCenter,
+        ("agents", "control") => DesktopControlCommand::SetAgentController {
+            controller: match options.remove("--set").as_deref() {
+                Some("auto") => PaneController::Auto,
+                Some("human") => PaneController::Human,
+                Some("paused") => PaneController::Paused,
+                _ => {
+                    return Err(text
+                        .get(UiTextKey::CliLocalizationControllerInvalid)
+                        .to_string());
+                }
+            },
+        },
         ("agents", "assign") => DesktopControlCommand::AssignAgent {
             owner: match (options.remove("--to"), options.remove("--clear")) {
                 (Some(owner), None) => Some(owner),
@@ -507,7 +524,9 @@ fn report_agent_control_error(error: &AgentControlError, json: bool, text: UiTex
             AgentControlErrorCode::InvalidRequest => DesktopControlErrorCode::InvalidRequest,
             AgentControlErrorCode::Forbidden => DesktopControlErrorCode::PermissionDenied,
             AgentControlErrorCode::NotFound => DesktopControlErrorCode::NotFound,
-            AgentControlErrorCode::NotReady => DesktopControlErrorCode::Busy,
+            AgentControlErrorCode::NotReady | AgentControlErrorCode::HumanControl => {
+                DesktopControlErrorCode::Busy
+            }
             AgentControlErrorCode::Failed => DesktopControlErrorCode::Failed,
         };
         eprintln!("{}: {}", error_code_label(&code, text), error.message);
@@ -522,10 +541,12 @@ fn report_agent_control_error(error: &AgentControlError, json: bool, text: UiTex
 fn format_agent_control(response: &AgentControlResponse, text: UiText) -> String {
     let line = |agent: &ControlledAgent| {
         format!(
-            "{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             agent.agent.as_str(),
             agent.title,
             agent.pane_state,
+            protocol_word(&agent.controller),
+            agent.queued,
             agent.agent_state.as_ref().map_or_else(
                 || "-".to_string(),
                 |state| format!("{} #{}", protocol_word(&state.turn), state.turn_seq)
@@ -543,13 +564,20 @@ fn format_agent_control(response: &AgentControlResponse, text: UiText) -> String
         AgentControlResponse::Closed { agent } => text
             .get(UiTextKey::CliLocalizationAgentClosed)
             .replace("{agent}", agent.as_str()),
+        AgentControlResponse::Sent { agent, queued, .. } if *queued => text
+            .get(UiTextKey::CliLocalizationAgentQueued)
+            .replace("{agent}", agent.as_str()),
         AgentControlResponse::Sent {
             agent,
             turn_seq_before,
+            ..
         } => text
             .get(UiTextKey::CliLocalizationAgentSent)
             .replace("{agent}", agent.as_str())
             .replace("{turn}", &turn_seq_before.to_string()),
+        AgentControlResponse::Released { agent } => text
+            .get(UiTextKey::CliLocalizationAgentReleased)
+            .replace("{agent}", agent.as_str()),
         AgentControlResponse::Waited {
             reason,
             agent,
@@ -564,6 +592,9 @@ fn format_agent_control(response: &AgentControlResponse, text: UiText) -> String
                     .replace("{agent}", agent.as_str()),
                 (AgentWaitReason::Exited, Some(agent)) => text
                     .get(UiTextKey::CliLocalizationWaitExited)
+                    .replace("{agent}", agent.as_str()),
+                (AgentWaitReason::ControlChanged, Some(agent)) => text
+                    .get(UiTextKey::CliLocalizationWaitControlChanged)
                     .replace("{agent}", agent.as_str()),
             };
             std::iter::once(headline)

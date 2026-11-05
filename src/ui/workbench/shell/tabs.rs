@@ -26,7 +26,9 @@ use crate::{
             status::{YtttStatusTone, yttt_status_dot_style},
             tabs::{YtttTabBarStyle, yttt_tab, yttt_tabbar_style},
         },
-        terminal::status::{agent_status_label, tab_agent_status},
+        terminal::status::{
+            agent_status_label, tab_agent_status, tab_worker_controller, worker_controller_label,
+        },
         theme::icons::{IconTheme, IconVisual, icon_for_visual},
         theme::{UiStyle, WorkbenchTheme},
     },
@@ -191,6 +193,9 @@ pub fn visible_tab_items(workspace: &Workspace, text: UiText) -> Vec<ProjectTabI
                 let mut parts = vec![tab_start_state_label(state.start_state, &text).to_string()];
                 if let Some(agent_status) = tab_agent_status(project, &tab.id) {
                     parts.push(agent_status_label(agent_status, &text).to_string());
+                }
+                if let Some(controller) = tab_worker_controller(project, &tab.id) {
+                    parts.push(worker_controller_label(controller, &text).to_string());
                 }
                 parts.join(" · ")
             }),

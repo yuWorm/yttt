@@ -680,6 +680,33 @@ impl WorkbenchView {
         self.dispatch_command_action(CommandId::PaneRename, window, cx);
     }
 
+    pub(super) fn on_agent_take_over(
+        &mut self,
+        _: &AgentTakeOver,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::AgentTakeOver, window, cx);
+    }
+
+    pub(super) fn on_agent_pause(
+        &mut self,
+        _: &AgentPause,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::AgentPause, window, cx);
+    }
+
+    pub(super) fn on_agent_hand_back(
+        &mut self,
+        _: &AgentHandBack,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::AgentHandBack, window, cx);
+    }
+
     pub(super) fn on_pane_focus_left(
         &mut self,
         _: &PaneFocusLeft,

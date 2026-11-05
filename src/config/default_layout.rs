@@ -250,6 +250,7 @@ fn agent_pane(agent: BuiltinAgent) -> PaneConfig {
         detector: None,
         role: yttt_core::model::layout::PaneRole::Worker,
         spawned_by: None,
+        controller: yttt_core::model::layout::PaneController::Auto,
     }
 }
 
@@ -266,6 +267,7 @@ fn shell_pane() -> PaneConfig {
         detector: None,
         role: yttt_core::model::layout::PaneRole::Worker,
         spawned_by: None,
+        controller: yttt_core::model::layout::PaneController::Auto,
     }
 }
 

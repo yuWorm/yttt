@@ -351,14 +351,16 @@ where
         &bootstrap.config_root,
     );
     pane_runtime.start(stop_rx.clone());
-    agent_hooks.set_control_handler(Arc::new(agent_control::AgentControl::new(
+    let agent_control = Arc::new(agent_control::AgentControl::new(
         workspaces.clone(),
         projects.clone(),
         runtime.clone(),
         pane_runtime.clone(),
         audit.clone(),
         tokio::runtime::Handle::current(),
-    )));
+    ));
+    agent_control.start(stop_rx.clone());
+    agent_hooks.set_control_handler(agent_control.clone());
     if bootstrap.lifetime == HostLifetime::Independent {
         let startup = pane_runtime.clone();
         tokio::task::spawn_blocking(move || startup.ensure_all());
@@ -373,6 +375,7 @@ where
         projects: projects.clone(),
         workspaces: workspaces.clone(),
         pane_runtime: pane_runtime.clone(),
+        agent_control: agent_control.clone(),
         device_settings: device_settings.clone(),
         remote_access,
         network_admission: None,
@@ -507,6 +510,7 @@ struct ConnectionContext {
     projects: Arc<HostProjectRuntime>,
     workspaces: Arc<WorkspaceService>,
     pane_runtime: Arc<pane_runtime::PaneRuntime>,
+    agent_control: Arc<agent_control::AgentControl>,
     device_settings: Arc<Mutex<device_settings::DeviceSettingsStore>>,
     remote_access: remote_access::RemoteAccessHandle,
     network_admission: Option<Arc<remote_access::NetworkAdmission>>,
@@ -2260,6 +2264,7 @@ async fn handle_request(
             )?;
             runtime.validate_lease(&input.session_id, client_id)?;
             terminal.input(input.bytes)?;
+            context.agent_control.person_typed(&input.session_id);
             accept_terminal_mutation(
                 attachments,
                 &input.session_id,

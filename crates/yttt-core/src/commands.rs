@@ -1,7 +1,7 @@
 use crate::model::{
     editor::WorkItemId,
     host_workspace::{NewTab, WorkspaceIntent},
-    layout::SplitDirection,
+    layout::{PaneController, SplitDirection},
     split_tree::{FocusDirection, ResizeDirection},
     workspace::{Workspace, WorkspaceError},
 };
@@ -75,6 +75,9 @@ pub enum CommandId {
     PaneResizeDown,
     PaneRename,
     PanePalette,
+    AgentTakeOver,
+    AgentPause,
+    AgentHandBack,
     LayoutDefaultEdit,
     LayoutDefaultReset,
     LayoutDefaultReload,
@@ -125,6 +128,9 @@ impl CommandId {
         Self::PaneResizeDown,
         Self::PaneRename,
         Self::PanePalette,
+        Self::AgentTakeOver,
+        Self::AgentPause,
+        Self::AgentHandBack,
         Self::LayoutDefaultEdit,
         Self::LayoutDefaultReset,
         Self::LayoutDefaultReload,
@@ -175,6 +181,9 @@ impl CommandId {
             Self::PaneResizeDown => "pane.resize_down",
             Self::PaneRename => "pane.rename",
             Self::PanePalette => "pane.palette",
+            Self::AgentTakeOver => "agent.take_over",
+            Self::AgentPause => "agent.pause",
+            Self::AgentHandBack => "agent.hand_back",
             Self::LayoutDefaultEdit => "layout.default.edit",
             Self::LayoutDefaultReset => "layout.default.reset",
             Self::LayoutDefaultReload => "layout.default.reload",
@@ -286,6 +295,18 @@ impl CommandId {
                 presentation("Resize Pane Down", "Resize the focused split downward")
             }
             Self::PaneRename => presentation("Rename Pane", "Rename the focused pane"),
+            Self::AgentTakeOver => presentation(
+                "Take Over Agent",
+                "Drive the focused worker yourself; its orchestrator stops sending to it",
+            ),
+            Self::AgentPause => presentation(
+                "Pause Agent",
+                "Stop the orchestrator from sending to the focused worker for now",
+            ),
+            Self::AgentHandBack => presentation(
+                "Hand Agent Back",
+                "Let the orchestrator drive the focused worker again",
+            ),
             Self::PanePalette => {
                 presentation("Open Pane Palette", "Focus panes in the selected tab")
             }
@@ -439,7 +460,10 @@ impl CommandId {
             | Self::PaneResizeUp
             | Self::PaneResizeDown
             | Self::PaneRename
-            | Self::PanePalette => {
+            | Self::PanePalette
+            | Self::AgentTakeOver
+            | Self::AgentPause
+            | Self::AgentHandBack => {
                 if !context.has_selected_project {
                     disabled("Open a project first")
                 } else if context.active_surface == ActiveSurface::Terminal {
@@ -469,6 +493,9 @@ impl CommandId {
             | Self::PaneResizeUp
             | Self::PaneResizeDown
             | Self::PaneRename
+            | Self::AgentTakeOver
+            | Self::AgentPause
+            | Self::AgentHandBack
             | Self::LayoutDefaultReset
             | Self::LayoutProjectEdit
             | Self::LayoutSaveCurrent
@@ -661,6 +688,24 @@ pub fn workspace_command_intent(
             tab_ids: vec![tab_id.clone()],
         })
     };
+    // Only a worker some orchestrator drives has a controller to change.
+    let controller = |controller| -> Result<WorkspaceIntent, CommandDispatchError> {
+        let pane_id = focused_pane()?;
+        let pane = project
+            .layout
+            .tab(&tab_id)
+            .and_then(|tab| tab.layout.find_pane(&pane_id))
+            .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.clone()))?;
+        if pane.spawned_by.is_none() {
+            return Err(WorkspaceError::PaneHasNoOrchestrator(pane_id).into());
+        }
+        Ok(WorkspaceIntent::SetPaneController {
+            project_id: project_id.clone(),
+            tab_id: tab_id.clone(),
+            pane_id,
+            controller,
+        })
+    };
     let split = |direction| -> Result<WorkspaceIntent, CommandDispatchError> {
         Ok(WorkspaceIntent::SplitPane {
             project_id: project_id.clone(),
@@ -723,6 +768,9 @@ pub fn workspace_command_intent(
             pane_id: focused_pane()?,
             title: DEFAULT_RENAMED_PANE_TITLE.to_string(),
         }),
+        CommandId::AgentTakeOver => controller(PaneController::Human),
+        CommandId::AgentPause => controller(PaneController::Paused),
+        CommandId::AgentHandBack => controller(PaneController::Auto),
         CommandId::PaneFocusLeft => Ok(focus(FocusDirection::Left)),
         CommandId::PaneFocusRight => Ok(focus(FocusDirection::Right)),
         CommandId::PaneFocusUp => Ok(focus(FocusDirection::Up)),

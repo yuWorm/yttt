@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** P0、P1、P2 已实现（见 §6 记录；推迟项在各条目中注明）；下一步 P3。§4 的开放问题已于 2026-11-05 按建议默认确认。
+**状态：** P0–P3 已实现（P3-4 为最小呈现；推迟项在各条目中注明，见 §6 记录）；下一步 P4。§4 的开放问题已于 2026-11-05 按建议默认确认。
 
 **依据：** 2026-11-05 对 `yttt ctl`、Agent hook、调度中心与 C4 之后 Host 布局的代码梳理；`docs/cli-control.md`、`docs/host-client-architecture.md`、`docs/plans/2026-10-28-c4-host-owned-layout-design.md`。同类设计参考：Claude Code agent teams（lead + teammate，各占一个 pane，人可直接进入 teammate）、Codex app-server（`turn/start`、`turn/interrupt`、`turn/completed{status}`）、ACP（`session/prompt`、`session/cancel`、`session/update`）、cmux（终端 socket/CLI + hook 通知）。
 
@@ -210,22 +210,24 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 
 ## P3-1：输入来源
 
-- [ ] 测试：`TerminalInput` 新增 `origin: keyboard | control`（默认 keyboard，旧 Client 兼容）；桌面 ctl 路径写 `control`；Host 记录每个终端最近一次 keyboard 输入时间。
+- [x] 实现（与原设想不同，无 wire 变更）：编排者的输入由 Host 直接写 PTY，从不经过 `Request::TerminalInput`；因此 Host 把每个通过 Lease 校验的 Client `TerminalInput` 视为人的输入（键盘、粘贴，以及桌面 socket 上的 `panes send`），无需 `origin` 字段。
+- [ ] 推迟：`UserPromptSubmit` 文本哈希的精确关联。自动接管后人的输入不会再被编排者的写入混入，`after_turn` 已能区分轮次。
 
 ## P3-2：自动接管与交还
 
-- [ ] 测试：`auto` 的 Worker 收到 keyboard 输入后变为 `human` 并发出 `control_changed{by: human}`；`human` 状态下编排者 send/interrupt 得 `human_control`，排队消息不写出；人点「交还」后排队消息按序写出；`release` 由编排者发起后同样进入 `human`。
-- [ ] 实现：控制权状态存 Host pane 状态；任一窗口的操作对所有 Client 一致。
+- [x] 测试：`take_over` 只把有 `spawned_by` 且处于 `auto` 的 pane 变为 `human`，重复调用、编排者自身、普通 pane、`paused` pane 均不变；`send_decision` 表：auto 且就绪写入、忙碌拒绝或排队、`human`/`paused` 得 `human_control` 或排队、写入后在 Worker 报告新一轮前不再写、已有排队时新消息排在其后、队列上限 32；人接管时进行中的 `wait` 返回 `control_changed`；`SetPaneOwner` 把控制权重置为 `auto`。
+- [x] 实现：`PaneConfig.controller: auto | human | paused` 随 Host 布局持久化并同步到所有 Client，由 `WorkspaceIntent::SetPaneController` 修改；Client 输入落到 `auto` Worker 时 Host 置为 `human` 并丢弃该 Worker 的排队消息（人可能已改变任务）；`agents send --queue` 在 Host 内存中排队，投递线程每 300 ms 在 Worker 处于 `auto` 且开始新一轮后按序写出；`agents release` 由编排者交给人；人用 `agents control --set auto|human|paused` 或命令面板「接管 / 暂停 / 交还 Agent」切换；`interrupt` 在非 `auto` 时拒绝。
+- [ ] 已知限制：排队消息只在 Host 内存中，Host 重启即丢失；人无法在界面中查看或编辑队列内容（列表只显示条数）。
 
 ## P3-3：审批与提问交给人
 
-- [ ] 测试：Worker 进入 `Waiting{Approval}` 时编排者的 `panes send`/`board answer` 被拒，Host 发出 `needs_human` 事件并触发现有通知；`Waiting{UserInput}` 的结构化问题按 §4 Q2 的决定处理。
+- [x] 无需新增代码：编排者没有回答审批或结构化问题的入口（`board answer`、`panes send` 只经桌面 socket），`send` 对 `waiting` 的 Worker 返回 `not_ready`；编排者可用 `wait --until waiting` 得知需要人处理，现有通知照常提醒人。
+- [ ] 推迟：Q2 允许编排者回答 `UserInput` 问题——当前不提供，需要时以单独的 `/control/v1/agents/answer` 加入。
 
 ## P3-4：调度中心呈现
 
-- [ ] 编排者节点下列出 Worker：控制权标记、当前 turn、排队消息（可编辑/撤回/调序）、「接管 / 交还 / 暂停」按钮。
-- [ ] 时间线：按审计与投递记录展示"主体 → Worker：动作 → 结果"。
-- [ ] 测试：沿用 `command_center` 现有测试方式覆盖状态到视图的映射；按钮动作走 Host 请求。
+- [x] 最小呈现：Worker 的 tab 状态在 Agent 状态后显示「编排中 / 由你驱动 / 已暂停」；命令面板新增「接管 Agent」「暂停 Agent」「交还 Agent」（作用于当前 pane，非 Worker 时报错）。
+- [ ] 推迟：调度中心中的编排者-Worker 树、排队消息编辑、审计时间线。需要 Host 向 Client 暴露队列与审计（新的 session 请求或事件），工作量单列。
 
 ---
 
@@ -284,3 +286,4 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 | 2026-11-05 | P0-1～P0-3 | `yttt-protocol::agent` 集中定义 Host 注入的 5 个变量（替换 Host、pane_launch、SSH、桌面 4 处副本）与 `AgentHookScope::encode/decode`；每个终端注入 `YTTT_SELF`；`PaneConfig.role`（worker 不序列化，旧形状不变）、`NewTab::Agent.role`、`CreateAgent.role`；`pane_runtime` 按 pane 角色签发控制 token（HMAC，`control:` 域前缀与 hook token 区分），Host 记录编排者 scope，重启或角色变更即失效；hook listener 新增 `/control/v1/whoami`；`yttt ctl whoami [--json]` 与 `agents create --role`。个人布局模板不携带角色。测试：`agent_hooks` 新增 3 例（注入、凭证鉴权含重启失效、真实 HTTP 路由），`agent_control_client` 4 例，`cli_control` 与 `host_workspace` 各 1 例；CI 同款 16 个包 `cargo test` 1648 通过、0 失败，clippy `-D warnings` 与 fmt 通过（`--workspace` 下 vendor `gpui-markdown-editor` 的 lib test 在 master 上即无法编译，与本改动无关）。真实桌面冒烟（隔离 `YTTT_PROFILE_ROOT`；profile 放在 worktree `tmp/`，放 scratchpad 时路径超过 Unix socket 长度上限）：ctl 新建 shell tab，pane 内环境含 `YTTT_SELF`，`whoami --json` 返回 pane、worker、`not_granted`，中文文本输出正常；pane 外返回 `external`；provider 配置文件前后校验和一致。未做：编排者 pane 的端到端冒烟——Agent pane 启动会安装 provider hook，P1 冒烟按 AGENTS.md 记录并还原 hook 后再做；P0-2/P0-3 的两条验收依赖 P1 的 spawn 与审计。 |
 | 2026-11-05 | P1 | `PaneConfig.spawned_by` 与 `NewTab::Agent.spawned_by`、`WorkspaceIntent::SetPaneOwner`；Host `agent_control`（hook listener 鉴权后经 `AgentControlHandler` 转入，进入 Host tokio 上下文执行）：`/control/v1/agents/spawn`、`/list`、`/close`，按 `spawned_by` 检查归属并写审计；关闭唯一 pane 时关闭其 tab，项目最后一个终端 tab 拒绝关闭。`WorkspaceService::locate_pane`/`panes_where`。CLI：`agents spawn`、`agents list --mine`、`agents close --agent`（编排者 pane 直连 Host，非编排者得 `forbidden`），`agents assign --to/--clear`（经桌面）。测试：`agent_control` 4 例、hook 转发 1 例、客户端 1 例、CLI 解析 2 例、`host_workspace` 1 例、桌面 `cli_control_creates_splits…` 增加 assign 断言。真实桌面冒烟（隔离 profile；临时 `HOME`，`PATH` 前置假 `claude`/`codex` 脚本以免 provider hook 写入真实配置）：编排者 `whoami` 得 `verified`；spawn 出 W1，pane 内可见假 codex 收到参数；worker pane 内 spawn 得 `forbidden`；关闭人创建的 Agent 得 `forbidden`，人 assign 后出现在 `list --mine`；重启桌面与 Host 后角色、归属保留，`whoami` 仍 `verified`，close W1 后 tab 移除、Host 子进程 4→3。真实 provider 配置校验和前后一致；hook 只写入临时 HOME，随冒烟目录删除。观察：重启后约数秒内 pane 列表为 `starting`、`panes send` 得 `not_ready`，之后恢复，与本改动无关，未深究。 |
 | 2026-11-05 | P2 | `AgentSnapshot.turn_seq`；Host `/control/v1/agents/send`、`/wait`、`/result`、`/interrupt`（后两类阻塞请求在 hook listener 上各占独立线程，上限 32）；`agent_control/transcript.rs` 读取 Claude/Codex 会话记录末尾的最后回复；新错误码 `not_ready`（HTTP 409，CLI 显示为忙碌）。CLI：`agents send --agent`（不带 `--agent` 仍走桌面）、`agents wait`、`agents result`、`agents interrupt`。测试：reducer 1 例、`agent_control` 4 例、transcript 3 例、hook 线程 1 例（已确认去掉修复后失败）、CLI 解析 1 例。真实桌面冒烟（隔离 profile、临时 HOME）：用 Python 写的模拟 Claude（向真实 hook endpoint 发送 Claude 格式的 SessionStart/UserPromptSubmit/Stop，写 Claude 格式 transcript，读 bracketed paste，Esc 视为打断）作 Worker，编排者为 shell。spawn 带初始任务 → `wait` 得 `completed #1` → `result` 得 "Done: fix the parser" → `send` 返回 `turn_seq_before: 1` → `wait --after-turn 1` 得 `completed #2` → `result` 得第二轮回复；长任务进行中 `send` 得忙碌；`interrupt` 得 `confirmed: true`，状态 `interrupted #3`。Worker 终端可见全部 prompt、回复与打断。真实 provider 配置前后一致。未做：真实 Claude/Codex 的验证（需在真实 HOME 安装开发版 hook，会覆盖正式版写入的 hook 配置，需先备份并征得同意）。 |
+| 2026-11-05 | P3 | `PaneConfig.controller` 与 `WorkspaceIntent::SetPaneController`（`SetPaneOwner` 重置为 auto）；Host 在每个通过 Lease 校验的 Client `TerminalInput` 后调用 `AgentControl::person_typed`；`send` 改为 `send_decision`（写入 / 排队 / 拒绝），记录 `written_after_turn` 防止同一轮写两次；排队投递任务；`release`；`wait` 新增 `control_changed`；错误码 `human_control`。CLI：`agents send --queue`、`agents release`、`agents control --set`；`list` 增加控制权与排队条数两列。界面：Worker tab 状态显示控制权；命令面板三条命令（中英文）。测试：`agent_control` 3 例、`host_workspace` 控制权断言、`commands_keybindings` 1 例、CLI 解析 2 处。真实桌面冒烟（模拟 Claude，隔离 profile 与 HOME）：编排者等待中，人经桌面 `panes send` 向 Worker 输入 → `wait` 返回 `control_changed`、Worker `controller: human`；编排者直接 `send` 得"有人正在驱动"，`--queue` 得排队，列表显示 `human 1`；人执行 `agents control --set auto` 后排队消息自动写出为第 3 轮，`result` 得其回复；长任务中排队 1 条后人输入 → `human 0`（队列被丢弃）；`--set paused` 生效；编排者 `release` 后为 `human`。真实 provider 配置前后一致。界面上的 tab 标签与命令面板只有自动化测试，未在 GUI 中目视确认（本机无辅助功能/录屏权限）。 |

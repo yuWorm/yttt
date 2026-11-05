@@ -4,7 +4,7 @@ use yttt::{
     desktop_shell::{DesktopShellClaim, DesktopShellCommand, DesktopShellRuntime, control_desktop},
     ui::i18n::UiText,
 };
-use yttt_core::model::layout::PaneRole;
+use yttt_core::model::layout::{PaneController, PaneRole};
 use yttt_protocol::desktop_control::*;
 
 fn parse(words: &[&str]) -> Result<cli::CliInvocation, String> {
@@ -212,8 +212,25 @@ fn the_turn_commands_reach_the_host_with_their_defaults() {
     assert_eq!(send.path, "/control/v1/agents/send");
     assert_eq!(
         send.body,
-        serde_json::json!({"agent": "p:w:agent", "text": "Add tests"})
+        serde_json::json!({"agent": "p:w:agent", "text": "Add tests", "queue": false})
     );
+    let queued = parse_control(&[
+        "agents",
+        "send",
+        "--agent",
+        "p:w:agent",
+        "--queue",
+        "--text",
+        "Later",
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(queued.body["queue"], true);
+    let release = parse_control(&["agents", "release", "--agent", "p:w:agent"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(release.path, "/control/v1/agents/release");
+    assert_eq!(release.body, serde_json::json!({"agent": "p:w:agent"}));
     // Without --agent, `agents send` still targets a pane through the desktop.
     assert!(
         parse_control(&["agents", "send", "--project", "p", "--text", "x"])
@@ -283,6 +300,41 @@ fn the_turn_commands_reach_the_host_with_their_defaults() {
         let error = parse_control(&words).unwrap_err();
         assert!(error.contains(message), "{words:?}: {error}");
     }
+}
+
+#[test]
+fn a_person_sets_who_drives_a_worker_through_the_desktop() {
+    let set = |value: &str| {
+        parse(&[
+            "agents",
+            "control",
+            "--project",
+            "p",
+            "--tab",
+            "t",
+            "--pane",
+            "agent",
+            "--set",
+            value,
+        ])
+        .map(|invocation| invocation.request.command)
+    };
+    for (value, controller) in [
+        ("auto", PaneController::Auto),
+        ("human", PaneController::Human),
+        ("paused", PaneController::Paused),
+    ] {
+        assert_eq!(
+            set(value).unwrap(),
+            DesktopControlCommand::SetAgentController { controller }
+        );
+    }
+    assert!(set("orchestrator").unwrap_err().contains("--set"));
+    assert!(
+        parse_control(&["agents", "control", "--project", "p"])
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

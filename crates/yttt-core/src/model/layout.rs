@@ -172,6 +172,9 @@ pub struct PaneConfig {
     /// started it, or one a person assigned it to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawned_by: Option<String>,
+    /// Who drives a worker: its orchestrator, or a person who took over.
+    #[serde(default, skip_serializing_if = "PaneController::is_auto")]
+    pub controller: PaneController,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
@@ -207,6 +210,26 @@ pub enum PaneRole {
     #[default]
     Worker,
     Orchestrator,
+}
+
+/// `Auto` lets the orchestrator send to and interrupt the worker. A person
+/// typing in it makes it `Human` until they hand it back; `Paused` holds the
+/// orchestrator's queued messages without a person taking over.
+#[derive(
+    Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq, Hash,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneController {
+    #[default]
+    Auto,
+    Human,
+    Paused,
+}
+
+impl PaneController {
+    pub fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
 }
 
 impl PaneRole {

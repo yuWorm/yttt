@@ -5,8 +5,8 @@ use yttt_agent_core::AgentSnapshot;
 use crate::model::{
     ids::{ProjectId, ProjectInstanceId},
     layout::{
-        LayoutNode, PaneConfig, PaneKind, PaneRole, ProcessExitBehavior, ProjectLayout,
-        SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
+        LayoutNode, PaneConfig, PaneController, PaneKind, PaneRole, ProcessExitBehavior,
+        ProjectLayout, SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
     },
     project::{ProjectDescriptor, ProjectLocation},
     split_tree::{FocusDirection, ResizeDirection},
@@ -816,6 +816,7 @@ impl OpenedProject {
             detector: None,
             role: PaneRole::Worker,
             spawned_by: None,
+            controller: PaneController::Auto,
         };
         if !split_pane_node(tab_layout, target_pane_id, direction, new_pane) {
             return Err(WorkspaceError::PaneNotFound(target_pane_id.to_string()));
@@ -880,6 +881,23 @@ impl OpenedProject {
             .find_pane_mut(pane_id)
             .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
         pane.spawned_by = owner;
+        // A new owner starts driving; a pane taken back has no one to defer to.
+        pane.controller = PaneController::Auto;
+        Ok(())
+    }
+
+    pub(crate) fn set_pane_controller(
+        &mut self,
+        tab_id: &str,
+        pane_id: &str,
+        controller: PaneController,
+    ) -> Result<(), WorkspaceError> {
+        let tab_index = self.tab_index(tab_id)?;
+        let pane = self.layout.tabs[tab_index]
+            .layout
+            .find_pane_mut(pane_id)
+            .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
+        pane.controller = controller;
         Ok(())
     }
 
@@ -936,6 +954,7 @@ pub(crate) fn shell_tab_config(id: String, title: String, command: String) -> Ta
             detector: None,
             role: PaneRole::Worker,
             spawned_by: None,
+            controller: PaneController::Auto,
         }),
     }
 }
@@ -965,6 +984,7 @@ pub(crate) fn agent_tab_config(
             detector: None,
             role,
             spawned_by,
+            controller: PaneController::Auto,
         }),
     }
 }
@@ -1056,6 +1076,8 @@ pub enum WorkspaceError {
     TabNotFound(String),
     #[error("pane not found: {0}")]
     PaneNotFound(String),
+    #[error("pane {0} is not driven by an orchestrator")]
+    PaneHasNoOrchestrator(String),
     #[error("no selected project")]
     NoSelectedProject,
     #[error("selected project has no tabs")]

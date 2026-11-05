@@ -10,6 +10,7 @@
 mod transcript;
 
 use std::{
+    collections::{HashMap, VecDeque},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
@@ -22,18 +23,19 @@ use yttt_agent_providers::builtin_providers;
 use yttt_core::model::{
     host_workspace::{NewTab, PaneAddress, WorkspaceIntent},
     ids::TerminalSessionId,
-    layout::PaneRole,
+    layout::{PaneController, PaneRole},
     workspace::PaneProcessState,
 };
 use yttt_protocol::{
     agent::{
         AGENT_CONTROL_CLOSE_PATH, AGENT_CONTROL_INTERRUPT_PATH, AGENT_CONTROL_LIST_PATH,
-        AGENT_CONTROL_PROVIDERS, AGENT_CONTROL_RESULT_PATH, AGENT_CONTROL_SEND_PATH,
-        AGENT_CONTROL_SPAWN_PATH, AGENT_CONTROL_WAIT_PATH, AgentControlError,
-        AgentControlErrorCode, AgentControlIdentity, AgentControlResponse, AgentInterruptRequest,
-        AgentResultSource, AgentSendRequest, AgentSpawnRequest, AgentTargetRequest,
-        AgentTurnResult, AgentWaitCondition, AgentWaitReason, AgentWaitRequest, ControlledAgent,
-        ControlledAgentState, MAX_AGENT_RESULT_BYTES, MAX_AGENT_SEND_BYTES, MAX_AGENT_WAIT_SECONDS,
+        AGENT_CONTROL_PROVIDERS, AGENT_CONTROL_RELEASE_PATH, AGENT_CONTROL_RESULT_PATH,
+        AGENT_CONTROL_SEND_PATH, AGENT_CONTROL_SPAWN_PATH, AGENT_CONTROL_WAIT_PATH,
+        AgentControlError, AgentControlErrorCode, AgentControlIdentity, AgentControlResponse,
+        AgentInterruptRequest, AgentResultSource, AgentSendRequest, AgentSpawnRequest,
+        AgentTargetRequest, AgentTurnResult, AgentWaitCondition, AgentWaitReason, AgentWaitRequest,
+        ControlledAgent, ControlledAgentState, MAX_AGENT_QUEUED_MESSAGES, MAX_AGENT_RESULT_BYTES,
+        MAX_AGENT_SEND_BYTES, MAX_AGENT_WAIT_SECONDS,
     },
     desktop_control::MAX_CONTROL_TEXT_BYTES,
     workspace::WorkspaceId,
@@ -55,6 +57,8 @@ const MAX_WAIT_AGENTS: usize = 16;
 /// How often a wait looks at the Agents again.
 const WAIT_POLL: Duration = Duration::from_millis(200);
 const DEFAULT_INTERRUPT_SECONDS: u32 = 10;
+/// How often queued messages are checked against their workers.
+const DELIVERY_POLL: Duration = Duration::from_millis(300);
 
 pub(crate) struct AgentControl {
     workspaces: Arc<WorkspaceService>,
@@ -65,6 +69,25 @@ pub(crate) struct AgentControl {
     /// Requests arrive on the hook listener's threads; launching a pane may
     /// need the Host's async runtime.
     tokio: tokio::runtime::Handle,
+    deliveries: parking_lot::Mutex<HashMap<TerminalSessionId, Deliveries>>,
+}
+
+/// What the Host wrote to a worker and still holds for it.
+#[derive(Default)]
+struct Deliveries {
+    queued: VecDeque<String>,
+    /// The worker's turn number when the Host last wrote to it. Nothing more
+    /// is written until a later turn ends, so two messages never share one.
+    written_after_turn: Option<u64>,
+}
+
+impl Deliveries {
+    fn may_write(&self, snapshot: &AgentSnapshot) -> bool {
+        accepts_input(snapshot)
+            && self
+                .written_after_turn
+                .is_none_or(|turn| snapshot.turn_seq > turn)
+    }
 }
 
 impl AgentControl {
@@ -83,7 +106,131 @@ impl AgentControl {
             pane_runtime,
             audit,
             tokio,
+            deliveries: parking_lot::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Delivers queued messages as workers become ready, until the Host stops.
+    pub(crate) fn start(self: &Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) {
+        let control = Arc::downgrade(self);
+        self.tokio.spawn(async move {
+            let mut interval = tokio::time::interval(DELIVERY_POLL);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = stop.changed() => break,
+                }
+                let Some(control) = control.upgrade() else {
+                    break;
+                };
+                let _ = tokio::task::spawn_blocking(move || control.deliver_queued()).await;
+            }
+        });
+    }
+
+    /// Called for every terminal input a Client sends. A person typing in a
+    /// worker the orchestrator drives takes it over, and what the
+    /// orchestrator queued is dropped: the person may have changed the task.
+    pub(crate) fn person_typed(&self, session_id: &TerminalSessionId) {
+        match take_over(&self.workspaces, session_id) {
+            Ok(true) => {
+                self.deliveries.lock().remove(session_id);
+            }
+            Ok(false) => {}
+            Err(error) => eprintln!(
+                "worker {} was not marked as driven by a person: {}",
+                session_id.as_str(),
+                error.message
+            ),
+        }
+    }
+
+    fn deliver_queued(&self) {
+        let agents = self.deliveries.lock().keys().cloned().collect::<Vec<_>>();
+        for agent in agents {
+            let Some(worker) = self
+                .workspaces
+                .locate_pane(&agent)
+                .filter(|worker| !has_ended(worker))
+            else {
+                self.deliveries.lock().remove(&agent);
+                continue;
+            };
+            if worker.config.controller != PaneController::Auto {
+                continue;
+            }
+            let Some(snapshot) = worker.state.agent_snapshot.as_ref() else {
+                continue;
+            };
+            let text = {
+                let mut deliveries = self.deliveries.lock();
+                let Some(entry) = deliveries.get_mut(&agent) else {
+                    continue;
+                };
+                if !entry.may_write(snapshot) {
+                    continue;
+                }
+                let Some(text) = entry.queued.pop_front() else {
+                    continue;
+                };
+                entry.written_after_turn = Some(snapshot.turn_seq);
+                text
+            };
+            if let Err(error) = self.paste_and_enter(&agent, &text) {
+                eprintln!(
+                    "a queued message for {} was not delivered: {}",
+                    agent.as_str(),
+                    error.message
+                );
+                let mut deliveries = self.deliveries.lock();
+                let entry = deliveries.entry(agent.clone()).or_default();
+                entry.queued.push_front(text);
+                entry.written_after_turn = None;
+            }
+        }
+    }
+
+    fn queued(&self, agent: &TerminalSessionId) -> usize {
+        self.deliveries
+            .lock()
+            .get(agent)
+            .map_or(0, |entry| entry.queued.len())
+    }
+
+    /// Fills in the queue lengths only this service knows.
+    fn with_queue_lengths(&self, mut response: AgentControlResponse) -> AgentControlResponse {
+        let fill = |agent: &mut ControlledAgent| agent.queued = self.queued(&agent.agent);
+        match &mut response {
+            AgentControlResponse::Spawned { agent } => fill(agent),
+            AgentControlResponse::Agents { agents }
+            | AgentControlResponse::Waited { agents, .. } => agents.iter_mut().for_each(fill),
+            _ => {}
+        }
+        response
+    }
+
+    fn set_controller(
+        &self,
+        worker: &LocatedPane,
+        controller: PaneController,
+    ) -> Result<(), AgentControlError> {
+        set_controller(&self.workspaces, worker, controller)
+    }
+
+    /// Hands a worker to a person, as their typing in it would.
+    fn release(
+        &self,
+        caller: &AgentControlIdentity,
+        request: AgentTargetRequest,
+    ) -> Result<AgentControlResponse, AgentControlError> {
+        let worker = owned_worker(&self.workspaces, caller, &request.agent)?;
+        self.deliveries.lock().remove(&request.agent);
+        if worker.config.controller != PaneController::Human {
+            self.set_controller(&worker, PaneController::Human)?;
+        }
+        Ok(AgentControlResponse::Released {
+            agent: request.agent,
+        })
     }
 
     fn spawn(
@@ -132,21 +279,51 @@ impl AgentControl {
             return Err(invalid("text must be 1 byte to 64 KiB without NUL"));
         }
         let worker = owned_worker(&self.workspaces, caller, &request.agent)?;
-        let snapshot = worker
-            .state
-            .agent_snapshot
-            .as_ref()
-            .filter(|snapshot| accepts_input(snapshot))
-            .ok_or_else(|| {
-                not_ready("the Agent has not reported that it is ready for a new instruction")
-            })?;
-        let mut bytes = self.paste(&request.agent, &request.text)?;
+        let snapshot = worker.state.agent_snapshot.as_ref();
+        let turn_seq_before = snapshot.map_or(0, |snapshot| snapshot.turn_seq);
+        let mut deliveries = self.deliveries.lock();
+        let entry = deliveries.entry(request.agent.clone()).or_default();
+        match send_decision(worker.config.controller, entry, snapshot, request.queue) {
+            SendDecision::Write => {
+                entry.written_after_turn = Some(turn_seq_before);
+                drop(deliveries);
+                if let Err(error) = self.paste_and_enter(&request.agent, &request.text) {
+                    if let Some(entry) = self.deliveries.lock().get_mut(&request.agent) {
+                        entry.written_after_turn = None;
+                    }
+                    return Err(error);
+                }
+                Ok(AgentControlResponse::Sent {
+                    agent: request.agent,
+                    turn_seq_before,
+                    queued: false,
+                })
+            }
+            SendDecision::Queue => {
+                entry.queued.push_back(request.text);
+                Ok(AgentControlResponse::Sent {
+                    agent: request.agent,
+                    turn_seq_before,
+                    queued: true,
+                })
+            }
+            SendDecision::Refuse(error) => {
+                if entry.queued.is_empty() && entry.written_after_turn.is_none() {
+                    deliveries.remove(&request.agent);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn paste_and_enter(
+        &self,
+        agent: &TerminalSessionId,
+        text: &str,
+    ) -> Result<(), AgentControlError> {
+        let mut bytes = self.paste(agent, text)?;
         bytes.push(b'\r');
-        self.write(&request.agent, bytes)?;
-        Ok(AgentControlResponse::Sent {
-            agent: request.agent,
-            turn_seq_before: snapshot.turn_seq,
-        })
+        self.write(agent, bytes)
     }
 
     /// Presses the provider's interrupt key in a working worker and waits
@@ -161,6 +338,9 @@ impl AgentControl {
             return Err(invalid("wait at most 600 seconds for an interruption"));
         }
         let worker = owned_worker(&self.workspaces, caller, &request.agent)?;
+        if worker.config.controller != PaneController::Auto {
+            return Err(human_control("a person is driving or paused this Agent"));
+        }
         let snapshot = worker
             .state
             .agent_snapshot
@@ -330,8 +510,18 @@ impl AgentControlHandler for AgentControl {
                     request.and_then(|request| self.interrupt(caller, request)),
                 )
             }
+            AGENT_CONTROL_RELEASE_PATH => {
+                let request = parse::<AgentTargetRequest>(body);
+                let resource = target_of(request.as_ref().map(|request| &request.agent));
+                (
+                    "agent_control.release",
+                    resource,
+                    request.and_then(|request| self.release(caller, request)),
+                )
+            }
             _ => return Err(not_found("unknown control request")),
         };
+        let result = result.map(|response| self.with_queue_lengths(response));
         self.audit.record(AuditEntry {
             request_id: 0,
             actor_client_id: format!("agent:{}", caller.terminal_session_id.as_str()),
@@ -509,7 +699,11 @@ fn wait(
             let Some(worker) = worker.as_ref().filter(|worker| !has_ended(worker)) else {
                 return Ok(found(AgentWaitReason::Exited, agent));
             };
-            if condition_holds(request.until, request.after_turn, before, &observed(worker)) {
+            let now = observed(worker);
+            if now.controller != before.controller {
+                return Ok(found(AgentWaitReason::ControlChanged, agent));
+            }
+            if condition_holds(request.until, request.after_turn, before, &now) {
                 return Ok(found(AgentWaitReason::Matched, agent));
             }
         }
@@ -564,17 +758,92 @@ fn result(
     })
 }
 
+enum SendDecision {
+    Write,
+    Queue,
+    Refuse(AgentControlError),
+}
+
+/// Whether text for a worker is written now, held, or refused. Queued text
+/// keeps its order: nothing is written past it.
+fn send_decision(
+    controller: PaneController,
+    entry: &Deliveries,
+    snapshot: Option<&AgentSnapshot>,
+    queue: bool,
+) -> SendDecision {
+    if controller == PaneController::Auto
+        && entry.queued.is_empty()
+        && snapshot.is_some_and(|snapshot| entry.may_write(snapshot))
+    {
+        return SendDecision::Write;
+    }
+    if queue {
+        if entry.queued.len() >= MAX_AGENT_QUEUED_MESSAGES {
+            return SendDecision::Refuse(not_ready(
+                "32 messages are already queued for this Agent",
+            ));
+        }
+        return SendDecision::Queue;
+    }
+    SendDecision::Refuse(match controller {
+        PaneController::Auto => {
+            not_ready("the Agent has not reported that it is ready for a new instruction")
+        }
+        PaneController::Human => human_control("a person is driving this Agent"),
+        PaneController::Paused => human_control("a person paused this Agent"),
+    })
+}
+
+/// Marks a worker its orchestrator drives as driven by a person. Returns
+/// whether that changed anything.
+fn take_over(
+    workspaces: &WorkspaceService,
+    session_id: &TerminalSessionId,
+) -> Result<bool, AgentControlError> {
+    let Some(worker) = workspaces
+        .locate_pane(session_id)
+        .filter(|pane| pane.config.spawned_by.is_some())
+        .filter(|pane| pane.config.controller == PaneController::Auto)
+    else {
+        return Ok(false);
+    };
+    set_controller(workspaces, &worker, PaneController::Human).map(|()| true)
+}
+
+fn set_controller(
+    workspaces: &WorkspaceService,
+    worker: &LocatedPane,
+    controller: PaneController,
+) -> Result<(), AgentControlError> {
+    workspaces
+        .apply(
+            worker.workspace_id.clone(),
+            WorkspaceIntent::SetPaneController {
+                project_id: worker.address.project_id.clone(),
+                tab_id: worker.address.tab_id.clone(),
+                pane_id: worker.address.pane_id.clone(),
+                controller,
+            },
+            None,
+        )
+        .map(|_| ())
+        .map_err(|error| failed(error.message))
+}
+
 /// What a wait compares: whether the Agent runs, its turn and turn number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Observed {
     process: Option<AgentProcessState>,
     turn: Option<AgentTurnState>,
     turn_seq: u64,
+    controller: PaneController,
 }
 
 fn observed(pane: &LocatedPane) -> Observed {
     let snapshot = pane.state.agent_snapshot.as_ref();
     Observed {
+        controller: pane.config.controller,
         process: snapshot.map(|snapshot| snapshot.process_state),
         turn: snapshot.map(|snapshot| snapshot.turn_state),
         turn_seq: snapshot.map_or(0, |snapshot| snapshot.turn_seq),
@@ -682,6 +951,8 @@ fn controlled(pane: &LocatedPane) -> ControlledAgent {
         pane_id: pane.address.pane_id.clone(),
         title: pane.config.title.clone(),
         command: pane.config.command.clone(),
+        controller: pane.config.controller,
+        queued: 0,
         pane_state: match pane.state.process_state {
             PaneProcessState::Idle => "idle",
             PaneProcessState::Running => "running",
@@ -729,6 +1000,10 @@ fn forbidden(message: impl Into<String>) -> AgentControlError {
 
 fn not_found(message: impl Into<String>) -> AgentControlError {
     AgentControlError::new(AgentControlErrorCode::NotFound, message)
+}
+
+fn human_control(message: impl Into<String>) -> AgentControlError {
+    AgentControlError::new(AgentControlErrorCode::HumanControl, message)
 }
 
 fn not_ready(message: impl Into<String>) -> AgentControlError {
@@ -1154,6 +1429,129 @@ mod tests {
     }
 
     #[test]
+    fn a_person_typing_takes_over_only_workers_an_orchestrator_drives() {
+        let root = tempdir().unwrap();
+        let workspaces = workspaces(root.path());
+        let worker = spawn(&workspaces, &caller("lead"), spawn_request("codex", None)).unwrap();
+        let agent = worker.address.terminal_session_id();
+        let controller = || workspaces.locate_pane(&agent).unwrap().config.controller;
+
+        assert!(take_over(&workspaces, &agent).unwrap());
+        assert_eq!(controller(), PaneController::Human);
+        assert!(!take_over(&workspaces, &agent).unwrap());
+        for pane in ["lead", "plain"] {
+            assert!(!take_over(&workspaces, &caller(pane).terminal_session_id).unwrap());
+        }
+        assert!(!take_over(&workspaces, &TerminalSessionId::new("project:gone:gone")).unwrap());
+
+        let paused = workspaces.locate_pane(&agent).unwrap();
+        set_controller(&workspaces, &paused, PaneController::Paused).unwrap();
+        // Typing in a paused worker does not turn a pause into a takeover.
+        assert!(!take_over(&workspaces, &agent).unwrap());
+        assert_eq!(controller(), PaneController::Paused);
+    }
+
+    #[test]
+    fn text_is_written_once_per_turn_held_in_order_or_refused() {
+        let ready = agent_snapshot("codex", AgentTurnState::Completed, 2);
+        let busy = agent_snapshot("codex", AgentTurnState::Working, 3);
+        let decide = |controller, entry: &Deliveries, snapshot, queue| match send_decision(
+            controller, entry, snapshot, queue,
+        ) {
+            SendDecision::Write => "write".to_string(),
+            SendDecision::Queue => "queue".to_string(),
+            SendDecision::Refuse(error) => format!("{:?}", error.code),
+        };
+        let empty = Deliveries::default();
+        assert_eq!(
+            decide(PaneController::Auto, &empty, Some(&ready), false),
+            "write"
+        );
+        assert_eq!(
+            decide(PaneController::Auto, &empty, Some(&busy), false),
+            "NotReady"
+        );
+        assert_eq!(
+            decide(PaneController::Auto, &empty, Some(&busy), true),
+            "queue"
+        );
+        assert_eq!(
+            decide(PaneController::Auto, &empty, None, false),
+            "NotReady"
+        );
+        assert_eq!(
+            decide(PaneController::Human, &empty, Some(&ready), false),
+            "HumanControl"
+        );
+        assert_eq!(
+            decide(PaneController::Paused, &empty, Some(&ready), true),
+            "queue"
+        );
+
+        // Written after turn 2: the snapshot still says turn 2 completed
+        // until the worker reports the new turn, so nothing else is written.
+        let written = Deliveries {
+            written_after_turn: Some(2),
+            ..Deliveries::default()
+        };
+        assert_eq!(
+            decide(PaneController::Auto, &written, Some(&ready), false),
+            "NotReady"
+        );
+        let next = agent_snapshot("codex", AgentTurnState::Completed, 3);
+        assert_eq!(
+            decide(PaneController::Auto, &written, Some(&next), false),
+            "write"
+        );
+
+        // Queued text keeps its place ahead of later sends.
+        let waiting = Deliveries {
+            queued: VecDeque::from(["first".to_string()]),
+            ..Deliveries::default()
+        };
+        assert_eq!(
+            decide(PaneController::Auto, &waiting, Some(&ready), false),
+            "NotReady"
+        );
+        let full = Deliveries {
+            queued: (0..MAX_AGENT_QUEUED_MESSAGES)
+                .map(|i| i.to_string())
+                .collect(),
+            ..Deliveries::default()
+        };
+        assert_eq!(
+            decide(PaneController::Auto, &full, Some(&busy), true),
+            "NotReady"
+        );
+    }
+
+    #[test]
+    fn a_wait_ends_when_a_person_takes_the_worker() {
+        let root = tempdir().unwrap();
+        let workspaces = Arc::new(workspaces(root.path()));
+        let worker = spawn(&workspaces, &caller("lead"), spawn_request("codex", None)).unwrap();
+        let agent = worker.address.terminal_session_id();
+        report(
+            &workspaces,
+            &worker,
+            agent_snapshot("codex", AgentTurnState::Working, 1),
+        );
+        let person = std::thread::spawn({
+            let workspaces = workspaces.clone();
+            let agent = agent.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(300));
+                take_over(&workspaces, &agent).unwrap();
+            }
+        });
+        assert_eq!(
+            wait_for(&workspaces, &agent, AgentWaitCondition::Finished, None, 10).unwrap(),
+            (AgentWaitReason::ControlChanged, Some(agent))
+        );
+        person.join().unwrap();
+    }
+
+    #[test]
     fn input_helpers_match_the_desktop_and_refuse_unknown_interrupts() {
         assert_eq!(
             paste_bytes("one\ntwo\u{1b}\u{3}", true),
@@ -1173,6 +1571,7 @@ mod tests {
         let waiting = agent_snapshot("codex", AgentTurnState::Waiting, 1);
         assert!(!accepts_input(&waiting) && in_turn(&waiting));
         let seen = |turn, turn_seq| Observed {
+            controller: PaneController::Auto,
             process: Some(AgentProcessState::Running),
             turn: Some(turn),
             turn_seq,

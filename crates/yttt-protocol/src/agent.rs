@@ -5,7 +5,10 @@ use yttt_agent_core::{
     AgentBoardCommand, AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState,
     WaitingReason,
 };
-use yttt_core::model::{ids::TerminalSessionId, layout::PaneRole};
+use yttt_core::model::{
+    ids::TerminalSessionId,
+    layout::{PaneController, PaneRole},
+};
 
 pub const AGENT_HOOK_DELIVERY_PROTOCOL: u16 = 1;
 
@@ -54,6 +57,9 @@ pub const AGENT_CONTROL_SEND_PATH: &str = "/control/v1/agents/send";
 pub const AGENT_CONTROL_WAIT_PATH: &str = "/control/v1/agents/wait";
 pub const AGENT_CONTROL_RESULT_PATH: &str = "/control/v1/agents/result";
 pub const AGENT_CONTROL_INTERRUPT_PATH: &str = "/control/v1/agents/interrupt";
+pub const AGENT_CONTROL_RELEASE_PATH: &str = "/control/v1/agents/release";
+/// The most messages held for one worker.
+pub const MAX_AGENT_QUEUED_MESSAGES: usize = 32;
 /// The longest a single wait or interrupt confirmation may block.
 pub const MAX_AGENT_WAIT_SECONDS: u32 = 600;
 /// The most text an orchestrator may send in one request.
@@ -160,6 +166,12 @@ pub struct ControlledAgent {
     pub command: String,
     /// `idle`, `running` or `exited`: the pane's terminal, not the Agent.
     pub pane_state: String,
+    /// Whether the orchestrator or a person drives the worker now.
+    #[serde(default)]
+    pub controller: PaneController,
+    /// Messages the Host holds until the worker can take them.
+    #[serde(default)]
+    pub queued: usize,
     /// Absent until the Agent's hooks report.
     pub agent_state: Option<ControlledAgentState>,
 }
@@ -193,6 +205,13 @@ pub enum AgentControlResponse {
     Sent {
         agent: TerminalSessionId,
         turn_seq_before: u64,
+        /// The Host holds the text until the worker is ready and driven by
+        /// the orchestrator; its turn number is not known yet.
+        #[serde(default)]
+        queued: bool,
+    },
+    Released {
+        agent: TerminalSessionId,
     },
     Waited {
         reason: AgentWaitReason,
@@ -215,6 +234,10 @@ pub enum AgentControlResponse {
 pub struct AgentSendRequest {
     pub agent: TerminalSessionId,
     pub text: String,
+    /// Hold the text while the worker is busy or a person drives it,
+    /// instead of refusing.
+    #[serde(default)]
+    pub queue: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +269,8 @@ pub enum AgentWaitReason {
     Matched,
     /// The Agent's process or pane ended; no condition can hold any more.
     Exited,
+    /// A person took over, handed back or paused the worker.
+    ControlChanged,
     TimedOut,
 }
 
@@ -284,6 +309,8 @@ pub enum AgentControlErrorCode {
     NotFound,
     /// The Agent is not in a state that accepts this; inspect it and retry.
     NotReady,
+    /// A person drives the worker or paused it; wait for `control_changed`.
+    HumanControl,
     Failed,
 }
 

@@ -202,6 +202,7 @@ fn open_pane_with_command<'a>(
         detector: None,
         role: yttt_core::model::layout::PaneRole::Worker,
         spawned_by: None,
+        controller: yttt_core::model::layout::PaneController::Auto,
     };
     let layout = ProjectLayout {
         project: ProjectConfig {

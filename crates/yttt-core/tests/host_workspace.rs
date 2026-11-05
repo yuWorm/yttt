@@ -12,7 +12,8 @@ use yttt_core::model::{
     },
     ids::ProjectId,
     layout::{
-        PaneConfig, PaneKind, PaneRole, ProjectLayout, SplitDirection, TerminalExecutionMode,
+        PaneConfig, PaneController, PaneKind, PaneRole, ProjectLayout, SplitDirection,
+        TerminalExecutionMode,
     },
     project::{ProjectDescriptor, ProjectLocation},
     work_area::{TabGroupId, WorkAreaDropPlacement},
@@ -561,6 +562,24 @@ fn a_spawned_agent_records_its_owner_and_a_person_can_reassign_it() {
             .and_then(|(config, _)| config.spawned_by.clone())
     };
     assert_eq!(owner(&workspace).as_deref(), Some("lead-terminal"));
+    let controller = |workspace: &HostWorkspace| workspace.pane(added).unwrap().0.controller;
+    assert_eq!(controller(&workspace), PaneController::Auto);
+    workspace
+        .apply(
+            WorkspaceIntent::SetPaneController {
+                project_id: project_id(),
+                tab_id: added.tab_id.clone(),
+                pane_id: added.pane_id.clone(),
+                controller: PaneController::Human,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(controller(&workspace), PaneController::Human);
+    assert_eq!(
+        serde_json::to_value(workspace.pane(added).unwrap().0).unwrap()["controller"],
+        "human"
+    );
 
     workspace
         .apply(
@@ -574,6 +593,8 @@ fn a_spawned_agent_records_its_owner_and_a_person_can_reassign_it() {
         )
         .unwrap();
     assert_eq!(owner(&workspace).as_deref(), Some("other-lead"));
+    // A new owner drives the pane; the earlier person's takeover ends.
+    assert_eq!(controller(&workspace), PaneController::Auto);
 
     let revision = workspace.revision();
     assert!(

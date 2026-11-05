@@ -16,7 +16,7 @@ use yttt_agent_core::AgentSnapshot;
 use crate::model::{
     editor::{DocumentId, ProjectEditorWorkspaceSnapshot, ProjectEditorWorkspaceState, WorkItemId},
     ids::ProjectId,
-    layout::{PaneConfig, PaneRole, ProjectLayout, SplitDirection},
+    layout::{PaneConfig, PaneController, PaneRole, ProjectLayout, SplitDirection},
     project::{ProjectDescriptor, ProjectLocation},
     split_tree::{FocusDirection, ResizeDirection},
     work_area::{TabGroupId, WorkAreaDropPlacement, WorkAreaSplitId},
@@ -153,6 +153,13 @@ pub enum WorkspaceIntent {
         tab_id: String,
         pane_id: String,
         title: String,
+    },
+    /// Sets who drives a worker pane.
+    SetPaneController {
+        project_id: ProjectId,
+        tab_id: String,
+        pane_id: String,
+        controller: PaneController,
     },
     /// Names the orchestrator terminal that may drive a pane, or none.
     SetPaneOwner {
@@ -748,6 +755,15 @@ impl IntentExecutor {
                 .workspace
                 .project_mut(&project_id)?
                 .rename_pane(&tab_id, &pane_id, &title)?,
+            WorkspaceIntent::SetPaneController {
+                project_id,
+                tab_id,
+                pane_id,
+                controller,
+            } => self
+                .workspace
+                .project_mut(&project_id)?
+                .set_pane_controller(&tab_id, &pane_id, controller)?,
             WorkspaceIntent::SetPaneOwner {
                 project_id,
                 tab_id,

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use yttt_agent_core::{AgentQuestionAnswer, AgentSnapshot};
-use yttt_core::model::layout::PaneRole;
+use yttt_core::model::layout::{PaneController, PaneRole};
 
 pub const MAX_CONTROL_TEXT_BYTES: usize = 64 * 1024;
 
@@ -61,6 +61,10 @@ pub enum DesktopControlCommand {
     /// `None` takes the pane back.
     AssignAgent {
         owner: Option<String>,
+    },
+    /// Takes a worker from its orchestrator, pauses it, or hands it back.
+    SetAgentController {
+        controller: PaneController,
     },
 }
 
@@ -320,6 +324,7 @@ impl DesktopControlRequest {
                 | DesktopControlCommand::Send { .. }
                 | DesktopControlCommand::AnswerAgentQuestion { .. }
                 | DesktopControlCommand::AssignAgent { .. }
+                | DesktopControlCommand::SetAgentController { .. }
                 | DesktopControlCommand::Read
         ) && self.pane.is_none()
         {

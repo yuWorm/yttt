@@ -2092,7 +2092,7 @@ fn control_request(
                     AgentControlErrorCode::InvalidRequest => 400,
                     AgentControlErrorCode::Forbidden => 403,
                     AgentControlErrorCode::NotFound => 404,
-                    AgentControlErrorCode::NotReady => 409,
+                    AgentControlErrorCode::NotReady | AgentControlErrorCode::HumanControl => 409,
                     AgentControlErrorCode::Failed => 500,
                 },
                 serde_json::to_vec(&error).expect("control error must serialize"),

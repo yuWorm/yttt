@@ -132,6 +132,29 @@ last reply from its provider's transcript (Claude Code and Codex); for other pro
 before a reply exists, `source` is `unavailable`. `interrupt` presses Esc in a working Claude
 Code or Codex worker and reports whether its turn ended within `--timeout` (default 10 s).
 
+### Handing a worker between a person and its orchestrator
+
+A worker is driven by its orchestrator (`auto`), by a person (`human`), or `paused`.
+Typing in a worker the orchestrator drives takes it over: the Host counts every input a
+desktop sends to it, including `panes send`, as a person's. The orchestrator's `send` and
+`interrupt` then fail with `human_control`, and a `wait` in progress returns
+`control_changed`. Anything the orchestrator had queued for the worker is dropped, because
+the person may have changed the task.
+
+```sh
+yttt ctl agents send --agent TERMINAL --queue --text 'Then update the docs'   # in the orchestrator
+yttt ctl agents release --agent TERMINAL                                       # in the orchestrator
+yttt ctl agents control --project PROJECT_ID --tab TAB_ID --pane PANE_ID --set auto|human|paused
+```
+
+`--queue` holds up to 32 messages while the worker is busy, taken over or paused, and the
+Host writes them in order once the worker is `auto` and ready, one per turn. The queue lives
+in the Host's memory and is lost if the Host restarts. `release` hands the worker to a person.
+A person hands it back, takes it over or pauses it with `agents control`, or with the
+**Take Over Agent**, **Pause Agent** and **Hand Agent Back** commands on the focused pane;
+the worker's tab shows who drives it. Orchestrators cannot answer approval prompts or
+structured questions; `wait --until waiting` tells them a person is needed.
+
 Ownership is kept with the layout and survives a Host restart. Every orchestrator request,
 allowed or refused, is recorded in the Host's audit log with the orchestrator's terminal.
 

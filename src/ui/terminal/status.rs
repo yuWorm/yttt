@@ -2,7 +2,7 @@ use yttt_agent_core::{AgentProcessState, AgentViewState};
 
 use crate::{
     model::{
-        layout::PaneConfig,
+        layout::{PaneConfig, PaneController},
         workspace::{OpenedProject, PaneProcessState, PaneState},
     },
     runtime::agent::classify_agent,
@@ -21,6 +21,33 @@ pub fn agent_status_label(status: AgentViewState, text: &UiText) -> &'static str
         AgentViewState::Stale => UiTextKey::TerminalI18nAgentStatusUnknown,
     })
 }
+/// Who drives the tab's orchestrated worker, when it has one; a person's
+/// takeover or pause shows over the orchestrator driving another pane.
+pub fn tab_worker_controller(project: &OpenedProject, tab_id: &str) -> Option<PaneController> {
+    let tab = project.layout.tabs.iter().find(|tab| tab.id == tab_id)?;
+    let controllers = project
+        .tab_state(tab_id)?
+        .pane_states
+        .iter()
+        .filter_map(|state| tab.layout.find_pane(&state.pane_id))
+        .filter(|pane| pane.spawned_by.is_some())
+        .map(|pane| pane.controller)
+        .collect::<Vec<_>>();
+    controllers
+        .iter()
+        .copied()
+        .find(|controller| *controller != PaneController::Auto)
+        .or_else(|| controllers.first().copied())
+}
+
+pub fn worker_controller_label(controller: PaneController, text: &UiText) -> &'static str {
+    text.get(match controller {
+        PaneController::Auto => UiTextKey::TerminalI18nWorkerOrchestrated,
+        PaneController::Human => UiTextKey::TerminalI18nWorkerDrivenByYou,
+        PaneController::Paused => UiTextKey::TerminalI18nWorkerPaused,
+    })
+}
+
 pub fn project_agent_status(project: &OpenedProject) -> Option<AgentViewState> {
     project
         .layout
@@ -99,6 +126,7 @@ mod tests {
             detector: None,
             role: yttt_core::model::layout::PaneRole::Worker,
             spawned_by: None,
+            controller: yttt_core::model::layout::PaneController::Auto,
         }
     }
 

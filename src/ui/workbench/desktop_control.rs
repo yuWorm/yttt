@@ -586,6 +586,16 @@ impl WorkbenchView {
                     self.apply_workspace_intent(intent).map_err(failed)?;
                     DesktopControlResponse::Updated { target }
                 }
+                DesktopControlCommand::SetAgentController { controller } => {
+                    self.apply_workspace_intent(WorkspaceIntent::SetPaneController {
+                        project_id,
+                        tab_id: target.tab.clone(),
+                        pane_id: target.pane.clone().expect("validated pane"),
+                        controller: *controller,
+                    })
+                    .map_err(failed)?;
+                    DesktopControlResponse::Updated { target }
+                }
                 DesktopControlCommand::AssignAgent { owner } => {
                     self.apply_workspace_intent(WorkspaceIntent::SetPaneOwner {
                         project_id,

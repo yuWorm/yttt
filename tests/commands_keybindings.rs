@@ -14,9 +14,9 @@ use yttt::config::{
 };
 use yttt::model::{
     editor::WorkItemId,
-    host_workspace::{HostWorkspace, ProjectPanel, WorkspaceIntent},
+    host_workspace::{HostWorkspace, NewTab, ProjectPanel, WorkspaceIntent},
     ids::ProjectId,
-    layout::LayoutNode,
+    layout::{LayoutNode, PaneController, PaneRole},
     project::{ProjectDescriptor, ProjectLocation},
     workspace::{TabStartState, Workspace},
 };
@@ -36,6 +36,7 @@ use yttt::ui::settings::keybindings::{
     KeybindingDiagnosticKind, KeybindingEditError, KeybindingOrigin, KeybindingProfile,
     KeybindingsEditorState,
 };
+use yttt::ui::terminal::status::{tab_worker_controller, worker_controller_label};
 use yttt::ui::vim::{
     VIM_CONTROL_CONTEXT, VIM_NORMAL_CONTEXT, VIM_PALETTE_NORMAL_CONTEXT,
     VIM_PROJECT_PANEL_NORMAL_CONTEXT, VIM_PROJECT_TREE_NORMAL_CONTEXT, VIM_PROJECTS_NORMAL_CONTEXT,
@@ -1781,6 +1782,69 @@ fn pane_resize_commands_adjust_current_split_ratio() {
 
     dispatch(&mut layout, CommandId::PaneResizeLeft);
     assert_ratio(root_split_ratio(layout.workspace()), 0.65);
+}
+
+#[test]
+fn a_person_takes_over_pauses_and_hands_back_a_focused_worker() {
+    let mut layout = workspace_with_sample_project();
+    let project_id = layout.workspace().selected_project_id().unwrap().clone();
+    let plain = workspace_command_intent(layout.workspace(), CommandId::AgentTakeOver);
+    assert!(
+        plain
+            .unwrap_err()
+            .to_string()
+            .contains("not driven by an orchestrator"),
+        "only orchestrated workers have a controller"
+    );
+    layout
+        .apply(
+            WorkspaceIntent::CreateTab {
+                project_id: project_id.clone(),
+                tab: NewTab::Agent {
+                    title: "Worker".into(),
+                    command: "codex".into(),
+                    args: Vec::new(),
+                    role: PaneRole::Worker,
+                    spawned_by: Some("lead".into()),
+                },
+                tab_id: Some("worker".into()),
+            },
+            None,
+        )
+        .unwrap();
+    let controller = |layout: &HostWorkspace| {
+        let project = layout.workspace().project(&project_id).unwrap();
+        (
+            project
+                .layout
+                .tab("worker")
+                .unwrap()
+                .layout
+                .find_pane("agent")
+                .unwrap()
+                .controller,
+            tab_worker_controller(project, "worker"),
+        )
+    };
+    assert_eq!(
+        controller(&layout),
+        (PaneController::Auto, Some(PaneController::Auto))
+    );
+    for (command, expected) in [
+        (CommandId::AgentTakeOver, PaneController::Human),
+        (CommandId::AgentPause, PaneController::Paused),
+        (CommandId::AgentHandBack, PaneController::Auto),
+    ] {
+        dispatch(&mut layout, command);
+        assert_eq!(controller(&layout), (expected, Some(expected)));
+    }
+    let project = layout.workspace().project(&project_id).unwrap();
+    // An Agent tab no orchestrator started shows no controller.
+    assert_eq!(tab_worker_controller(project, "agent"), None);
+    assert_eq!(
+        worker_controller_label(PaneController::Human, &UiText::english()),
+        "you drive"
+    );
 }
 
 fn workspace_with_sample_project() -> HostWorkspace {

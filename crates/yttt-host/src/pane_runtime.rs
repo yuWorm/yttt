@@ -632,6 +632,7 @@ mod tests {
                 detector: None,
                 role: yttt_core::model::layout::PaneRole::Worker,
                 spawned_by: None,
+                controller: yttt_core::model::layout::PaneController::Auto,
             },
             agent_snapshot: Some(snapshot),
             restore: true,
