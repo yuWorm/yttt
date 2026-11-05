@@ -50,6 +50,21 @@ pub const AGENT_CONTROL_WHOAMI_PATH: &str = "/control/v1/whoami";
 pub const AGENT_CONTROL_SPAWN_PATH: &str = "/control/v1/agents/spawn";
 pub const AGENT_CONTROL_LIST_PATH: &str = "/control/v1/agents/list";
 pub const AGENT_CONTROL_CLOSE_PATH: &str = "/control/v1/agents/close";
+pub const AGENT_CONTROL_SEND_PATH: &str = "/control/v1/agents/send";
+pub const AGENT_CONTROL_WAIT_PATH: &str = "/control/v1/agents/wait";
+pub const AGENT_CONTROL_RESULT_PATH: &str = "/control/v1/agents/result";
+pub const AGENT_CONTROL_INTERRUPT_PATH: &str = "/control/v1/agents/interrupt";
+/// The longest a single wait or interrupt confirmation may block.
+pub const MAX_AGENT_WAIT_SECONDS: u32 = 600;
+/// The most text an orchestrator may send in one request.
+pub const MAX_AGENT_SEND_BYTES: usize = 64 * 1024;
+/// The most of a final reply a result returns.
+pub const MAX_AGENT_RESULT_BYTES: usize = 64 * 1024;
+
+/// Requests that may block until an Agent changes state.
+pub fn agent_control_blocks(path: &str) -> bool {
+    matches!(path, AGENT_CONTROL_WAIT_PATH | AGENT_CONTROL_INTERRUPT_PATH)
+}
 /// Providers an orchestrator may start; each runs the command of the same name.
 pub const AGENT_CONTROL_PROVIDERS: [&str; 7] =
     ["codex", "claude", "grok", "groky", "opencode", "pi", "omp"];
@@ -154,6 +169,8 @@ pub struct ControlledAgentState {
     pub provider: String,
     pub process: AgentProcessState,
     pub turn: AgentTurnState,
+    /// The number of the current or last turn; see `AgentSnapshot::turn_seq`.
+    pub turn_seq: u64,
     pub waiting: Option<WaitingReason>,
     pub task: Option<String>,
     pub updated_at: u64,
@@ -162,9 +179,100 @@ pub struct ControlledAgentState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentControlResponse {
-    Spawned { agent: Box<ControlledAgent> },
-    Agents { agents: Vec<ControlledAgent> },
-    Closed { agent: TerminalSessionId },
+    Spawned {
+        agent: Box<ControlledAgent>,
+    },
+    Agents {
+        agents: Vec<ControlledAgent>,
+    },
+    Closed {
+        agent: TerminalSessionId,
+    },
+    /// The Host wrote the input. The turn it starts will be numbered above
+    /// `turn_seq_before`; wait with `after_turn` set to it.
+    Sent {
+        agent: TerminalSessionId,
+        turn_seq_before: u64,
+    },
+    Waited {
+        reason: AgentWaitReason,
+        /// The Agent that ended the wait; absent after a timeout.
+        agent: Option<TerminalSessionId>,
+        agents: Vec<ControlledAgent>,
+    },
+    Result {
+        result: Box<AgentTurnResult>,
+    },
+    Interrupted {
+        agent: TerminalSessionId,
+        /// Whether the Agent reported the interruption before the deadline.
+        confirmed: bool,
+    },
+}
+
+/// Writes text into a worker's prompt and presses Enter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSendRequest {
+    pub agent: TerminalSessionId,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWaitCondition {
+    /// A turn ended: completed, failed or interrupted.
+    Finished,
+    /// The Agent is waiting for an approval or an answer.
+    Waiting,
+    /// The Agent can take a new instruction.
+    Ready,
+    /// Anything about the Agent's process or turn changed.
+    Change,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentWaitRequest {
+    pub agents: Vec<TerminalSessionId>,
+    pub until: AgentWaitCondition,
+    /// Only turns numbered above this count, for `finished` and `ready`.
+    #[serde(default)]
+    pub after_turn: Option<u64>,
+    pub timeout_seconds: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWaitReason {
+    Matched,
+    /// The Agent's process or pane ended; no condition can hold any more.
+    Exited,
+    TimedOut,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInterruptRequest {
+    pub agent: TerminalSessionId,
+    #[serde(default)]
+    pub timeout_seconds: Option<u32>,
+}
+
+/// A worker's last reply, read from its provider's own transcript.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTurnResult {
+    pub agent: TerminalSessionId,
+    pub turn_seq: u64,
+    pub turn: AgentTurnState,
+    pub text: Option<String>,
+    pub truncated: bool,
+    pub source: AgentResultSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentResultSource {
+    Transcript,
+    /// The provider reported no transcript, or it held no reply yet.
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,6 +282,8 @@ pub enum AgentControlErrorCode {
     /// The caller may not act on that target.
     Forbidden,
     NotFound,
+    /// The Agent is not in a state that accepts this; inspect it and retry.
+    NotReady,
     Failed,
 }
 

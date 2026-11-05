@@ -14,6 +14,7 @@ use yttt_protocol::agent::{
     AGENT_CONTROL_SCOPE_HEADER, AGENT_CONTROL_TOKEN_ENV, AGENT_CONTROL_TOKEN_HEADER,
     AGENT_CONTROL_WHOAMI_PATH, AGENT_HOOK_ENDPOINT_ENV, AGENT_SELF_ENV, AgentControlError,
     AgentControlErrorCode, AgentControlIdentity, AgentControlResponse, AgentHookScope,
+    MAX_AGENT_WAIT_SECONDS, agent_control_blocks,
 };
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
@@ -135,8 +136,14 @@ impl PaneCredentials {
             .ok_or(())?;
         let token = self.control_token.as_deref().ok_or(())?;
         let mut stream = TcpStream::connect_timeout(&address, CONTROL_TIMEOUT).map_err(|_| ())?;
+        // The Host answers a wait or interrupt only when it ends.
+        let read_timeout = if agent_control_blocks(path) {
+            Duration::from_secs(u64::from(MAX_AGENT_WAIT_SECONDS) + 15)
+        } else {
+            CONTROL_TIMEOUT
+        };
         stream
-            .set_read_timeout(Some(CONTROL_TIMEOUT))
+            .set_read_timeout(Some(read_timeout))
             .map_err(|_| ())?;
         stream
             .set_write_timeout(Some(CONTROL_TIMEOUT))

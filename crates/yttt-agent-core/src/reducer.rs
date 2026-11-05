@@ -19,6 +19,10 @@ pub struct AgentSnapshot {
     pub generation: u64,
     pub process_state: AgentProcessState,
     pub turn_state: AgentTurnState,
+    /// Counts the turns this Agent started, so a caller can tell the turn
+    /// that follows its input from one that had already finished.
+    #[serde(default)]
+    pub turn_seq: u64,
     pub waiting_reason: Option<WaitingReason>,
     pub waiting_message: Option<String>,
     pub task: Option<AgentTask>,
@@ -158,6 +162,7 @@ impl AgentReducer {
                 generation: 0,
                 process_state: AgentProcessState::Registered,
                 turn_state: AgentTurnState::Unknown,
+                turn_seq: 0,
                 waiting_reason: None,
                 waiting_message: None,
                 task: None,
@@ -181,6 +186,7 @@ impl AgentReducer {
     ) -> Self {
         let mut reducer = Self::new(instance_id, provider_id, now);
         reducer.snapshot.task = restored.task.clone();
+        reducer.snapshot.turn_seq = restored.turn_seq;
         reducer.snapshot.session = restored.session.clone().map(sanitize_session_metadata);
         reducer.snapshot.board = restored.board.clone();
         reducer.snapshot.board.mark_unavailable(now);
@@ -302,6 +308,7 @@ impl AgentReducer {
                     }
                     self.snapshot.task = Some(task);
                 }
+                self.snapshot.turn_seq += 1;
                 self.snapshot.current_action = None;
                 self.snapshot.last_action_failed = false;
                 self.clear_waiting();

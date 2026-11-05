@@ -28,6 +28,7 @@ fn completed_agent_snapshot() -> AgentSnapshot {
         generation: 1,
         process_state: AgentProcessState::Running,
         turn_state: AgentTurnState::Completed,
+        turn_seq: 0,
         waiting_reason: None,
         waiting_message: None,
         task: None,

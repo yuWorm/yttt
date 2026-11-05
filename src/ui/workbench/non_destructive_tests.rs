@@ -1530,6 +1530,7 @@ fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &m
         generation: 1,
         process_state: AgentProcessState::Running,
         turn_state,
+        turn_seq: 0,
         waiting_reason: None,
         waiting_message: None,
         task: None,

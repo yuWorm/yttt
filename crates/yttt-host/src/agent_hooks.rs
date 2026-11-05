@@ -35,7 +35,7 @@ use yttt_protocol::{
         AGENT_HOOK_SCOPE_ENV, AGENT_HOOK_TOKEN_ENV, AGENT_SELF_ENV, AgentCommandRequest,
         AgentControlError, AgentControlErrorCode, AgentControlIdentity, AgentControlResponse,
         AgentHookAcknowledgement, AgentHookDelivery, AgentHookScope, AgentSnapshotCursor,
-        AgentSnapshotUpdate, HOST_TERMINAL_IDENTITY_ENVIRONMENT,
+        AgentSnapshotUpdate, HOST_TERMINAL_IDENTITY_ENVIRONMENT, agent_control_blocks,
     },
     terminal::TerminalSpawnSpec,
 };
@@ -65,6 +65,7 @@ const QUESTION_POLL_FRESH_MILLIS: u64 = 5_000;
 const ENVIRONMENT_VARIABLES: [&str; 5] = HOST_TERMINAL_IDENTITY_ENVIRONMENT;
 /// Keeps a control token from ever equalling the hook token for the same scope.
 const CONTROL_TOKEN_DOMAIN: &str = "control:";
+const MAX_BLOCKING_CONTROL_REQUESTS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct AgentAddress {
@@ -163,6 +164,8 @@ struct AgentState {
     bindings: Mutex<HashMap<AgentHookScope, TerminalSessionId>>,
     /// Bound scopes whose pane was started as an orchestrator.
     orchestrators: Mutex<HashSet<AgentHookScope>>,
+    /// Waits and interrupts in progress, each on its own thread.
+    blocking_requests: std::sync::atomic::AtomicUsize,
     /// Serves authenticated control requests other than `whoami`; set once
     /// the Host services it needs exist.
     control_handler: std::sync::OnceLock<Arc<dyn AgentControlHandler>>,
@@ -220,6 +223,7 @@ impl HostAgentHookRuntime {
             bindings: Mutex::new(HashMap::new()),
             orchestrators: Mutex::new(HashSet::new()),
             control_handler: std::sync::OnceLock::new(),
+            blocking_requests: std::sync::atomic::AtomicUsize::new(0),
             records: Mutex::new(HashMap::new()),
             terminal_exits: Mutex::new(HashMap::new()),
             process_observations: Mutex::new(HashMap::new()),
@@ -946,18 +950,52 @@ enum HookApplicationOutcome {
     Ignored,
 }
 
-fn handle_connection(mut stream: TcpStream, state: &AgentState) {
+fn handle_connection(mut stream: TcpStream, state: &Arc<AgentState>) {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(CLIENT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(CLIENT_TIMEOUT));
-    let request = read_http_request(&mut stream).and_then(|request| {
+    let request = match read_http_request(&mut stream) {
+        Ok(request) if agent_control_blocks(&request.path) => {
+            serve_blocking_control(stream, state, request);
+            return;
+        }
+        request => request,
+    };
+    let outcome = request.and_then(|request| {
         if request.path.starts_with("/control/") {
             return control_request(state, request)
                 .map(|(status, body)| HookIngestOutcome::Control { status, body });
         }
         decode_request(request, &state.secret).and_then(|request| ingest_request(state, request))
     });
-    let (status, reason, body) = match request {
+    respond(stream, outcome);
+}
+
+/// A wait or interrupt may block for minutes, so it gets its own thread
+/// instead of holding one of the few workers that hooks depend on.
+fn serve_blocking_control(stream: TcpStream, state: &Arc<AgentState>, request: HttpRequest) {
+    if state.blocking_requests.fetch_add(1, Ordering::AcqRel) >= MAX_BLOCKING_CONTROL_REQUESTS {
+        state.blocking_requests.fetch_sub(1, Ordering::AcqRel);
+        respond(stream, Err(HttpRequestError::Unavailable));
+        return;
+    }
+    let state = state.clone();
+    let spawned = thread::Builder::new()
+        .name("yttt-agent-control".into())
+        .spawn(move || {
+            let outcome = control_request(&state, request)
+                .map(|(status, body)| HookIngestOutcome::Control { status, body });
+            respond(stream, outcome);
+            state.blocking_requests.fetch_sub(1, Ordering::AcqRel);
+        });
+    if spawned.is_err() {
+        // The stream went with the closure; the caller sees a closed connection.
+        eprintln!("an Agent control request was dropped: no thread could be started");
+    }
+}
+
+fn respond(mut stream: TcpStream, outcome: Result<HookIngestOutcome, HttpRequestError>) {
+    let (status, reason, body) = match outcome {
         Ok(HookIngestOutcome::Control { status, body }) => (
             status,
             match status {
@@ -965,6 +1003,7 @@ fn handle_connection(mut stream: TcpStream, state: &AgentState) {
                 400 => "Bad Request",
                 403 => "Forbidden",
                 404 => "Not Found",
+                409 => "Conflict",
                 _ => "Internal Server Error",
             },
             body,
@@ -2053,6 +2092,7 @@ fn control_request(
                     AgentControlErrorCode::InvalidRequest => 400,
                     AgentControlErrorCode::Forbidden => 403,
                     AgentControlErrorCode::NotFound => 404,
+                    AgentControlErrorCode::NotReady => 409,
                     AgentControlErrorCode::Failed => 500,
                 },
                 serde_json::to_vec(&error).expect("control error must serialize"),
@@ -2537,6 +2577,70 @@ mod tests {
         let error: AgentControlError = serde_json::from_slice(&body).unwrap();
         assert_eq!(error.code, AgentControlErrorCode::Forbidden);
         assert_eq!(error.message, "lead may not /control/v1/agents/list");
+    }
+
+    struct SlowWaits;
+
+    impl AgentControlHandler for SlowWaits {
+        fn handle(
+            &self,
+            caller: &AgentControlIdentity,
+            _path: &str,
+            _body: &[u8],
+        ) -> Result<AgentControlResponse, AgentControlError> {
+            thread::sleep(Duration::from_secs(2));
+            Ok(AgentControlResponse::Closed {
+                agent: caller.terminal_session_id.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn waits_in_progress_never_hold_the_workers_hooks_need() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        runtime.set_control_handler(Arc::new(SlowWaits));
+        let mut lead = spec("lead", "lead");
+        runtime.secure_terminal_environment(&mut lead, 1, PaneRole::Orchestrator);
+        let scope = environment_value(&lead, AGENT_SELF_ENV)
+            .unwrap()
+            .to_string();
+        let token = environment_value(&lead, AGENT_CONTROL_TOKEN_ENV)
+            .unwrap()
+            .to_string();
+        let endpoint = runtime
+            .endpoint
+            .strip_prefix("http://")
+            .unwrap()
+            .to_string();
+        let post = move |path: &str| {
+            let mut stream = TcpStream::connect(&endpoint).unwrap();
+            write!(
+                stream,
+                "POST {path} HTTP/1.1\r\n{AGENT_CONTROL_SCOPE_HEADER}: {scope}\r\n{AGENT_CONTROL_TOKEN_HEADER}: {token}\r\nContent-Length: 0\r\n\r\n"
+            )
+            .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        };
+
+        let waits = (0..CONNECTION_WORKERS * 2)
+            .map(|_| {
+                let post = post.clone();
+                thread::spawn(move || post(yttt_protocol::agent::AGENT_CONTROL_WAIT_PATH))
+            })
+            .collect::<Vec<_>>();
+        thread::sleep(Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        let whoami = post(AGENT_CONTROL_WHOAMI_PATH);
+        assert!(whoami.starts_with("HTTP/1.1 200"), "{whoami}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "whoami waited behind blocking requests"
+        );
+        for wait in waits {
+            assert!(wait.join().unwrap().starts_with("HTTP/1.1 200"));
+        }
     }
 
     #[test]

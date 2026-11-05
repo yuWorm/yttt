@@ -37,6 +37,43 @@ mod tests {
     }
 
     #[test]
+    fn each_started_turn_gets_the_next_number_and_a_restore_keeps_it() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        assert_eq!(reducer.snapshot().turn_seq, 0);
+        for (now, expected) in [(4, 1), (6, 2)] {
+            reducer.apply(1, AgentEventKind::TurnStarted { task: None }, now);
+            assert_eq!(reducer.snapshot().turn_seq, expected);
+            reducer.apply(
+                1,
+                AgentEventKind::TurnFinished {
+                    outcome: TurnOutcome::Completed,
+                },
+                now + 1,
+            );
+            assert_eq!(reducer.snapshot().turn_seq, expected);
+        }
+        reducer.apply(1, AgentEventKind::Working, 8);
+        assert_eq!(reducer.snapshot().turn_seq, 2);
+
+        let restored = AgentReducer::from_restored(
+            AgentInstanceId::new("agent-2").unwrap(),
+            ProviderId::new("omp").unwrap(),
+            reducer.snapshot(),
+            9,
+        );
+        assert_eq!(restored.snapshot().turn_seq, 2);
+        let older: AgentSnapshot = serde_json::from_value({
+            let mut value = serde_json::to_value(reducer.snapshot()).unwrap();
+            value.as_object_mut().unwrap().remove("turn_seq");
+            value
+        })
+        .unwrap();
+        assert_eq!(older.turn_seq, 0);
+    }
+
+    #[test]
     fn process_and_session_metadata_do_not_claim_an_idle_turn() {
         let mut reducer = reducer();
         reducer.process_starting(1, 2);

@@ -3,9 +3,12 @@ use yttt_core::model::ids::TerminalSessionId;
 use yttt_core::model::layout::PaneRole;
 use yttt_protocol::{
     agent::{
-        AGENT_CONTROL_CLOSE_PATH, AGENT_CONTROL_LIST_PATH, AGENT_CONTROL_SPAWN_PATH,
-        AgentControlError, AgentControlErrorCode, AgentControlResponse, AgentSpawnRequest,
-        AgentTargetRequest, ControlledAgent,
+        AGENT_CONTROL_CLOSE_PATH, AGENT_CONTROL_INTERRUPT_PATH, AGENT_CONTROL_LIST_PATH,
+        AGENT_CONTROL_RESULT_PATH, AGENT_CONTROL_SEND_PATH, AGENT_CONTROL_SPAWN_PATH,
+        AGENT_CONTROL_WAIT_PATH, AgentControlError, AgentControlErrorCode, AgentControlResponse,
+        AgentInterruptRequest, AgentSendRequest, AgentSpawnRequest, AgentTargetRequest,
+        AgentWaitCondition, AgentWaitReason, AgentWaitRequest, ControlledAgent,
+        MAX_AGENT_WAIT_SECONDS,
     },
     desktop_control::*,
 };
@@ -106,6 +109,69 @@ fn split_command(args: &[OsString], text: UiText) -> Result<CommandWords, String
     })
 }
 
+fn take_agent(
+    options: &mut BTreeMap<String, String>,
+    text: UiText,
+) -> Result<TerminalSessionId, String> {
+    options
+        .remove("--agent")
+        .map(TerminalSessionId::new)
+        .ok_or_else(|| {
+            text.get(UiTextKey::CliLocalizationAgentRequired)
+                .to_string()
+        })
+}
+
+const DEFAULT_WAIT_SECONDS: u32 = 300;
+const DEFAULT_INTERRUPT_SECONDS: u32 = 10;
+
+fn seconds(
+    options: &mut BTreeMap<String, String>,
+    default: u32,
+    text: UiText,
+) -> Result<u32, String> {
+    options
+        .remove("--timeout")
+        .map(|value| value.parse::<u32>())
+        .transpose()
+        .map(|value| value.unwrap_or(default))
+        .ok()
+        .filter(|seconds| *seconds <= MAX_AGENT_WAIT_SECONDS)
+        .ok_or_else(|| text.get(UiTextKey::CliLocalizationTimeoutRange).to_string())
+}
+
+/// The text of `--text`, `--prompt-file` or `--stdin`; exactly one is given.
+fn input_text(options: &mut BTreeMap<String, String>, text: UiText) -> Result<String, String> {
+    let text_value = options.remove("--text");
+    let file = options.remove("--prompt-file");
+    let stdin = options.remove("--stdin").is_some();
+    if usize::from(text_value.is_some()) + usize::from(file.is_some()) + usize::from(stdin) != 1 {
+        return Err(text
+            .get(UiTextKey::CliLocalizationInputSourceExactlyOne)
+            .to_string());
+    }
+    if let Some(text_value) = text_value {
+        return Ok(text_value);
+    }
+    let reader: Box<dyn std::io::Read> = if let Some(file) = file {
+        Box::new(std::fs::File::open(PathBuf::from(file)).map_err(|error| {
+            text.get(UiTextKey::CliLocalizationPromptInputReadFailure)
+                .replace("{error}", &error.to_string())
+        })?)
+    } else {
+        Box::new(std::io::stdin())
+    };
+    let mut text_value = String::new();
+    reader
+        .take(MAX_CONTROL_TEXT_BYTES as u64 + 1)
+        .read_to_string(&mut text_value)
+        .map_err(|error| {
+            text.get(UiTextKey::CliLocalizationPromptInputReadFailure)
+                .replace("{error}", &error.to_string())
+        })?;
+    Ok(text_value)
+}
+
 /// A request an orchestrator pane sends straight to the Host.
 #[derive(Debug)]
 pub struct AgentControlInvocation {
@@ -133,8 +199,13 @@ pub fn parse_agent_control(
         ("agents", "spawn") => AGENT_CONTROL_SPAWN_PATH,
         ("agents", "list") if options.contains_key("--mine") => AGENT_CONTROL_LIST_PATH,
         ("agents", "close") => AGENT_CONTROL_CLOSE_PATH,
+        ("agents", "send") if options.contains_key("--agent") => AGENT_CONTROL_SEND_PATH,
+        ("agents", "wait") => AGENT_CONTROL_WAIT_PATH,
+        ("agents", "result") => AGENT_CONTROL_RESULT_PATH,
+        ("agents", "interrupt") => AGENT_CONTROL_INTERRUPT_PATH,
         _ => return Ok(None),
     };
+
     let json = options.remove("--json").is_some();
     let body = match path {
         AGENT_CONTROL_SPAWN_PATH => serde_json::to_value(AgentSpawnRequest {
@@ -145,12 +216,54 @@ pub fn parse_agent_control(
             args: trailing.clone(),
             title: options.remove("--title"),
         }),
-        AGENT_CONTROL_CLOSE_PATH => serde_json::to_value(AgentTargetRequest {
-            agent: TerminalSessionId::new(options.remove("--agent").ok_or_else(|| {
-                text.get(UiTextKey::CliLocalizationAgentRequired)
-                    .to_string()
-            })?),
-        }),
+        AGENT_CONTROL_CLOSE_PATH | AGENT_CONTROL_RESULT_PATH => {
+            serde_json::to_value(AgentTargetRequest {
+                agent: take_agent(&mut options, text)?,
+            })
+        }
+        AGENT_CONTROL_SEND_PATH => {
+            let agent = take_agent(&mut options, text)?;
+            serde_json::to_value(AgentSendRequest {
+                agent,
+                text: input_text(&mut options, text)?,
+            })
+        }
+        AGENT_CONTROL_WAIT_PATH => {
+            let agents = take_agent(&mut options, text)?
+                .as_str()
+                .split(',')
+                .map(|agent| TerminalSessionId::new(agent.trim()))
+                .collect();
+            let until = match options.remove("--until").as_deref() {
+                None | Some("finished") => AgentWaitCondition::Finished,
+                Some("waiting") => AgentWaitCondition::Waiting,
+                Some("ready") => AgentWaitCondition::Ready,
+                Some("change") => AgentWaitCondition::Change,
+                Some(_) => {
+                    return Err(text
+                        .get(UiTextKey::CliLocalizationWaitCondition)
+                        .to_string());
+                }
+            };
+            let after_turn = options
+                .remove("--after-turn")
+                .map(|value| value.parse::<u64>())
+                .transpose()
+                .map_err(|_| text.get(UiTextKey::CliLocalizationAfterTurn).to_string())?;
+            serde_json::to_value(AgentWaitRequest {
+                agents,
+                until,
+                after_turn,
+                timeout_seconds: seconds(&mut options, DEFAULT_WAIT_SECONDS, text)?,
+            })
+        }
+        AGENT_CONTROL_INTERRUPT_PATH => {
+            let agent = take_agent(&mut options, text)?;
+            serde_json::to_value(AgentInterruptRequest {
+                agent,
+                timeout_seconds: Some(seconds(&mut options, DEFAULT_INTERRUPT_SECONDS, text)?),
+            })
+        }
         _ => {
             options.remove("--mine");
             Ok(serde_json::json!({}))
@@ -271,37 +384,7 @@ pub fn parse(args: &[OsString], text: UiText) -> Result<CliInvocation, String> {
                 .unwrap_or(5),
         },
         ("panes" | "agents", "send") => {
-            let text_value = options.remove("--text");
-            let file = options.remove("--prompt-file");
-            let stdin = options.remove("--stdin").is_some();
-            if usize::from(text_value.is_some()) + usize::from(file.is_some()) + usize::from(stdin)
-                != 1
-            {
-                return Err(text
-                    .get(UiTextKey::CliLocalizationInputSourceExactlyOne)
-                    .to_string());
-            }
-            let text_value = if let Some(text_value) = text_value {
-                text_value
-            } else {
-                let reader: Box<dyn std::io::Read> = if let Some(file) = file {
-                    Box::new(std::fs::File::open(PathBuf::from(file)).map_err(|error| {
-                        text.get(UiTextKey::CliLocalizationPromptInputReadFailure)
-                            .replace("{error}", &error.to_string())
-                    })?)
-                } else {
-                    Box::new(std::io::stdin())
-                };
-                let mut text_value = String::new();
-                reader
-                    .take(MAX_CONTROL_TEXT_BYTES as u64 + 1)
-                    .read_to_string(&mut text_value)
-                    .map_err(|error| {
-                        text.get(UiTextKey::CliLocalizationPromptInputReadFailure)
-                            .replace("{error}", &error.to_string())
-                    })?;
-                text_value
-            };
+            let text_value = input_text(&mut options, text)?;
             let enter = options.remove("--enter").is_some() || resource == "agents";
             let raw = options.remove("--raw").is_some();
             if resource == "agents" && raw {
@@ -424,6 +507,7 @@ fn report_agent_control_error(error: &AgentControlError, json: bool, text: UiTex
             AgentControlErrorCode::InvalidRequest => DesktopControlErrorCode::InvalidRequest,
             AgentControlErrorCode::Forbidden => DesktopControlErrorCode::PermissionDenied,
             AgentControlErrorCode::NotFound => DesktopControlErrorCode::NotFound,
+            AgentControlErrorCode::NotReady => DesktopControlErrorCode::Busy,
             AgentControlErrorCode::Failed => DesktopControlErrorCode::Failed,
         };
         eprintln!("{}: {}", error_code_label(&code, text), error.message);
@@ -442,10 +526,10 @@ fn format_agent_control(response: &AgentControlResponse, text: UiText) -> String
             agent.agent.as_str(),
             agent.title,
             agent.pane_state,
-            agent
-                .agent_state
-                .as_ref()
-                .map_or_else(|| "-".to_string(), |state| protocol_word(&state.turn))
+            agent.agent_state.as_ref().map_or_else(
+                || "-".to_string(),
+                |state| format!("{} #{}", protocol_word(&state.turn), state.turn_seq)
+            )
         )
     };
     match response {
@@ -458,6 +542,46 @@ fn format_agent_control(response: &AgentControlResponse, text: UiText) -> String
         }
         AgentControlResponse::Closed { agent } => text
             .get(UiTextKey::CliLocalizationAgentClosed)
+            .replace("{agent}", agent.as_str()),
+        AgentControlResponse::Sent {
+            agent,
+            turn_seq_before,
+        } => text
+            .get(UiTextKey::CliLocalizationAgentSent)
+            .replace("{agent}", agent.as_str())
+            .replace("{turn}", &turn_seq_before.to_string()),
+        AgentControlResponse::Waited {
+            reason,
+            agent,
+            agents,
+        } => {
+            let headline = match (reason, agent) {
+                (AgentWaitReason::TimedOut, _) | (_, None) => {
+                    text.get(UiTextKey::CliLocalizationWaitTimedOut).to_string()
+                }
+                (AgentWaitReason::Matched, Some(agent)) => text
+                    .get(UiTextKey::CliLocalizationWaitMatched)
+                    .replace("{agent}", agent.as_str()),
+                (AgentWaitReason::Exited, Some(agent)) => text
+                    .get(UiTextKey::CliLocalizationWaitExited)
+                    .replace("{agent}", agent.as_str()),
+            };
+            std::iter::once(headline)
+                .chain(agents.iter().map(line))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        AgentControlResponse::Result { result } => result.text.clone().unwrap_or_else(|| {
+            text.get(UiTextKey::CliLocalizationNoAgentReply)
+                .replace("{turn}", &result.turn_seq.to_string())
+                .replace("{state}", &protocol_word(&result.turn))
+        }),
+        AgentControlResponse::Interrupted { agent, confirmed } => text
+            .get(if *confirmed {
+                UiTextKey::CliLocalizationAgentInterrupted
+            } else {
+                UiTextKey::CliLocalizationAgentInterruptUnconfirmed
+            })
             .replace("{agent}", agent.as_str()),
     }
 }

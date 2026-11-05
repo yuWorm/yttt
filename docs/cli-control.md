@@ -112,6 +112,26 @@ yttt ctl agents assign --project PROJECT_ID --tab TAB_ID --pane PANE_ID --to TER
 yttt ctl agents assign --project PROJECT_ID --tab TAB_ID --pane PANE_ID --clear
 ```
 
+An orchestrator drives a turn and reads its outcome:
+
+```sh
+yttt ctl agents send --agent TERMINAL --text 'Now add tests'   # prints turn_seq_before
+yttt ctl agents wait --agent TERMINAL --until finished --after-turn 1 --timeout 300
+yttt ctl agents result --agent TERMINAL --json
+yttt ctl agents interrupt --agent TERMINAL
+```
+
+`send` pastes into a worker that reported a finished or idle turn and presses Enter, like a
+person typing; it refuses a busy worker with `not_ready`. Its answer carries the number of
+the worker's last turn: wait with `--after-turn` set to it, so a turn that finished before
+the input does not end the wait. `wait` takes up to 16 comma-separated handles and returns
+when one meets the condition (`matched`), ends (`exited`), or the timeout passes
+(`timed_out`, with the current states); `change` counts only changes after the wait began.
+A wait lasts at most 600 seconds; call it again to keep waiting. `result` reads the worker's
+last reply from its provider's transcript (Claude Code and Codex); for other providers, or
+before a reply exists, `source` is `unavailable`. `interrupt` presses Esc in a working Claude
+Code or Codex worker and reports whether its turn ended within `--timeout` (default 10 s).
+
 Ownership is kept with the layout and survives a Host restart. Every orchestrator request,
 allowed or refused, is recorded in the Host's audit log with the orchestrator's terminal.
 

@@ -198,6 +198,94 @@ fn orchestrator_commands_go_to_the_host_and_others_to_the_desktop() {
 }
 
 #[test]
+fn the_turn_commands_reach_the_host_with_their_defaults() {
+    let send = parse_control(&[
+        "agents",
+        "send",
+        "--agent",
+        "p:w:agent",
+        "--text",
+        "Add tests",
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(send.path, "/control/v1/agents/send");
+    assert_eq!(
+        send.body,
+        serde_json::json!({"agent": "p:w:agent", "text": "Add tests"})
+    );
+    // Without --agent, `agents send` still targets a pane through the desktop.
+    assert!(
+        parse_control(&["agents", "send", "--project", "p", "--text", "x"])
+            .unwrap()
+            .is_none()
+    );
+
+    let wait = parse_control(&["agents", "wait", "--agent", "p:a:agent, p:b:agent"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        wait.body,
+        serde_json::json!({
+            "agents": ["p:a:agent", "p:b:agent"],
+            "until": "finished",
+            "after_turn": null,
+            "timeout_seconds": 300
+        })
+    );
+    let ready = parse_control(&[
+        "agents",
+        "wait",
+        "--agent",
+        "p:a:agent",
+        "--until",
+        "ready",
+        "--after-turn",
+        "4",
+        "--timeout",
+        "0",
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(ready.body["until"], "ready");
+    assert_eq!(ready.body["after_turn"], 4);
+    assert_eq!(ready.body["timeout_seconds"], 0);
+
+    let interrupt = parse_control(&["agents", "interrupt", "--agent", "p:a:agent"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        interrupt.body,
+        serde_json::json!({"agent": "p:a:agent", "timeout_seconds": 10})
+    );
+    let result = parse_control(&["agents", "result", "--agent", "p:a:agent", "--json"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.path, "/control/v1/agents/result");
+    assert!(result.json);
+
+    for (words, message) in [
+        (vec!["agents", "wait"], "--agent"),
+        (
+            vec!["agents", "wait", "--agent", "a", "--until", "soon"],
+            "--until",
+        ),
+        (
+            vec!["agents", "wait", "--agent", "a", "--timeout", "601"],
+            "--timeout",
+        ),
+        (
+            vec!["agents", "wait", "--agent", "a", "--after-turn", "-1"],
+            "--after-turn",
+        ),
+        (vec!["agents", "send", "--agent", "a"], "exactly one"),
+    ] {
+        let error = parse_control(&words).unwrap_err();
+        assert!(error.contains(message), "{words:?}: {error}");
+    }
+}
+
+#[test]
 fn assigning_an_agent_names_one_orchestrator_or_clears_it() {
     let assign = |extra: &[&str]| {
         let mut words = vec![

@@ -70,6 +70,10 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `GetDocumentDraft`、`ReleaseDocument` 请求,`Document`/`DocumentDraft` 响应,
   `DocumentState { document, draft, lease }`、`DocumentLease { holder, epoch }` 与
   `ServerEvent::DocumentChanged(DocumentUpdate { workspace_id, state })`。
+  v22 内追加(未升版本):`AgentSnapshot.turn_seq`(`#[serde(default)]`,旧端读作 0),Agent 每开始一轮加一;
+  `PaneConfig` 追加 `role`(省略即 worker)与 `spawned_by`(省略即无),`NewTab::Agent` 追加同名字段,
+  `WorkspaceIntent::SetPaneOwner` 新意图(旧 Host 拒绝该意图)。编排者与 Host 之间的
+  `/control/v1/*` 是 hook listener 上的本机 HTTP JSON 接口,不经过 session 连接,不属于本样本。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

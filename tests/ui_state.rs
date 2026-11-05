@@ -150,6 +150,7 @@ fn agent_snapshot(turn_state: AgentTurnState) -> AgentSnapshot {
         generation: 1,
         process_state: AgentProcessState::Running,
         turn_state,
+        turn_seq: 0,
         waiting_reason: None,
         waiting_message: None,
         task: None,

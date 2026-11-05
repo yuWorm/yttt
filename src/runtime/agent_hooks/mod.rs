@@ -101,6 +101,7 @@ mod tests {
                 generation,
                 process_state: AgentProcessState::Running,
                 turn_state: AgentTurnState::Idle,
+                turn_seq: 0,
                 waiting_reason: None,
                 waiting_message: None,
                 task: None,

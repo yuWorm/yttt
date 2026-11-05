@@ -3268,6 +3268,7 @@ impl WorkbenchView {
                             generation: 1,
                             process_state: AgentProcessState::Running,
                             turn_state: turn,
+                            turn_seq: 0,
                             waiting_reason: None,
                             waiting_message: None,
                             task: AgentTask::new(task, AgentTaskSource::External),

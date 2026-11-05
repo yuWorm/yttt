@@ -187,6 +187,7 @@
       "session",
       "state_started_at",
       "task",
+      "turn_seq",
       "turn_state",
       "updated_at",
       "waiting_message",

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** P0、P1 已实现（见 §6 记录；推迟项在各条目中注明）；下一步 P2。§4 的开放问题已于 2026-11-05 按建议默认确认。
+**状态：** P0、P1、P2 已实现（见 §6 记录；推迟项在各条目中注明）；下一步 P3。§4 的开放问题已于 2026-11-05 按建议默认确认。
 
 **依据：** 2026-11-05 对 `yttt ctl`、Agent hook、调度中心与 C4 之后 Host 布局的代码梳理；`docs/cli-control.md`、`docs/host-client-architecture.md`、`docs/plans/2026-10-28-c4-host-owned-layout-design.md`。同类设计参考：Claude Code agent teams（lead + teammate，各占一个 pane，人可直接进入 teammate）、Codex app-server（`turn/start`、`turn/interrupt`、`turn/completed{status}`）、ACP（`session/prompt`、`session/cancel`、`session/update`）、cmux（终端 socket/CLI + hook 通知）。
 
@@ -176,29 +176,29 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 
 ## P2-1：turn 序号与事件流
 
-- [ ] 测试：reducer 在每次 `TurnStarted` 递增 `turn_seq`，`TurnFinished` 携带同一序号；Host 为每个 Agent 维护单调 `event_seq` 的有界环，游标过旧时返回 `cursor_expired` 与当前快照。
-- [ ] 实现：`events --follow` 以长轮询返回 NDJSON；事件包括 turn、waiting、control_changed、delivery 状态、process exit。
+- [x] 测试：reducer 在每次 `TurnStarted` 递增 `turn_seq`，`TurnFinished` 不改变它，恢复时保留；旧快照缺字段读作 0。
+- [ ] 推迟到 P3：带游标的事件环与 `events --follow`。P2 的 `wait` 直接轮询 pane 内的 Agent 快照（200 ms），足以闭环；事件流在 P3 需要 `control_changed` 时一起做。
 
 ## P2-2：`agents wait`
 
-- [ ] 测试：多个 Worker 任一满足条件即返回（含是哪个）；超时返回当前状态而非错误；`control_changed` 与进程退出总是立即返回；返回体为精简摘要。
-- [ ] 实现：基于 P2-1 游标；单次等待上限 600 s，超出由调用方再次调用。
+- [x] 测试：Worker 完成编号大于 `after_turn` 的一轮时返回 `matched`（之前已完成的轮不算）；超时返回当前状态而非错误；Worker 进程或 pane 结束返回 `exited`；无权 Worker、超过 600 s 被拒；`change` 只对等待开始后的变化生效。`wait` 与 `interrupt` 在 hook listener 上各占独立线程（上限 32），去掉该分支后"阻塞请求不占用 hook worker"测试失败。
+- [x] 实现：`--agent A,B`（最多 16 个）、`--until finished|waiting|ready|change`、`--after-turn N`、`--timeout`（默认 300，上限 600）。`control_changed` 随 P3。
 
 ## P2-3：投递与关联
 
-- [ ] 测试：Host 写入的编排输入在 `UserPromptSubmit` 文本规范化后哈希一致时绑定 turn_seq；文本被 provider 改写（去尾空白、合并换行）仍匹配；无 prompt 字段的 provider 得 `unconfirmed`；上一轮结束后若有人类输入，`send` 得 `human_input_pending` 且不写入。
-- [ ] 实现：Host 侧直接写 PTY（K7），粘贴编码沿用终端当前模式；投递记录 `{id, text_hash, written_at, generation, state}`；`--queue` 进入每 Worker 队列，条件满足时由 Host 写出。
+- [x] 实现：Host 侧直接写 PTY（K7），按终端当前 bracketed-paste 模式编码，末尾加 Enter；只在 Agent 报告 running 且 idle/completed/failed/interrupted 时接受，否则 `not_ready`；返回 `turn_seq_before`，配合 `wait --after-turn` 关联本次输入引起的轮次。
+- [ ] 推迟：按 `UserPromptSubmit` 文本哈希的精确关联（`after_turn` 已足够闭环，精确关联在人机混用时才有区别，随 P3）；`human_input_pending` 随 P3-1 输入来源；`--queue` 随 P3-2。
 
 ## P2-4：结果统一
 
-- [ ] 测试：Claude、Codex 各用真实 hook 夹具与 transcript 样本得到最终回复 Message；payload 自带最后消息时优先；transcript 不可读时降级到视口并标 `source: viewport`；超长截断标 `truncated`。
-- [ ] 实现：provider 适配新增 `final_message(payload, metadata)`；`agents result --turn N` 读取对应 Message 与该轮元数据（outcome、耗时、token、动作数）。
-- [ ] 记录：各 provider 实际支持级别写入 `docs/usage.md` 表格，不支持的明确标注。
+- [x] 测试：Claude transcript 取最近一次人类 prompt 之后助手写下的最后一个文本块（跳过 thinking、tool_use、tool_result）；Codex 优先 `task_complete.last_agent_message`，旧版本退回助手 `output_text`，新任务开始后清空；未知 provider、文件缺失、尾部截断行均不误报；结果超过 64 KiB 截断并标 `truncated`。
+- [x] 实现：`agents result --agent` 从快照中的 `transcript_path` 读取文件末尾 8 MiB，返回 `{turn_seq, turn, text, truncated, source}`；读不到时 `source: unavailable`。
+- [ ] 推迟：视口兜底、按 `--turn N` 取历史轮次、SSH 项目（transcript 在远端，当前为 `unavailable`）；provider 支持表随 P4-3 文档。
 
 ## P2-5：打断
 
-- [ ] 测试：按 provider 映射写入打断按键后，在期限内收到 `Interrupted` 返回 `interrupted`；未收到返回 `not_confirmed` 并保持 Worker；`--terminate-after` 到期后关闭 pane 并记 `terminated`。
-- [ ] 实现：映射表放在 `BuiltinAgent`；对每个 provider 记录验证过的 CLI 版本。
+- [x] 实现：claude、codex 写入 Esc，其余 provider 返回 `invalid_request`（不盲发未知按键）；Agent 不在轮次中返回 `not_ready`；期限内轮次结束得 `confirmed: true`，否则 `false`，Worker 保持不动。
+- [ ] 推迟：`--terminate-after`；用真实 Claude/Codex 记录验证过的版本（本阶段冒烟用模拟 provider，见 §6）。
 
 ---
 
@@ -283,3 +283,4 @@ queued ──人撤回 / Worker 退出──▶ cancelled
 |---|---|---|
 | 2026-11-05 | P0-1～P0-3 | `yttt-protocol::agent` 集中定义 Host 注入的 5 个变量（替换 Host、pane_launch、SSH、桌面 4 处副本）与 `AgentHookScope::encode/decode`；每个终端注入 `YTTT_SELF`；`PaneConfig.role`（worker 不序列化，旧形状不变）、`NewTab::Agent.role`、`CreateAgent.role`；`pane_runtime` 按 pane 角色签发控制 token（HMAC，`control:` 域前缀与 hook token 区分），Host 记录编排者 scope，重启或角色变更即失效；hook listener 新增 `/control/v1/whoami`；`yttt ctl whoami [--json]` 与 `agents create --role`。个人布局模板不携带角色。测试：`agent_hooks` 新增 3 例（注入、凭证鉴权含重启失效、真实 HTTP 路由），`agent_control_client` 4 例，`cli_control` 与 `host_workspace` 各 1 例；CI 同款 16 个包 `cargo test` 1648 通过、0 失败，clippy `-D warnings` 与 fmt 通过（`--workspace` 下 vendor `gpui-markdown-editor` 的 lib test 在 master 上即无法编译，与本改动无关）。真实桌面冒烟（隔离 `YTTT_PROFILE_ROOT`；profile 放在 worktree `tmp/`，放 scratchpad 时路径超过 Unix socket 长度上限）：ctl 新建 shell tab，pane 内环境含 `YTTT_SELF`，`whoami --json` 返回 pane、worker、`not_granted`，中文文本输出正常；pane 外返回 `external`；provider 配置文件前后校验和一致。未做：编排者 pane 的端到端冒烟——Agent pane 启动会安装 provider hook，P1 冒烟按 AGENTS.md 记录并还原 hook 后再做；P0-2/P0-3 的两条验收依赖 P1 的 spawn 与审计。 |
 | 2026-11-05 | P1 | `PaneConfig.spawned_by` 与 `NewTab::Agent.spawned_by`、`WorkspaceIntent::SetPaneOwner`；Host `agent_control`（hook listener 鉴权后经 `AgentControlHandler` 转入，进入 Host tokio 上下文执行）：`/control/v1/agents/spawn`、`/list`、`/close`，按 `spawned_by` 检查归属并写审计；关闭唯一 pane 时关闭其 tab，项目最后一个终端 tab 拒绝关闭。`WorkspaceService::locate_pane`/`panes_where`。CLI：`agents spawn`、`agents list --mine`、`agents close --agent`（编排者 pane 直连 Host，非编排者得 `forbidden`），`agents assign --to/--clear`（经桌面）。测试：`agent_control` 4 例、hook 转发 1 例、客户端 1 例、CLI 解析 2 例、`host_workspace` 1 例、桌面 `cli_control_creates_splits…` 增加 assign 断言。真实桌面冒烟（隔离 profile；临时 `HOME`，`PATH` 前置假 `claude`/`codex` 脚本以免 provider hook 写入真实配置）：编排者 `whoami` 得 `verified`；spawn 出 W1，pane 内可见假 codex 收到参数；worker pane 内 spawn 得 `forbidden`；关闭人创建的 Agent 得 `forbidden`，人 assign 后出现在 `list --mine`；重启桌面与 Host 后角色、归属保留，`whoami` 仍 `verified`，close W1 后 tab 移除、Host 子进程 4→3。真实 provider 配置校验和前后一致；hook 只写入临时 HOME，随冒烟目录删除。观察：重启后约数秒内 pane 列表为 `starting`、`panes send` 得 `not_ready`，之后恢复，与本改动无关，未深究。 |
+| 2026-11-05 | P2 | `AgentSnapshot.turn_seq`；Host `/control/v1/agents/send`、`/wait`、`/result`、`/interrupt`（后两类阻塞请求在 hook listener 上各占独立线程，上限 32）；`agent_control/transcript.rs` 读取 Claude/Codex 会话记录末尾的最后回复；新错误码 `not_ready`（HTTP 409，CLI 显示为忙碌）。CLI：`agents send --agent`（不带 `--agent` 仍走桌面）、`agents wait`、`agents result`、`agents interrupt`。测试：reducer 1 例、`agent_control` 4 例、transcript 3 例、hook 线程 1 例（已确认去掉修复后失败）、CLI 解析 1 例。真实桌面冒烟（隔离 profile、临时 HOME）：用 Python 写的模拟 Claude（向真实 hook endpoint 发送 Claude 格式的 SessionStart/UserPromptSubmit/Stop，写 Claude 格式 transcript，读 bracketed paste，Esc 视为打断）作 Worker，编排者为 shell。spawn 带初始任务 → `wait` 得 `completed #1` → `result` 得 "Done: fix the parser" → `send` 返回 `turn_seq_before: 1` → `wait --after-turn 1` 得 `completed #2` → `result` 得第二轮回复；长任务进行中 `send` 得忙碌；`interrupt` 得 `confirmed: true`，状态 `interrupted #3`。Worker 终端可见全部 prompt、回复与打断。真实 provider 配置前后一致。未做：真实 Claude/Codex 的验证（需在真实 HOME 安装开发版 hook，会覆盖正式版写入的 hook 配置，需先备份并征得同意）。 |
