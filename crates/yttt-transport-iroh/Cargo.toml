@@ -1,0 +1,15 @@
+[package]
+name = "yttt-transport-iroh"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Pinned: iroh's API moves between minor releases; only this crate names its types.
+iroh = { version = "=1.4.1", default-features = false, features = ["tls-aws-lc-rs", "portmapper", "fast-apple-datapath"] }
+parking_lot = "0.12"
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
+yttt-protocol = { path = "../yttt-protocol" }
+yttt-transport = { path = "../yttt-transport" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -12,6 +12,7 @@ members = [
     "crates/yttt-transport",
     "crates/yttt-transport-local",
     "crates/yttt-transport-tls",
+    "crates/yttt-transport-iroh",
     "crates/yttt-core",
     "crates/yttt-terminal-core",
     "crates/yttt-ssh",

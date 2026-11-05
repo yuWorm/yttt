@@ -1,0 +1,192 @@
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use yttt_protocol::EndpointKey;
+use yttt_transport::TransportConnector as _;
+use yttt_transport_iroh::{
+    EndpointConfig, IrohConnector, IrohEndpoint, OpenGate, PathKind, PeerAddr, PeerGate,
+    endpoint_key,
+};
+
+const ALPN: &[u8] = b"yttt/test/1";
+const HOST_SECRET: [u8; 32] = [11; 32];
+const CLIENT_SECRET: [u8; 32] = [12; 32];
+
+/// Admits the peers in its set, which tests change while connections are open.
+#[derive(Default)]
+struct ListGate(Mutex<HashSet<EndpointKey>>);
+
+impl ListGate {
+    fn allow(&self, peer: EndpointKey) {
+        self.0.lock().unwrap().insert(peer);
+    }
+    fn deny(&self, peer: EndpointKey) {
+        self.0.lock().unwrap().remove(&peer);
+    }
+}
+
+impl PeerGate for ListGate {
+    fn admit(&self, peer: EndpointKey, alpn: &[u8]) -> bool {
+        alpn == ALPN && self.0.lock().unwrap().contains(&peer)
+    }
+}
+
+async fn host(gate: Arc<ListGate>) -> IrohEndpoint {
+    IrohEndpoint::bind(EndpointConfig {
+        secret: HOST_SECRET,
+        relay: None,
+        alpns: vec![ALPN.to_vec()],
+        gate,
+        bind_addr: Some("127.0.0.1:0".parse().unwrap()),
+    })
+    .await
+    .unwrap()
+}
+
+async fn client() -> IrohEndpoint {
+    IrohEndpoint::bind(EndpointConfig {
+        secret: CLIENT_SECRET,
+        relay: None,
+        alpns: Vec::new(),
+        gate: Arc::new(OpenGate),
+        bind_addr: Some("127.0.0.1:0".parse().unwrap()),
+    })
+    .await
+    .unwrap()
+}
+
+fn address_of(endpoint: &IrohEndpoint) -> PeerAddr {
+    PeerAddr {
+        key: endpoint.id(),
+        relay_url: None,
+        direct_addrs: endpoint.direct_addrs(),
+    }
+}
+
+/// Echoes every stream of every admitted connection until the endpoint closes.
+fn serve_echo(endpoint: IrohEndpoint) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(connection) = endpoint.accept().await {
+            tokio::spawn(async move {
+                while let Some(mut stream) = connection.accept_stream().await {
+                    tokio::spawn(async move {
+                        let mut buffer = [0_u8; 64];
+                        while let Ok(read) = stream.read(&mut buffer).await {
+                            if read == 0 || stream.write_all(&buffer[..read]).await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    })
+}
+
+async fn echo(
+    stream: &mut yttt_transport::TransportStream,
+    text: &[u8],
+) -> std::io::Result<Vec<u8>> {
+    stream.write_all(text).await?;
+    let mut reply = vec![0_u8; text.len()];
+    tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut reply))
+        .await
+        .map_err(|_| std::io::Error::other("echo timed out"))??;
+    Ok(reply)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_admitted_peer_reaches_the_host_directly_on_several_streams() {
+    let gate = Arc::new(ListGate::default());
+    gate.allow(endpoint_key(&CLIENT_SECRET));
+    let host = host(gate).await;
+    assert_eq!(host.id(), endpoint_key(&HOST_SECRET));
+    let server = serve_echo(host.clone());
+    let connector = IrohConnector::new(client().await, address_of(&host), ALPN);
+
+    let mut first = connector.connect().await.unwrap();
+    let mut second = connector.connect().await.unwrap();
+    assert_eq!(echo(&mut first, b"one").await.unwrap(), b"one");
+    assert_eq!(echo(&mut second, b"two").await.unwrap(), b"two");
+    assert_eq!(connector.path_kind().await, PathKind::Direct);
+
+    host.close().await;
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_the_gate_refuses_gets_no_stream() {
+    let host = host(Arc::new(ListGate::default())).await;
+    let server = serve_echo(host.clone());
+    let connector = IrohConnector::new(client().await, address_of(&host), ALPN);
+
+    let refused = async {
+        let mut stream = connector.connect().await?;
+        echo(&mut stream, b"hello")
+            .await
+            .map_err(yttt_transport::TransportError::Io)
+    };
+    assert!(refused.await.is_err());
+
+    host.close().await;
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_a_peer_closes_its_connection_and_refuses_new_streams() {
+    let gate = Arc::new(ListGate::default());
+    let device = endpoint_key(&CLIENT_SECRET);
+    gate.allow(device);
+    let host = host(gate.clone()).await;
+    let server = serve_echo(host.clone());
+    let client = client().await;
+    let connection = client.connect(&address_of(&host), ALPN).await.unwrap();
+    let mut stream = connection.open_stream().await.unwrap();
+    assert_eq!(echo(&mut stream, b"before").await.unwrap(), b"before");
+
+    gate.deny(device);
+    assert_eq!(host.close_peer(device), 1);
+    tokio::time::timeout(Duration::from_secs(10), connection.closed())
+        .await
+        .expect("the Host closed the connection");
+    assert!(echo(&mut stream, b"after").await.is_err());
+    let reconnect = async {
+        let connection = client.connect(&address_of(&host), ALPN).await?;
+        let mut stream = connection.open_stream().await?;
+        echo(&mut stream, b"again")
+            .await
+            .map_err(yttt_transport::TransportError::Io)
+    };
+    assert!(reconnect.await.is_err());
+
+    host.close().await;
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_stream_rechecks_the_gate_on_a_live_connection() {
+    let gate = Arc::new(ListGate::default());
+    let device = endpoint_key(&CLIENT_SECRET);
+    gate.allow(device);
+    let host = host(gate.clone()).await;
+    let server = serve_echo(host.clone());
+    let client = client().await;
+    let connection = client.connect(&address_of(&host), ALPN).await.unwrap();
+    let mut first = connection.open_stream().await.unwrap();
+    assert_eq!(echo(&mut first, b"first").await.unwrap(), b"first");
+
+    // Revoked in the gate only; the connection itself was never closed.
+    gate.deny(device);
+    let mut second = connection.open_stream().await.unwrap();
+    assert!(echo(&mut second, b"second").await.is_err());
+    tokio::time::timeout(Duration::from_secs(10), connection.closed())
+        .await
+        .expect("the Host closed the connection");
+
+    host.close().await;
+    server.await.unwrap();
+}
