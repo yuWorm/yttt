@@ -2,8 +2,7 @@ use std::process::ExitCode;
 
 use yttt_control::{Control, ControlConfig};
 
-const USAGE: &str =
-    "usage: yttt-control --config <path.toml>\n       yttt-control public-key <ticket_secret hex>";
+const USAGE: &str = "usage: yttt-control --config <path.toml>\n       yttt-control public-key <ticket_secret hex>\n       yttt-control promote-admin --config <path.toml> <email>";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -16,6 +15,37 @@ async fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let path = match (args.next().as_deref(), args.next()) {
         (Some("--config"), Some(path)) => path,
+        // Makes an existing account an administrator.
+        (Some("promote-admin"), Some(flag)) if flag == "--config" => {
+            let (Some(path), Some(email)) = (args.next(), args.next()) else {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            };
+            let config = match std::fs::read_to_string(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|text| ControlConfig::from_toml(&text).map_err(|error| error.to_string()))
+            {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            return match yttt_control::promote_admin(&config, &email).await {
+                Ok(true) => {
+                    println!("{email} is now an administrator");
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("no account has the email {email}");
+                    ExitCode::FAILURE
+                }
+                Err(error) => {
+                    eprintln!("yttt-control: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         // Prints the key relay nodes list in `ticket_keys`.
         (Some("public-key"), Some(secret)) => {
             let Some(secret) = yttt_relay_ticket::parse_key(&secret) else {

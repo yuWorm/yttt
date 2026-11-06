@@ -5,8 +5,11 @@
 //! writes a Host's device list, and nothing it signs lets anyone reach a Host.
 //! A compromised control plane can deny or meter service, nothing more.
 
+mod admin;
 mod api;
+mod auth;
 mod config;
+mod web;
 
 use std::{
     net::SocketAddr,
@@ -18,7 +21,7 @@ use axum::{
     Json, Router,
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{any, delete, get, post},
 };
 use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -26,7 +29,7 @@ use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use yttt_relay_ticket::TicketSigner;
 use zeroize::Zeroizing;
 
-pub use config::{ControlConfig, NodeEntry, PlanConfig};
+pub use config::{ControlConfig, NodeEntry, PlanConfig, SignupConfig};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
@@ -47,6 +50,7 @@ pub(crate) struct AppState {
     pool: PgPool,
     signer: TicketSigner,
     config: ControlConfig,
+    limits: auth::Limits,
 }
 
 /// A running control plane.
@@ -86,14 +90,18 @@ impl Control {
             pool,
             signer,
             config,
+            limits: auth::Limits::default(),
         }));
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
-            let _ = axum::serve(listener, router)
-                .with_graceful_shutdown(async {
-                    let _ = stopped.await;
-                })
-                .await;
+            let _ = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await;
         });
         Ok(Self {
             addr,
@@ -131,7 +139,25 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/devices/{endpoint_id}", delete(api::remove_device))
         .route("/v1/tickets", post(api::issue_ticket))
-        .route("/v1/nodes/{node_id}/usage", post(api::node_usage));
+        .route("/v1/nodes/{node_id}/usage", post(api::node_usage))
+        .route("/v1/accounts", post(web::sign_up))
+        .route("/v1/web/session", post(web::sign_in).delete(web::sign_out))
+        .route("/v1/accounts/me/usage", get(web::usage_history))
+        .route("/v1/accounts/me/password", post(web::change_password))
+        .route("/v1/admin/overview", get(admin::overview))
+        .route("/v1/admin/accounts", get(admin::accounts))
+        .route(
+            "/v1/admin/accounts/{account_id}",
+            get(admin::account).patch(admin::change_account),
+        )
+        .route(
+            "/v1/admin/accounts/{account_id}/devices/{endpoint_id}",
+            delete(admin::remove_device),
+        )
+        .route("/v1/admin/plans", get(admin::plans))
+        .route("/v1/admin/audit", get(admin::audit_log))
+        // Unknown API paths answer as the API, never with the console page.
+        .route("/v1/{*rest}", any(|| async { Failure::not_found() }));
     if state.config.dev_mode {
         router = router
             .route("/v1/dev/accounts", post(api::create_account))
@@ -140,10 +166,68 @@ fn router(state: Arc<AppState>) -> Router {
                 post(api::set_suspended),
             );
     }
-    router.with_state(state)
+    if let Some(root) = state.config.web_root.clone() {
+        let index = root.join("index.html");
+        router = router.fallback_service(
+            tower_http::services::ServeDir::new(root)
+                .fallback(tower_http::services::ServeFile::new(index)),
+        );
+    }
+    router
+        .layer(axum::middleware::map_response(security_headers))
+        .with_state(state)
 }
 
-/// Makes the plan and node tables match the configuration.
+/// Locks pages down to this origin: scripts and styles from here only, no
+/// framing, no referrer to other sites.
+async fn security_headers(mut response: Response) -> Response {
+    use axum::http::{HeaderValue, header};
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    let html = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if html {
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+                 img-src 'self' data:; font-src 'self' data:; connect-src 'self'; \
+                 frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            ),
+        );
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
+    response
+}
+
+/// Makes the account with `email` an administrator; the first administrator
+/// can only come from here.
+pub async fn promote_admin(config: &ControlConfig, email: &str) -> Result<bool, StartError> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&config.database_url)
+        .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
+    let updated = sqlx::query("UPDATE accounts SET role = 'admin' WHERE email = $1")
+        .bind(email.trim().to_ascii_lowercase())
+        .execute(&pool)
+        .await?
+        .rows_affected();
+    Ok(updated == 1)
+}
+
+/// Makes the plan table match the configuration, and adds configured nodes
+/// the database does not have yet. Nodes it has are managed in the console
+/// and left alone: their tokens rotate and their addresses change there.
 async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     for plan in &config.plans {
@@ -164,12 +248,14 @@ async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> 
     }
     for node in &config.nodes {
         sqlx::query(
-            "INSERT INTO nodes (id, url, token_hash) VALUES ($1, $2, $3)
-             ON CONFLICT (id) DO UPDATE SET url = $2, token_hash = $3",
+            "INSERT INTO nodes (id, url, token_hash, name, state, created_unix, enrolled_unix)
+             VALUES ($1, $2, $3, $1, 'active', $4, $4)
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind(&node.id)
         .bind(&node.url)
         .bind(sha256(node.token.as_bytes()))
+        .bind(clamp_i64(now_unix()))
         .execute(&mut *tx)
         .await?;
     }
@@ -193,6 +279,15 @@ impl Failure {
     }
     pub(crate) fn not_found() -> Self {
         Self(StatusCode::NOT_FOUND, "not found")
+    }
+    pub(crate) fn unavailable(reason: &'static str) -> Self {
+        Self(StatusCode::SERVICE_UNAVAILABLE, reason)
+    }
+    pub(crate) fn too_many() -> Self {
+        Self(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many attempts; try again shortly",
+        )
     }
 }
 

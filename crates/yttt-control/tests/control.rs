@@ -39,6 +39,7 @@ fn now() -> u64 {
 
 struct Harness {
     control: Control,
+    config: ControlConfig,
     http: reqwest::Client,
     base: String,
 }
@@ -55,8 +56,17 @@ impl Harness {
         let admin = sqlx_admin(&server).await;
         sqlx_execute(&admin, &format!("CREATE DATABASE {name}")).await;
         let (prefix, _) = server.rsplit_once('/').unwrap();
-        let control = Control::spawn(ControlConfig {
+        let config = ControlConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
+            public_url: None,
+            web_root: None,
+            relay_binaries_dir: None,
+            trusted_proxy: false,
+            signup: Some(yttt_control::SignupConfig {
+                enabled: true,
+                plan: "basic".into(),
+                node: NODE.into(),
+            }),
             database_url: format!("{prefix}/{name}"),
             ticket_secret: yttt_relay_ticket::hex(&[1; 32]),
             ticket_ttl_secs: 30 * 24 * 3600,
@@ -78,12 +88,12 @@ impl Harness {
                     token: (*token).into(),
                 })
                 .collect(),
-        })
-        .await
-        .unwrap();
+        };
+        let control = Control::spawn(config.clone()).await.unwrap();
         let base = format!("http://{}", control.addr());
         Self {
             control,
+            config,
             http: reqwest::Client::new(),
             base,
         }
@@ -205,6 +215,7 @@ impl Harness {
             &format!("/v1/nodes/{NODE}/usage"),
             Some(token),
             &UsageReport {
+                version: None,
                 accounts: usage
                     .iter()
                     .map(|(account_id, upstream_bytes, devices)| AccountUsage {
@@ -396,9 +407,10 @@ async fn a_ticket_is_issued_only_to_a_registered_device_and_verifies_on_the_node
             &SetSuspended { suspended: true },
         )
         .await;
+    // Suspension ends the account's sessions, so the device cannot even ask.
     assert_eq!(
         harness.ticket(&session, alice, &LAPTOP).await.unwrap_err(),
-        StatusCode::FORBIDDEN
+        StatusCode::UNAUTHORIZED
     );
     harness.control.shutdown().await;
 }
@@ -556,6 +568,7 @@ async fn a_node_cannot_bill_or_probe_accounts_of_another_node() {
             "/v1/nodes/other-1/usage",
             Some("other-token"),
             &UsageReport {
+                version: None,
                 accounts: vec![AccountUsage {
                     account_id: alice,
                     upstream_bytes: MONTHLY_BYTES * 10,
@@ -579,4 +592,277 @@ async fn a_node_cannot_bill_or_probe_accounts_of_another_node() {
         "another node's report billed nothing"
     );
     harness.control.shutdown().await;
+}
+
+/// A browser: keeps the session cookie and may send the console header.
+struct Browser<'a> {
+    harness: &'a Harness,
+    cookie: Option<String>,
+}
+
+impl Browser<'_> {
+    async fn send(
+        &mut self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        console_header: bool,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = self
+            .harness
+            .http
+            .request(method, format!("{}{path}", self.harness.base));
+        if let Some(cookie) = &self.cookie {
+            request = request.header("cookie", cookie);
+        }
+        if console_header {
+            request = request.header("x-yttt-web", "1");
+        }
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request.send().await.unwrap();
+        if let Some(set) = response.headers().get("set-cookie") {
+            let pair = set.to_str().unwrap().split(';').next().unwrap().to_string();
+            self.cookie = (!pair.ends_with('=')).then_some(pair);
+        }
+        let status = response.status();
+        let body = response.json().await.unwrap_or(serde_json::Value::Null);
+        (status, body)
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_browser_signs_up_and_keeps_a_cookie_session_that_forgery_cannot_use() {
+    let harness = Harness::start().await;
+    let mut browser = Browser {
+        harness: &harness,
+        cookie: None,
+    };
+    let signup = serde_json::json!({"email": "web@example.com", "password": "correct horse"});
+    let (status, _) = browser
+        .send(
+            reqwest::Method::POST,
+            "/v1/accounts",
+            Some(signup.clone()),
+            false,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "sign-up needs the console header"
+    );
+    let (status, body) = browser
+        .send(reqwest::Method::POST, "/v1/accounts", Some(signup), true)
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["role"], "user");
+    let cookie = browser.cookie.clone().expect("signing up opens a session");
+    assert!(cookie.starts_with("yttt_session="));
+
+    let (status, me) = browser
+        .send(reqwest::Method::GET, "/v1/accounts/me", None, false)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["plan"], "basic");
+    let (status, usage) = browser
+        .send(reqwest::Method::GET, "/v1/accounts/me/usage", None, false)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(usage.as_array().unwrap().len(), 1);
+
+    // A cross-site page can make the browser send the cookie, not the header.
+    let change = serde_json::json!({"current": "correct horse", "new": "battery staple"});
+    let (status, _) = browser
+        .send(
+            reqwest::Method::POST,
+            "/v1/accounts/me/password",
+            Some(change.clone()),
+            false,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = browser
+        .send(
+            reqwest::Method::POST,
+            "/v1/accounts/me/password",
+            Some(change),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = browser
+        .send(reqwest::Method::DELETE, "/v1/web/session", None, true)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let mut stale = Browser {
+        harness: &harness,
+        cookie: Some(cookie),
+    };
+    let (status, _) = stale
+        .send(reqwest::Method::GET, "/v1/accounts/me", None, false)
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "signing out ends the session"
+    );
+    let login = serde_json::json!({"email": "web@example.com", "password": "battery staple"});
+    let (status, _) = browser
+        .send(reqwest::Method::POST, "/v1/web/session", Some(login), true)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn guessing_passwords_is_slowed_for_every_login_door() {
+    let harness = Harness::start().await;
+    harness.account("victim@example.com").await;
+    let mut statuses = Vec::new();
+    for _ in 0..8 {
+        statuses.push(
+            harness
+                .status(
+                    "/v1/sessions",
+                    None,
+                    &Login {
+                        email: "victim@example.com".into(),
+                        password: "wrong horse".into(),
+                    },
+                )
+                .await,
+        );
+    }
+    assert!(statuses.contains(&StatusCode::UNAUTHORIZED));
+    assert_eq!(statuses.last(), Some(&StatusCode::TOO_MANY_REQUESTS));
+    harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn only_administrators_manage_accounts_and_every_change_is_audited() {
+    let harness = Harness::start().await;
+    let (_, admin_token) = harness.account("admin@example.com").await;
+    let (bob, bob_token) = harness.account("bob@example.com").await;
+    let forbidden = harness
+        .http
+        .get(format!("{}/v1/admin/overview", harness.base))
+        .bearer_auth(&admin_token)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(forbidden, StatusCode::FORBIDDEN);
+    assert!(
+        yttt_control::promote_admin(&harness.config, "Admin@Example.com")
+            .await
+            .unwrap()
+    );
+    let admin = |method: reqwest::Method, path: &str| {
+        harness
+            .http
+            .request(method, format!("{}{path}", harness.base))
+            .bearer_auth(&admin_token)
+    };
+    let overview: serde_json::Value = admin(reqwest::Method::GET, "/v1/admin/overview")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(overview["accounts"], 2);
+    assert_eq!(overview["nodes"][0]["id"], NODE);
+    let page: serde_json::Value = admin(reqwest::Method::GET, "/v1/admin/accounts?q=BOB")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["accounts"][0]["email"], "bob@example.com");
+
+    let me: AccountView = harness.get("/v1/accounts/me", &admin_token).await.unwrap();
+    let demote_self = admin(
+        reqwest::Method::PATCH,
+        &format!("/v1/admin/accounts/{}", me.account_id),
+    )
+    .json(&serde_json::json!({"role": "user"}))
+    .send()
+    .await
+    .unwrap()
+    .status();
+    assert_eq!(demote_self, StatusCode::FORBIDDEN);
+
+    let suspended = admin(reqwest::Method::PATCH, &format!("/v1/admin/accounts/{bob}"))
+        .json(&serde_json::json!({"suspended": true}))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(suspended, StatusCode::NO_CONTENT);
+    assert_eq!(
+        harness
+            .get::<AccountView>("/v1/accounts/me", &bob_token)
+            .await
+            .unwrap_err(),
+        StatusCode::UNAUTHORIZED,
+        "suspension ends the account's sessions"
+    );
+    let audit: serde_json::Value = admin(reqwest::Method::GET, "/v1/admin/audit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(audit[0]["action"], "suspend");
+    assert_eq!(audit[0]["admin_email"], "admin@example.com");
+    harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_disabled_node_drops_its_devices_and_restarts_keep_managed_nodes() {
+    let harness = Harness::start().await;
+    let (alice, _) = harness.account("alice@example.com").await;
+    let pool = sqlx::PgPool::connect(&harness.config.database_url)
+        .await
+        .unwrap();
+    sqlx::raw_sql(&format!(
+        "UPDATE nodes SET state = 'disabled' WHERE id = '{NODE}'"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let reply = harness.report(NODE_TOKEN, &[(alice, 0)]).await.unwrap();
+    assert_eq!(reply.accounts[0].standing, Standing::Suspended);
+
+    // The token rotates in the database; restarting with the old seed keeps it.
+    sqlx::query("UPDATE nodes SET token_hash = $1, state = 'active'")
+        .bind(sha2_hex("rotated-token"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut config = harness.config.clone();
+    config.listen = "127.0.0.1:0".parse().unwrap();
+    let restarted = Control::spawn(config).await.unwrap();
+    assert_eq!(
+        harness.report(NODE_TOKEN, &[(alice, 0)]).await.unwrap_err(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(harness.report("rotated-token", &[(alice, 0)]).await.is_ok());
+    restarted.shutdown().await;
+    harness.control.shutdown().await;
+}
+
+fn sha2_hex(text: &str) -> Vec<u8> {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(text.as_bytes()).to_vec()
 }

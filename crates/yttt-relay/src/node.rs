@@ -311,7 +311,10 @@ impl Node {
             }
         }
         accounts.sort_by_key(|usage| usage.account_id);
-        UsageReport { accounts }
+        UsageReport {
+            accounts,
+            version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        }
     }
 
     pub(crate) fn restore(&self, report: &UsageReport) {

@@ -4428,6 +4428,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10769,10 +10775,19 @@ checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "bitflags 2.13.0",
  "bytes",
+ "futures-core",
  "futures-util",
  "http",
  "http-body",
+ "http-body-util",
+ "http-range-header",
+ "httpdate",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
  "pin-project-lite",
+ "tokio",
+ "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",
@@ -13473,14 +13488,17 @@ dependencies = [
  "argon2 0.5.3",
  "axum",
  "data-encoding",
+ "parking_lot",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "yttt-relay-ticket",

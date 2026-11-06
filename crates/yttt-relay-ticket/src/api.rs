@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageReport {
     pub accounts: Vec<AccountUsage>,
+    /// The node's software version, shown in the console.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +171,9 @@ pub struct AccountView {
     pub suspended: bool,
     pub devices: u32,
     pub max_devices: u32,
+    /// `user` or `admin`.
+    #[serde(default)]
+    pub role: String,
 }
 
 /// Development-only suspension switch.

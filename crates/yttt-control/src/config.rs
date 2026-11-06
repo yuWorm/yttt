@@ -7,6 +7,24 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct ControlConfig {
     pub listen: SocketAddr,
+    /// Where browsers and nodes reach the control plane, e.g.
+    /// `https://control.example.com`. Decides whether the session cookie is
+    /// `Secure`, and is the origin deploy commands download from.
+    #[serde(default)]
+    pub public_url: Option<String>,
+    /// The built web console; without it only the API is served.
+    #[serde(default)]
+    pub web_root: Option<std::path::PathBuf>,
+    /// Relay binaries the install script downloads, named
+    /// `yttt-relay-linux-<arch>`, with a `SHA256SUMS` file beside them.
+    #[serde(default)]
+    pub relay_binaries_dir: Option<std::path::PathBuf>,
+    /// Trust the last `X-Forwarded-For` hop as the client address: only behind
+    /// exactly one reverse proxy that sets it.
+    #[serde(default)]
+    pub trusted_proxy: bool,
+    #[serde(default)]
+    pub signup: Option<SignupConfig>,
     pub database_url: String,
     /// Hex Ed25519 secret that signs relay tickets. Its public key goes into
     /// every node's `ticket_keys`.
@@ -19,7 +37,18 @@ pub struct ControlConfig {
     #[serde(default)]
     pub dev_mode: bool,
     pub plans: Vec<PlanConfig>,
+    /// Seeds for a fresh database only; nodes are managed in the console
+    /// afterwards and never overwritten from here.
+    #[serde(default)]
     pub nodes: Vec<NodeEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignupConfig {
+    pub enabled: bool,
+    pub plan: String,
+    pub node: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -54,6 +83,13 @@ impl ControlConfig {
         Duration::from_secs(self.ticket_ttl_secs.clamp(3600, 365 * 24 * 3600))
     }
 
+    /// Whether browsers reach the console over HTTPS.
+    pub(crate) fn secure_cookies(&self) -> bool {
+        self.public_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("https://"))
+    }
+
     pub(crate) fn session_ttl(&self) -> Duration {
         Duration::from_secs(self.session_ttl_secs.max(60))
     }
@@ -64,6 +100,11 @@ impl std::fmt::Debug for ControlConfig {
         formatter
             .debug_struct("ControlConfig")
             .field("listen", &self.listen)
+            .field("public_url", &self.public_url)
+            .field("web_root", &self.web_root)
+            .field("relay_binaries_dir", &self.relay_binaries_dir)
+            .field("trusted_proxy", &self.trusted_proxy)
+            .field("signup", &self.signup)
             .field("database_url", &"[redacted]")
             .field("ticket_secret", &"[redacted]")
             .field("ticket_ttl_secs", &self.ticket_ttl_secs)

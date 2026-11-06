@@ -167,6 +167,11 @@ async fn paid_relay() -> (Control, RelayNode, String) {
     let node = RelayNode::spawn(node_config).await.unwrap();
     let control = Control::spawn(ControlConfig {
         listen: control_addr,
+        public_url: None,
+        web_root: None,
+        relay_binaries_dir: None,
+        trusted_proxy: false,
+        signup: None,
         database_url: format!("{prefix}/{name}"),
         ticket_secret: yttt_relay_ticket::hex(&ticket_secret),
         ticket_ttl_secs: 30 * 24 * 3600,

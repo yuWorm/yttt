@@ -1,15 +1,10 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
-use argon2::{
-    Argon2, PasswordHash, PasswordHasher as _, PasswordVerifier as _,
-    password_hash::{SaltString, rand_core::OsRng},
-};
 use axum::{
     Json,
-    extract::{FromRequestParts, Path, State},
-    http::{StatusCode, header::AUTHORIZATION, request::Parts},
+    extract::{Path, State},
+    http::{StatusCode, request::Parts},
 };
-use rand::RngCore as _;
 use sqlx::Row as _;
 use yttt_relay_ticket::{
     ProofPurpose, Ticket,
@@ -20,52 +15,19 @@ use yttt_relay_ticket::{
     },
 };
 
-use crate::{AppState, Failure, clamp_i64, month_of, now_unix, sha256};
+use crate::{
+    AppState, Failure,
+    auth::{self, AnySession, Attempt, Session},
+    clamp_i64, month_of, now_unix, sha256,
+    web::{check_password, normalize_email},
+};
 
 type AppResult<T> = Result<T, Failure>;
 type Shared = State<Arc<AppState>>;
 
-const MIN_PASSWORD_CHARS: usize = 8;
-const MAX_PASSWORD_BYTES: usize = 256;
-const MAX_EMAIL_BYTES: usize = 254;
 const MAX_LABEL_CHARS: usize = 64;
 /// More accounts than one node report may carry.
 const MAX_REPORTED_ACCOUNTS: usize = 100_000;
-
-/// Verified against when the email is unknown, so a login takes the same time
-/// whether or not the account exists.
-static DECOY_HASH: LazyLock<String> = LazyLock::new(|| hash_password("decoy password"));
-
-/// An account authenticated by its session token.
-pub(crate) struct Session {
-    account_id: i64,
-}
-
-impl FromRequestParts<Arc<AppState>> for Session {
-    type Rejection = Failure;
-
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> AppResult<Self> {
-        let token = bearer(parts).ok_or(Failure::UNAUTHORIZED)?;
-        let account_id: Option<i64> = sqlx::query_scalar(
-            "SELECT account_id FROM sessions WHERE token_hash = $1 AND expires_unix > $2",
-        )
-        .bind(sha256(token.as_bytes()))
-        .bind(clamp_i64(now_unix()))
-        .fetch_optional(&state.pool)
-        .await?;
-        account_id
-            .map(|account_id| Self { account_id })
-            .ok_or(Failure::UNAUTHORIZED)
-    }
-}
-
-fn bearer(parts: &Parts) -> Option<&str> {
-    let value = parts.headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    scheme
-        .eq_ignore_ascii_case("bearer")
-        .then_some(token.trim())
-}
 
 pub(crate) async fn create_account(
     State(state): Shared,
@@ -74,7 +36,7 @@ pub(crate) async fn create_account(
     let email = normalize_email(&request.email)?;
     check_password(&request.password)?;
     let password = request.password;
-    let hash = tokio::task::spawn_blocking(move || hash_password(&password))
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
         .await
         .expect("hashing never panics");
     let created: Result<i64, sqlx::Error> = sqlx::query_scalar(
@@ -119,51 +81,20 @@ pub(crate) async fn set_suspended(
     if updated == 0 {
         return Err(Failure::not_found());
     }
+    if request.suspended {
+        auth::end_sessions(&state, account_id, None).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn login(
     State(state): Shared,
+    _attempt: Attempt,
     Json(request): Json<Login>,
 ) -> AppResult<Json<SessionGranted>> {
-    if request.password.len() > MAX_PASSWORD_BYTES {
-        return Err(Failure::UNAUTHORIZED);
-    }
     let email = request.email.trim().to_ascii_lowercase();
-    let account = sqlx::query("SELECT id, password_hash FROM accounts WHERE email = $1")
-        .bind(&email)
-        .fetch_optional(&state.pool)
-        .await?;
-    let (account_id, hash) = match &account {
-        Some(row) => (
-            Some(row.get::<i64, _>("id")),
-            row.get::<String, _>("password_hash"),
-        ),
-        None => (None, DECOY_HASH.clone()),
-    };
-    let password = request.password;
-    let matches = tokio::task::spawn_blocking(move || verify_password(&password, &hash))
-        .await
-        .expect("verification never panics");
-    let Some(account_id) = account_id.filter(|_| matches) else {
-        return Err(Failure::UNAUTHORIZED);
-    };
-
-    let mut token = [0_u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut token);
-    let token = data_encoding::BASE64URL_NOPAD.encode(&token);
-    let expires_unix = now_unix() + state.config.session_ttl().as_secs();
-    sqlx::query("DELETE FROM sessions WHERE account_id = $1 AND expires_unix <= $2")
-        .bind(account_id)
-        .bind(clamp_i64(now_unix()))
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("INSERT INTO sessions (token_hash, account_id, expires_unix) VALUES ($1, $2, $3)")
-        .bind(sha256(token.as_bytes()))
-        .bind(account_id)
-        .bind(clamp_i64(expires_unix))
-        .execute(&state.pool)
-        .await?;
+    let account_id = auth::check_login(&state, &email, &request.password).await?;
+    let (token, expires_unix) = auth::open_session(&state, account_id).await?;
     Ok(Json(SessionGranted {
         token,
         account_id: account_id as u64,
@@ -171,7 +102,7 @@ pub(crate) async fn login(
     }))
 }
 
-pub(crate) async fn me(State(state): Shared, session: Session) -> AppResult<Json<AccountView>> {
+pub(crate) async fn me(State(state): Shared, session: AnySession) -> AppResult<Json<AccountView>> {
     let row = sqlx::query(
         "SELECT a.email, a.plan_id, a.node_id, n.url, a.suspended, p.monthly_bytes, p.max_devices,
                 COALESCE(u.upstream_bytes, 0) AS used,
@@ -197,6 +128,7 @@ pub(crate) async fn me(State(state): Shared, session: Session) -> AppResult<Json
         suspended: row.get("suspended"),
         devices: row.get::<i64, _>("devices") as u32,
         max_devices: row.get::<i32, _>("max_devices") as u32,
+        role: session.role,
     }))
 }
 
@@ -380,14 +312,41 @@ pub(crate) async fn node_usage(
     parts: Parts,
     Json(report): Json<UsageReport>,
 ) -> AppResult<Json<UsageReply>> {
-    let token = bearer(&parts).ok_or(Failure::UNAUTHORIZED)?;
-    let known: Option<Vec<u8>> = sqlx::query_scalar("SELECT token_hash FROM nodes WHERE id = $1")
+    let token = auth::bearer(&parts.headers).ok_or(Failure::UNAUTHORIZED)?;
+    let node = sqlx::query("SELECT token_hash, state FROM nodes WHERE id = $1")
         .bind(&node_id)
         .fetch_optional(&state.pool)
-        .await?;
+        .await?
+        .ok_or(Failure::UNAUTHORIZED)?;
+    // A node that has not enrolled has no token, and nothing matches it.
+    let known: Option<Vec<u8>> = node.get("token_hash");
     if known.is_none_or(|hash| hash != sha256(token.as_bytes())) {
         return Err(Failure::UNAUTHORIZED);
     }
+    // A disabled node is still answered, so its connected devices are told to
+    // leave rather than relayed unbilled until their tickets expire.
+    let disabled = node.get::<String, _>("state") == "disabled";
+    let connected: usize = report
+        .accounts
+        .iter()
+        .map(|usage| usage.endpoints.len())
+        .sum();
+    sqlx::query(
+        "UPDATE nodes SET last_report_unix = $2, last_connected_devices = $3,
+             version = COALESCE($4, version)
+         WHERE id = $1",
+    )
+    .bind(&node_id)
+    .bind(clamp_i64(now_unix()))
+    .bind(i32::try_from(connected).unwrap_or(i32::MAX))
+    .bind(
+        report
+            .version
+            .as_deref()
+            .map(|version| version.chars().take(64).collect::<String>()),
+    )
+    .execute(&state.pool)
+    .await?;
     if report.accounts.len() > MAX_REPORTED_ACCOUNTS {
         return Err(Failure::bad_request("too many accounts in one report"));
     }
@@ -452,7 +411,9 @@ pub(crate) async fn node_usage(
                 .iter()
                 .find(|row| row.get::<i64, _>("id") as u64 == usage.account_id);
             let standing = match row {
-                // Unknown or deleted accounts get nothing.
+                // Unknown or deleted accounts, and everyone on a disabled node,
+                // get nothing.
+                _ if disabled => Standing::Suspended,
                 None => Standing::Suspended,
                 Some(row) if row.get::<bool, _>("suspended") => Standing::Suspended,
                 Some(row) if row.get::<i64, _>("used") >= row.get::<i64, _>("monthly_bytes") => {
@@ -512,37 +473,4 @@ fn proven_device(
         .verify(purpose, session.account_id as u64, now_unix())
         .map_err(|_| Failure::forbidden("the device proof was rejected"))?;
     Ok(proof.endpoint_id)
-}
-
-fn normalize_email(email: &str) -> AppResult<String> {
-    let email = email.trim().to_ascii_lowercase();
-    let valid = email.len() <= MAX_EMAIL_BYTES
-        && email
-            .split_once('@')
-            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.'));
-    valid
-        .then_some(email)
-        .ok_or(Failure::bad_request("the email address is invalid"))
-}
-
-fn check_password(password: &str) -> AppResult<()> {
-    if password.chars().count() < MIN_PASSWORD_CHARS || password.len() > MAX_PASSWORD_BYTES {
-        return Err(Failure::bad_request("a password is 8 to 256 characters"));
-    }
-    Ok(())
-}
-
-fn hash_password(password: &str) -> String {
-    Argon2::default()
-        .hash_password(password.as_bytes(), &SaltString::generate(&mut OsRng))
-        .expect("default Argon2 parameters are valid")
-        .to_string()
-}
-
-fn verify_password(password: &str, hash: &str) -> bool {
-    PasswordHash::new(hash).is_ok_and(|hash| {
-        Argon2::default()
-            .verify_password(password.as_bytes(), &hash)
-            .is_ok()
-    })
 }
