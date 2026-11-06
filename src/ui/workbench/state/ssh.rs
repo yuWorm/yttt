@@ -158,6 +158,11 @@ pub(in super::super) struct RelayAccountPanelState {
     pub(in super::super) password_form: bool,
     /// A browser sign-in waits for the console; dropping this cancels it.
     pub(in super::super) browser_cancel: Option<flume::Sender<()>>,
+    /// The nodes the Host may move to, with its latency to each, once asked.
+    pub(in super::super) nodes: Option<Vec<yttt_protocol::remote_access::RelayNode>>,
+    /// The node list is shown; it opens by itself once the Host starts
+    /// using the account.
+    pub(in super::super) choosing_node: bool,
 }
 
 pub(in super::super) struct SshControllerState {

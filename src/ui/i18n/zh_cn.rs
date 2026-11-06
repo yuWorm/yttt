@@ -881,6 +881,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountUseBrowser => "改用浏览器登录",
         UiTextKey::RelayAccountBrowserTimedOut => "浏览器登录已超时，请重试。",
         UiTextKey::RelayAccountBrowserDenied => "已在浏览器中拒绝这次登录。",
+        UiTextKey::RelayAccountNode => "节点：{node}",
+        UiTextKey::RelayAccountChooseNode => "选择节点",
+        UiTextKey::RelayAccountNodeHint => {
+            "选择离这台电脑和常用设备都近的节点。连接这台电脑的设备会自动跟随，切换时远程会话会断开并自动重连。"
+        }
+        UiTextKey::RelayAccountNodeLatency => "{ms} ms",
+        UiTextKey::RelayAccountNodeNoAnswer => "无响应",
+        UiTextKey::RelayAccountNodeLoad => "负载 {percent}%",
+        UiTextKey::RelayAccountNodeFull => "已满",
+        UiTextKey::RelayAccountNodeUse => "使用",
+        UiTextKey::RelayAccountNodeCurrent => "当前",
+        UiTextKey::RelayAccountNodeLoading => "正在测量各节点…",
         UiTextKey::P2pPathConnecting => "连接中",
         UiTextKey::P2pPathDirect => "直连",
         UiTextKey::P2pPathRelay => "经 relay",

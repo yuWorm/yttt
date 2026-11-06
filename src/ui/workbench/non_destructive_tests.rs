@@ -309,6 +309,52 @@ fn the_relay_account_section_signs_in_then_shows_the_plan(cx: &mut TestAppContex
     cx.refresh().unwrap();
     cx.run_until_parked();
     assert!(cx.debug_bounds("relay-account-signed-in").is_some());
+    assert!(cx.debug_bounds("relay-account-node").is_none());
+
+    // The Host uses the account: its node shows, and the list to move to.
+    use yttt_protocol::remote_access::{
+        P2pStatus, RemoteAccessSettings, RemoteAccessState, RemoteAccessStatus,
+    };
+    root.update(cx, |root, cx| {
+        root.ssh.remote_access = Some(RemoteAccessStatus {
+            settings: RemoteAccessSettings::default(),
+            effective: RemoteAccessState::Disabled,
+            bound_address: None,
+            error: None,
+            clients: Vec::new(),
+            p2p: P2pStatus {
+                effective: RemoteAccessState::Listening,
+                endpoint_id: Some(yttt_protocol::EndpointKey([7; 32])),
+                error: None,
+                pairing: None,
+                relay_account: Some(Box::new(yttt_protocol::remote_access::RelayAccountStatus {
+                    control_url: "https://control.example".into(),
+                    account_id: 7,
+                    node_id: Some("tokyo-1".into()),
+                    ..Default::default()
+                })),
+            },
+        });
+        root.ssh.relay_account.choosing_node = true;
+        root.ssh.relay_account.nodes = Some(vec![
+            yttt_protocol::remote_access::RelayNode {
+                id: "tokyo-1".into(),
+                name: "Tokyo".into(),
+                latency_ms: Some(38),
+                ..Default::default()
+            },
+            yttt_protocol::remote_access::RelayNode {
+                id: "hk-1".into(),
+                name: "Hong Kong".into(),
+                full: true,
+                ..Default::default()
+            },
+        ]);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("relay-account-node").is_some());
 }
 
 #[gpui::test]

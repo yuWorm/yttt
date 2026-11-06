@@ -805,6 +805,9 @@ impl WorkbenchView {
                 }
             }
             RemoteAccessResponse::Devices(devices) => self.ssh.p2p.devices = devices.clone(),
+            RemoteAccessResponse::RelayNodes(nodes) => {
+                self.ssh.relay_account.nodes = Some(nodes.clone());
+            }
             RemoteAccessResponse::Status(status) => {
                 if !matches!(
                     status.p2p.pairing,

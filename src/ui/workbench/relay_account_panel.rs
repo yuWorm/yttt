@@ -75,6 +75,8 @@ impl WorkbenchView {
             .unwrap_or_default();
         let host_uses_account = p2p.relay_account.is_some();
         let p2p_listening = p2p.effective == RemoteAccessState::Listening;
+        let node_section =
+            (host_uses_account && p2p_listening).then(|| self.relay_node_section(&p2p, cx));
 
         let body = match display {
             None => {
@@ -283,6 +285,7 @@ impl WorkbenchView {
                                 .child(text.get(UiTextKey::RelayAccountHostNeedsP2p)),
                         )
                     })
+                    .children(node_section)
             }
         };
 
@@ -309,6 +312,172 @@ impl WorkbenchView {
             .when_some(error, |view, error| {
                 view.child(div().text_sm().text_color(theme.danger).child(error))
             })
+    }
+
+    /// The node this computer's Host relays through, and the nodes it may
+    /// move to with its latency to each.
+    fn relay_node_section(
+        &mut self,
+        p2p: &yttt_protocol::remote_access::P2pStatus,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let style = appearance.style;
+        let text = self.ui_text;
+        let busy = self.ssh.remote_access_busy;
+        let state = &mut self.ssh.relay_account;
+        if state.choosing_node && state.nodes.is_none() && !busy {
+            // Asked once per opening; the reply fills the list.
+            state.nodes = Some(Vec::new());
+            self.begin_remote_access_action(
+                Request::RemoteAccess(RemoteAccessRequest::ListRelayNodes),
+                cx,
+            );
+        }
+        let state = &self.ssh.relay_account;
+        let current = p2p
+            .relay_account
+            .as_ref()
+            .and_then(|account| account.node_id.clone())
+            .unwrap_or_default();
+        let nodes = state.nodes.clone().unwrap_or_default();
+        let name_of = |id: &str| {
+            nodes
+                .iter()
+                .find(|node| node.id == id)
+                .map(|node| {
+                    if node.region.is_empty() {
+                        node.name.clone()
+                    } else {
+                        format!("{} · {}", node.name, node.region)
+                    }
+                })
+                .unwrap_or_else(|| id.to_owned())
+        };
+        let mut section = div()
+            .debug_selector(|| "relay-account-node".into())
+            .flex()
+            .flex_col()
+            .gap(style.spacing.sm)
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(style.spacing.sm)
+                    .child(
+                        div().text_sm().child(
+                            text.get(UiTextKey::RelayAccountNode)
+                                .replace("{node}", &name_of(&current)),
+                        ),
+                    )
+                    .when(!state.choosing_node, |row| {
+                        row.child(
+                            yttt_button(
+                                "relay-account-choose-node",
+                                text.get(UiTextKey::RelayAccountChooseNode),
+                                YtttButtonVariant::Ghost,
+                                theme,
+                                style,
+                            )
+                            .disabled(busy)
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                root.ssh.relay_account.choosing_node = true;
+                                root.ssh.relay_account.nodes = None;
+                                cx.notify();
+                            })),
+                        )
+                    }),
+            );
+        if !state.choosing_node {
+            return section;
+        }
+        section = section.child(
+            div()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(text.get(UiTextKey::RelayAccountNodeHint)),
+        );
+        if nodes.is_empty() {
+            return section.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child(text.get(UiTextKey::RelayAccountNodeLoading)),
+            );
+        }
+        for node in nodes.iter() {
+            let latency = match node.latency_ms {
+                Some(ms) => text
+                    .get(UiTextKey::RelayAccountNodeLatency)
+                    .replace("{ms}", &ms.to_string()),
+                None => text.get(UiTextKey::RelayAccountNodeNoAnswer).to_owned(),
+            };
+            let load = if node.full {
+                text.get(UiTextKey::RelayAccountNodeFull).to_owned()
+            } else {
+                node.load_percent
+                    .map(|percent| {
+                        text.get(UiTextKey::RelayAccountNodeLoad)
+                            .replace("{percent}", &percent.to_string())
+                    })
+                    .unwrap_or_default()
+            };
+            let is_current = node.id == current;
+            let node_id = node.id.clone();
+            section = section.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(style.spacing.sm)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(div().text_sm().child(name_of(&node.id)))
+                            .child(
+                                div().text_xs().text_color(theme.text_muted).child(
+                                    [latency, load]
+                                        .into_iter()
+                                        .filter(|part| !part.is_empty())
+                                        .collect::<Vec<_>>()
+                                        .join(" · "),
+                                ),
+                            ),
+                    )
+                    .child(if is_current {
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(text.get(UiTextKey::RelayAccountNodeCurrent))
+                    } else {
+                        div().child(
+                            yttt_button(
+                                gpui::SharedString::from(format!("relay-node-{}", node.id)),
+                                text.get(UiTextKey::RelayAccountNodeUse),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                style,
+                            )
+                            .disabled(busy || node.full)
+                            .on_click(cx.listener(
+                                move |root, _, _, cx| {
+                                    root.ssh.relay_account.choosing_node = false;
+                                    root.begin_remote_access_action(
+                                        Request::RemoteAccess(RemoteAccessRequest::SetRelayNode {
+                                            node_id: node_id.clone(),
+                                        }),
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                    }),
+            );
+        }
+        section
     }
 
     fn load_relay_account(&mut self, cx: &mut Context<Self>) {
@@ -536,10 +705,15 @@ impl WorkbenchView {
             }
             Outcome::Failed(error) => state.error = Some(error),
             Outcome::Cancelled => {}
-            Outcome::UseForHost(account) => self.begin_remote_access_action(
-                Request::RemoteAccess(RemoteAccessRequest::SetRelayAccount { account }),
-                cx,
-            ),
+            Outcome::UseForHost(account) => {
+                // Starting to use the account is when to pick a node.
+                state.choosing_node = account.is_some();
+                state.nodes = None;
+                self.begin_remote_access_action(
+                    Request::RemoteAccess(RemoteAccessRequest::SetRelayAccount { account }),
+                    cx,
+                );
+            }
         }
         cx.notify();
     }

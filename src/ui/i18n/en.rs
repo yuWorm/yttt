@@ -1077,6 +1077,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountUseBrowser => "Sign in with the browser instead",
         UiTextKey::RelayAccountBrowserTimedOut => "The browser sign-in timed out; try again.",
         UiTextKey::RelayAccountBrowserDenied => "The sign-in was denied in the browser.",
+        UiTextKey::RelayAccountNode => "Node: {node}",
+        UiTextKey::RelayAccountChooseNode => "Choose node",
+        UiTextKey::RelayAccountNodeHint => {
+            "Pick a node close to this computer and the devices you use. Devices that connect here follow it; switching drops remote sessions, which reconnect on their own."
+        }
+        UiTextKey::RelayAccountNodeLatency => "{ms} ms",
+        UiTextKey::RelayAccountNodeNoAnswer => "no answer",
+        UiTextKey::RelayAccountNodeLoad => "{percent}% busy",
+        UiTextKey::RelayAccountNodeFull => "Full",
+        UiTextKey::RelayAccountNodeUse => "Use",
+        UiTextKey::RelayAccountNodeCurrent => "Current",
+        UiTextKey::RelayAccountNodeLoading => "Measuring the nodes…",
         UiTextKey::P2pPathConnecting => "connecting",
         UiTextKey::P2pPathDirect => "direct",
         UiTextKey::P2pPathRelay => "via relay",
