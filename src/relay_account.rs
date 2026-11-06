@@ -112,7 +112,17 @@ pub(crate) fn device_label(host_name: &str) -> String {
     } else {
         local
     };
-    format!("{local} → {host_name}")
+    label_for(&local, host_name)
+}
+
+/// Keeps both names readable within the limit: a long local name gives up
+/// its tail before the Host name does.
+fn label_for(local: &str, host_name: &str) -> String {
+    const SEPARATOR: &str = " → ";
+    let budget = MAX_LABEL_CHARS - SEPARATOR.chars().count();
+    let host_chars = host_name.chars().count().min(budget / 2);
+    let local: String = local.chars().take(budget - host_chars).collect();
+    format!("{local}{SEPARATOR}{host_name}")
         .chars()
         .take(MAX_LABEL_CHARS)
         .collect()
@@ -204,5 +214,14 @@ mod tests {
         let label = device_label(&"office ".repeat(30));
         assert!(label.chars().count() <= MAX_LABEL_CHARS);
         assert!(label.contains(" → office"));
+
+        let label = label_for(&"runner".repeat(20), &"office ".repeat(30));
+        assert_eq!(label.chars().count(), MAX_LABEL_CHARS);
+        assert!(label.contains(" → office"));
+        assert_eq!(label_for("laptop", "office"), "laptop → office");
+        let label = label_for(&"runner".repeat(20), "office");
+        assert!(label.starts_with("runnerrunner"));
+        assert!(label.ends_with(" → office"));
+        assert_eq!(label.chars().count(), MAX_LABEL_CHARS);
     }
 }
