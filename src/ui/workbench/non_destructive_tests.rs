@@ -264,6 +264,25 @@ fn the_relay_account_section_signs_in_then_shows_the_plan(cx: &mut TestAppContex
     let root = slot.borrow_mut().take().unwrap();
     assert!(cx.debug_bounds("relay-account").is_some());
     assert!(cx.debug_bounds("relay-account-signed-in").is_none());
+    assert!(cx.debug_bounds("relay-account-waiting").is_none());
+
+    // Waiting for the browser shows how to finish and how to stop.
+    let (cancel, cancelled) = flume::bounded::<()>(1);
+    root.update(cx, |root, cx| {
+        root.ssh.relay_account.browser_cancel = Some(cancel);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("relay-account-waiting").is_some());
+    root.update(cx, |root, cx| {
+        root.ssh.relay_account.browser_cancel = None;
+        cx.notify();
+    });
+    assert!(
+        cancelled.recv().is_err(),
+        "dropping the sender cancels the wait"
+    );
 
     root.update(cx, |root, cx| {
         root.ssh.relay_account.display = Some(crate::relay_account::AccountDisplay {

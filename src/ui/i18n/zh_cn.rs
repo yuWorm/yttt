@@ -872,6 +872,15 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountStopForHost => "本机不再使用此账号",
         UiTextKey::RelayAccountHostNeedsP2p => "开启 P2P 配对后，才能让本机作为 Host 使用此账号。",
         UiTextKey::RelayAccountSessionExpired => "登录已失效，请重新登录。",
+        UiTextKey::RelayAccountSignInWithBrowser => "在浏览器中登录",
+        UiTextKey::RelayAccountWaitingForBrowser => {
+            "已在浏览器中打开登录页，在页面上点“允许”后回到这里。"
+        }
+        UiTextKey::RelayAccountCancel => "取消",
+        UiTextKey::RelayAccountUsePassword => "改用邮箱和密码登录",
+        UiTextKey::RelayAccountUseBrowser => "改用浏览器登录",
+        UiTextKey::RelayAccountBrowserTimedOut => "浏览器登录已超时，请重试。",
+        UiTextKey::RelayAccountBrowserDenied => "已在浏览器中拒绝这次登录。",
         UiTextKey::P2pPathConnecting => "连接中",
         UiTextKey::P2pPathDirect => "直连",
         UiTextKey::P2pPathRelay => "经 relay",

@@ -36,16 +36,17 @@ pub(crate) enum P2pCommand {
         endpoint_id: EndpointKey,
         reset_tls: bool,
     },
-    /// Joins the relay of a paid relay account; the password comes from
-    /// `YTTT_RELAY_PASSWORD` or the terminal.
+    /// Joins the relay of a paid relay account: by default with a short code
+    /// confirmed on the console from any browser; with `--password <email>`,
+    /// the password comes from `YTTT_RELAY_PASSWORD` or the terminal.
     Login {
         control_url: String,
-        email: String,
+        password_email: Option<String>,
     },
     Logout,
 }
 
-pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]|login <control url> <email>|logout> [--profile <id>] [--state-root <absolute path>]";
+pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]|login <control url> [--password <email>]|logout> [--profile <id>] [--state-root <absolute path>]";
 
 /// Parses what follows `p2p`, leaving `--profile` and `--state-root` for the caller.
 pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError> {
@@ -70,17 +71,29 @@ pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError>
         "devices" => P2pCommand::Devices,
         "logout" => P2pCommand::Logout,
         "login" => {
-            if args.len() < 2 {
+            let password_email = match args.iter().position(|argument| argument == "--password") {
+                Some(index) => {
+                    args.remove(index);
+                    if index >= args.len() {
+                        return Err(usage());
+                    }
+                    Some(args.remove(index).into_string().map_err(|_| usage())?)
+                }
+                None => None,
+            };
+            if args.is_empty() {
                 return Err(usage());
             }
             let control_url = args.remove(0).into_string().map_err(|_| usage())?;
-            let email = args.remove(0).into_string().map_err(|_| usage())?;
             if !(control_url.starts_with("http://") || control_url.starts_with("https://")) {
                 return Err(ServerError::InvalidArgument(
                     "the control plane must be an http:// or https:// URL".into(),
                 ));
             }
-            P2pCommand::Login { control_url, email }
+            P2pCommand::Login {
+                control_url,
+                password_email,
+            }
         }
         "enable" => {
             let relay_url = match args.iter().position(|argument| argument == "--relay") {
@@ -183,19 +196,40 @@ pub(crate) async fn run(paths: ServerPaths, command: P2pCommand) -> Result<(), S
             write_json(&listed(admin.devices().await?))
         }
         P2pCommand::Pair => pair(&admin).await,
-        P2pCommand::Login { control_url, email } => {
-            let password = match std::env::var("YTTT_RELAY_PASSWORD") {
-                Ok(password) => password,
-                Err(_) => prompt("password: ")
-                    .await?
-                    .trim_end_matches(['\r', '\n'])
-                    .to_owned(),
+        P2pCommand::Login {
+            control_url,
+            password_email,
+        } => {
+            let refused = |error: yttt_control_client::ControlError| {
+                ServerError::InvalidArgument(error.to_string())
             };
-            let session = yttt_control_client::ControlClient::new(&control_url)
-                .map_err(|error| ServerError::InvalidArgument(error.to_string()))?
-                .login(&email, &password)
-                .await
-                .map_err(|error| ServerError::InvalidArgument(error.to_string()))?;
+            let client = yttt_control_client::ControlClient::new(&control_url).map_err(refused)?;
+            let session = match password_email {
+                Some(email) => {
+                    let password = match std::env::var("YTTT_RELAY_PASSWORD") {
+                        Ok(password) => password,
+                        Err(_) => prompt("password: ")
+                            .await?
+                            .trim_end_matches(['\r', '\n'])
+                            .to_owned(),
+                    };
+                    client.login(&email, &password).await.map_err(refused)?
+                }
+                None => {
+                    let login = client
+                        .begin_device_login(&format!("yttt-server on {}", host_name()))
+                        .await
+                        .map_err(refused)?;
+                    // Instructions on stderr; stdout keeps the JSON summary.
+                    eprintln!("{}", qr_text(&login.verification_uri_complete));
+                    eprintln!(
+                        "To sign in, open {} on any device and enter:\n\n    {}\n\n\
+                         or scan the QR code. Waiting for the confirmation (10 minutes)…",
+                        login.verification_uri, login.user_code
+                    );
+                    login.finish().await.map_err(refused)?
+                }
+            };
             admin
                 .send(RemoteAccessRequest::SetRelayAccount {
                     account: Some(RelayAccount {
@@ -410,6 +444,17 @@ async fn prompt(question: &str) -> Result<String, ServerError> {
 }
 
 /// The code as a QR code drawn with half-block characters, for a phone camera.
+/// This machine's name, for the console to show what is signing in.
+fn host_name() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "this machine".into())
+}
+
 fn qr_text(code: &str) -> String {
     use qrcode::render::unicode::Dense1x2;
     match qrcode::QrCode::with_error_correction_level(code.as_bytes(), qrcode::EcLevel::M) {
@@ -459,8 +504,32 @@ mod tests {
             }
         );
         assert_eq!(parsed(&["pair"]).unwrap().0, P2pCommand::Pair);
+        assert_eq!(
+            parsed(&["login", "https://control.example"]).unwrap().0,
+            P2pCommand::Login {
+                control_url: "https://control.example".into(),
+                password_email: None
+            }
+        );
+        assert_eq!(
+            parsed(&[
+                "login",
+                "https://control.example",
+                "--password",
+                "me@example.com"
+            ])
+            .unwrap()
+            .0,
+            P2pCommand::Login {
+                control_url: "https://control.example".into(),
+                password_email: Some("me@example.com".into())
+            }
+        );
         for bad in [
             &["enable", "--relay"][..],
+            &["login"],
+            &["login", "control.example"],
+            &["login", "https://control.example", "--password"],
             &["enable", "--relay", "relay.example"],
             &["revoke", "abc"],
             &["revoke"],

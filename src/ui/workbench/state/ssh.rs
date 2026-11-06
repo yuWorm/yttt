@@ -154,6 +154,10 @@ pub(in super::super) struct RelayAccountPanelState {
     pub(in super::super) control_url: Option<Entity<InputState>>,
     pub(in super::super) email: Option<Entity<InputState>>,
     pub(in super::super) password: Option<Entity<InputState>>,
+    /// Signing in with email and password instead of the browser.
+    pub(in super::super) password_form: bool,
+    /// A browser sign-in waits for the console; dropping this cancels it.
+    pub(in super::super) browser_cancel: Option<flume::Sender<()>>,
 }
 
 pub(in super::super) struct SshControllerState {

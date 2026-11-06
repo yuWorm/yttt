@@ -1068,6 +1068,15 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Turn on P2P pairing to use the account for this computer."
         }
         UiTextKey::RelayAccountSessionExpired => "The sign-in has expired; sign in again.",
+        UiTextKey::RelayAccountSignInWithBrowser => "Sign in with browser",
+        UiTextKey::RelayAccountWaitingForBrowser => {
+            "The sign-in page is open in your browser. Click Allow there, then come back here."
+        }
+        UiTextKey::RelayAccountCancel => "Cancel",
+        UiTextKey::RelayAccountUsePassword => "Sign in with email and password instead",
+        UiTextKey::RelayAccountUseBrowser => "Sign in with the browser instead",
+        UiTextKey::RelayAccountBrowserTimedOut => "The browser sign-in timed out; try again.",
+        UiTextKey::RelayAccountBrowserDenied => "The sign-in was denied in the browser.",
         UiTextKey::P2pPathConnecting => "connecting",
         UiTextKey::P2pPathDirect => "direct",
         UiTextKey::P2pPathRelay => "via relay",

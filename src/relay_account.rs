@@ -103,16 +103,20 @@ pub(crate) fn forget(profile: &AppProfile, store: &impl KeyStore) -> Result<(), 
 
 /// How the account lists a device key this Client holds for one Host.
 pub(crate) fn device_label(host_name: &str) -> String {
+    label_for(&machine_name(), host_name)
+}
+
+/// This machine's name, as the console shows it when the app signs in.
+pub(crate) fn machine_name() -> String {
     let local = gethostname::gethostname()
         .to_string_lossy()
         .trim()
         .to_string();
-    let local = if local.is_empty() {
+    if local.is_empty() {
         "yttt".into()
     } else {
         local
-    };
-    label_for(&local, host_name)
+    }
 }
 
 /// Keeps both names readable within the limit: a long local name gives up

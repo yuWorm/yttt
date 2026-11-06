@@ -5,7 +5,7 @@
 //! may reach this computer.
 
 use super::*;
-use yttt_control_client::{AccountView, ControlClient, ControlSession};
+use yttt_control_client::{AccountView, ControlClient, ControlError, ControlSession};
 use yttt_protocol::{
     Request,
     remote_access::{RelayAccount, RemoteAccessRequest, RemoteAccessState, SecretText},
@@ -14,6 +14,8 @@ use yttt_protocol::{
 use crate::relay_account::{self, AccountDisplay};
 
 const DEFAULT_CONTROL_URL: &str = "https://";
+/// How long a browser sign-in waits for the console's answer.
+const BROWSER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 enum Outcome {
     SignedIn(AccountDisplay, Option<AccountView>),
@@ -21,6 +23,8 @@ enum Outcome {
     SignedOut,
     Failed(String),
     UseForHost(Option<RelayAccount>),
+    /// The browser sign-in was cancelled here.
+    Cancelled,
 }
 
 impl WorkbenchView {
@@ -61,6 +65,8 @@ impl WorkbenchView {
         let display = state.display.clone();
         let view = state.view.clone();
         let error = state.error.clone();
+        let password_form = state.password_form;
+        let waiting = state.browser_cancel.is_some();
         let p2p = self
             .ssh
             .remote_access
@@ -70,146 +76,215 @@ impl WorkbenchView {
         let host_uses_account = p2p.relay_account.is_some();
         let p2p_listening = p2p.effective == RemoteAccessState::Listening;
 
-        let body =
-            match display {
-                None => div()
-                    .flex()
-                    .flex_col()
-                    .gap(style.spacing.sm)
-                    .child(field(
-                        text.get(UiTextKey::RelayAccountControlUrl),
-                        &control_url,
-                        busy,
-                        theme,
-                        style,
-                    ))
-                    .child(field(
-                        text.get(UiTextKey::RelayAccountEmail),
-                        &email,
-                        busy,
-                        theme,
-                        style,
-                    ))
-                    .child(field(
-                        text.get(UiTextKey::RelayAccountPassword),
-                        &password,
-                        busy,
-                        theme,
-                        style,
-                    ))
-                    .child(
+        let body = match display {
+            None => {
+                let mut form = div().flex().flex_col().gap(style.spacing.sm).child(field(
+                    text.get(UiTextKey::RelayAccountControlUrl),
+                    &control_url,
+                    busy || waiting,
+                    theme,
+                    style,
+                ));
+                if password_form {
+                    form = form
+                        .child(field(
+                            text.get(UiTextKey::RelayAccountEmail),
+                            &email,
+                            busy,
+                            theme,
+                            style,
+                        ))
+                        .child(field(
+                            text.get(UiTextKey::RelayAccountPassword),
+                            &password,
+                            busy,
+                            theme,
+                            style,
+                        ))
+                        .child(
+                            div().child(
+                                yttt_button(
+                                    "relay-account-sign-in",
+                                    text.get(UiTextKey::RelayAccountSignIn),
+                                    YtttButtonVariant::Primary,
+                                    theme,
+                                    style,
+                                )
+                                .disabled(busy)
+                                .on_click(cx.listener(
+                                    |root, _, window, cx| root.sign_in_relay_account(window, cx),
+                                )),
+                            ),
+                        );
+                } else if waiting {
+                    form = form.child(
+                        div()
+                            .debug_selector(|| "relay-account-waiting".into())
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(style.spacing.sm)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.text_muted)
+                                    .child(text.get(UiTextKey::RelayAccountWaitingForBrowser)),
+                            )
+                            .child(
+                                yttt_button(
+                                    "relay-account-cancel",
+                                    text.get(UiTextKey::RelayAccountCancel),
+                                    YtttButtonVariant::Secondary,
+                                    theme,
+                                    style,
+                                )
+                                .on_click(cx.listener(
+                                    |root, _, _, cx| {
+                                        // Dropping the sender ends the wait.
+                                        root.ssh.relay_account.browser_cancel = None;
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    );
+                } else {
+                    form = form.child(
                         div().child(
                             yttt_button(
-                                "relay-account-sign-in",
-                                text.get(UiTextKey::RelayAccountSignIn),
+                                "relay-account-browser",
+                                text.get(UiTextKey::RelayAccountSignInWithBrowser),
                                 YtttButtonVariant::Primary,
                                 theme,
                                 style,
                             )
                             .disabled(busy)
-                            .on_click(cx.listener(
-                                |root, _, window, cx| root.sign_in_relay_account(window, cx),
-                            )),
+                            .on_click(cx.listener(|root, _, _, cx| root.sign_in_with_browser(cx))),
                         ),
-                    ),
-                Some(display) => {
-                    let mut view_lines = div().flex().flex_col().gap(style.spacing.xs);
-                    if let Some(view) = &view {
-                        view_lines = view_lines
-                            .child(
-                                div().text_xs().text_color(theme.text_muted).child(
-                                    text.get(UiTextKey::RelayAccountPlan)
-                                        .replace(
-                                            "{plan}",
-                                            if view.plan_name.is_empty() {
-                                                &view.plan
-                                            } else {
-                                                &view.plan_name
-                                            },
-                                        )
-                                        .replace("{relay}", &view.relay_url),
-                                ),
+                    );
+                }
+                form.when(!waiting, |form| {
+                    form.child(
+                        div().child(
+                            yttt_button(
+                                "relay-account-switch",
+                                text.get(if password_form {
+                                    UiTextKey::RelayAccountUseBrowser
+                                } else {
+                                    UiTextKey::RelayAccountUsePassword
+                                }),
+                                YtttButtonVariant::Ghost,
+                                theme,
+                                style,
                             )
-                            .child(
-                                div().text_xs().text_color(theme.text_muted).child(
-                                    text.get(UiTextKey::RelayAccountUsage)
-                                        .replace("{used}", &format_bytes(view.month_upstream_bytes))
-                                        .replace("{quota}", &format_bytes(view.monthly_bytes))
-                                        .replace("{devices}", &view.devices.to_string())
-                                        .replace("{max}", &view.max_devices.to_string()),
-                                ),
-                            )
-                            .when(view.suspended, |lines| {
-                                lines.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.danger)
-                                        .child(text.get(UiTextKey::RelayAccountSuspended)),
-                                )
-                            });
-                    }
-                    div()
-                        .debug_selector(|| "relay-account-signed-in".into())
-                        .flex()
-                        .flex_col()
-                        .gap(style.spacing.sm)
+                            .disabled(busy)
+                            .on_click(cx.listener(|root, _, _, cx| {
+                                let state = &mut root.ssh.relay_account;
+                                state.password_form = !state.password_form;
+                                state.error = None;
+                                cx.notify();
+                            })),
+                        ),
+                    )
+                })
+            }
+            Some(display) => {
+                let mut view_lines = div().flex().flex_col().gap(style.spacing.xs);
+                if let Some(view) = &view {
+                    view_lines = view_lines
                         .child(
-                            div().text_sm().child(
-                                text.get(UiTextKey::RelayAccountSignedIn)
-                                    .replace("{email}", &display.email),
+                            div().text_xs().text_color(theme.text_muted).child(
+                                text.get(UiTextKey::RelayAccountPlan)
+                                    .replace(
+                                        "{plan}",
+                                        if view.plan_name.is_empty() {
+                                            &view.plan
+                                        } else {
+                                            &view.plan_name
+                                        },
+                                    )
+                                    .replace("{relay}", &view.relay_url),
                             ),
                         )
-                        .child(view_lines)
                         .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .gap(style.spacing.sm)
-                                .child(
-                                    yttt_button(
-                                        "relay-account-host",
-                                        text.get(if host_uses_account {
-                                            UiTextKey::RelayAccountStopForHost
-                                        } else {
-                                            UiTextKey::RelayAccountUseForHost
-                                        }),
-                                        YtttButtonVariant::Secondary,
-                                        theme,
-                                        style,
-                                    )
-                                    .disabled(busy || self.ssh.remote_access_busy || !p2p_listening)
-                                    .on_click(cx.listener(
-                                        move |root, _, _, cx| {
-                                            root.use_relay_account_for_host(!host_uses_account, cx)
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    yttt_button(
-                                        "relay-account-sign-out",
-                                        text.get(UiTextKey::RelayAccountSignOut),
-                                        YtttButtonVariant::Ghost,
-                                        theme,
-                                        style,
-                                    )
-                                    .disabled(busy)
-                                    .on_click(cx.listener(
-                                        move |root, _, _, cx| {
-                                            root.sign_out_relay_account(host_uses_account, cx)
-                                        },
-                                    )),
-                                ),
+                            div().text_xs().text_color(theme.text_muted).child(
+                                text.get(UiTextKey::RelayAccountUsage)
+                                    .replace("{used}", &format_bytes(view.month_upstream_bytes))
+                                    .replace("{quota}", &format_bytes(view.monthly_bytes))
+                                    .replace("{devices}", &view.devices.to_string())
+                                    .replace("{max}", &view.max_devices.to_string()),
+                            ),
                         )
-                        .when(!p2p_listening, |view| {
-                            view.child(
+                        .when(view.suspended, |lines| {
+                            lines.child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .child(text.get(UiTextKey::RelayAccountHostNeedsP2p)),
+                                    .text_color(theme.danger)
+                                    .child(text.get(UiTextKey::RelayAccountSuspended)),
                             )
-                        })
+                        });
                 }
-            };
+                div()
+                    .debug_selector(|| "relay-account-signed-in".into())
+                    .flex()
+                    .flex_col()
+                    .gap(style.spacing.sm)
+                    .child(
+                        div().text_sm().child(
+                            text.get(UiTextKey::RelayAccountSignedIn)
+                                .replace("{email}", &display.email),
+                        ),
+                    )
+                    .child(view_lines)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(style.spacing.sm)
+                            .child(
+                                yttt_button(
+                                    "relay-account-host",
+                                    text.get(if host_uses_account {
+                                        UiTextKey::RelayAccountStopForHost
+                                    } else {
+                                        UiTextKey::RelayAccountUseForHost
+                                    }),
+                                    YtttButtonVariant::Secondary,
+                                    theme,
+                                    style,
+                                )
+                                .disabled(busy || self.ssh.remote_access_busy || !p2p_listening)
+                                .on_click(cx.listener(
+                                    move |root, _, _, cx| {
+                                        root.use_relay_account_for_host(!host_uses_account, cx)
+                                    },
+                                )),
+                            )
+                            .child(
+                                yttt_button(
+                                    "relay-account-sign-out",
+                                    text.get(UiTextKey::RelayAccountSignOut),
+                                    YtttButtonVariant::Ghost,
+                                    theme,
+                                    style,
+                                )
+                                .disabled(busy)
+                                .on_click(cx.listener(
+                                    move |root, _, _, cx| {
+                                        root.sign_out_relay_account(host_uses_account, cx)
+                                    },
+                                )),
+                            ),
+                    )
+                    .when(!p2p_listening, |view| {
+                        view.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(text.get(UiTextKey::RelayAccountHostNeedsP2p)),
+                        )
+                    })
+            }
+        };
 
         div()
             .debug_selector(|| "relay-account".into())
@@ -251,6 +326,101 @@ impl WorkbenchView {
                 Ok(Outcome::Refreshed(block_on(session.account()).ok()))
             });
         }
+    }
+
+    /// Opens the console in the browser and waits on a loopback port for
+    /// the person to allow this app there.
+    fn sign_in_with_browser(&mut self, cx: &mut Context<Self>) {
+        let state = &mut self.ssh.relay_account;
+        if state.busy || state.browser_cancel.is_some() {
+            return;
+        }
+        let control_url = state
+            .control_url
+            .as_ref()
+            .map(|input| input.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        let Some(profile) = self.config_paths.profile().cloned() else {
+            return;
+        };
+        let (cancel, cancelled) = flume::bounded::<()>(1);
+        let (opened, open) = flume::bounded::<String>(1);
+        state.browser_cancel = Some(cancel);
+        state.error = None;
+        let text = self.ui_text;
+        // The wait can last minutes: its own thread, not the shared pool.
+        let (done, finished) = flume::bounded::<Result<Outcome, String>>(1);
+        let work = move || -> Result<Outcome, String> {
+            let client = ControlClient::new(&control_url).map_err(|error| error.to_string())?;
+            block_on(async move {
+                let login = client
+                    .begin_browser_login(&relay_account::machine_name())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let _ = opened.send(login.authorize_url().to_owned());
+                drop(opened);
+                enum Waited {
+                    Session(ControlSession),
+                    Cancelled,
+                    Failed(String),
+                }
+                let finished = async {
+                    match login.finish().await {
+                        Ok(session) => Waited::Session(session),
+                        Err(ControlError::Denied) => {
+                            Waited::Failed(text.get(UiTextKey::RelayAccountBrowserDenied).into())
+                        }
+                        Err(error) => Waited::Failed(error.to_string()),
+                    }
+                };
+                let cancelled = async {
+                    let _ = cancelled.recv_async().await;
+                    Waited::Cancelled
+                };
+                let timed_out = async {
+                    tokio::time::sleep(BROWSER_TIMEOUT).await;
+                    Waited::Failed(text.get(UiTextKey::RelayAccountBrowserTimedOut).into())
+                };
+                let session = match futures_lite::future::or(
+                    finished,
+                    futures_lite::future::or(cancelled, timed_out),
+                )
+                .await
+                {
+                    Waited::Session(session) => session,
+                    Waited::Cancelled => return Ok(Outcome::Cancelled),
+                    Waited::Failed(error) => return Err(error),
+                };
+                // The app learns the email only now.
+                let view = session.account().await.map_err(|error| error.to_string())?;
+                let display = relay_account::save(
+                    &profile,
+                    &relay_account::session_store(&profile),
+                    &view.email,
+                    &session,
+                )?;
+                Ok(Outcome::SignedIn(display, Some(view)))
+            })
+        };
+        std::thread::spawn(move || {
+            let _ = done.send(work());
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(url) = open.recv_async().await {
+                let _ = this.update(cx, |_, cx| cx.open_url(&url));
+            }
+            let outcome = finished
+                .recv_async()
+                .await
+                .unwrap_or_else(|_| Err("the sign-in stopped".into()))
+                .unwrap_or_else(Outcome::Failed);
+            let _ = this.update(cx, |root, cx| {
+                root.ssh.relay_account.browser_cancel = None;
+                root.apply_relay_account_outcome(outcome, cx);
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     fn sign_in_relay_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -335,37 +505,42 @@ impl WorkbenchView {
         cx.spawn(async move |this, cx| {
             let outcome = task.await.unwrap_or_else(Outcome::Failed);
             let _ = this.update(cx, |root, cx| {
-                let state = &mut root.ssh.relay_account;
-                state.busy = false;
-                match outcome {
-                    Outcome::SignedIn(display, view) => {
-                        state.display = Some(display);
-                        state.view = view;
-                    }
-                    Outcome::Refreshed(view) => {
-                        if view.is_none() {
-                            state.error = Some(
-                                root.ui_text
-                                    .get(UiTextKey::RelayAccountSessionExpired)
-                                    .into(),
-                            );
-                        }
-                        state.view = view;
-                    }
-                    Outcome::SignedOut => {
-                        state.display = None;
-                        state.view = None;
-                    }
-                    Outcome::Failed(error) => state.error = Some(error),
-                    Outcome::UseForHost(account) => root.begin_remote_access_action(
-                        Request::RemoteAccess(RemoteAccessRequest::SetRelayAccount { account }),
-                        cx,
-                    ),
-                }
-                cx.notify();
+                root.ssh.relay_account.busy = false;
+                root.apply_relay_account_outcome(outcome, cx);
             });
         })
         .detach();
+        cx.notify();
+    }
+
+    fn apply_relay_account_outcome(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
+        let state = &mut self.ssh.relay_account;
+        match outcome {
+            Outcome::SignedIn(display, view) => {
+                state.display = Some(display);
+                state.view = view;
+            }
+            Outcome::Refreshed(view) => {
+                if view.is_none() {
+                    state.error = Some(
+                        self.ui_text
+                            .get(UiTextKey::RelayAccountSessionExpired)
+                            .into(),
+                    );
+                }
+                state.view = view;
+            }
+            Outcome::SignedOut => {
+                state.display = None;
+                state.view = None;
+            }
+            Outcome::Failed(error) => state.error = Some(error),
+            Outcome::Cancelled => {}
+            Outcome::UseForHost(account) => self.begin_remote_access_action(
+                Request::RemoteAccess(RemoteAccessRequest::SetRelayAccount { account }),
+                cx,
+            ),
+        }
         cx.notify();
     }
 }
