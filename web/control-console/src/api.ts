@@ -68,6 +68,12 @@ export interface AccountView {
   devices: number;
   max_devices: number;
   role: "user" | "admin";
+  plan_name: string;
+  plan_description: string;
+  node_name: string;
+  /** Bytes per second. */
+  rate_bps: number;
+  throttled_rate_bps: number;
 }
 
 export interface DeviceEntry {
@@ -81,6 +87,12 @@ export interface MonthUsage {
   upstream_bytes: number;
 }
 
+export interface DayUsage {
+  /** Days since the Unix epoch, UTC. */
+  day: number;
+  upstream_bytes: number;
+}
+
 export interface NodeView {
   id: string;
   name: string;
@@ -91,6 +103,7 @@ export interface NodeView {
   version: string | null;
   reachable: boolean | null;
   accounts: number;
+  month_bytes: number;
   enrollment_expires_unix: number | null;
 }
 
@@ -98,7 +111,10 @@ export interface Overview {
   accounts: number;
   suspended: number;
   admins: number;
+  accounts_today: number;
   month_upstream_bytes: number;
+  today_upstream_bytes: number;
+  connected_devices: number;
   nodes: NodeView[];
 }
 
@@ -123,16 +139,28 @@ export interface AccountDetail {
   account: AccountRow;
   devices: DeviceEntry[];
   usage: MonthUsage[];
+  daily: DayUsage[];
 }
 
 export interface PlanView {
   id: string;
+  name: string;
+  description: string;
+  /** Bytes per second. */
   rate_bps: number;
   burst_bytes: number;
   monthly_bytes: number;
   throttled_rate_bps: number;
   max_devices: number;
+  archived: boolean;
+  sort: number;
   accounts: number;
+}
+
+export interface Settings {
+  signup_enabled: boolean;
+  signup_plan: string | null;
+  signup_node: string | null;
 }
 
 export interface AuditEntry {
@@ -163,8 +191,31 @@ export function formatBytes(bytes: number): string {
   return unit === 0 ? `${bytes} B` : `${value.toFixed(1)} ${UNITS[unit]}`;
 }
 
+/** A rate in bytes per second, shown in megabits per second as networks are sold. */
 export function formatRate(bytesPerSecond: number): string {
-  return `${formatBytes(bytesPerSecond)}/s`;
+  const mbps = (bytesPerSecond * 8) / 1_000_000;
+  return mbps >= 1 ? `${trim(mbps)} Mbps` : `${trim(mbps * 1000)} Kbps`;
+}
+
+function trim(value: number): string {
+  return value >= 100 ? value.toFixed(0) : String(Number(value.toFixed(2)));
+}
+
+export const MBPS = 125_000;
+export const GIB = 1024 ** 3;
+
+/** Month-day of a day since the epoch, e.g. 11-06. */
+export function formatDay(day: number): string {
+  const date = new Date(day * 86_400_000);
+  return `${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+export function percentOf(used: number, quota: number): number {
+  return quota > 0 ? Math.min((used / quota) * 100, 100) : 0;
+}
+
+export function errorText(failure: unknown): string {
+  return failure instanceof Error ? failure.message : String(failure);
 }
 
 export function formatTime(unix: number | null | undefined): string {

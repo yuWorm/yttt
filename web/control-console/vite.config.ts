@@ -17,7 +17,7 @@ export default defineConfig({
     outDir: "dist",
     // The control plane's CSP allows no inline scripts.
     modulePreload: { polyfill: false },
-    chunkSizeWarningLimit: 1200,
+    chunkSizeWarningLimit: 1300,
     rollupOptions: {
       output: {
         // The UI library changes rarely; browsers keep it cached across releases.

@@ -1,0 +1,244 @@
+/* Layout and the few pieces Semi does not draw. Colors come from Semi's
+   tokens so both themes follow. */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--semi-color-bg-0);
+  color: var(--semi-color-text-0);
+  font-family: var(--semi-font-family-regular, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-layout {
+  height: 100vh;
+}
+
+.app-sider {
+  background: var(--semi-color-bg-1);
+  border-right: 1px solid var(--semi-color-border);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 60px;
+  padding: 0 24px;
+  background: var(--semi-color-bg-1);
+  border-bottom: 1px solid var(--semi-color-border);
+}
+
+.app-content {
+  overflow: auto;
+  background: var(--semi-color-fill-0);
+}
+
+.app-page {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--semi-color-text-0);
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--semi-color-primary) 0%, var(--semi-color-tertiary) 100%);
+  color: #fff;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.page-header h3 {
+  margin: 0;
+}
+
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
+.stat {
+  height: 100%;
+}
+
+.stat .semi-card-body {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.stat-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 10px;
+  font-size: 20px;
+}
+
+.stat-value {
+  margin: 4px 0 2px;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+  color: var(--semi-color-text-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart {
+  position: relative;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.chart-bar {
+  fill: var(--semi-color-primary);
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+
+.chart-bar.active {
+  opacity: 1;
+  fill: var(--semi-color-primary-hover);
+}
+
+.chart-tip {
+  position: absolute;
+  top: 0;
+  transform: translate(-50%, -100%);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--semi-color-bg-3);
+  box-shadow: var(--semi-shadow-elevated);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.auth {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--semi-color-bg-0);
+}
+
+.auth-brand {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 48px 56px;
+  overflow: hidden;
+  color: #fff;
+  background: radial-gradient(circle at 20% 15%, rgba(255, 255, 255, 0.18), transparent 45%),
+    linear-gradient(150deg, #0b5fff 0%, #3a2fd8 55%, #1b1c4d 100%);
+}
+
+.auth-brand h1 {
+  margin: 0 0 12px;
+  font-size: 34px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.auth-feature {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-top: 22px;
+}
+
+.auth-feature-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 18px;
+}
+
+.auth-form {
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+}
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.spec {
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--semi-color-border);
+}
+
+.spec:last-child {
+  border-bottom: none;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.clickable-row {
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .auth {
+    grid-template-columns: 1fr;
+  }
+  .auth-brand {
+    display: none;
+  }
+  .app-page {
+    padding: 16px;
+  }
+  .app-header {
+    padding: 0 16px;
+  }
+}

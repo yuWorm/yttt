@@ -19,6 +19,7 @@ const AdminAccountDetail = page(() => import("./pages/admin/AccountDetail"), "Ad
 const AdminNodes = page(() => import("./pages/admin/Nodes"), "AdminNodes");
 const AdminPlans = page(() => import("./pages/admin/Plans"), "AdminPlans");
 const AdminAudit = page(() => import("./pages/admin/Audit"), "AdminAudit");
+const AdminSettings = page(() => import("./pages/admin/Settings"), "AdminSettings");
 
 function Loading() {
   return (
@@ -50,7 +51,7 @@ export function App() {
   return (
     <Shell>
       <Suspense fallback={<Loading />}>
-      <Routes>
+        <Routes>
         <Route path="/" element={<Overview />} />
         <Route path="/devices" element={<Devices />} />
         <Route path="/usage" element={<Usage />} />
@@ -62,6 +63,7 @@ export function App() {
             <Route path="/admin/accounts/:id" element={<AdminAccountDetail />} />
             <Route path="/admin/nodes" element={<AdminNodes />} />
             <Route path="/admin/plans" element={<AdminPlans />} />
+            <Route path="/admin/settings" element={<AdminSettings />} />
             <Route path="/admin/audit" element={<AdminAudit />} />
           </>
         )}

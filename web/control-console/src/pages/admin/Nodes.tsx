@@ -7,6 +7,7 @@ import {
   Form,
   Modal,
   Select,
+  SideSheet,
   Space,
   Table,
   Toast,
@@ -18,12 +19,14 @@ import {
   type NodeView,
   ApiError,
   del,
+  formatBytes,
   formatTime,
   get,
   patch,
   post,
 } from "../../api";
 import { NodeStatus } from "./status";
+import { EmptyState, PageHeader } from "../../components/ui";
 
 function failed(failure: unknown) {
   Toast.error(failure instanceof ApiError ? failure.message : String(failure));
@@ -173,38 +176,56 @@ export function AdminNodes() {
 
   return (
     <>
-      <Space style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }}>
-        <Typography.Title heading={3}>节点</Typography.Title>
-        <Button icon={<IconPlus />} theme="solid" onClick={() => setCreating(true)}>
-          新建节点
-        </Button>
-      </Space>
-      <Card>
+      <PageHeader
+        title="节点"
+        description="新建节点会生成一条部署命令，在服务器上执行后节点自动登记上线。"
+        extra={
+          <Button icon={<IconPlus />} theme="solid" onClick={() => setCreating(true)}>
+            新建节点
+          </Button>
+        }
+      />
+      <Card bodyStyle={{ padding: 0 }}>
         <Table
           loading={nodes === undefined}
           dataSource={nodes}
           rowKey="id"
           pagination={false}
+          empty={
+            <EmptyState title="还没有节点" description="新建一个节点，复制部署命令到一台 Linux 服务器上执行。">
+              <Button theme="solid" icon={<IconPlus />} onClick={() => setCreating(true)}>
+                新建节点
+              </Button>
+            </EmptyState>
+          }
           columns={[
             {
               title: "节点",
               render: (_: unknown, node: NodeView) => (
-                <Space vertical align="start" spacing={2}>
-                  <Typography.Text strong>{node.id}</Typography.Text>
-                  <Typography.Text type="secondary" size="small">
-                    {node.name}
+                <div>
+                  <Typography.Text strong>{node.name}</Typography.Text>
+                  <Typography.Text type="tertiary" size="small" style={{ display: "block" }}>
+                    {node.id}
                   </Typography.Text>
-                </Space>
+                </div>
               ),
             },
             { title: "状态", render: (_: unknown, node: NodeView) => <NodeStatus node={node} /> },
             {
               title: "地址",
               dataIndex: "url",
-              render: (url: string) => (url ? <Typography.Text copyable>{url}</Typography.Text> : "—"),
+              render: (url: string) =>
+                url ? (
+                  <Typography.Text className="mono" copyable>
+                    {url}
+                  </Typography.Text>
+                ) : (
+                  "—"
+                ),
             },
             { title: "在线设备", dataIndex: "connected_devices", render: (count: number | null) => count ?? "—" },
             { title: "账号", dataIndex: "accounts" },
+            { title: "本月流量", dataIndex: "month_bytes", render: (bytes: number) => formatBytes(bytes) },
             { title: "版本", dataIndex: "version", render: (version: string | null) => version ?? "—" },
             { title: "最后上报", dataIndex: "last_report_unix", render: (unix: number | null) => formatTime(unix) },
             {
@@ -233,7 +254,7 @@ export function AdminNodes() {
                     </Dropdown.Menu>
                   }
                 >
-                  <Button icon={<IconMore />} theme="borderless" />
+                  <Button icon={<IconMore />} theme="borderless" type="tertiary" />
                 </Dropdown>
               ),
             },
@@ -241,7 +262,7 @@ export function AdminNodes() {
         />
       </Card>
 
-      <Modal title="新建节点" visible={creating} onCancel={() => setCreating(false)} footer={null}>
+      <SideSheet title="新建节点" visible={creating} onCancel={() => setCreating(false)} width={440}>
         <Form onSubmit={create} labelPosition="top">
           <Form.Input
             field="id"
@@ -252,18 +273,18 @@ export function AdminNodes() {
               { pattern: /^[a-z0-9-]{1,32}$/, message: "小写字母、数字与连字符，至多 32 个" },
             ]}
           />
-          <Form.Input field="name" label="显示名" placeholder="东京 1 号" />
+          <Form.Input field="name" label="显示名" placeholder="东京 1 号" extraText="用户在控制台里看到的节点名称。" />
           <Form.Input
             field="domain"
             label="域名（可选）"
             placeholder="relay.example.com"
             extraText="填写后自动申请 Let's Encrypt 证书并走 HTTPS，打洞成功率更高；不填则用服务器公网 IP 的 http 地址。"
           />
-          <Button htmlType="submit" theme="solid" block>
+          <Button htmlType="submit" theme="solid" block style={{ marginTop: 12 }}>
             生成部署命令
           </Button>
         </Form>
-      </Modal>
+      </SideSheet>
 
       <Modal
         title={`重新生成 ${regenerating?.id ?? ""} 的部署命令`}
@@ -282,11 +303,11 @@ export function AdminNodes() {
         </Form>
       </Modal>
 
-      <Modal
+      <SideSheet
         title={`编辑节点 ${editing?.id ?? ""}`}
         visible={editing !== undefined}
         onCancel={() => setEditing(undefined)}
-        footer={null}
+        width={440}
       >
         {editing && (
           <Form onSubmit={edit} labelPosition="top" initValues={{ name: editing.name, url: editing.url }}>
@@ -296,12 +317,12 @@ export function AdminNodes() {
               label="地址"
               extraText="改地址后，设备要到下次续签 ticket 才换到新地址，Host 也需要重新开启 P2P。尽量保持不变，推荐使用域名。"
             />
-            <Button htmlType="submit" theme="solid" block>
+            <Button htmlType="submit" theme="solid" block style={{ marginTop: 12 }}>
               保存
             </Button>
           </Form>
         )}
-      </Modal>
+      </SideSheet>
 
       <Modal
         title={`迁移 ${moving?.id ?? ""} 上的 ${moving?.accounts ?? 0} 个账号`}
