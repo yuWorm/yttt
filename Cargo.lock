@@ -13630,6 +13630,7 @@ dependencies = [
  "iroh-dns",
  "iroh-relay",
  "parking_lot",
+ "rcgen 0.13.2",
  "reqwest 0.12.28",
  "rustls",
  "serde",

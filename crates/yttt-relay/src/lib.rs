@@ -12,6 +12,7 @@ pub mod enroll;
 mod framing;
 mod http;
 mod node;
+mod quic_tls;
 mod report;
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
@@ -38,6 +39,8 @@ pub enum StartError {
     QuicWithoutTls,
     #[error("set either [tls] or [acme], not both")]
     TlsAndAcme,
+    #[error("[quic_tls] is for a node without [tls] or [acme], which QUIC uses already")]
+    QuicTlsWithTls,
     #[error("could not load TLS files: {0}")]
     Tls(String),
     #[error("could not bind {addr}: {source}")]
@@ -122,10 +125,26 @@ impl RelayNode {
             ));
         }
 
+        let quic_config = match (&server_config, &config.quic_tls) {
+            (Some(_), Some(_)) => return Err(StartError::QuicTlsWithTls),
+            (Some(config), None) => Some(config.clone()),
+            (None, Some(files)) => {
+                let reloading = quic_tls::Reloading::new(files.clone());
+                if !reloading.loaded() {
+                    tracing::warn!(
+                        path = %files.cert_chain.display(),
+                        "no QUIC certificate yet; QUIC waits for it"
+                    );
+                }
+                tasks.spawn(reloading.clone().watch(cancel.clone()));
+                Some(reloading.server_config())
+            }
+            (None, None) => None,
+        };
         let quic = match config.quic_listen {
             None => None,
             Some(quic_addr) => {
-                let tls = server_config.as_ref().ok_or(StartError::QuicWithoutTls)?;
+                let tls = quic_config.as_ref().ok_or(StartError::QuicWithoutTls)?;
                 let mut quic = iroh_relay::server::QuicConfig::new(quic_addr);
                 // With ACME this shares the certificate resolver, so QUIC
                 // picks up each new certificate too.

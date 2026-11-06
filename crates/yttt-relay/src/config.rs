@@ -22,6 +22,11 @@ pub struct NodeConfig {
     /// QUIC address discovery, which needs `tls`.
     #[serde(default)]
     pub quic_listen: Option<SocketAddr>,
+    /// A certificate for QUIC alone, from files another program renews:
+    /// for a node whose HTTP sits in the clear behind a reverse proxy that
+    /// holds the certificate. Not with `[tls]` or `[acme]`.
+    #[serde(default)]
+    pub quic_tls: Option<TlsFiles>,
     /// Hex Ed25519 keys whose tickets this node accepts: the control plane's
     /// current key, and its previous one during a rotation.
     #[serde(default)]
@@ -119,6 +124,7 @@ impl NodeConfig {
             acme: None,
             captive_portal_listen: None,
             quic_listen: None,
+            quic_tls: None,
             ticket_keys: ticket_keys
                 .iter()
                 .map(|key| yttt_relay_ticket::hex(key))

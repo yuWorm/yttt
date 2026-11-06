@@ -14,6 +14,7 @@
 #   --method docker|native     --database sqlite|postgres
 #   --expose caddy|service     --domain NAME  --email ADDRESS
 #   --listen ADDRESS:PORT      --public-url URL  --behind-proxy yes|no
+#   --relay-domain NAME | --no-relay   (with Caddy: also run a relay node here)
 #   --admin-email ADDRESS      (password from YTTT_ADMIN_PASSWORD)
 #   --signup open|closed       --dir DIR (Docker; default /opt/yttt-control)
 #
@@ -41,6 +42,8 @@ NATIVE_SHARE=/usr/share/yttt-control
 NATIVE_BIN=/usr/local/bin/yttt-control
 NATIVE_UNIT=/etc/systemd/system/yttt-control.service
 CADDY_UNIT=/etc/systemd/system/caddy.service
+CERT_SYNC=/usr/local/bin/yttt-relay-cert-sync
+CERT_UNIT=/etc/systemd/system/yttt-relay-cert
 SERVICE_USER=yttt-control
 # The image runs as nobody.
 IMAGE_UID=65534
@@ -227,6 +230,7 @@ EMAIL=$EMAIL
 LISTEN=$LISTEN
 PUBLIC_URL=$PUBLIC_URL
 BEHIND_PROXY=$BEHIND_PROXY
+RELAY_DOMAIN=$RELAY_DOMAIN
 DIR=$DIR
 INSTALLED_VERSION=$VERSION
 EOF
@@ -248,7 +252,7 @@ find_install() {
 load_state() {
     # Values from options win over the saved ones.
     saved_method=$(awk -F= '$1 == "METHOD" { print $2 }' "$1")
-    for key in DATABASE EXPOSE DOMAIN EMAIL LISTEN PUBLIC_URL BEHIND_PROXY DIR; do
+    for key in DATABASE EXPOSE DOMAIN EMAIL LISTEN PUBLIC_URL BEHIND_PROXY RELAY_DOMAIN DIR; do
         value=$(awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$1")
         eval "current=\${$key:-}"
         [ -n "$current" ] || eval "$key=\$value"
@@ -333,6 +337,22 @@ write_caddyfile() {
         echo "    encode gzip"
         echo "    reverse_proxy $upstream"
         echo "}"
+        if [ -n "$RELAY_DOMAIN" ]; then
+            echo ""
+            echo "# The relay node on this machine, which listens in the clear behind Caddy."
+            echo "$RELAY_DOMAIN {"
+            echo "    reverse_proxy 127.0.0.1:3340"
+            echo "}"
+            echo "# Devices probe for captive portals over plain HTTP."
+            echo "http://$RELAY_DOMAIN {"
+            echo "    handle /generate_204 {"
+            echo "        reverse_proxy 127.0.0.1:3340"
+            echo "    }"
+            echo "    handle {"
+            echo "        redir https://{host}{uri} permanent"
+            echo "    }"
+            echo "}"
+        fi
     } >"$path"
 }
 
@@ -356,6 +376,14 @@ ask_everything() {
         ask EMAIL "Email for certificate notices" "admin@$DOMAIN"
         if has getent && ! getent hosts "$DOMAIN" >/dev/null; then
             echo "warning: $DOMAIN does not resolve yet; Caddy gets the certificate once it does." >&2
+        fi
+        if [ "$NO_RELAY" = 0 ] && [ -z "$RELAY_DOMAIN" ]; then
+            choose COLOCATE "Also run a relay node on this machine?" yes \
+                "yes|Yes, behind the same Caddy (its own domain, e.g. relay.$DOMAIN)" \
+                "no|No, I deploy nodes elsewhere from the console"
+            if [ "$COLOCATE" = yes ]; then
+                ask RELAY_DOMAIN "Domain for the relay node (its DNS points at this server)" "relay.$DOMAIN"
+            fi
         fi
     else
         choose BIND "Listen on" loopback \
@@ -478,6 +506,7 @@ docker_upgrade() {
 }
 
 docker_uninstall() {
+    remove_cert_sync
     if [ "$PURGE" = 1 ]; then
         (cd "$DIR" && docker compose down -v) || true
         rm -rf "$DIR"
@@ -650,6 +679,7 @@ native_upgrade() {
 }
 
 native_uninstall() {
+    remove_cert_sync
     systemctl disable --now yttt-control >/dev/null 2>&1 || true
     rm -f "$NATIVE_UNIT" "$NATIVE_BIN"
     rm -rf "$NATIVE_SHARE"
@@ -670,6 +700,98 @@ native_uninstall() {
         rm -f "$NATIVE_CONFIG_DIR/install.env"
         say "removed the control plane; settings stay in $NATIVE_CONFIG_DIR and data in $NATIVE_DATA (--purge deletes them)"
     fi
+}
+
+# --- A relay node on this machine ------------------------------------------------
+
+# Deploys node-1 here, behind Caddy, with the administrator just created.
+colocate_relay() {
+    [ -n "$RELAY_DOMAIN" ] || return 0
+    say "deploying a relay node for $RELAY_DOMAIN on this machine"
+    # The node reaches the control plane at its public address, through Caddy.
+    i=0
+    until curl -fsS "https://$DOMAIN/healthz" >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ $i -lt 120 ] || die "https://$DOMAIN does not answer yet; once it does, deploy node-1 from the console"
+        sleep 2
+    done
+    local=$(local_target)
+    password=$(printf '%s' "$ADMIN_PASSWORD" | sed 's/["\\]/\\&/g')
+    printf '{"email": "%s", "password": "%s"}' "$ADMIN_EMAIL" "$password" >"$WORK/sign-in.json"
+    cookie=$(curl -fsS -D - -o /dev/null -H 'x-yttt-web: 1' -H 'content-type: application/json' \
+        --data-binary "@$WORK/sign-in.json" "http://$local/v1/web/session" \
+        | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p')
+    rm -f "$WORK/sign-in.json"
+    [ -n "$cookie" ] || die "could not sign in as $ADMIN_EMAIL to deploy the node"
+    deploy=$(curl -fsS -H "cookie: $cookie" -H 'x-yttt-web: 1' -H 'content-type: application/json' \
+        -d "{\"domain\": \"$RELAY_DOMAIN\"}" "http://$local/v1/admin/nodes/node-1/enrollment")
+    token=$(printf '%s' "$deploy" | sed -n "s/.*YTTT_ENROLL=.\([A-Za-z0-9_-]*\).*/\1/p")
+    [ -n "$token" ] || die "the control plane gave no enrollment token"
+    curl -fsS "http://$local/install/relay.sh" -o "$WORK/relay.sh"
+    YTTT_ENROLL=$token sh "$WORK/relay.sh" --method "$METHOD" --domain "$RELAY_DOMAIN" \
+        --behind-proxy --yes
+    install_cert_sync
+}
+
+# Keeps /etc/yttt-relay/quic a readable copy of Caddy's certificate for the
+# relay domain, which QUIC address discovery uses.
+install_cert_sync() {
+    if [ -n "${YTTT_CADDY_TEST:-}" ]; then issuer=local; else issuer=acme-v02.api.letsencrypt.org-directory; fi
+    if [ "$METHOD" = docker ]; then
+        volume=$(docker volume inspect -f '{{ .Mountpoint }}' "$(basename "$DIR")_caddy_data")
+        store="$volume/caddy/certificates/$issuer/$RELAY_DOMAIN/$RELAY_DOMAIN"
+        group=root
+    else
+        store="/var/lib/caddy/.local/share/caddy/certificates/$issuer/$RELAY_DOMAIN/$RELAY_DOMAIN"
+        group=yttt-relay
+    fi
+    cat >"$CERT_SYNC" <<SYNC
+#!/bin/sh
+# Written by install-control.sh: copies Caddy's certificate for $RELAY_DOMAIN
+# where the relay can read it. The key goes first; the relay reloads when
+# the certificate changes.
+set -eu
+src='$store'
+dst=/etc/yttt-relay/quic
+[ -f "\$src.crt" ] && [ -f "\$src.key" ] || exit 0
+cmp -s "\$src.crt" "\$dst/cert.pem" 2>/dev/null && exit 0
+mkdir -p "\$dst"
+install -m 640 -g $group "\$src.key" "\$dst/key.pem.new"
+mv "\$dst/key.pem.new" "\$dst/key.pem"
+install -m 644 "\$src.crt" "\$dst/cert.pem.new"
+mv "\$dst/cert.pem.new" "\$dst/cert.pem"
+SYNC
+    chmod 755 "$CERT_SYNC"
+    cat >"$CERT_UNIT.service" <<UNIT
+[Unit]
+Description=Copy the relay node's certificate from Caddy
+
+[Service]
+Type=oneshot
+ExecStart=$CERT_SYNC
+UNIT
+    cat >"$CERT_UNIT.timer" <<UNIT
+[Unit]
+Description=Copy the relay node's certificate from Caddy after each renewal
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now yttt-relay-cert.timer >/dev/null
+    "$CERT_SYNC"
+}
+
+remove_cert_sync() {
+    [ -f "$CERT_UNIT.timer" ] || return 0
+    systemctl disable --now yttt-relay-cert.timer >/dev/null 2>&1 || true
+    rm -f "$CERT_UNIT.timer" "$CERT_UNIT.service" "$CERT_SYNC"
+    systemctl daemon-reload || true
+    note "The relay node on this machine stays; remove it with: sudo yttt-relay-install --uninstall"
 }
 
 # --- Shared ------------------------------------------------------------------
@@ -718,7 +840,9 @@ summary() {
     elif [ "$BEHIND_PROXY" = yes ]; then
         note "Point your reverse proxy at http://${LISTEN} and keep its X-Forwarded-For header."
     fi
-    if [ "$ADMIN_EMAIL" != none ]; then
+    if [ -n "$RELAY_DOMAIN" ]; then
+        note "The relay node runs here as node-1 at https://$RELAY_DOMAIN; also open UDP 7842."
+    elif [ "$ADMIN_EMAIL" != none ]; then
         note "Sign in as $ADMIN_EMAIL, then deploy a relay node from Nodes."
     fi
     note "Later: sudo sh install-control.sh --upgrade | --reconfigure | --uninstall"
@@ -736,6 +860,9 @@ main() {
     BIND=''
     PORT=''
     SIGNUP=''
+    RELAY_DOMAIN=''
+    COLOCATE=''
+    NO_RELAY=0
     ADMIN_EMAIL=''
     ADMIN_PASSWORD=${YTTT_ADMIN_PASSWORD:-}
     DIR=/opt/yttt-control
@@ -748,7 +875,7 @@ main() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --method | --database | --expose | --domain | --email | --listen | --public-url | \
-                --behind-proxy | --admin-email | --signup | --dir | --asset-dir | --image)
+                --behind-proxy | --admin-email | --signup | --dir | --asset-dir | --image | --relay-domain)
                 [ $# -ge 2 ] || die "$1 needs a value"
                 case "$1" in
                     --method) METHOD=$2 ;;
@@ -764,10 +891,12 @@ main() {
                     --dir) DIR=$2; DIR_GIVEN=1 ;;
                     --asset-dir) ASSET_DIR=$2 ;;
                     --image) IMAGE=$2 ;;
+                    --relay-domain) RELAY_DOMAIN=$2 ;;
                 esac
                 shift 2
                 ;;
             --yes) YES=1; shift ;;
+            --no-relay) NO_RELAY=1; shift ;;
             --upgrade) ACTION=upgrade; shift ;;
             --reconfigure) ACTION=reconfigure; shift ;;
             --uninstall) ACTION=uninstall; shift ;;
@@ -843,6 +972,7 @@ main() {
     say "creating the administrator $ADMIN_EMAIL"
     "${METHOD}_admin"
     save_state
+    [ "$EXPOSE" = caddy ] && colocate_relay
     summary
 }
 

@@ -27,6 +27,13 @@ sudo sh install-control.sh
 
 空闲时的内存：控制面 6–8 MB，PostgreSQL 约 40 MB，Caddy 约 15 MB。一台 512 MB 的小机器用 SQLite + Caddy 绰绰有余。
 
+选 Caddy 时，脚本还会问“是否同时把本机部署为 relay 节点”（`--relay-domain relay.example.com` / `--no-relay`）。选是则：
+
+- Caddy 同时为 relay 域名签证书并转发到本机 `127.0.0.1:3340`；relay 在 Caddy 之后明文监听（`yttt-relay enroll --behind-proxy`）。
+- QUIC 地址探测（UDP 7842）需要 relay 域名的证书：`yttt-relay-cert.timer` 每 10 分钟把 Caddy 的证书复制到 `/etc/yttt-relay/quic/`，relay 每分钟检查一次并自动换上（配置里的 `[quic_tls]`）。
+- 节点用安装时的管理员身份登记为 `node-1`（新账号的默认节点），与控制面同一种安装方式；需要放行 TCP 80、443 与 UDP 7842。
+- 卸载控制面不会删除这个节点，用 `sudo yttt-relay-install --uninstall` 另行删除。
+
 ### 手动部署
 
 每次发布（`v*` 标签）都会推送镜像 `ghcr.io/yuworm/yttt-relay:<版本>` 与 `:latest`（linux/amd64、linux/arm64），内含控制面、网页控制台和发给节点的两种架构静态 relay 二进制；同样的静态二进制也附在 GitHub Release 里。生产部署用 `packaging/relay/` 下的 compose 文件与配置模板：

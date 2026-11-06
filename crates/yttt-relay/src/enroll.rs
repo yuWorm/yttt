@@ -9,7 +9,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-const USAGE: &str = "usage: yttt-relay enroll --control <url> --config-dir <dir> [--domain <name>] [--public-url <url>] [--port <port>]  (token on stdin or in YTTT_ENROLL)";
+const USAGE: &str = "usage: yttt-relay enroll --control <url> --config-dir <dir> [--domain <name>] [--public-url <url>] [--port <port>]\n       [--behind-proxy --quic-cert <file> --quic-key <file> [--listen <addr>]]  (token on stdin or in YTTT_ENROLL)\n\n--behind-proxy: a reverse proxy on this machine serves --domain over HTTPS and forwards to --listen\n(default 127.0.0.1:3340); QUIC address discovery uses the proxy's certificate files.";
+/// Where a node behind a reverse proxy listens for it.
+const PROXIED_LISTEN: &str = "127.0.0.1:3340";
 const DEFAULT_PORT: u16 = 3341;
 /// Where certificates persist; systemd's StateDirectory for the service.
 const ACME_CACHE: &str = "/var/lib/yttt-relay/acme";
@@ -41,6 +43,14 @@ struct Options {
     domain: Option<String>,
     public_url: Option<String>,
     port: u16,
+    proxied: Option<Proxied>,
+}
+
+/// A node whose HTTPS a reverse proxy on the same machine terminates.
+struct Proxied {
+    listen: String,
+    quic_cert: PathBuf,
+    quic_key: PathBuf,
 }
 
 pub async fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
@@ -90,6 +100,10 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut domain = None;
     let mut public_url = None;
     let mut port = DEFAULT_PORT;
+    let mut behind_proxy = false;
+    let mut listen = None;
+    let mut quic_cert = None;
+    let mut quic_key = None;
     while let Some(argument) = args.next() {
         let mut value = || args.next().ok_or_else(|| USAGE.to_string());
         match argument.as_str() {
@@ -98,15 +112,36 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--domain" => domain = Some(value()?),
             "--public-url" => public_url = Some(value()?),
             "--port" => port = value()?.parse().map_err(|_| USAGE.to_string())?,
+            "--behind-proxy" => behind_proxy = true,
+            "--listen" => listen = Some(value()?),
+            "--quic-cert" => quic_cert = Some(PathBuf::from(value()?)),
+            "--quic-key" => quic_key = Some(PathBuf::from(value()?)),
             _ => return Err(USAGE.into()),
         }
     }
+    let proxied = if behind_proxy {
+        if domain.is_none() {
+            return Err("--behind-proxy needs the --domain the proxy serves".into());
+        }
+        let listen = listen.unwrap_or_else(|| PROXIED_LISTEN.into());
+        listen
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| format!("--listen {listen} is not an address"))?;
+        Some(Proxied {
+            listen,
+            quic_cert: quic_cert.ok_or("--behind-proxy needs --quic-cert")?,
+            quic_key: quic_key.ok_or("--behind-proxy needs --quic-key")?,
+        })
+    } else {
+        None
+    };
     Ok(Options {
         control: control.ok_or(USAGE)?,
         config_dir: config_dir.ok_or(USAGE)?,
         domain,
         public_url,
         port,
+        proxied,
     })
 }
 
@@ -140,11 +175,17 @@ fn config(options: &Options, enrolled: &Enrolled) -> String {
         id = enrolled.node_id,
         url = enrolled.url,
     );
-    match &options.domain {
-        Some(domain) => text.push_str(&format!(
+    match (&options.domain, &options.proxied) {
+        (Some(_), Some(proxied)) => text.push_str(&format!(
+            "# HTTPS is the reverse proxy's; QUIC uses its certificate files.\nlisten = \"{listen}\"\nquic_listen = \"0.0.0.0:7842\"\nticket_keys = [{keys}]\n\n[quic_tls]\ncert_chain = {cert:?}\nprivate_key = {key:?}\n",
+            listen = proxied.listen,
+            cert = proxied.quic_cert.display().to_string(),
+            key = proxied.quic_key.display().to_string(),
+        )),
+        (Some(domain), None) => text.push_str(&format!(
             "listen = \"0.0.0.0:443\"\ncaptive_portal_listen = \"0.0.0.0:80\"\nquic_listen = \"0.0.0.0:7842\"\nticket_keys = [{keys}]\n\n[acme]\ndomains = [\"{domain}\"]\ncache_dir = \"{ACME_CACHE}\"\n"
         )),
-        None => text.push_str(&format!(
+        (None, _) => text.push_str(&format!(
             "listen = \"0.0.0.0:{port}\"\nticket_keys = [{keys}]\n",
             port = options.port
         )),
@@ -197,6 +238,7 @@ mod tests {
                 domain: domain.clone(),
                 public_url: None,
                 port: 3341,
+                proxied: None,
             };
             let text = config(&options, &enrolled());
             assert!(!text.contains("secret"));
@@ -207,5 +249,49 @@ mod tests {
             assert_eq!(loaded.control.unwrap().node_token, "secret");
             assert_eq!(loaded.acme.is_some(), domain.is_some());
         }
+    }
+
+    #[test]
+    fn a_node_behind_a_proxy_listens_locally_and_borrows_its_certificate() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = parse(
+            [
+                "--control",
+                "https://control.example",
+                "--config-dir",
+                temp.path().to_str().unwrap(),
+                "--domain",
+                "relay.example.com",
+                "--behind-proxy",
+                "--quic-cert",
+                "/var/lib/caddy/relay.crt",
+                "--quic-key",
+                "/var/lib/caddy/relay.key",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("relay.toml"),
+            config(&options, &enrolled()),
+        )
+        .unwrap();
+        write_private(&temp.path().join("node-token"), "secret").unwrap();
+        let loaded = crate::NodeConfig::load(&temp.path().join("relay.toml")).unwrap();
+        assert_eq!(loaded.listen, "127.0.0.1:3340".parse().unwrap());
+        assert!(loaded.acme.is_none() && loaded.tls.is_none());
+        assert_eq!(
+            loaded.quic_tls.unwrap().cert_chain,
+            PathBuf::from("/var/lib/caddy/relay.crt")
+        );
+        assert!(
+            parse(
+                ["--control", "x", "--config-dir", "y", "--behind-proxy"]
+                    .into_iter()
+                    .map(String::from)
+            )
+            .is_err()
+        );
     }
 }

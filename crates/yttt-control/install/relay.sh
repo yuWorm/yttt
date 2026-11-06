@@ -10,6 +10,10 @@
 #   YTTT_ENROLL=<token> sh relay.sh [--method native|docker] [--domain relay.example.com]
 #                                   [--public-url URL] [--binary-url URL] [--image IMAGE]
 #                                   [--no-systemd] [--yes]
+#   With --behind-proxy, a reverse proxy on this machine (the control plane
+#   installer's Caddy) serves --domain over HTTPS: the relay listens on
+#   127.0.0.1:3340 and QUIC uses the certificate in /etc/yttt-relay/quic.
+#
 #   yttt-relay-install --upgrade      replace the binary or image, keep the enrollment
 #   yttt-relay-install --uninstall    stop and remove the node from this machine
 #
@@ -86,6 +90,7 @@ main() {
     image=''
     method=''
     no_systemd=0
+    behind_proxy=0
     yes=0
     mode=install
     while [ $# -gt 0 ]; do
@@ -96,6 +101,7 @@ main() {
             --image) [ $# -ge 2 ] || die "--image needs a value"; image=$2; shift 2 ;;
             --method) [ $# -ge 2 ] || die "--method needs a value"; method=$2; shift 2 ;;
             --no-systemd) no_systemd=1; shift ;;
+            --behind-proxy) behind_proxy=1; shift ;;
             --yes) yes=1; shift ;;
             --upgrade) mode=upgrade; shift ;;
             --uninstall) mode=uninstall; shift ;;
@@ -127,6 +133,7 @@ main() {
     ask_method
     case "$method" in native | docker) ;; *) die "--method is native or docker" ;; esac
     ask_domain
+    [ "$behind_proxy" = 0 ] || [ -n "$domain" ] || die "--behind-proxy needs the --domain the proxy serves"
     if [ -n "$domain" ]; then
         if command -v getent >/dev/null && ! getent hosts "$domain" >/dev/null; then
             die "$domain does not resolve; point its DNS at this machine first"
@@ -153,6 +160,8 @@ native_install() {
     set -- --control "$CONTROL" --config-dir "$CONFIG_DIR"
     [ -n "$domain" ] && set -- "$@" --domain "$domain"
     [ -n "$public_url" ] && set -- "$@" --public-url "$public_url"
+    [ "$behind_proxy" = 1 ] && set -- "$@" --behind-proxy \
+        --quic-cert "$CONFIG_DIR/quic/cert.pem" --quic-key "$CONFIG_DIR/quic/key.pem"
     printf '%s' "$YTTT_ENROLL" | "$PREFIX/yttt-relay" enroll "$@"
     unset YTTT_ENROLL
 
@@ -186,6 +195,8 @@ docker_install() {
     set -- --control "$CONTROL" --config-dir "$CONFIG_DIR"
     [ -n "$domain" ] && set -- "$@" --domain "$domain"
     [ -n "$public_url" ] && set -- "$@" --public-url "$public_url"
+    [ "$behind_proxy" = 1 ] && set -- "$@" --behind-proxy \
+        --quic-cert "$CONFIG_DIR/quic/cert.pem" --quic-key "$CONFIG_DIR/quic/key.pem"
     # Host networking, like the node: the control plane may be on this machine.
     printf '%s' "$YTTT_ENROLL" | docker run --rm -i --user 0:0 --network host \
         -v "$CONFIG_DIR:$CONFIG_DIR" --entrypoint yttt-relay "$image" enroll "$@"
@@ -309,7 +320,9 @@ wait_healthy() {
     fi
     url=$(awk -F'"' '/^# url/ { print $2 }' "$CONFIG_DIR/relay.toml")
     say "the node is enrolled as ${url:-this machine}"
-    if [ -n "$domain" ]; then
+    if [ "$behind_proxy" = 1 ]; then
+        echo "    The proxy in front serves $domain; open UDP 7842 to this machine for direct paths."
+    elif [ -n "$domain" ]; then
         echo "    Open TCP 443 and 80 and UDP 7842 to this machine."
         echo "    The certificate is requested in the background; the node serves once it arrives."
     else

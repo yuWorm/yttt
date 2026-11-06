@@ -425,3 +425,34 @@ async fn a_suspended_account_is_dropped_and_refused_until_reinstated() {
     );
     node.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_behind_a_proxy_serves_quic_with_the_proxys_certificate() {
+    let dir = tempfile::tempdir().unwrap();
+    let cert = rcgen::generate_simple_self_signed(vec!["relay.example".to_owned()]).unwrap();
+    std::fs::write(dir.path().join("cert.pem"), cert.cert.pem()).unwrap();
+    std::fs::write(dir.path().join("key.pem"), cert.key_pair.serialize_pem()).unwrap();
+    let files = yttt_relay::TlsFiles {
+        cert_chain: dir.path().join("cert.pem"),
+        private_key: dir.path().join("key.pem"),
+    };
+    let mut config = NodeConfig::local(
+        NODE,
+        "127.0.0.1:0".parse().unwrap(),
+        &[public_key(&CONTROL_SECRET)],
+    );
+    config.quic_listen = Some("127.0.0.1:0".parse().unwrap());
+    config.quic_tls = Some(files.clone());
+    let node = RelayNode::spawn(config.clone()).await.unwrap();
+    assert!(node.quic_addr().is_some());
+    // Plain HTTP stays, for the proxy in front.
+    let mut client = connect(&node, &ALICE_LAPTOP, Some(fast_ticket(&ALICE_LAPTOP)))
+        .await
+        .unwrap();
+    send(&mut client, &ALICE_LAPTOP, 10).await;
+    node.shutdown().await;
+
+    // With its own TLS, QUIC already has a certificate.
+    config.tls = Some(files);
+    assert!(RelayNode::spawn(config).await.is_err());
+}
