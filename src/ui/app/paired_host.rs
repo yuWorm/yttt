@@ -426,6 +426,7 @@ impl PairedHostForm {
         let mut records = self.records.clone();
         records.retain(|record| record.host.host != host);
         let profile = self.profile.clone();
+        remove_from_account(&profile, host);
         let result = paired_hosts::save_records(&profile, &records)
             .and_then(|()| {
                 paired_hosts::delete_device_key(&paired_hosts::device_key_store(&profile), host)
@@ -676,6 +677,32 @@ impl Render for PairedHostForm {
     }
 }
 
+/// Takes this device's key for `host` off the relay account, if signed in.
+/// Best effort, in the background: forgetting a Host never waits on the
+/// control plane.
+fn remove_from_account(profile: &AppProfile, host: EndpointKey) {
+    let Ok(Some(session)) =
+        crate::relay_account::load_session(&crate::relay_account::session_store(profile))
+    else {
+        return;
+    };
+    let Ok(secret) = paired_hosts::load_device_key(&paired_hosts::device_key_store(profile), host)
+    else {
+        return;
+    };
+    let endpoint_id = yttt_transport_iroh::endpoint_key(&secret).0;
+    let _ = std::thread::Builder::new()
+        .name("yttt-relay-account".into())
+        .spawn(move || {
+            if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                let _ = runtime.block_on(session.remove_device(&endpoint_id));
+            }
+        });
+}
+
 /// Six digits in two groups, as the Host shows them.
 pub(crate) fn format_short_code(code: u32) -> String {
     let digits = format!("{code:06}");
@@ -717,15 +744,44 @@ fn pair_with_host(
         .build()
         .map_err(|error| error.to_string())?;
     let secret = paired_hosts::new_device_key();
+    let mut code = code;
+    let account = crate::relay_account::load_session(&crate::relay_account::session_store(profile))
+        .ok()
+        .flatten();
     runtime.block_on(async {
-        let endpoint = IrohEndpoint::bind(EndpointConfig {
-            // The key the Host will admit: the work session must use the same one.
-            secret: *secret,
-            relay: code
+        // With a relay account the new key joins the account's relay node,
+        // where the account's Host waits; a Host reachable only through that
+        // relay can then still be paired.
+        let host_name = if name.is_empty() {
+            format!("P2P Host {}", &code.host.to_string()[..8])
+        } else {
+            name.clone()
+        };
+        let ticket = match &account {
+            Some(session) => crate::relay_account::ticket_for(
+                session,
+                &secret,
+                &crate::relay_account::device_label(&host_name),
+            )
+            .await
+            .ok(),
+            None => None,
+        };
+        let relay = match &ticket {
+            Some(ticket) => {
+                code.relay_url = Some(ticket.relay_url.clone());
+                yttt_transport_iroh::RelaySetup::Use(ticket.target())
+            }
+            None => code
                 .relay_url
                 .clone()
                 .map(|url| RelayTarget { url, token: None })
                 .into(),
+        };
+        let endpoint = IrohEndpoint::bind(EndpointConfig {
+            // The key the Host will admit: the work session must use the same one.
+            secret: *secret,
+            relay,
             alpns: Vec::new(),
             gate: Arc::new(OpenGate),
             direct: DirectPaths::Any,
@@ -740,7 +796,19 @@ fn pair_with_host(
             _ = cancelled.recv_async() => Err("pairing was cancelled".to_string()),
         };
         endpoint.close().await;
-        let host = result?;
+        let host = match result {
+            Ok(host) => host,
+            Err(error) => {
+                // A key that never paired should not hold one of the plan's
+                // device slots.
+                if let (Some(session), Some(_)) = (&account, &ticket) {
+                    let _ = session
+                        .remove_device(&yttt_transport_iroh::endpoint_key(&secret).0)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
         paired_hosts::save_device_key(
             &paired_hosts::device_key_store(profile),
             host.host,

@@ -21,6 +21,7 @@ impl WorkbenchView {
         let text = self.ui_text;
         let busy = self.ssh.remote_access_busy || runtime.is_none();
         let p2p_section = self.p2p_settings_section(window, cx);
+        let relay_account_section = self.relay_account_section(window, cx);
         let status = self.ssh.remote_access.as_ref();
         let enabled = status.is_some_and(|status| status.effective == RemoteAccessState::Listening);
         let state_key = match status.map(|status| status.effective) {
@@ -290,6 +291,7 @@ impl WorkbenchView {
                     ),
             )
             .child(p2p_section)
+            .child(relay_account_section)
             .when_some(
                 status.and_then(|status| status.error.as_ref()),
                 |view, error| {

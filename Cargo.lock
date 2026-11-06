@@ -13371,6 +13371,7 @@ dependencies = [
  "yttt-agent-providers",
  "yttt-agent-runtime",
  "yttt-client-core",
+ "yttt-control-client",
  "yttt-core",
  "yttt-host",
  "yttt-project-core",

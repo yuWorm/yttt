@@ -248,6 +248,49 @@ fn the_host_page_shows_an_invitation_then_asks_to_compare_the_devices_numbers(
 }
 
 #[gpui::test]
+fn the_relay_account_section_signs_in_then_shows_the_plan(cx: &mut TestAppContext) {
+    cx.update(yttt_ui::init);
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_profile(&p2p_test_profile(temp.path(), "relay-account-page"));
+    let slot = Rc::new(RefCell::new(None));
+    let window_slot = slot.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        *window_slot.borrow_mut() = Some(root.clone());
+        let surface = cx.new(|_| RemoteAccessTestSurface(root));
+        yttt_ui::window::yttt_root(surface, window, cx)
+    });
+    cx.run_until_parked();
+    let root = slot.borrow_mut().take().unwrap();
+    assert!(cx.debug_bounds("relay-account").is_some());
+    assert!(cx.debug_bounds("relay-account-signed-in").is_none());
+
+    root.update(cx, |root, cx| {
+        root.ssh.relay_account.display = Some(crate::relay_account::AccountDisplay {
+            control_url: "https://control.example".into(),
+            email: "owner@example.com".into(),
+            account_id: 7,
+        });
+        root.ssh.relay_account.view = Some(yttt_control_client::AccountView {
+            account_id: 7,
+            email: "owner@example.com".into(),
+            plan: "basic".into(),
+            node_id: "tokyo-1".into(),
+            relay_url: "https://tokyo-1.relay.example".into(),
+            month_upstream_bytes: 3 << 30,
+            monthly_bytes: 50 << 30,
+            suspended: false,
+            devices: 2,
+            max_devices: 5,
+        });
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("relay-account-signed-in").is_some());
+}
+
+#[gpui::test]
 fn a_paired_host_is_listed_and_pairing_opens_its_editor(cx: &mut TestAppContext) {
     cx.update(yttt_ui::init);
     let temp = tempdir().unwrap();

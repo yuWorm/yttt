@@ -10,11 +10,13 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use yttt_relay_ticket::{
     DeviceProof, ProofPurpose,
     api::{
-        AccountView, ApiError, DeviceEntry, DeviceList, DeviceProofBody, Login, RegisterDevice,
-        SessionGranted, TicketGranted, TicketRequest,
+        ApiError, DeviceEntry, DeviceList, DeviceProofBody, Login, RegisterDevice, SessionGranted,
+        TicketGranted, TicketRequest,
     },
 };
 use yttt_transport_iroh::{IrohEndpoint, RelayTarget};
+
+pub use yttt_relay_ticket::api::AccountView;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const FIRST_RETRY: Duration = Duration::from_secs(30);
@@ -204,6 +206,30 @@ impl ControlSession {
                     }),
             )
             .await
+    }
+
+    /// Removes a device from the account; removing one that is not there is
+    /// not an error.
+    pub async fn remove_device(&self, endpoint_id: &[u8; 32]) -> Result<(), ControlError> {
+        let client = self.client()?;
+        let response = client
+            .http
+            .delete(client.url(&format!(
+                "/v1/devices/{}",
+                yttt_relay_ticket::hex(endpoint_id)
+            )))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|error| ControlError::Unreachable(error.to_string()))?;
+        let status = response.status();
+        if status.is_success() || status.as_u16() == 404 {
+            return Ok(());
+        }
+        Err(ControlError::Refused {
+            status: status.as_u16(),
+            message: status.to_string(),
+        })
     }
 
     pub async fn devices(&self) -> Result<DeviceList, ControlError> {

@@ -75,7 +75,19 @@ cargo build --release -p yttt-relay
 
 Host 开启 P2P 时填这个地址；设备不用单独设置，配对码里带着 Host 的 relay 地址。
 
-## 5. 出问题时收集什么
+## 5. 付费 relay（账号）
+
+需要控制面和计费 relay 节点，本地可以用 docker 起一整套（见 `packaging/relay-dev/docker-compose.full.yml`，控制面在 `http://127.0.0.1:18080`，节点在 `http://127.0.0.1:3341`）。真机测试时把两者部署到双方都能访问的机器上，并把控制面配置里节点的 `url` 改成那台机器的地址。
+
+1. 建账号（开发模式）：`curl -X POST http://<控制面>/v1/dev/accounts -H 'content-type: application/json' -d '{"email":"me@example.com","password":"至少八位密码","plan":"basic","node":"local-1"}'`。
+2. Host 与设备都在“远程访问此电脑”页的“relay 账号”一节用同一账号登录。
+3. Host 上点“本机作为 Host 时使用此账号”。Host 会登记自己的密钥并取得 ticket，P2P 一节显示正在使用的 relay。
+4. 照常配对：设备已登录时，配对与之后的连接都经账号的 relay 节点，即使配对码里的 relay 地址不同。
+5. 在 Host 页面的账号信息里应能看到本月用量增长；在控制面封停账号（`POST /v1/dev/accounts/<id>/suspension {"suspended":true}`）后，只走 relay 的会话约 30 秒内断开。
+
+每把设备密钥各占套餐的一个设备名额：Host 一个，每台设备对每台 Host 各一个。忘记一台配对的 Host 时会从账号移除对应的密钥。
+
+## 6. 出问题时收集什么
 
 - Host：“远程访问此电脑”页的错误文字，或 `yttt-server p2p status` 的输出；服务器 Host 的日志在 `~/.local/state/yttt/remote/default/logs/server.log`（设置了 `XDG_STATE_HOME` 时以它代替 `~/.local/state`）。
 - 设备：`logs/client.log` 的最后几十行，和连接窗口里显示的错误。

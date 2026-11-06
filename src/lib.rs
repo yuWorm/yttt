@@ -19,6 +19,7 @@ pub mod host_storage;
 pub mod login_startup;
 mod paired_hosts;
 pub mod palette;
+mod relay_account;
 pub mod remote_host;
 pub mod remote_launch;
 mod remote_restore;

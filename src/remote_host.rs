@@ -477,19 +477,66 @@ fn connect_paired(
         .thread_name("yttt-paired-host-client")
         .build()
         .map_err(|error| error.to_string())?;
+    let logs = launch.local_profile.paths().logs.clone();
+    // A signed-in relay account puts this device on the account's relay node,
+    // where the Host of the same account is too. Without one, or if the
+    // control plane cannot be reached, the relay hint from pairing is used.
+    let account = crate::relay_account::load_session(&crate::relay_account::session_store(
+        &launch.local_profile,
+    ))
+    .ok()
+    .flatten();
+    let mut host = host;
+    let ticket = account.as_ref().and_then(|session| {
+        let label = crate::relay_account::device_label(&label);
+        match runtime.block_on(crate::relay_account::ticket_for(session, &secret, &label)) {
+            Ok(ticket) => Some(ticket),
+            Err(error) => {
+                let line = format!("relay account unavailable, using the pairing relay: {error}");
+                runtime.block_on(crate::connection_log::note(&logs, &label, &line));
+                None
+            }
+        }
+    });
+    let relay = match &ticket {
+        Some(ticket) => {
+            host.relay_url = Some(ticket.relay_url.clone());
+            yttt_transport_iroh::RelaySetup::Use(ticket.target())
+        }
+        None => host
+            .relay_url
+            .clone()
+            .map(|url| RelayTarget { url, token: None })
+            .into(),
+    };
     let endpoint = runtime
         .block_on(IrohEndpoint::bind(EndpointConfig {
             secret: *secret,
-            relay: host
-                .relay_url
-                .clone()
-                .map(|url| RelayTarget { url, token: None })
-                .into(),
+            relay,
             alpns: Vec::new(),
             gate: Arc::new(OpenGate),
             direct: DirectPaths::Any,
         }))
         .map_err(|error| format!("cannot open the P2P endpoint: {error}"))?;
+    if let (Some(session), Some(ticket)) = (account, ticket) {
+        let logs = logs.clone();
+        let label = label.clone();
+        runtime.spawn(yttt_control_client::keep_ticket(
+            session,
+            *secret,
+            endpoint.clone(),
+            ticket,
+            |_| {},
+            move |error| {
+                let line = format!("relay ticket renewal failed: {error}");
+                let logs = logs.clone();
+                let label = label.clone();
+                tokio::spawn(
+                    async move { crate::connection_log::note(&logs, &label, &line).await },
+                );
+            },
+        ));
+    }
     let connector = Arc::new(host.connector(endpoint));
     set_p2p_path(P2pPath::Connecting);
     watch_path(

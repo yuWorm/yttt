@@ -1049,6 +1049,25 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAddSsh => "SSH connection",
         UiTextKey::RemoteAddHost => "Network Host",
         UiTextKey::RemoteAddPaired => "Pair with a Host (P2P)",
+        UiTextKey::RelayAccountTitle => "Relay account",
+        UiTextKey::RelayAccountDescription => {
+            "A relay account lets your devices reach each other through a paid relay when no direct path works. Sign in with the same account on the Host and on its devices. The account only carries traffic; it never decides who may reach this computer."
+        }
+        UiTextKey::RelayAccountControlUrl => "Service address",
+        UiTextKey::RelayAccountEmail => "Email",
+        UiTextKey::RelayAccountPassword => "Password",
+        UiTextKey::RelayAccountSignIn => "Sign in",
+        UiTextKey::RelayAccountSignOut => "Sign out",
+        UiTextKey::RelayAccountSignedIn => "Signed in as {email}",
+        UiTextKey::RelayAccountPlan => "Plan {plan} · relay {relay}",
+        UiTextKey::RelayAccountUsage => "This month {used} of {quota} · devices {devices} of {max}",
+        UiTextKey::RelayAccountSuspended => "This account is suspended.",
+        UiTextKey::RelayAccountUseForHost => "Use for this computer as a Host",
+        UiTextKey::RelayAccountStopForHost => "Stop using for this computer",
+        UiTextKey::RelayAccountHostNeedsP2p => {
+            "Turn on P2P pairing to use the account for this computer."
+        }
+        UiTextKey::RelayAccountSessionExpired => "The sign-in has expired; sign in again.",
         UiTextKey::P2pPathConnecting => "connecting",
         UiTextKey::P2pPathDirect => "direct",
         UiTextKey::P2pPathRelay => "via relay",

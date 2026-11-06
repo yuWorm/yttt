@@ -855,6 +855,23 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAddSsh => "SSH 连接",
         UiTextKey::RemoteAddHost => "网络 Host",
         UiTextKey::RemoteAddPaired => "配对 Host（P2P）",
+        UiTextKey::RelayAccountTitle => "relay 账号",
+        UiTextKey::RelayAccountDescription => {
+            "登录 relay 账号后，直连不通时设备之间可以经付费 relay 互通。Host 和它的设备要登录同一个账号。账号只负责转发流量，不决定谁能连接本机。"
+        }
+        UiTextKey::RelayAccountControlUrl => "服务地址",
+        UiTextKey::RelayAccountEmail => "邮箱",
+        UiTextKey::RelayAccountPassword => "密码",
+        UiTextKey::RelayAccountSignIn => "登录",
+        UiTextKey::RelayAccountSignOut => "退出登录",
+        UiTextKey::RelayAccountSignedIn => "已登录：{email}",
+        UiTextKey::RelayAccountPlan => "套餐 {plan} · relay {relay}",
+        UiTextKey::RelayAccountUsage => "本月 {used} / {quota} · 设备 {devices} / {max}",
+        UiTextKey::RelayAccountSuspended => "此账号已被封停。",
+        UiTextKey::RelayAccountUseForHost => "本机作为 Host 时使用此账号",
+        UiTextKey::RelayAccountStopForHost => "本机不再使用此账号",
+        UiTextKey::RelayAccountHostNeedsP2p => "开启 P2P 配对后，才能让本机作为 Host 使用此账号。",
+        UiTextKey::RelayAccountSessionExpired => "登录已失效，请重新登录。",
         UiTextKey::P2pPathConnecting => "连接中",
         UiTextKey::P2pPathDirect => "直连",
         UiTextKey::P2pPathRelay => "经 relay",

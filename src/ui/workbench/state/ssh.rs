@@ -143,6 +143,19 @@ pub(in super::super) struct P2pPanelState {
     pub(in super::super) devices: Vec<yttt_protocol::p2p::PairedDevice>,
 }
 
+/// The relay account part of "Remote access to this computer".
+#[derive(Default)]
+pub(in super::super) struct RelayAccountPanelState {
+    pub(in super::super) loaded: bool,
+    pub(in super::super) busy: bool,
+    pub(in super::super) error: Option<String>,
+    pub(in super::super) display: Option<crate::relay_account::AccountDisplay>,
+    pub(in super::super) view: Option<yttt_control_client::AccountView>,
+    pub(in super::super) control_url: Option<Entity<InputState>>,
+    pub(in super::super) email: Option<Entity<InputState>>,
+    pub(in super::super) password: Option<Entity<InputState>>,
+}
+
 pub(in super::super) struct SshControllerState {
     pub(in super::super) connections: SshConnectionsConfig,
     pub(in super::super) statuses: HashMap<ConnectionId, ConnectionStatus>,
@@ -156,6 +169,7 @@ pub(in super::super) struct SshControllerState {
     pub(in super::super) remote_access_error: Option<String>,
     pub(in super::super) remote_access_address: Option<Entity<InputState>>,
     pub(in super::super) p2p: P2pPanelState,
+    pub(in super::super) relay_account: RelayAccountPanelState,
     pub(in super::super) form: Option<SshConnectionForm>,
     pub(in super::super) project_picker: SshProjectPickerState,
     pub(in super::super) pending_host_keys: VecDeque<HostKeyChallenge>,
@@ -188,6 +202,7 @@ impl SshControllerState {
                 remote_access_error: None,
                 remote_access_address: None,
                 p2p: P2pPanelState::default(),
+                relay_account: RelayAccountPanelState::default(),
                 form: None,
                 project_picker: SshProjectPickerState::default(),
                 pending_host_keys: VecDeque::new(),

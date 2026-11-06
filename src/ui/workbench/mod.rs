@@ -57,6 +57,7 @@ mod palette;
 mod performance;
 mod persistence;
 mod project_files;
+mod relay_account_panel;
 mod remote_access;
 mod remote_access_p2p;
 mod remote_connections;

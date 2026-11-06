@@ -125,6 +125,7 @@ yttt-core = { path = "crates/yttt-core" }
 flume = "0.12"
 yttt-host = { path = "crates/yttt-host" }
 yttt-client-core = { path = "crates/yttt-client-core" }
+yttt-control-client = { path = "crates/yttt-control-client" }
 yttt-protocol = { path = "crates/yttt-protocol" }
 yttt-project-core = { path = "crates/yttt-project-core" }
 yttt-transport-local = { path = "crates/yttt-transport-local" }
