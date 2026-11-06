@@ -204,7 +204,18 @@ pub async fn run_from_os_args(args: impl IntoIterator<Item = OsString>) -> Resul
     }
 }
 
+/// Our warnings by default; `RUST_LOG` (e.g. `iroh=debug`) adds more. The
+/// detached Host's stderr is `server.log`.
+const DEFAULT_TRACE: &str = "warn,iroh=error,iroh_relay=error,iroh_quinn=error";
+
 async fn serve(paths: ServerPaths) -> Result<(), ServerError> {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_TRACE));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .try_init();
     paths.prepare_for_host()?;
     let _token = ensure_auth_token(&paths.token_file)?;
     let work_token = ensure_auth_token(&paths.runtime_root.join("work-auth-token"))?;

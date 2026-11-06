@@ -156,6 +156,7 @@ impl EndpointHooks for GateHook {
         let peer = key_of(connection.remote_id());
         // Outgoing connections reach peers this endpoint chose to dial.
         if connection.side().is_server() && !self.gate.admit(peer, connection.alpn()) {
+            tracing::debug!(%peer, alpn = %String::from_utf8_lossy(connection.alpn()), "the gate refused a connection");
             return AfterHandshakeOutcome::Reject {
                 error_code: VarInt::from_u32(CLOSE_REFUSED),
                 reason: b"refused".to_vec(),
@@ -240,8 +241,9 @@ impl IrohEndpoint {
         loop {
             let incoming = self.endpoint.accept().await?;
             // A refused or failed handshake only ends that connection.
-            if let Ok(connection) = incoming.await {
-                return Some(self.wrap(connection));
+            match incoming.await {
+                Ok(connection) => return Some(self.wrap(connection)),
+                Err(error) => tracing::debug!(%error, "an incoming connection failed"),
             }
         }
     }
@@ -315,8 +317,15 @@ impl PeerConnection {
     /// The next stream the peer opened, if the gate still admits the peer. A refused
     /// peer's connection is closed and `None` returned.
     pub async fn accept_stream(&self) -> Option<TransportStream> {
-        let (send, receive) = self.connection.accept_bi().await.ok()?;
+        let (send, receive) = match self.connection.accept_bi().await {
+            Ok(stream) => stream,
+            Err(error) => {
+                tracing::debug!(peer = %self.peer, %error, "the connection ended");
+                return None;
+            }
+        };
         if !self.gate.admit(self.peer, self.connection.alpn()) {
+            tracing::debug!(peer = %self.peer, "the gate refused a stream");
             self.connection
                 .close(VarInt::from_u32(CLOSE_REVOKED), b"revoked");
             return None;

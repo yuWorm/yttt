@@ -278,6 +278,8 @@ struct Summary {
     relay_url: Option<String>,
     relay_account: Option<String>,
     error: Option<String>,
+    /// Remote clients connected now, by their device key or client ID.
+    clients: Vec<String>,
 }
 
 impl Summary {
@@ -300,6 +302,14 @@ impl Summary {
                 .as_ref()
                 .map(|account| format!("{} at {}", account.account_id, account.control_url)),
             error: error.clone(),
+            clients: status
+                .clients
+                .iter()
+                .map(|client| match client.device {
+                    Some(device) => device.to_string(),
+                    None => client.client_id.as_str().to_owned(),
+                })
+                .collect(),
         }
     }
 }

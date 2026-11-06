@@ -110,7 +110,10 @@ main() {
     chmod 640 "$CONFIG_DIR/node-token"
     install_unit
     systemctl daemon-reload
-    systemctl enable --now yttt-relay
+    systemctl enable yttt-relay
+    # A machine deployed again keeps its service running; restart it so the
+    # new enrollment takes effect.
+    systemctl restart yttt-relay
     wait_healthy "$domain"
 }
 

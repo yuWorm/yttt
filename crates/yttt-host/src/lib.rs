@@ -886,7 +886,17 @@ async fn serve_connection(
     let authenticated = tokio::select! {
         _ = handshake_stop.changed() => return Err(()),
         result = tokio::time::timeout_at(deadline, yttt_transport::server_handshake_with(&mut stream, &context.identity, credential.as_ref())) =>
-            result.map_err(|_| ())?.map_err(|_| ())?,
+            match result {
+                Ok(Ok(authenticated)) => authenticated,
+                Ok(Err(error)) => {
+                    tracing::debug!(ingress = ?context.identity.ingress, %error, "a client handshake failed");
+                    return Err(());
+                }
+                Err(_) => {
+                    tracing::debug!(ingress = ?context.identity.ingress, "a client handshake timed out");
+                    return Err(());
+                }
+            },
     };
     if let Some(permit) = context.handshake_permit.take() {
         permit.lock().take();
@@ -896,17 +906,21 @@ async fn serve_connection(
             Some(device) => remote_access::Principal::Device(device.key),
             None => remote_access::Principal::Session(authenticated.client_instance_id.clone()),
         };
-        let session = admission.admit(
-            context.identity.ingress,
-            principal,
-            &authenticated.client_instance_id,
-            || {
-                context
-                    .device
-                    .as_ref()
-                    .is_none_or(|device| device.devices.contains(device.key))
-            },
-        )?;
+        let session = admission
+            .admit(
+                context.identity.ingress,
+                principal.clone(),
+                &authenticated.client_instance_id,
+                || {
+                    context
+                        .device
+                        .as_ref()
+                        .is_none_or(|device| device.devices.contains(device.key))
+                },
+            )
+            .inspect_err(|()| {
+                tracing::debug!(?principal, "refused a remote client: not admitted")
+            })?;
         if let Some(device) = &context.device {
             device.devices.touch(device.key);
         }
@@ -953,10 +967,12 @@ async fn serve_client_session(
         let mut sessions = context.sessions.lock();
         if let Some(binding) = sessions.get(&client_id) {
             if binding.authentication != authenticated.session {
+                tracing::debug!(%client_id, "refused a session: the client ID belongs to another session");
                 return Err(());
             }
         } else {
             if sessions.len() >= MAX_CLIENT_SESSIONS {
+                tracing::debug!(%client_id, "refused a session: too many sessions");
                 return Err(());
             }
             sessions.insert(

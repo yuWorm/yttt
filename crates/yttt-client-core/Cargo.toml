@@ -33,3 +33,4 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 yttt-control = { path = "../yttt-control" }
 yttt-relay = { path = "../yttt-relay" }
 yttt-relay-ticket = { path = "../yttt-relay-ticket" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

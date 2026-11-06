@@ -394,15 +394,25 @@ pub(crate) async fn accept_loop(shared: P2pShared, mut context: ConnectionContex
     let handshakes = Arc::new(Semaphore::new(MAX_PENDING_HANDSHAKES));
     let mut stop = context.stop.clone();
     let mut connections = JoinSet::new();
+    // Accepting finishes the QUIC handshake, so the future must survive the
+    // other branches: dropping it mid-handshake would refuse that connection.
+    let next = |endpoint: IrohEndpoint| Box::pin(async move { endpoint.accept().await });
+    let mut accept = next(shared.endpoint.clone());
     loop {
         tokio::select! {
             changed = stop.changed() => { if changed.is_err() || *stop.borrow() { break; } }
             _ = connections.join_next(), if !connections.is_empty() => {}
-            accepted = shared.endpoint.accept() => {
+            accepted = &mut accept => {
+                accept = next(shared.endpoint.clone());
                 let Some(connection) = accepted else { break };
                 let shared = shared.clone();
                 let context = context.clone();
                 let handshakes = handshakes.clone();
+                tracing::debug!(
+                    device = %connection.peer(),
+                    alpn = %String::from_utf8_lossy(connection.alpn()),
+                    "accepted a P2P connection"
+                );
                 connections.spawn(async move {
                     if connection.alpn() == PAIR_ALPN {
                         serve_pairing_connection(connection, &shared, &context).await;
@@ -433,14 +443,17 @@ async fn serve_work_connection(
             // The transport re-checks the gate, so a revoked device gets no stream.
             stream = connection.accept_stream() => match stream { Some(stream) => stream, None => break },
         };
+        tracing::debug!(%device, "work stream accepted");
         let (Ok(pending), Ok(slot)) = (
             handshakes.clone().try_acquire_owned(),
             shared.streams.clone().try_acquire_owned(),
         ) else {
+            tracing::warn!(%device, "dropped a work stream: too many pending handshakes or streams");
             drop(stream);
             continue;
         };
         let Some(preset) = shared.devices.preset(device) else {
+            tracing::debug!(%device, "the device is no longer paired");
             break;
         };
         let mut session = context.clone();

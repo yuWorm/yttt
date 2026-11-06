@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+tracing = "0.1"
 # Pinned: iroh's API moves between minor releases; only this crate names its types.
 iroh = { version = "=1.4.1", default-features = false, features = ["tls-aws-lc-rs", "portmapper", "fast-apple-datapath"] }
 parking_lot = "0.12"
