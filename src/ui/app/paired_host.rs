@@ -165,6 +165,7 @@ impl PairedHostForm {
         self.clear_inputs(window, cx);
         self.error = None;
         self.editor = Editor::Pair(PairStage::Input);
+        self.code.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -191,6 +192,7 @@ impl PairedHostForm {
             .update(cx, |input, cx| input.set_value(&addresses, window, cx));
         self.error = None;
         self.editor = Editor::Edit { host };
+        self.name.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 

@@ -823,6 +823,11 @@ impl WorkbenchView {
     }
 }
 
+#[cfg(test)]
+pub(super) fn tests_now_millis() -> u64 {
+    now_millis()
+}
+
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -144,7 +144,7 @@ impl WorkbenchView {
         cx.notify();
     }
 
-    fn pair_remote_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn pair_remote_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_ssh_connection_editor();
         if let Some(paired) = self.auxiliary_windows.paired_host.clone() {
             paired.update(cx, |paired, cx| paired.new_pairing(window, cx));

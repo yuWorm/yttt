@@ -119,6 +119,188 @@ fn remote_manager_connects_from_list_and_scrolls_modal_without_losing_list(
     assert!(cx.debug_bounds("remote-connection-editor").is_none());
 }
 
+struct RemoteAccessTestSurface(Entity<WorkbenchView>);
+
+impl Render for RemoteAccessTestSurface {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(900.0)).h(px(1600.0)).child(
+            self.0
+                .update(cx, |root, cx| root.remote_access_settings(window, cx)),
+        )
+    }
+}
+
+fn p2p_test_profile(temp: &Path, id: &str) -> crate::config::profile::AppProfile {
+    use crate::config::profile::{
+        AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+    };
+    AppProfile::scoped(
+        yttt_core::model::ids::ProfileId::new(id),
+        EnvironmentKind::Test,
+        ProfilePersistence::Ephemeral,
+        temp,
+        ProjectConfigPolicy::Overlay,
+        HostConnectPolicy::ProfileDiscovery,
+    )
+}
+
+#[gpui::test]
+fn the_host_page_shows_an_invitation_then_asks_to_compare_the_devices_numbers(
+    cx: &mut TestAppContext,
+) {
+    use yttt_protocol::remote_access::*;
+    cx.update(yttt_ui::init);
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_profile(&p2p_test_profile(temp.path(), "p2p-host-page"));
+    let slot = Rc::new(RefCell::new(None));
+    let window_slot = slot.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        *window_slot.borrow_mut() = Some(root.clone());
+        let surface = cx.new(|_| RemoteAccessTestSurface(root));
+        yttt_ui::window::yttt_root(surface, window, cx)
+    });
+    let root = slot.borrow_mut().take().unwrap();
+    let expires_millis = super::remote_access_p2p::tests_now_millis() + 300_000;
+    let status = |pairing| RemoteAccessStatus {
+        settings: RemoteAccessSettings::default(),
+        effective: RemoteAccessState::Disabled,
+        bound_address: None,
+        error: None,
+        clients: Vec::new(),
+        p2p: P2pStatus {
+            effective: RemoteAccessState::Listening,
+            endpoint_id: Some(yttt_protocol::EndpointKey([7; 32])),
+            error: None,
+            pairing,
+            relay_account: None,
+        },
+    };
+    let code = yttt_protocol::p2p::PairingCode {
+        host: yttt_protocol::EndpointKey([7; 32]),
+        relay_url: None,
+        direct_addrs: vec!["192.168.1.20:51820".parse().unwrap()],
+        invitation_id: [1; 16],
+        secret: [2; 32],
+        environment_id: "host-environment".into(),
+        profile_id: yttt_core::model::ids::ProfileId::new("default"),
+    }
+    .encode();
+    root.update(cx, |root, cx| {
+        root.ssh.remote_access = Some(status(Some(PairingState::Open { expires_millis })));
+        root.ssh.remote_access_loaded = true;
+        root.p2p_action_result(
+            &RemoteAccessResponse::PairingInvitation {
+                code: SecretText(code.clone()),
+                expires_millis,
+            },
+            cx,
+        );
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("p2p-settings").is_some());
+    assert!(cx.debug_bounds("p2p-invitation").is_some());
+    let qr = cx
+        .debug_bounds("p2p-qr")
+        .expect("the code shows as a QR code");
+    assert!(qr.size.width > px(100.0));
+    assert!(
+        cx.debug_bounds("p2p-code-text").is_none(),
+        "the code's text stays hidden until asked for"
+    );
+
+    root.update(cx, |root, cx| {
+        root.ssh.remote_access = Some(status(Some(PairingState::AwaitingConfirmation {
+            endpoint_id: yttt_protocol::EndpointKey([9; 32]),
+            device_label: "phone".into(),
+            short_code: 4_207,
+            expires_millis,
+        })));
+        root.ssh.p2p.devices = vec![yttt_protocol::p2p::PairedDevice {
+            endpoint_id: yttt_protocol::EndpointKey([5; 32]),
+            label: "laptop".into(),
+            preset: yttt_protocol::p2p::DevicePreset::Observe,
+            paired_at_millis: 1_700_000_000_000,
+            last_seen_millis: None,
+        }];
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("p2p-confirm").is_some());
+    assert!(cx.debug_bounds("p2p-short-code").is_some());
+    assert!(cx.debug_bounds("p2p-invitation").is_none());
+    assert!(
+        cx.debug_bounds(String::leak(format!(
+            "p2p-device-{}",
+            yttt_protocol::EndpointKey([5; 32])
+        )))
+        .is_some()
+    );
+
+    // The invitation ending forgets its code.
+    root.update(cx, |root, cx| {
+        root.p2p_action_result(&RemoteAccessResponse::Status(status(None)), cx);
+        assert!(root.ssh.p2p.code.is_none());
+        assert!(root.ssh.p2p.qr.is_none());
+    });
+}
+
+#[gpui::test]
+fn a_paired_host_is_listed_and_pairing_opens_its_editor(cx: &mut TestAppContext) {
+    cx.update(yttt_ui::init);
+    let temp = tempdir().unwrap();
+    let profile = p2p_test_profile(temp.path(), "p2p-client-list");
+    let host = yttt_protocol::EndpointKey([3; 32]);
+    crate::paired_hosts::save_records(
+        &profile,
+        &[crate::paired_hosts::PairedHostRecord {
+            name: "Office".into(),
+            host: yttt_client_core::p2p::PairedHost {
+                host,
+                environment_id: "office".into(),
+                profile_id: yttt_core::model::ids::ProfileId::new("default"),
+                host_label: "office".into(),
+                relay_url: Some("https://relay.example".into()),
+                direct_addrs: Vec::new(),
+            },
+        }],
+    )
+    .unwrap();
+    let paths = AppConfigPaths::from_profile(&profile);
+    let slot = Rc::new(RefCell::new(None));
+    let window_slot = slot.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        let root = cx.new(|_| {
+            let mut root = WorkbenchView::with_config_paths(paths);
+            root.open_ssh_connection_manager();
+            root
+        });
+        *window_slot.borrow_mut() = Some(root.clone());
+        let surface = cx.new(|_| RemoteManagerTestSurface(root));
+        yttt_ui::window::yttt_root(surface, window, cx)
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    let root = slot.borrow_mut().take().unwrap();
+    assert!(
+        cx.debug_bounds(String::leak(format!("remote-record-paired-{host}")))
+            .is_some(),
+        "the paired Host is listed"
+    );
+    root.update_in(cx, |root, window, cx| root.pair_remote_host(window, cx));
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("remote-connection-editor").is_some());
+    assert!(cx.debug_bounds("paired-host-editor").is_some());
+    cx.simulate_keystrokes("escape");
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("paired-host-editor").is_none());
+}
+
 #[derive(Clone)]
 struct RuntimeSnapshot {
     layout: ProjectLayout,
