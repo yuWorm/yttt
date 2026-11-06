@@ -151,6 +151,7 @@ export function AdminPlans() {
                 <Dropdown
                   trigger="click"
                   position="bottomRight"
+                  clickToHide
                   render={
                     <Dropdown.Menu>
                       <Dropdown.Item icon={<IconEdit />} onClick={() => setEditing(plan)}>

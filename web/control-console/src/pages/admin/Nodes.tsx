@@ -325,6 +325,7 @@ export function AdminNodes() {
                 <Dropdown
                   trigger="click"
                   position="bottomRight"
+                  clickToHide
                   render={
                     <Dropdown.Menu>
                       <Dropdown.Item onClick={() => setRegenerating(node)}>重新生成部署命令</Dropdown.Item>
