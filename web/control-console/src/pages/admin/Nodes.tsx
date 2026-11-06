@@ -146,7 +146,7 @@ export function AdminNodes() {
   const remove = (node: NodeView) =>
     Modal.confirm({
       title: `删除节点 ${node.id}？`,
-      content: "节点上不能还有账号。删除后它的上报会被拒绝，记得在服务器上执行安装脚本的 --uninstall。",
+      content: "节点上不能还有账号。删除后它的上报会被拒绝，记得在服务器上执行 sudo yttt-relay-install --uninstall。",
       onOk: async () => {
         try {
           await del(`/v1/admin/nodes/${node.id}`);

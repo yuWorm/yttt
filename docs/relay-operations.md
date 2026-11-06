@@ -4,11 +4,13 @@
 
 ## 1. 控制面
 
-镜像 `packaging/relay-dev/Dockerfile` 同时包含控制面、网页控制台和发给节点的静态 relay 二进制：
+镜像 `packaging/relay-dev/Dockerfile` 同时包含控制面、网页控制台和发给节点的静态 relay 二进制（x86_64 与 aarch64 各一个：构建机自身架构用 musl-gcc，另一个用 Zig 交叉编译）：
 
 ```sh
 docker build -f packaging/relay-dev/Dockerfile -t yttt-relay .
 ```
+
+已验证的是在 aarch64 构建机上产出两种二进制。在 x86_64 构建机上交叉编译 aarch64 时，Zig 0.13 可能不认 rustc 为 aarch64 传的链接参数 `--fix-cortex-a53-843419`；遇到时升级 `cargo-zigbuild`，或在 aarch64 机器上构建。
 
 控制面配置（TOML）的关键项：
 
@@ -34,7 +36,7 @@ yttt-control promote-admin --config control.toml you@example.com
 ## 2. 部署节点
 
 1. 控制台 → 节点 → 新建节点：填 ID（如 `tokyo-1`）、显示名，可选域名。
-2. 复制对话框里的命令，在目标 Linux 服务器（systemd，x86_64 或 aarch64，需与镜像构建机架构一致）上执行。命令只显示一次，1 小时内有效、单次可用。
+2. 复制对话框里的命令，在目标 Linux 服务器（systemd，x86_64 或 aarch64）上执行。命令只显示一次，1 小时内有效、单次可用。
 3. 放行端口：
    - 无域名：TCP 3341。节点地址为 `http://<服务器公网 IP>:3341`。
    - 有域名：域名先解析到该服务器；放行 TCP 443、80 与 UDP 7842。证书由 Let's Encrypt 自动签发，缓存在 `/var/lib/yttt-relay`。443 必须直达服务器，前面不能有 CDN 或 TLS 终结。
@@ -46,9 +48,19 @@ yttt-control promote-admin --config control.toml you@example.com
 
 ```sh
 journalctl -u yttt-relay -f                         # 日志
-sudo sh /tmp/yttt-relay-install.sh --upgrade        # 换成控制面当前提供的二进制，不重新登记（脚本不在了就用部署命令里的 curl 重新下载）
-sudo sh /tmp/yttt-relay-install.sh --uninstall      # 删除节点程序与配置
+sudo yttt-relay-install --upgrade                   # 换成控制面当前提供的二进制，不重新登记
+sudo yttt-relay-install --uninstall                 # 删除节点程序、配置与服务用户
 ```
+
+安装脚本会创建系统用户 `yttt-relay` 运行服务；节点令牌在 `/etc/yttt-relay/node-token`（`root:yttt-relay`，0640）。
+
+改了安装脚本后，可以在一台一次性的 systemd 容器里把节点的整个生命周期（部署、重启后恢复、升级、卸载）演练一遍：
+
+```sh
+packaging/relay-dev/rehearse-node.sh '<控制台给出的部署命令>' linux/arm64
+```
+
+控制面的 `public_url` 需要能从容器访问（如 `http://host.docker.internal:<端口>`）。`linux/amd64` 演练需要 Docker 开启 x86 模拟。
 
 重新部署同一节点（换机器或令牌泄露）：控制台“重新生成部署命令”，在新机器上执行；登记成功的那一刻旧节点令牌失效。
 

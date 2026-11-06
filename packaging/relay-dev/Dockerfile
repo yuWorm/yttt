@@ -1,6 +1,7 @@
 # Builds the control plane with its web console, and the relay node: a
-# dynamically linked one for this image and a static musl one that the
-# control plane hands to new nodes through its install script.
+# dynamically linked one for this image, and static musl ones for x86_64 and
+# aarch64 that the control plane hands to new nodes through its install
+# script.
 #   docker build -f packaging/relay-dev/Dockerfile -t yttt-relay-dev .
 FROM node:24.18.0-bookworm-slim AS console
 WORKDIR /console
@@ -10,19 +11,32 @@ COPY web/control-console/ ./
 RUN npm run build
 
 FROM rust:1.98-bookworm AS build
+# The static relay for this machine's architecture links with musl-gcc; Zig
+# cross-links the other one, so one build serves x86_64 and aarch64 nodes.
+ARG ZIG_VERSION=0.13.0
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends musl-tools \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends xz-utils musl-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-$(uname -m)-${ZIG_VERSION}.tar.xz" \
+        | tar -xJ -C /opt \
+    && ln -s "/opt/zig-linux-$(uname -m)-${ZIG_VERSION}/zig" /usr/local/bin/zig \
+    && cargo install --locked cargo-zigbuild@0.19.8
 WORKDIR /src
 COPY . .
-# Static relay for this machine's architecture; build the image on each
-# architecture you deploy nodes on, or cross-compile with cargo-zigbuild.
-RUN arch="$(uname -m)" \
-    && rustup target add "$arch-unknown-linux-musl" \
+# Targets go to the toolchain rust-toolchain.toml selects inside the source.
+RUN rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
     && cargo build --locked --release -p yttt-relay -p yttt-control \
-    && CC=musl-gcc cargo build --locked --release -p yttt-relay --target "$arch-unknown-linux-musl" \
     && mkdir -p /out/bin \
-    && cp "target/$arch-unknown-linux-musl/release/yttt-relay" "/out/bin/yttt-relay-linux-$arch" \
+    && native="$(uname -m)" \
+    && for arch in x86_64 aarch64; do \
+        if [ "$arch" = "$native" ]; then \
+            CC=musl-gcc cargo build --locked --release -p yttt-relay --target "$arch-unknown-linux-musl"; \
+        else \
+            cargo zigbuild --locked --release -p yttt-relay --target "$arch-unknown-linux-musl"; \
+        fi \
+        && cp "target/$arch-unknown-linux-musl/release/yttt-relay" "/out/bin/yttt-relay-linux-$arch" \
+        || exit 1; \
+    done \
     && cd /out/bin && sha256sum yttt-relay-linux-* > SHA256SUMS
 
 FROM debian:bookworm-slim

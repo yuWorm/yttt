@@ -1,19 +1,32 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Spin } from "@douyinfe/semi-ui";
 import { Shell } from "./components/Shell";
 import { useSession } from "./session";
 import { Login } from "./pages/Login";
 import { Signup } from "./pages/Signup";
-import { Overview } from "./pages/Overview";
-import { Devices } from "./pages/Devices";
-import { Usage } from "./pages/Usage";
-import { Account } from "./pages/Account";
-import { AdminOverview } from "./pages/admin/Overview";
-import { AdminAccounts } from "./pages/admin/Accounts";
-import { AdminAccountDetail } from "./pages/admin/AccountDetail";
-import { AdminNodes } from "./pages/admin/Nodes";
-import { AdminPlans } from "./pages/admin/Plans";
-import { AdminAudit } from "./pages/admin/Audit";
+
+// Pages load on first visit; account holders never download the admin ones.
+const page = <T extends Record<string, React.ComponentType>>(load: () => Promise<T>, name: keyof T) =>
+  lazy(() => load().then((module) => ({ default: module[name] })));
+const Overview = page(() => import("./pages/Overview"), "Overview");
+const Devices = page(() => import("./pages/Devices"), "Devices");
+const Usage = page(() => import("./pages/Usage"), "Usage");
+const Account = page(() => import("./pages/Account"), "Account");
+const AdminOverview = page(() => import("./pages/admin/Overview"), "AdminOverview");
+const AdminAccounts = page(() => import("./pages/admin/Accounts"), "AdminAccounts");
+const AdminAccountDetail = page(() => import("./pages/admin/AccountDetail"), "AdminAccountDetail");
+const AdminNodes = page(() => import("./pages/admin/Nodes"), "AdminNodes");
+const AdminPlans = page(() => import("./pages/admin/Plans"), "AdminPlans");
+const AdminAudit = page(() => import("./pages/admin/Audit"), "AdminAudit");
+
+function Loading() {
+  return (
+    <div style={{ display: "grid", placeItems: "center", minHeight: 240 }}>
+      <Spin size="large" />
+    </div>
+  );
+}
 
 export function App() {
   const { me } = useSession();
@@ -36,6 +49,7 @@ export function App() {
   const admin = me.role === "admin";
   return (
     <Shell>
+      <Suspense fallback={<Loading />}>
       <Routes>
         <Route path="/" element={<Overview />} />
         <Route path="/devices" element={<Devices />} />
@@ -53,6 +67,7 @@ export function App() {
         )}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
     </Shell>
   );
 }

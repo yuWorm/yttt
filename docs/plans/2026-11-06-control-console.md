@@ -160,9 +160,8 @@ node = "local-1"
 - I6 边界：由控制面分发 relay 二进制，意味着控制面一旦被攻破，攻击者能拿到之后新部署节点的 root。它仍然碰不到任何 Host，也碰不到 Host 的更新通道。这一点作为已接受的风险写进设计文档；以后改为用离线密钥签名二进制。
 - 节点地址：脚本可用 `--public-url` 显式给出。否则带域名时为 `https://<domain>`，不带域名时为 `http://<来源 IP>:3341`（IPv6 写成 `[addr]`）。控制面登记后主动回探节点的 `/healthz`，失败时在控制台标黄。地址视为基本不可变：改了以后，设备要到 ticket 续签才会换到新地址，所以推荐使用域名。
 - systemd：
-  - 节点令牌经 `LoadCredential=node-token:/etc/yttt-relay/node-token`，从 `$CREDENTIALS_DIRECTORY` 读取，配置项为 `node_token_file`；
-  - ACME 证书缓存放 `StateDirectory=yttt-relay`，保证持久化，避免撞上 Let's Encrypt 的重复签发限额；
-  - 继续用 `DynamicUser=yes`。
+  - 服务以安装脚本创建的系统用户 `yttt-relay` 运行；节点令牌文件为 `root:yttt-relay` 0640，配置项为 `node_token_file`。（实施记录：原计划的 `DynamicUser` 加 `LoadCredential` 在 systemd 演练里读不到凭据文件，改为固定系统用户；读取逻辑仍支持 `$CREDENTIALS_DIRECTORY`。）
+  - ACME 证书缓存放 `StateDirectory=yttt-relay`，保证持久化，避免撞上 Let's Encrypt 的重复签发限额。
 - ACME：
   - 接入方式照搬 iroh-relay：接受连接时区分 ACME 验证连接与普通 TLS 连接，另起一个任务驱动证书状态；
   - QUIC 共用基于 resolver 的 TLS 配置；

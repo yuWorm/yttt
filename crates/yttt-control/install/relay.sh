@@ -9,8 +9,11 @@
 #
 #   YTTT_ENROLL=<token> sh relay.sh [--domain relay.example.com] [--public-url URL]
 #                                   [--binary-url URL] [--no-systemd]
-#   sh relay.sh --upgrade      replace the binary, keep the enrollment
-#   sh relay.sh --uninstall    stop and remove the node from this machine
+#   yttt-relay-install --upgrade      replace the binary, keep the enrollment
+#   yttt-relay-install --uninstall    stop and remove the node from this machine
+#
+# Installing keeps a copy of this script as yttt-relay-install, since the
+# downloaded one may not survive a reboot.
 #
 # The relay only forwards traffic that is end-to-end encrypted between a
 # user's devices; nothing installed here can reach those devices.
@@ -65,6 +68,9 @@ main() {
     command -v sha256sum >/dev/null || die "sha256sum is required"
 
     fetch_binary "$arch" "$binary_url"
+    if [ "$0" != "$PREFIX/yttt-relay-install" ]; then
+        install -m 755 "$0" "$PREFIX/yttt-relay-install"
+    fi
     if [ "$mode" = upgrade ]; then
         [ -f "$CONFIG_DIR/relay.toml" ] || die "this machine has no enrolled node to upgrade"
         if [ -f "$UNIT" ]; then
@@ -96,6 +102,12 @@ main() {
         exec "$PREFIX/yttt-relay" --config "$CONFIG_DIR/relay.toml"
     fi
     command -v systemctl >/dev/null || die "systemd is required; rerun with --no-systemd to run in the foreground"
+    # The service runs as its own user, which may read the token but not change it.
+    if ! id yttt-relay >/dev/null 2>&1; then
+        useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin yttt-relay
+    fi
+    chown root:yttt-relay "$CONFIG_DIR/node-token"
+    chmod 640 "$CONFIG_DIR/node-token"
     install_unit
     systemctl daemon-reload
     systemctl enable --now yttt-relay
@@ -132,12 +144,13 @@ Wants=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/yttt-relay --config /etc/yttt-relay/relay.toml
-# The node token is root-only on disk and handed to the service as a credential.
-LoadCredential=node-token:/etc/yttt-relay/node-token
+User=yttt-relay
+Group=yttt-relay
 # Certificates from Let's Encrypt persist here across restarts.
 StateDirectory=yttt-relay
-DynamicUser=yes
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -172,6 +185,7 @@ wait_healthy() {
         echo "    Open TCP $port to this machine."
     fi
     echo "    The console shows the node online within a minute."
+    echo "    Later: sudo yttt-relay-install --upgrade | --uninstall"
 }
 
 uninstall() {
@@ -180,8 +194,11 @@ uninstall() {
         rm -f "$UNIT"
         systemctl daemon-reload || true
     fi
-    rm -f "$PREFIX/yttt-relay"
-    rm -rf "$CONFIG_DIR" /var/lib/yttt-relay /var/lib/private/yttt-relay
+    rm -f "$PREFIX/yttt-relay" "$PREFIX/yttt-relay-install"
+    rm -rf "$CONFIG_DIR" /var/lib/yttt-relay
+    if id yttt-relay >/dev/null 2>&1; then
+        userdel yttt-relay || true
+    fi
     say "removed; disable or delete the node in the console too"
 }
 

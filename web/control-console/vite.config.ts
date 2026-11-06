@@ -17,5 +17,15 @@ export default defineConfig({
     outDir: "dist",
     // The control plane's CSP allows no inline scripts.
     modulePreload: { polyfill: false },
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        // The UI library changes rarely; browsers keep it cached across releases.
+        manualChunks: {
+          semi: ["@douyinfe/semi-ui", "@douyinfe/semi-icons"],
+          react: ["react", "react-dom", "react-router-dom"],
+        },
+      },
+    },
   },
 });
