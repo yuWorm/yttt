@@ -10,6 +10,12 @@
 - Add paid relay accounts: once signed in under "Remote access to this computer", the Host and its devices meet through the account's relay node, rate-limited and metered by plan. Headless Hosts use `yttt-server p2p login`.
 - 新增 relay 服务端：控制面与网页控制台（账号、设备、用量、套餐、节点、设置、审计日志）、一键复制的节点部署命令（自动登记上线，可选域名自动申请证书），镜像发布在 `ghcr.io/yuworm/yttt-relay`。
 - Add the relay service: a control plane with a web console (accounts, devices, usage, plans, nodes, settings, audit log), one-command node deployment that enrolls the node and optionally obtains a certificate for its domain, and an image published as `ghcr.io/yuworm/yttt-relay`.
+- 新增 Agent 编排：用 `yttt ctl agents create --role orchestrator` 创建的编排 Agent 可以启动、列出、关闭自己的工作 Agent，向它们发送输入、等待回合结束、读取结果和中断；`yttt mcp` 以 MCP 工具提供同样的能力。有人在工作 Agent 的终端里输入时，编排方的发送和中断会被拒绝，交还后再继续；编排方不能启动跳过审批的工作 Agent。
+- Add Agent orchestration: an orchestrator created with `yttt ctl agents create --role orchestrator` can start, list, and close its worker Agents, send them input, wait for their turns, read results, and interrupt them; `yttt mcp` offers the same as MCP tools. While a person types in a worker's terminal, the orchestrator's sends and interrupts are refused until the worker is handed back, and an orchestrator cannot start workers that skip approvals.
+- 修复客户端拿回终端控制权后无法输入、终端保持另一个客户端的尺寸。
+- Fix a Client that takes terminal control back being unable to type and keeping the other Client's terminal size.
+- 修复经端口转发或隧道连接 Host 时被限流，导致隧道后的客户端连接变慢或断开。
+- Fix connections through a port forward or tunnel being throttled, which delayed or dropped Clients behind it.
 
 ## 0.3.21 - 2026-11-04
 
