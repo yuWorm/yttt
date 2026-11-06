@@ -10,7 +10,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 zeroize = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+qrcode = { version = "0.14", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+yttt-client-core = { path = "../yttt-client-core" }
 yttt-core = { path = "../yttt-core" }
 yttt-host = { path = "../yttt-host" }
 yttt-protocol = { path = "../yttt-protocol" }

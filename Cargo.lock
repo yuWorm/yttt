@@ -13631,6 +13631,7 @@ name = "yttt-server"
 version = "0.3.21"
 dependencies = [
  "fs2",
+ "qrcode",
  "rand 0.8.6",
  "rustix",
  "serde",
@@ -13638,6 +13639,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "yttt-client-core",
  "yttt-core",
  "yttt-host",
  "yttt-protocol",

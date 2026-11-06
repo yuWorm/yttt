@@ -282,6 +282,8 @@ struct NetworkGeneration {
 /// open or stopped on its own, doubling up to the maximum.
 const FIRST_REBIND_DELAY: Duration = Duration::from_secs(1);
 const MAX_REBIND_DELAY: Duration = Duration::from_secs(30);
+/// Direct addresses a pairing code names; hole punching finds the rest.
+const MAX_ADVERTISED_ADDRS: usize = 4;
 /// How long before its first relay ticket expires a P2P endpoint is rebuilt.
 const RESTART_BEFORE_EXPIRY_SECS: u64 = 3600;
 
@@ -644,7 +646,10 @@ impl Manager {
             .into_iter()
             .filter(|address| advertisable(address.ip()))
             .collect();
-        direct_addrs.truncate(MAX_DIRECT_ADDRS);
+        // LAN IPv4 first: it is what a nearby device can dial, and a machine
+        // can hold many temporary IPv6 addresses that only lengthen the code.
+        direct_addrs.sort_by_key(|address| address.is_ipv6());
+        direct_addrs.truncate(MAX_ADVERTISED_ADDRS.min(MAX_DIRECT_ADDRS));
         let code = PairingCode {
             host: endpoint.id(),
             relay_url: p2p.relay_url.lock().clone(),

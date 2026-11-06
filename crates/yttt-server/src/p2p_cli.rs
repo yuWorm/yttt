@@ -1,0 +1,417 @@
+//! `yttt-server p2p …`: P2P remote access for a Host with no screen.
+//!
+//! Every command goes to the running Host over its local administrator
+//! endpoint, the same way the desktop settings page does, so only someone
+//! logged in on this machine can pair or revoke devices.
+
+use std::{ffi::OsString, time::Duration};
+
+use serde::Serialize;
+use yttt_client_core::ClientCore;
+use yttt_core::model::ids::ClientInstanceId;
+use yttt_protocol::{
+    ConnectionChannel, EndpointKey, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
+    p2p::{DevicePreset, PairedDevice},
+    remote_access::{
+        P2pStatus, PairingState, RemoteAccessRequest, RemoteAccessResponse, RemoteAccessStatus,
+    },
+};
+use yttt_transport_local::{ClientIdentity, LocalConnector};
+
+use crate::{ServerError, ServerPaths, build_identity, read_token, write_json};
+
+const POLL: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum P2pCommand {
+    Status,
+    Enable {
+        relay_url: Option<String>,
+    },
+    Disable,
+    Pair,
+    Devices,
+    Revoke {
+        endpoint_id: EndpointKey,
+        reset_tls: bool,
+    },
+}
+
+pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]> [--profile <id>] [--state-root <absolute path>]";
+
+/// Parses what follows `p2p`, leaving `--profile` and `--state-root` for the caller.
+pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError> {
+    let usage = || ServerError::InvalidArgument(P2P_USAGE.to_string());
+    if args.is_empty() {
+        return Err(usage());
+    }
+    let command = args.remove(0).into_string().map_err(|_| usage())?;
+    let mut take_flag = |flag: &str| -> bool {
+        match args.iter().position(|argument| argument == flag) {
+            Some(index) => {
+                args.remove(index);
+                true
+            }
+            None => false,
+        }
+    };
+    Ok(match command.as_str() {
+        "status" => P2pCommand::Status,
+        "disable" => P2pCommand::Disable,
+        "pair" => P2pCommand::Pair,
+        "devices" => P2pCommand::Devices,
+        "enable" => {
+            let relay_url = match args.iter().position(|argument| argument == "--relay") {
+                Some(index) => {
+                    args.remove(index);
+                    if index >= args.len() {
+                        return Err(usage());
+                    }
+                    let url = args.remove(index).into_string().map_err(|_| usage())?;
+                    if !(url.starts_with("http://") || url.starts_with("https://")) {
+                        return Err(ServerError::InvalidArgument(
+                            "the relay must be an http:// or https:// URL".into(),
+                        ));
+                    }
+                    Some(url)
+                }
+                None => None,
+            };
+            P2pCommand::Enable { relay_url }
+        }
+        "revoke" => {
+            let reset_tls = take_flag("--reset-tls");
+            if args.is_empty() {
+                return Err(usage());
+            }
+            let key = args.remove(0).into_string().map_err(|_| usage())?;
+            let endpoint_id = key.parse().map_err(|_| {
+                ServerError::InvalidArgument("the device key must be 64 hex digits".into())
+            })?;
+            P2pCommand::Revoke {
+                endpoint_id,
+                reset_tls,
+            }
+        }
+        _ => return Err(usage()),
+    })
+}
+
+pub(crate) async fn run(paths: ServerPaths, command: P2pCommand) -> Result<(), ServerError> {
+    paths.prepare_for_client()?;
+    let token = read_token(&paths.token_file)?;
+    let identity = ClientIdentity {
+        expected_environment: None,
+        credential_generation: 0,
+        session_nonce: yttt_transport::new_session_nonce(),
+        supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+        build: build_identity(),
+        profile_id: paths.profile.clone(),
+        client_instance_id: ClientInstanceId::new(format!(
+            "yttt-server-p2p-{}",
+            std::process::id()
+        )),
+        host_epoch_hint: None,
+        can_force_stop: false,
+        channel: ConnectionChannel::Session,
+    };
+    let admin = ClientCore::connect(
+        LocalConnector::new(paths.endpoint()),
+        identity,
+        token.auth.clone(),
+    )
+    .await
+    .map_err(|error| match error {
+        yttt_client_core::ClientCoreError::Connection(_) => ServerError::NotRunning,
+        error => ServerError::InvalidArgument(error.to_string()),
+    })?;
+    let admin = Admin(admin);
+    match command {
+        P2pCommand::Status => write_json(&Summary::of(&admin.status().await?)),
+        P2pCommand::Enable { relay_url } => {
+            admin
+                .send(RemoteAccessRequest::SetP2p {
+                    enabled: true,
+                    relay_url,
+                })
+                .await?;
+            write_json(&Summary::of(&admin.status().await?))
+        }
+        P2pCommand::Disable => {
+            let relay_url = admin.status().await?.settings.p2p.relay_url;
+            admin
+                .send(RemoteAccessRequest::SetP2p {
+                    enabled: false,
+                    relay_url,
+                })
+                .await?;
+            write_json(&Summary::of(&admin.status().await?))
+        }
+        P2pCommand::Devices => write_json(&listed(admin.devices().await?)),
+        P2pCommand::Revoke {
+            endpoint_id,
+            reset_tls,
+        } => {
+            admin
+                .send(RemoteAccessRequest::RevokeDevice {
+                    endpoint_id,
+                    reset_tls,
+                })
+                .await?;
+            write_json(&listed(admin.devices().await?))
+        }
+        P2pCommand::Pair => pair(&admin).await,
+    }
+}
+
+struct Admin(ClientCore);
+
+impl Admin {
+    async fn send(
+        &self,
+        request: RemoteAccessRequest,
+    ) -> Result<RemoteAccessResponse, ServerError> {
+        match self.0.request(Request::RemoteAccess(request)).await {
+            Ok(Response::RemoteAccess(response)) => Ok(response),
+            Ok(_) => Err(ServerError::UnexpectedLifecycleResponse),
+            Err(error) => Err(ServerError::InvalidArgument(error.to_string())),
+        }
+    }
+
+    async fn status(&self) -> Result<RemoteAccessStatus, ServerError> {
+        match self.send(RemoteAccessRequest::Status).await? {
+            RemoteAccessResponse::Status(status) => Ok(status),
+            _ => Err(ServerError::UnexpectedLifecycleResponse),
+        }
+    }
+
+    async fn devices(&self) -> Result<Vec<PairedDevice>, ServerError> {
+        match self.send(RemoteAccessRequest::ListDevices).await? {
+            RemoteAccessResponse::Devices(devices) => Ok(devices),
+            _ => Err(ServerError::UnexpectedLifecycleResponse),
+        }
+    }
+}
+
+/// A paired device as the CLI prints it: the key in the hex `revoke` takes.
+#[derive(Serialize)]
+struct ListedDevice {
+    endpoint_id: String,
+    label: String,
+    preset: &'static str,
+    paired_at_millis: u64,
+    last_seen_millis: Option<u64>,
+}
+
+fn listed(devices: Vec<PairedDevice>) -> Vec<ListedDevice> {
+    devices
+        .into_iter()
+        .map(|device| ListedDevice {
+            endpoint_id: device.endpoint_id.to_string(),
+            label: device.label,
+            preset: match device.preset {
+                DevicePreset::Full => "full",
+                DevicePreset::Observe => "observe",
+            },
+            paired_at_millis: device.paired_at_millis,
+            last_seen_millis: device.last_seen_millis,
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct Summary {
+    effective: String,
+    endpoint_id: Option<String>,
+    relay_url: Option<String>,
+    relay_account: Option<String>,
+    error: Option<String>,
+}
+
+impl Summary {
+    fn of(status: &RemoteAccessStatus) -> Self {
+        let P2pStatus {
+            effective,
+            endpoint_id,
+            error,
+            relay_account,
+            ..
+        } = &status.p2p;
+        Self {
+            effective: format!("{effective:?}").to_lowercase(),
+            endpoint_id: endpoint_id.map(|key| key.to_string()),
+            relay_url: relay_account
+                .as_ref()
+                .and_then(|account| account.relay_url.clone())
+                .or_else(|| status.settings.p2p.relay_url.clone()),
+            relay_account: relay_account
+                .as_ref()
+                .map(|account| format!("{} at {}", account.account_id, account.control_url)),
+            error: error.clone(),
+        }
+    }
+}
+
+/// Opens an invitation, shows its code, and lets the person at this terminal
+/// compare the device's numbers and decide.
+async fn pair(admin: &Admin) -> Result<(), ServerError> {
+    let RemoteAccessResponse::PairingInvitation { code, .. } =
+        admin.send(RemoteAccessRequest::StartPairing).await?
+    else {
+        return Err(ServerError::UnexpectedLifecycleResponse);
+    };
+    println!("{}", qr_text(&code.0));
+    println!(
+        "Pairing code (single use, valid for 5 minutes):\n\n{}\n",
+        code.0
+    );
+    println!("Paste it on the device: Remote connections → Add → Pair with a Host (P2P).");
+    println!("Waiting for a device… (Ctrl-C cancels)");
+    drop(code);
+
+    let outcome = tokio::select! {
+        outcome = wait_and_decide(admin) => outcome,
+        _ = tokio::signal::ctrl_c() => {
+            println!("\nCancelled.");
+            Err(ServerError::InvalidArgument("pairing was cancelled".into()))
+        }
+    };
+    if outcome.is_err() {
+        let _ = admin.send(RemoteAccessRequest::CancelPairing).await;
+    }
+    outcome
+}
+
+async fn wait_and_decide(admin: &Admin) -> Result<(), ServerError> {
+    loop {
+        match admin.status().await?.p2p.pairing {
+            Some(PairingState::Open { .. }) => tokio::time::sleep(POLL).await,
+            Some(PairingState::AwaitingConfirmation {
+                endpoint_id,
+                device_label,
+                short_code,
+                ..
+            }) => {
+                let digits = format!("{short_code:06}");
+                println!(
+                    "\n“{device_label}” wants to pair. Accept only if the device shows:\n\n    {} {}\n",
+                    &digits[..3],
+                    &digits[3..]
+                );
+                let answer = prompt(
+                    "[v] allow viewing only, [f] allow full control, anything else declines: ",
+                )
+                .await?;
+                let preset = match answer.trim() {
+                    "v" | "V" => DevicePreset::Observe,
+                    "f" | "F" => DevicePreset::Full,
+                    _ => {
+                        admin.send(RemoteAccessRequest::CancelPairing).await?;
+                        println!("Declined.");
+                        return Ok(());
+                    }
+                };
+                admin
+                    .send(RemoteAccessRequest::ConfirmPairing {
+                        endpoint_id,
+                        preset,
+                    })
+                    .await?;
+                println!("Paired. Device key: {endpoint_id}");
+                return Ok(());
+            }
+            Some(PairingState::Compromised) => {
+                return Err(ServerError::InvalidArgument(
+                    "a second device used this code, so the invitation was withdrawn; the code may have leaked".into(),
+                ));
+            }
+            None => {
+                return Err(ServerError::InvalidArgument(
+                    "the invitation ended before a device asked to pair".into(),
+                ));
+            }
+        }
+    }
+}
+
+async fn prompt(question: &str) -> Result<String, ServerError> {
+    use std::io::Write as _;
+    print!("{question}");
+    std::io::stdout().flush()?;
+    tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).map(|_| line)
+    })
+    .await
+    .map_err(|error| ServerError::InvalidArgument(error.to_string()))?
+    .map_err(ServerError::Io)
+}
+
+/// The code as a QR code drawn with half-block characters, for a phone camera.
+fn qr_text(code: &str) -> String {
+    use qrcode::render::unicode::Dense1x2;
+    match qrcode::QrCode::with_error_correction_level(code.as_bytes(), qrcode::EcLevel::M) {
+        Ok(qr) => qr
+            .render::<Dense1x2>()
+            .dark_color(Dense1x2::Light)
+            .light_color(Dense1x2::Dark)
+            .quiet_zone(true)
+            .build(),
+        Err(_) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(args: &[&str]) -> Result<(P2pCommand, Vec<OsString>), ServerError> {
+        let mut args = args.iter().map(OsString::from).collect();
+        parse(&mut args).map(|command| (command, args))
+    }
+
+    #[test]
+    fn p2p_commands_parse_and_leave_shared_options() {
+        assert_eq!(
+            parsed(&[
+                "enable",
+                "--relay",
+                "https://relay.example",
+                "--profile",
+                "work"
+            ])
+            .unwrap(),
+            (
+                P2pCommand::Enable {
+                    relay_url: Some("https://relay.example".into())
+                },
+                vec![OsString::from("--profile"), OsString::from("work")]
+            )
+        );
+        let key = "07".repeat(32);
+        assert_eq!(
+            parsed(&["revoke", "--reset-tls", &key]).unwrap().0,
+            P2pCommand::Revoke {
+                endpoint_id: EndpointKey([7; 32]),
+                reset_tls: true
+            }
+        );
+        assert_eq!(parsed(&["pair"]).unwrap().0, P2pCommand::Pair);
+        for bad in [
+            &["enable", "--relay"][..],
+            &["enable", "--relay", "relay.example"],
+            &["revoke", "abc"],
+            &["revoke"],
+            &["open"],
+            &[],
+        ] {
+            assert!(parsed(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_terminal_qr_code_is_drawn() {
+        let text = qr_text("YTTT-PAIR:1:ABCDEFGHIJKLMNOP");
+        assert!(text.lines().count() > 10);
+    }
+}

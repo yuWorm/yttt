@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod p2p_cli;
+
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
@@ -33,7 +35,7 @@ const READY_RETRY_INTERVAL: Duration = Duration::from_millis(20);
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
     #[error(
-        "usage: yttt-server <serve|ensure|status|stop-if-idle> [--profile <id>] [--state-root <absolute path>]"
+        "usage: yttt-server <serve|ensure|status|stop-if-idle|p2p …> [--profile <id>] [--state-root <absolute path>]"
     )]
     Usage,
     #[error("{0}")]
@@ -84,12 +86,13 @@ enum StopIfIdleOutput {
     Busy { blockers: Vec<HostBlocker> },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandKind {
     Serve,
     Ensure,
     Status,
     StopIfIdle,
+    P2p(p2p_cli::P2pCommand),
 }
 
 struct Cli {
@@ -197,6 +200,7 @@ pub async fn run_from_os_args(args: impl IntoIterator<Item = OsString>) -> Resul
         CommandKind::Ensure => ensure(paths).await,
         CommandKind::Status => status(paths).await,
         CommandKind::StopIfIdle => stop_if_idle(paths).await,
+        CommandKind::P2p(command) => p2p_cli::run(paths, command).await,
     }
 }
 
@@ -509,13 +513,17 @@ impl ServerPaths {
 fn parse_cli(args: impl IntoIterator<Item = OsString>) -> Result<Cli, ServerError> {
     let mut args = args.into_iter();
     let _program = args.next();
-    let command = match args.next().as_deref() {
+    let first = args.next();
+    let mut rest: Vec<OsString> = args.collect();
+    let command = match first.as_deref() {
         Some(value) if value == OsStr::new("serve") => CommandKind::Serve,
         Some(value) if value == OsStr::new("ensure") => CommandKind::Ensure,
         Some(value) if value == OsStr::new("status") => CommandKind::Status,
         Some(value) if value == OsStr::new("stop-if-idle") => CommandKind::StopIfIdle,
+        Some(value) if value == OsStr::new("p2p") => CommandKind::P2p(p2p_cli::parse(&mut rest)?),
         _ => return Err(ServerError::Usage),
     };
+    let mut args = rest.into_iter();
     let mut profile = None;
     let mut state_root = None;
     while let Some(argument) = args.next() {
