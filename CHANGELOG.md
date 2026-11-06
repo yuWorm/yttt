@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-11-06
+
 - 新增 P2P 远程访问：Host 显示二维码或配对码，设备扫码配对后无需公网 IP 或端口转发即可连接；设备之间优先直连，打不通时经 relay 中转。配对与连接的身份验证只在 Host 与设备之间进行，relay 与控制面只转发端到端加密的流量。
 - Add P2P remote access: the Host shows a QR code or pairing code, and a device that scans it connects without a public IP or port forwarding. Devices connect directly when they can and through a relay otherwise. Pairing and connections are authenticated only between the Host and its devices; relays and the control plane carry end-to-end encrypted traffic.
 - 新增付费 relay 账号：在“远程访问此电脑”里登录账号后，Host 与设备经账号所在的 relay 节点互通，按套餐限速、计量。无桌面 Host 用 `yttt-server p2p login`。
