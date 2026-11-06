@@ -11,3 +11,6 @@ docs/zed-screenshots
 /skills-lock.json
 /tmp
 __pycache__/
+# The web console
+web/control-console/node_modules
+web/control-console/dist

@@ -1,3 +1,5 @@
 target
 .worktrees
 .git
+web/control-console/node_modules
+web/control-console/dist

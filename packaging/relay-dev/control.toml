@@ -1,8 +1,18 @@
 # Development only: the ticket secret and node token below are public.
 listen = "0.0.0.0:8080"
+# Where browsers and new nodes reach this control plane. Plain HTTP is only
+# accepted for deploy commands because dev_mode is on.
+public_url = "http://127.0.0.1:18080"
+web_root = "/usr/share/yttt-control/web"
+relay_binaries_dir = "/usr/share/yttt-control/bin"
 database_url = "postgres://postgres:yttt@postgres:5432/postgres"
 ticket_secret = "1111111111111111111111111111111111111111111111111111111111111111"
 dev_mode = true
+
+[signup]
+enabled = true
+plan = "basic"
+node = "local-1"
 
 [[plans]]
 id = "basic"
