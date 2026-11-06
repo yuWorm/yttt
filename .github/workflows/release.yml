@@ -373,6 +373,19 @@ jobs:
           retention-days: 1
           path: web/control-console/dist
           if-no-files-found: error
+      # The same console as a release asset, for installing without Docker.
+      - name: Package console
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          mkdir -p release
+          tar -czf "release/yttt-control-web-$VERSION.tar.gz" -C web/control-console/dist .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-console
+          retention-days: 1
+          path: release
+          if-no-files-found: error
 
   publish:
     name: Publish GitHub release
@@ -414,9 +427,16 @@ jobs:
             --notes-output release-notes.md \
             --manifest-output dist/update.json
 
+      - name: Add the control plane installer
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          sed "s/__VERSION__/$VERSION/g" packaging/relay/install-control.sh > dist/install-control.sh
+          ! grep -q __VERSION__ dist/install-control.sh
+
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum yttt-* update.json > SHA256SUMS
+        run: sha256sum yttt-* update.json install-control.sh > SHA256SUMS
 
       - name: Create immutable GitHub release
         env:

@@ -7,10 +7,15 @@
 # which only catches a truncated download: the trust in both comes from
 # HTTPS to the control plane.
 #
-#   YTTT_ENROLL=<token> sh relay.sh [--domain relay.example.com] [--public-url URL]
-#                                   [--binary-url URL] [--no-systemd]
-#   yttt-relay-install --upgrade      replace the binary, keep the enrollment
+#   YTTT_ENROLL=<token> sh relay.sh [--method native|docker] [--domain relay.example.com]
+#                                   [--public-url URL] [--binary-url URL] [--image IMAGE]
+#                                   [--no-systemd] [--yes]
+#   yttt-relay-install --upgrade      replace the binary or image, keep the enrollment
 #   yttt-relay-install --uninstall    stop and remove the node from this machine
+#
+# On a terminal it asks how to run the node (directly with systemd, or in
+# Docker) and for its domain; options answer those, and --yes or no terminal
+# takes the defaults: directly, without a domain.
 #
 # Installing keeps a copy of this script as yttt-relay-install, since the
 # downloaded one may not survive a reboot.
@@ -21,9 +26,21 @@
 set -eu
 
 CONTROL='__CONTROL_URL__'
+IMAGE_DEFAULT='__IMAGE__'
 PREFIX=/usr/local/bin
 CONFIG_DIR=/etc/yttt-relay
+STATE_DIR=/var/lib/yttt-relay
 UNIT=/etc/systemd/system/yttt-relay.service
+CONTAINER=yttt-relay
+# For testing beside a real node: every path under one directory and a
+# container of its own. Docker only.
+if [ -n "${YTTT_RELAY_ROOT:-}" ]; then
+    PREFIX=$YTTT_RELAY_ROOT/bin
+    CONFIG_DIR=$YTTT_RELAY_ROOT/etc
+    STATE_DIR=$YTTT_RELAY_ROOT/state
+    CONTAINER=yttt-relay-test
+    mkdir -p "$PREFIX"
+fi
 
 die() {
     echo "yttt-relay install: $*" >&2
@@ -34,18 +51,52 @@ say() {
     echo "==> $*"
 }
 
+# Whether to ask on the terminal.
+interactive() {
+    [ "$yes" = 0 ] && { : </dev/tty; } 2>/dev/null
+}
+
+ask_method() {
+    [ -n "$method" ] && return
+    method=native
+    interactive || return 0
+    echo "How should the relay run?" >/dev/tty
+    echo "  * 1) Directly on this server, as a systemd service" >/dev/tty
+    echo "    2) In Docker (host networking)" >/dev/tty
+    printf 'Choose [1]: ' >/dev/tty
+    read -r answer </dev/tty || answer=''
+    case "$answer" in
+        2 | docker) method=docker ;;
+    esac
+}
+
+ask_domain() {
+    [ -n "$domain" ] && return
+    interactive || return 0
+    echo "A domain gives the node HTTPS with a Let's Encrypt certificate, and lets" >/dev/tty
+    echo "devices find direct paths. Without one it only relays." >/dev/tty
+    printf 'Domain pointing at this server (empty for none): ' >/dev/tty
+    read -r domain </dev/tty || domain=''
+}
+
 main() {
     domain=''
     public_url=''
     binary_url=''
+    image=''
+    method=''
     no_systemd=0
+    yes=0
     mode=install
     while [ $# -gt 0 ]; do
         case "$1" in
             --domain) [ $# -ge 2 ] || die "--domain needs a value"; domain=$2; shift 2 ;;
             --public-url) [ $# -ge 2 ] || die "--public-url needs a value"; public_url=$2; shift 2 ;;
             --binary-url) [ $# -ge 2 ] || die "--binary-url needs a value"; binary_url=$2; shift 2 ;;
+            --image) [ $# -ge 2 ] || die "--image needs a value"; image=$2; shift 2 ;;
+            --method) [ $# -ge 2 ] || die "--method needs a value"; method=$2; shift 2 ;;
             --no-systemd) no_systemd=1; shift ;;
+            --yes) yes=1; shift ;;
             --upgrade) mode=upgrade; shift ;;
             --uninstall) mode=uninstall; shift ;;
             *) die "unknown option $1" ;;
@@ -60,35 +111,43 @@ main() {
         *) die "unsupported architecture $(uname -m)" ;;
     esac
 
+    # An existing node remembers how it was installed.
+    installed=$(awk -F= '$1 == "METHOD" { print $2 }' "$CONFIG_DIR/install.env" 2>/dev/null || true)
     if [ "$mode" = uninstall ]; then
-        uninstall
+        if [ "$installed" = docker ]; then docker_uninstall; else uninstall; fi
         return
-    fi
-    command -v curl >/dev/null || die "curl is required"
-    command -v sha256sum >/dev/null || die "sha256sum is required"
-
-    fetch_binary "$arch" "$binary_url"
-    if [ "$0" != "$PREFIX/yttt-relay-install" ]; then
-        install -m 755 "$0" "$PREFIX/yttt-relay-install"
     fi
     if [ "$mode" = upgrade ]; then
         [ -f "$CONFIG_DIR/relay.toml" ] || die "this machine has no enrolled node to upgrade"
-        if [ -f "$UNIT" ]; then
-            systemctl restart yttt-relay
-        fi
-        say "upgraded to $("$PREFIX/yttt-relay" --version 2>/dev/null || echo 'the new version')"
+        if [ "$installed" = docker ]; then docker_upgrade; else upgrade; fi
         return
     fi
 
     [ -n "${YTTT_ENROLL:-}" ] || die "YTTT_ENROLL is not set; copy the deploy command from the console again"
+    ask_method
+    case "$method" in native | docker) ;; *) die "--method is native or docker" ;; esac
+    ask_domain
     if [ -n "$domain" ]; then
         if command -v getent >/dev/null && ! getent hosts "$domain" >/dev/null; then
             die "$domain does not resolve; point its DNS at this machine first"
         fi
     fi
-
+    command -v curl >/dev/null || die "curl is required"
     mkdir -p "$CONFIG_DIR"
     chmod 755 "$CONFIG_DIR"
+    if [ "$method" = docker ]; then
+        docker_install
+    else
+        native_install
+    fi
+    echo "METHOD=$method" >"$CONFIG_DIR/install.env"
+    wait_healthy "$domain"
+}
+
+native_install() {
+    command -v sha256sum >/dev/null || die "sha256sum is required"
+    fetch_binary "$arch" "$binary_url"
+    keep_installer
     say "enrolling with $CONTROL"
     # The token goes over stdin, never onto a command line.
     set -- --control "$CONTROL" --config-dir "$CONFIG_DIR"
@@ -114,7 +173,70 @@ main() {
     # A machine deployed again keeps its service running; restart it so the
     # new enrollment takes effect.
     systemctl restart yttt-relay
-    wait_healthy "$domain"
+}
+
+docker_install() {
+    command -v docker >/dev/null || die "Docker is not installed; see https://docs.docker.com/engine/install/"
+    image=${image:-$IMAGE_DEFAULT}
+    keep_installer
+    say "pulling $image"
+    pull "$image"
+    mkdir -p "$STATE_DIR"
+    say "enrolling with $CONTROL"
+    set -- --control "$CONTROL" --config-dir "$CONFIG_DIR"
+    [ -n "$domain" ] && set -- "$@" --domain "$domain"
+    [ -n "$public_url" ] && set -- "$@" --public-url "$public_url"
+    # Host networking, like the node: the control plane may be on this machine.
+    printf '%s' "$YTTT_ENROLL" | docker run --rm -i --user 0:0 --network host \
+        -v "$CONFIG_DIR:$CONFIG_DIR" --entrypoint yttt-relay "$image" enroll "$@"
+    unset YTTT_ENROLL
+    chmod 600 "$CONFIG_DIR/node-token"
+    echo "IMAGE=$image" >"$CONFIG_DIR/docker.env"
+    run_container "$image"
+}
+
+# Fetches the image, or uses a copy already on this machine.
+pull() {
+    docker pull -q "$1" >/dev/null 2>&1 \
+        || docker image inspect "$1" >/dev/null 2>&1 \
+        || die "could not pull $1"
+}
+
+# Starts the node's container, replacing an earlier one.
+run_container() {
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    # Host networking: QUIC address discovery needs the machine's own
+    # addresses, and the node binds 80/443 when it has a domain. Docker gives
+    # added capabilities only to root, so it runs as root with nothing else.
+    docker run -d --name "$CONTAINER" --restart unless-stopped --network host \
+        --user 0:0 --cap-drop ALL --cap-add NET_BIND_SERVICE \
+        -v "$CONFIG_DIR:$CONFIG_DIR:ro" -v "$STATE_DIR:$STATE_DIR" \
+        --entrypoint yttt-relay "$1" --config "$CONFIG_DIR/relay.toml" >/dev/null
+}
+
+keep_installer() {
+    if [ "$0" != "$PREFIX/yttt-relay-install" ]; then
+        install -m 755 "$0" "$PREFIX/yttt-relay-install"
+    fi
+}
+
+upgrade() {
+    command -v sha256sum >/dev/null || die "sha256sum is required"
+    fetch_binary "$arch" "$binary_url"
+    keep_installer
+    if [ -f "$UNIT" ]; then
+        systemctl restart yttt-relay
+    fi
+    say "upgraded to $("$PREFIX/yttt-relay" --version 2>/dev/null || echo 'the new version')"
+}
+
+docker_upgrade() {
+    image=${image:-$IMAGE_DEFAULT}
+    keep_installer
+    pull "$image"
+    echo "IMAGE=$image" >"$CONFIG_DIR/docker.env"
+    run_container "$image"
+    say "upgraded to $image"
 }
 
 fetch_binary() {
@@ -178,7 +300,13 @@ wait_healthy() {
         i=$((i + 1))
         sleep 1
     done
-    [ $i -lt 30 ] || echo "warning: the relay did not answer yet; see: journalctl -u yttt-relay" >&2
+    if [ $i -ge 30 ]; then
+        if [ "$method" = docker ]; then
+            echo "warning: the relay did not answer yet; see: docker logs $CONTAINER" >&2
+        else
+            echo "warning: the relay did not answer yet; see: journalctl -u yttt-relay" >&2
+        fi
+    fi
     url=$(awk -F'"' '/^# url/ { print $2 }' "$CONFIG_DIR/relay.toml")
     say "the node is enrolled as ${url:-this machine}"
     if [ -n "$domain" ]; then
@@ -198,11 +326,18 @@ uninstall() {
         systemctl daemon-reload || true
     fi
     rm -f "$PREFIX/yttt-relay" "$PREFIX/yttt-relay-install"
-    rm -rf "$CONFIG_DIR" /var/lib/yttt-relay
+    rm -rf "$CONFIG_DIR" "$STATE_DIR"
     if id yttt-relay >/dev/null 2>&1; then
         userdel yttt-relay || true
     fi
     say "removed; disable or delete the node in the console too"
+}
+
+docker_uninstall() {
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    rm -f "$PREFIX/yttt-relay-install"
+    rm -rf "$CONFIG_DIR" "$STATE_DIR"
+    say "removed the container; disable or delete the node in the console too"
 }
 
 main "$@"

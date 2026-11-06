@@ -33,6 +33,8 @@ const DEFAULT_PORT: u16 = 3341;
 const REPORT_INTERVAL_SECS: u64 = 15;
 const PROBE_INTERVAL: Duration = Duration::from_secs(60);
 const INSTALL_SCRIPT: &str = include_str!("../install/relay.sh");
+/// The image a node installed with Docker runs: this release's.
+const RELAY_IMAGE: &str = concat!("ghcr.io/yuworm/yttt-relay:", env!("CARGO_PKG_VERSION"));
 /// The only files `/install/bin/` serves.
 const BINARIES: [&str; 3] = [
     "yttt-relay-linux-x86_64",
@@ -596,7 +598,9 @@ fn valid_domain(domain: Option<String>) -> Result<Option<String>, Failure> {
 }
 
 pub(crate) fn script(base: &str) -> String {
-    INSTALL_SCRIPT.replace("__CONTROL_URL__", base)
+    INSTALL_SCRIPT
+        .replace("__CONTROL_URL__", base)
+        .replace("__IMAGE__", RELAY_IMAGE)
 }
 
 /// The command an administrator pastes on the new machine. It checks the
