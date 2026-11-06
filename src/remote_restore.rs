@@ -17,7 +17,12 @@ use crate::config::profile::AppProfile;
 pub enum SavedRemoteTarget {
     Ssh { connection_id: ConnectionId },
     Host { credential_id: CredentialId },
+    Paired { host: yttt_protocol::EndpointKey },
 }
+
+/// Kinds this version knows. A record of any other kind came from a newer
+/// version and is left for it instead of failing the whole restore.
+const KNOWN_KINDS: [&str; 3] = ["Ssh", "Host", "Paired"];
 
 fn key(target: &SavedRemoteTarget) -> String {
     format!(
@@ -154,7 +159,15 @@ pub(crate) fn pending(profile: &AppProfile) -> io::Result<Vec<SavedRemoteTarget>
         if bytes.len() > 4096 {
             return Err(io::Error::other("remote restore record exceeds 4 KiB"));
         }
-        let target: SavedRemoteTarget = serde_json::from_slice(&bytes)?;
+        let record: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if record
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|kind| !KNOWN_KINDS.contains(&kind))
+        {
+            continue;
+        }
+        let target: SavedRemoteTarget = serde_json::from_value(record)?;
         if entry.file_name() != std::ffi::OsString::from(format!("{}.json", key(&target))) {
             return Err(io::Error::other("remote restore record identity mismatch"));
         }
@@ -242,5 +255,35 @@ mod tests {
         client.close_window().unwrap();
         drop(client);
         assert!(pending(&profile).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_record_from_a_newer_version_is_skipped_not_fatal() {
+        let root = tempfile::tempdir().unwrap();
+        use crate::config::profile::{
+            EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        };
+        let profile = AppProfile::scoped(
+            yttt_core::model::ids::ProfileId::new("remote-restore-future"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Persistent,
+            root.path(),
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        let paired = SavedRemoteTarget::Paired {
+            host: yttt_protocol::EndpointKey([7; 32]),
+        };
+        let registration = Registration::acquire(&profile, paired.clone())
+            .unwrap()
+            .unwrap();
+        registration.connected().unwrap();
+        drop(registration);
+        fs::write(
+            directory(&profile).join("future.json"),
+            br#"{"kind":"Mesh","mesh_id":"abc"}"#,
+        )
+        .unwrap();
+        assert_eq!(pending(&profile).unwrap(), vec![paired]);
     }
 }

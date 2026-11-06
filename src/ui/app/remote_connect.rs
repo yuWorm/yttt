@@ -186,6 +186,8 @@ impl RemoteConnectView {
                             *passphrase = Some(secret.to_string());
                         }
                     }
+                    // Never offered: a paired Host's key changes only by pairing again.
+                    crate::remote_launch::RemoteTarget::PairedHost { .. } => {}
                 }
                 input.update(cx, |input, cx| input.set_value("", window, cx));
             }
@@ -394,6 +396,7 @@ impl RemoteConnectView {
                 self.error = Some(error);
                 if self.launch.saved_target.is_some()
                     && self.replacement_credentials.is_none()
+                    && !matches!(&self.launch.target, crate::remote_launch::RemoteTarget::PairedHost { .. })
                     && !matches!(&self.launch.target, crate::remote_launch::RemoteTarget::SshServer { connection, .. }
                         if connection.auth == crate::config::ssh::SshAuthPreference::Agent)
                 {
@@ -744,6 +747,7 @@ impl Render for RemoteConnectView {
                         match &self.launch.target {
                             crate::remote_launch::RemoteTarget::SshServer { .. } => "SSH",
                             crate::remote_launch::RemoteTarget::ExistingHost { .. } => "TLS",
+                            crate::remote_launch::RemoteTarget::PairedHost { .. } => "P2P",
                         },
                     )),
             )

@@ -27,7 +27,7 @@ use yttt_protocol::{
 use yttt_ssh::{
     Authentication, ConnectRequest, SshEndpoint, StoredCredential, TransportEvent, TransportService,
 };
-use yttt_transport::{AuthToken, ClientIdentity, SharedConnector, TransportConnector};
+use yttt_transport::{AuthToken, ClientIdentity, Credential, SharedConnector, TransportConnector};
 use zeroize::{Zeroize, Zeroizing};
 
 pub enum RemoteConnectEvent {
@@ -356,6 +356,10 @@ pub fn connect(
     let label = launch.target.label();
     match &launch.target {
         RemoteTarget::SshServer { .. } => connect_ssh(launch, events, cancellation, label),
+        RemoteTarget::PairedHost { host, .. } => {
+            let host = host.clone();
+            connect_paired(launch, host, events, cancellation, label)
+        }
         RemoteTarget::ExistingHost {
             address,
             connection_info,
@@ -408,7 +412,7 @@ pub fn connect(
                 runtime,
                 connector,
                 identity,
-                AuthToken::from_bytes(connection_info.work_secret),
+                AuthToken::from_bytes(connection_info.work_secret).into(),
                 events,
                 cancellation,
                 label,
@@ -416,6 +420,112 @@ pub fn connect(
             )
         }
     }
+}
+
+/// How often the remote Client checks whether a P2P session runs direct or
+/// through the relay; hole punching usually upgrades a session after it starts.
+const PATH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+
+fn connect_paired(
+    launch: RemoteLaunch,
+    host: yttt_client_core::p2p::PairedHost,
+    events: flume::Sender<RemoteConnectEvent>,
+    cancellation: RemoteConnectCancellation,
+    label: String,
+) -> Result<RemoteEnvironment, String> {
+    use yttt_transport_iroh::{
+        DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelayTarget,
+    };
+    // Read here rather than carried in the launch, so no long-lived key passes
+    // between processes.
+    let secret = crate::paired_hosts::load_device_key(
+        &crate::paired_hosts::device_key_store(&launch.local_profile),
+        host.host,
+    )?;
+    send_status(&events, &cancellation, RemoteConnectStatus::VerifyingHost)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .thread_name("yttt-paired-host-client")
+        .build()
+        .map_err(|error| error.to_string())?;
+    let endpoint = runtime
+        .block_on(IrohEndpoint::bind(EndpointConfig {
+            secret: *secret,
+            relay: host
+                .relay_url
+                .clone()
+                .map(|url| RelayTarget { url, token: None })
+                .into(),
+            alpns: Vec::new(),
+            gate: Arc::new(OpenGate),
+            direct: DirectPaths::Any,
+        }))
+        .map_err(|error| format!("cannot open the P2P endpoint: {error}"))?;
+    let connector = Arc::new(host.connector(endpoint));
+    watch_path(
+        &runtime,
+        connector.clone(),
+        launch.local_profile.paths().logs.clone(),
+        label.clone(),
+    );
+    let identity = ClientIdentity {
+        expected_environment: Some(host.environment_id.clone()),
+        credential_generation: 0,
+        session_nonce: yttt_transport::new_session_nonce(),
+        supported: ProtocolRange::exact(yttt_protocol::RESOURCE_PROTOCOL_VERSION),
+        build: BuildIdentity {
+            product_version: env!("CARGO_PKG_VERSION").into(),
+            build_fingerprint: option_env!("YTTT_BUILD_FINGERPRINT")
+                .unwrap_or(env!("CARGO_PKG_VERSION"))
+                .into(),
+            resource_compatibility: "yttt-resource-v1".into(),
+        },
+        profile_id: host.profile_id.clone(),
+        client_instance_id: ClientInstanceId::new(format!(
+            "paired-host-client-{}",
+            uuid::Uuid::new_v4()
+        )),
+        host_epoch_hint: None,
+        can_force_stop: false,
+        channel: ConnectionChannel::Session,
+    };
+    cancellation.check(&events)?;
+    initialize_environment(
+        runtime,
+        SharedConnector::new(connector),
+        identity,
+        host.credential(*secret),
+        events,
+        cancellation,
+        label,
+        &launch.local_profile.paths().logs,
+    )
+}
+
+/// Logs each change between a direct and a relayed path for the session.
+fn watch_path(
+    runtime: &tokio::runtime::Runtime,
+    connector: Arc<yttt_transport_iroh::IrohConnector>,
+    logs: PathBuf,
+    label: String,
+) {
+    runtime.spawn(async move {
+        let mut reported = yttt_transport_iroh::PathKind::Unknown;
+        loop {
+            tokio::time::sleep(PATH_CHECK_INTERVAL).await;
+            let path = connector.path_kind().await;
+            if path != reported {
+                reported = path;
+                let line = match path {
+                    yttt_transport_iroh::PathKind::Direct => "P2P path: direct",
+                    yttt_transport_iroh::PathKind::Relay => "P2P path: relay",
+                    yttt_transport_iroh::PathKind::Unknown => continue,
+                };
+                crate::connection_log::note(&logs, &label, line).await;
+            }
+        }
+    });
 }
 
 fn connect_ssh(
@@ -610,7 +720,7 @@ fn connect_ssh(
         runtime,
         connector,
         identity,
-        token,
+        token.into(),
         events,
         cancellation,
         label,
@@ -647,7 +757,7 @@ fn initialize_environment(
     runtime: tokio::runtime::Runtime,
     connector: SharedConnector,
     identity: ClientIdentity,
-    token: AuthToken,
+    token: Credential,
     events: flume::Sender<RemoteConnectEvent>,
     cancellation: RemoteConnectCancellation,
     label: String,

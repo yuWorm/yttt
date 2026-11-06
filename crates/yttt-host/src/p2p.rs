@@ -320,14 +320,29 @@ impl PairingSlot {
         })
     }
 
-    /// The device waiting for confirmation, if it is `device`.
-    pub fn claimed_label(&self, device: EndpointKey) -> Option<String> {
+    /// The device waiting for confirmation, if it is `device` and the
+    /// invitation has not expired.
+    pub fn claimed_label(&self, device: EndpointKey, now_millis: u64) -> Option<String> {
         self.invitation
-            .as_ref()?
+            .as_ref()
+            .filter(|invitation| invitation.expires_millis > now_millis)?
             .claim
             .as_ref()
             .filter(|claim| claim.device == device)
             .map(|claim| claim.label.clone())
+    }
+
+    /// Forgets `device`'s claim when it left before the Host user decided, so
+    /// the invitation is open again rather than stuck waiting.
+    pub fn withdraw_claim(&mut self, device: EndpointKey) {
+        if let Some(invitation) = self.invitation.as_mut()
+            && invitation
+                .claim
+                .as_ref()
+                .is_some_and(|claim| claim.device == device)
+        {
+            invitation.claim = None;
+        }
     }
 
     /// Ends the invitation with the Host user's decision for the waiting device.
@@ -462,7 +477,7 @@ async fn serve_pairing_connection(
     let mut stop = context.stop.clone();
     tokio::select! {
         _ = stop.changed() => {}
-        _ = pair(&mut stream, connection.peer(), shared, context) => {}
+        _ = pair(&mut stream, &connection, shared, context) => {}
     }
     // Let the last message reach the device before the connection closes.
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -470,10 +485,11 @@ async fn serve_pairing_connection(
 
 async fn pair(
     stream: &mut TransportStream,
-    device: EndpointKey,
+    connection: &PeerConnection,
     shared: &P2pShared,
     context: &ConnectionContext,
 ) {
+    let device = connection.peer();
     let reject = async |stream: &mut TransportStream, reason| {
         let _ = send_pairing(stream, &PairMessage::Rejected(reason)).await;
     };
@@ -538,7 +554,14 @@ async fn pair(
             .close(PairRejectReason::InvitationClosed);
         return;
     }
-    let message = match decision.await {
+    let decision = tokio::select! {
+        decision = decision => decision,
+        () = connection.closed() => {
+            shared.pairing.lock().withdraw_claim(device);
+            return;
+        }
+    };
+    let message = match decision {
         Ok(Decision::Accept { host_label }) => PairMessage::Accepted {
             environment_id: context.identity.environment_id.clone(),
             profile_id: context.profile_id.clone(),
@@ -671,5 +694,30 @@ mod tests {
         assert!(matches!(slot.state(2_000), Some(PairingState::Open { .. })));
         slot.close(PairRejectReason::InvitationClosed);
         assert_eq!(slot.state(2_000), None);
+    }
+
+    #[test]
+    fn a_claim_cannot_be_confirmed_after_expiry_and_a_departed_device_frees_it() {
+        let mut slot = PairingSlot::default();
+        let invitation = slot.open(1_000);
+        let device = EndpointKey([9; 32]);
+        let (decision, _waiting) = oneshot::channel();
+        slot.invitation.as_mut().unwrap().claim = Some(Claim {
+            device,
+            label: "phone".into(),
+            short_code: 42,
+            decision: Some(decision),
+        });
+        assert_eq!(slot.claimed_label(device, 1_000).as_deref(), Some("phone"));
+        assert_eq!(slot.claimed_label(EndpointKey([8; 32]), 1_000), None);
+        assert_eq!(slot.claimed_label(device, invitation.expires_millis), None);
+
+        slot.withdraw_claim(EndpointKey([8; 32]));
+        assert!(matches!(
+            slot.state(1_000),
+            Some(PairingState::AwaitingConfirmation { .. })
+        ));
+        slot.withdraw_claim(device);
+        assert!(matches!(slot.state(1_000), Some(PairingState::Open { .. })));
     }
 }

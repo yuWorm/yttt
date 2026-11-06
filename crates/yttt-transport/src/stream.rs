@@ -45,6 +45,16 @@ pub trait TransportConnector: Send + Sync + 'static {
     }
 }
 
+impl<T: TransportConnector> TransportConnector for Arc<T> {
+    fn connect(&self) -> BoxFuture<'_, Result<TransportStream, TransportError>> {
+        (**self).connect()
+    }
+
+    fn link_profile(&self) -> LinkProfile {
+        (**self).link_profile()
+    }
+}
+
 #[derive(Clone)]
 pub struct SharedConnector {
     inner: Arc<dyn TransportConnector>,

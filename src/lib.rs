@@ -17,6 +17,7 @@ pub mod host_launcher;
 pub mod host_runtime;
 pub mod host_storage;
 pub mod login_startup;
+mod paired_hosts;
 pub mod palette;
 pub mod remote_host;
 pub mod remote_launch;

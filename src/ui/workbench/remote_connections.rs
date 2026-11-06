@@ -2,6 +2,7 @@ use super::auxiliary_windows::RemoteServicesPage;
 use super::*;
 use gpui_base::FocusTrapElement as _;
 use yttt_core::model::ids::{ConnectionId, CredentialId};
+use yttt_protocol::EndpointKey;
 use yttt_ui::menu::{YtttDropdownMenu as _, YtttMenuItem};
 use yttt_ui::primitives::button::{yttt_button, yttt_button_base};
 
@@ -9,6 +10,7 @@ use yttt_ui::primitives::button::{yttt_button, yttt_button_base};
 enum Target {
     Ssh(ConnectionId),
     Host(CredentialId),
+    Paired(EndpointKey),
 }
 
 impl WorkbenchView {
@@ -18,6 +20,15 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> bool {
         self.ensure_existing_hosts(window, cx);
+        let (paired_busy, paired_error) = self
+            .auxiliary_windows
+            .paired_host
+            .as_ref()
+            .map(|paired| {
+                let paired = paired.read(cx);
+                (paired.busy(), paired.error().is_some())
+            })
+            .unwrap_or_default();
         let (hosts_busy, hosts_error) = self
             .auxiliary_windows
             .existing_host
@@ -27,13 +38,20 @@ impl WorkbenchView {
                 (hosts.busy(), hosts.error().is_some())
             })
             .unwrap_or_default();
-        if self.remote_connection_editor_open(cx) || self.ssh.error.is_some() || hosts_error {
+        if self.remote_connection_editor_open(cx)
+            || self.ssh.error.is_some()
+            || hosts_error
+            || paired_error
+        {
             self.ssh.manager_open = true;
             self.auxiliary_windows
                 .request(AuxiliaryWindowKind::RemoteServices);
             cx.notify();
         }
-        !self.remote_connection_editor_open(cx) && self.ssh.connecting.is_none() && !hosts_busy
+        !self.remote_connection_editor_open(cx)
+            && self.ssh.connecting.is_none()
+            && !hosts_busy
+            && !paired_busy
     }
 
     pub(crate) fn restore_remote_target(
@@ -60,6 +78,13 @@ impl WorkbenchView {
                         .iter()
                         .any(|record| &record.credential_id == credential_id)
                 }),
+            crate::remote_restore::SavedRemoteTarget::Paired { host } => self
+                .auxiliary_windows
+                .paired_host
+                .as_ref()
+                .is_some_and(|paired| {
+                    crate::paired_hosts::find(paired.read(cx).records(), *host).is_some()
+                }),
         };
         if !exists {
             if let Some(profile) = self.config_paths.profile()
@@ -77,6 +102,7 @@ impl WorkbenchView {
             crate::remote_restore::SavedRemoteTarget::Host { credential_id } => {
                 Target::Host(credential_id)
             }
+            crate::remote_restore::SavedRemoteTarget::Paired { host } => Target::Paired(host),
         };
         self.connect_remote_record(target, window, cx);
     }
@@ -89,6 +115,14 @@ impl WorkbenchView {
             self.auxiliary_windows.existing_host_subscription =
                 Some(cx.observe(&hosts, |_, _, cx| cx.notify()));
             self.auxiliary_windows.existing_host = Some(hosts);
+        }
+        if self.auxiliary_windows.paired_host.is_none()
+            && let Some(profile) = self.config_paths.profile().cloned()
+        {
+            let paired = crate::ui::app::paired_host::create(profile, self.ui_text, window, cx);
+            self.auxiliary_windows.paired_host_subscription =
+                Some(cx.observe(&paired, |_, _, cx| cx.notify()));
+            self.auxiliary_windows.paired_host = Some(paired);
         }
         if self.auxiliary_windows.pending_new_host_editor
             && self
@@ -110,8 +144,24 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    fn pair_remote_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_ssh_connection_editor();
+        if let Some(paired) = self.auxiliary_windows.paired_host.clone() {
+            paired.update(cx, |paired, cx| paired.new_pairing(window, cx));
+        }
+        cx.notify();
+    }
+
+    fn paired_editor_open(&self, cx: &App) -> bool {
+        self.auxiliary_windows
+            .paired_host
+            .as_ref()
+            .is_some_and(|paired| paired.read(cx).editor_open())
+    }
+
     pub(super) fn remote_connection_editor_open(&self, cx: &App) -> bool {
-        self.ssh.editor_open
+        self.paired_editor_open(cx)
+            || self.ssh.editor_open
             || self
                 .auxiliary_windows
                 .existing_host
@@ -143,6 +193,9 @@ impl WorkbenchView {
         if let Some(hosts) = self.auxiliary_windows.existing_host.clone() {
             hosts.update(cx, |hosts, cx| hosts.dismiss_editor(window, cx));
         }
+        if let Some(paired) = self.auxiliary_windows.paired_host.clone() {
+            paired.update(cx, |paired, cx| paired.dismiss_editor(window, cx));
+        }
         if let Some(focus) = &self.auxiliary_windows.remote_manager_focus {
             focus.focus(window, cx);
         }
@@ -162,6 +215,11 @@ impl WorkbenchView {
                     hosts.update(cx, |hosts, cx| hosts.connect_saved(id, window, cx));
                 }
             }
+            Target::Paired(host) => {
+                if let Some(paired) = self.auxiliary_windows.paired_host.clone() {
+                    paired.update(cx, |paired, cx| paired.connect_saved(host, window, cx));
+                }
+            }
         }
     }
 
@@ -171,6 +229,11 @@ impl WorkbenchView {
             Target::Host(id) => {
                 if let Some(hosts) = self.auxiliary_windows.existing_host.clone() {
                     hosts.update(cx, |hosts, cx| hosts.edit_connection(id, window, cx));
+                }
+            }
+            Target::Paired(host) => {
+                if let Some(paired) = self.auxiliary_windows.paired_host.clone() {
+                    paired.update(cx, |paired, cx| paired.edit(host, window, cx));
                 }
             }
         }
@@ -187,6 +250,11 @@ impl WorkbenchView {
             Target::Host(id) => {
                 if let Some(hosts) = self.auxiliary_windows.existing_host.clone() {
                     hosts.update(cx, |hosts, cx| hosts.delete_connection(id, window, cx));
+                }
+            }
+            Target::Paired(host) => {
+                if let Some(paired) = self.auxiliary_windows.paired_host.clone() {
+                    paired.update(cx, |paired, cx| paired.forget(host, window, cx));
                 }
             }
         }
@@ -284,14 +352,21 @@ pub(super) fn render(
             .remote_editor_focus
             .get_or_insert_with(|| cx.focus_handle())
             .clone();
-        let credentials_only = root.ssh.editor_open && root.ssh.credentials_only
+        let paired_open = root.paired_editor_open(cx);
+        let credentials_only = !paired_open && root.ssh.editor_open && root.ssh.credentials_only
             || !root.ssh.editor_open
                 && root
                     .auxiliary_windows
                     .existing_host
                     .as_ref()
                     .is_some_and(|hosts| hosts.read(cx).credentials_only());
-        let (title, editor) = if root.ssh.editor_open {
+        let (title, editor) = if paired_open {
+            let paired = root.auxiliary_windows.paired_host.as_ref().unwrap().clone();
+            (
+                root.ui_text.get(paired.read(cx).title()),
+                paired.into_any_element(),
+            )
+        } else if root.ssh.editor_open {
             let title = root.ui_text.get(if root.ssh.credentials_only {
                 UiTextKey::RemoteCredentialsRequired
             } else {
@@ -384,6 +459,7 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
     .yttt_dropdown_menu(crate::ui::theme::menu_appearance, move |menu, _, _| {
         let ssh_owner = owner.clone();
         let host_owner = owner.clone();
+        let paired_owner = owner.clone();
         menu.item(
             YtttMenuItem::new(text.get(UiTextKey::RemoteAddSsh)).on_click(move |_, window, cx| {
                 let _ = ssh_owner.update(cx, |root, cx| {
@@ -395,6 +471,13 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
             YtttMenuItem::new(text.get(UiTextKey::RemoteAddHost)).on_click(move |_, window, cx| {
                 let _ = host_owner.update(cx, |root, cx| root.new_remote_host(window, cx));
             }),
+        )
+        .item(
+            YtttMenuItem::new(text.get(UiTextKey::RemoteAddPaired)).on_click(
+                move |_, window, cx| {
+                    let _ = paired_owner.update(cx, |root, cx| root.pair_remote_host(window, cx));
+                },
+            ),
         )
     });
     let mut rows = Vec::new();
@@ -430,7 +513,33 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
             ));
         }
     }
+    if let Some(paired) = root.auxiliary_windows.paired_host.as_ref() {
+        let records = paired.read(cx).records().to_vec();
+        let busy = paired.read(cx).busy();
+        for record in records {
+            let hint = record
+                .host
+                .relay_url
+                .clone()
+                .or_else(|| record.host.direct_addrs.first().map(ToString::to_string))
+                .unwrap_or_else(|| record.host.host.to_string()[..16].to_string());
+            rows.push(connection_row(
+                root,
+                Target::Paired(record.host.host),
+                record.display_name(),
+                hint,
+                busy,
+                cx,
+            ));
+        }
+    }
     let empty = rows.is_empty();
+    let paired_error = root
+        .auxiliary_windows
+        .paired_host
+        .as_ref()
+        .and_then(|paired| paired.read(cx).error())
+        .map(str::to_owned);
     let host_error = root
         .auxiliary_windows
         .existing_host
@@ -440,7 +549,7 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
     let error = if root.remote_connection_editor_open(cx) {
         None
     } else {
-        root.ssh.error.clone().or(host_error)
+        root.ssh.error.clone().or(host_error).or(paired_error)
     };
     div()
         .flex()
@@ -495,10 +604,12 @@ fn connection_row(
     let kind = match &target {
         Target::Ssh(_) => "SSH",
         Target::Host(_) => text.get(UiTextKey::WorkbenchI18nRemoteConnectionKindHost),
+        Target::Paired(_) => "P2P",
     };
     let id = match &target {
         Target::Ssh(id) => format!("ssh-{}", id),
         Target::Host(id) => format!("host-{}", id),
+        Target::Paired(host) => format!("paired-{host}"),
     };
     let debug_id = format!("remote-record-{id}");
     let menu_owner = cx.weak_entity();

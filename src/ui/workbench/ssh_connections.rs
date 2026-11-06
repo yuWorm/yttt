@@ -317,6 +317,8 @@ impl WorkbenchView {
         self.ssh.remote_access_address = None;
         self.auxiliary_windows.existing_host = None;
         self.auxiliary_windows.existing_host_subscription = None;
+        self.auxiliary_windows.paired_host = None;
+        self.auxiliary_windows.paired_host_subscription = None;
         self.auxiliary_windows.pending_new_host_editor = false;
         if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::RemoteServices) {
             self.auxiliary_windows.active = None;

@@ -31,6 +31,8 @@ pub(super) struct AuxiliaryWindows {
     pub(super) remote_page: RemoteServicesPage,
     pub(super) existing_host: Option<Entity<crate::ui::app::existing_host::ExistingHostForm>>,
     pub(super) existing_host_subscription: Option<Subscription>,
+    pub(super) paired_host: Option<Entity<crate::ui::app::paired_host::PairedHostForm>>,
+    pub(super) paired_host_subscription: Option<Subscription>,
     pub(super) remote_list_scroll: ScrollHandle,
     pub(super) remote_editor_focus: Option<FocusHandle>,
     pub(super) remote_manager_focus: Option<FocusHandle>,

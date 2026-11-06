@@ -1,6 +1,7 @@
 pub mod assets;
 mod desktop_control;
 pub(crate) mod existing_host;
+pub(crate) mod paired_host;
 pub mod platform;
 mod remote_connect;
 pub mod startup;

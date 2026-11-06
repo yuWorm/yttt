@@ -105,7 +105,7 @@ enum DesktopHostLifecycle {
     Remote {
         connector: yttt_transport::SharedConnector,
         identity: yttt_transport::ClientIdentity,
-        token: yttt_transport::AuthToken,
+        token: yttt_transport::Credential,
         environment: yttt_protocol::workspace::WorkspaceEnvironment,
         label: String,
     },
@@ -310,7 +310,7 @@ impl DesktopHostRuntime {
         storage: Arc<crate::host_storage::HostStorage>,
         connector: yttt_transport::SharedConnector,
         identity: yttt_transport::ClientIdentity,
-        token: yttt_transport::AuthToken,
+        token: yttt_transport::Credential,
         environment: yttt_protocol::workspace::WorkspaceEnvironment,
         label: String,
     ) -> Result<Arc<Self>, DesktopHostRuntimeError> {
@@ -544,7 +544,7 @@ impl DesktopHostRuntime {
                             .connect()
                             .await
                             .map_err(|error| HostLaunchError::RequestFailed(error.to_string()))?;
-                        yttt_transport::client_handshake(&mut stream, &identity, &token).await?;
+                        yttt_transport::client_handshake_with(&mut stream, &identity, &token).await?;
                         yttt_transport::send_lifecycle(
                             &mut stream,
                             &yttt_protocol::LifecycleMessage::Request(

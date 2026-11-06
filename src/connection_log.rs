@@ -34,6 +34,16 @@ pub(crate) fn follow(
     });
 }
 
+/// Appends one line about the connection labelled `label`.
+pub(crate) async fn note(logs: &Path, label: &str, line: &str) {
+    let path = logs.join(LOG_FILE);
+    let line = format!(
+        "{} [{label}] {line}\n",
+        chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z")
+    );
+    let _ = tokio::task::spawn_blocking(move || append(&path, &line)).await;
+}
+
 fn describe(client: &ClientCore, state: &ConnectionState) -> Option<String> {
     match state {
         ConnectionState::Reconnecting {

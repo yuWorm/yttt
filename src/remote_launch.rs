@@ -280,12 +280,23 @@ pub enum RemoteTarget {
         passphrase: Option<String>,
         save_password_as: Option<yttt_core::model::ids::CredentialId>,
     },
+    /// A Host paired over P2P. Carries no secret: the remote Client reads its
+    /// device key for this Host from the credential store itself.
+    PairedHost {
+        name: String,
+        host: yttt_client_core::p2p::PairedHost,
+    },
 }
 
 impl RemoteTarget {
     pub fn label(&self) -> String {
         match self {
             Self::ExistingHost { address, .. } => address.clone(),
+            Self::PairedHost { name, host } => crate::paired_hosts::PairedHostRecord {
+                name: name.clone(),
+                host: host.clone(),
+            }
+            .display_name(),
             Self::SshServer { connection, .. } => {
                 if connection.name.trim().is_empty() || connection.name == connection.host {
                     format!(
@@ -314,6 +325,7 @@ impl RemoteTarget {
                 password.zeroize();
                 passphrase.zeroize();
             }
+            Self::PairedHost { .. } => {}
         }
     }
 }

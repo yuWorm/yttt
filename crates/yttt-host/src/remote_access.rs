@@ -562,7 +562,7 @@ impl Manager {
                 let host_label = self.context.identity.environment_id.clone();
                 let mut pairing = self.pairing.lock();
                 let label = pairing
-                    .claimed_label(endpoint_id)
+                    .claimed_label(endpoint_id, super::now_millis())
                     .ok_or_else(|| failure("no device with that key is waiting to pair"))?;
                 // Saved before the device hears it was accepted.
                 devices

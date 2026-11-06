@@ -301,6 +301,46 @@ async fn a_declined_device_is_not_paired() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_device_that_leaves_before_the_host_decides_frees_the_invitation() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    let code = invitation(&admin).await;
+    let endpoint = device_endpoint([27; 32]).await;
+    let device = endpoint.clone();
+    let pairing = tokio::spawn(async move { pair(&device, &code, "leaving", |_| {}).await });
+    awaiting_confirmation(&admin).await;
+    pairing.abort();
+    endpoint.close().await;
+
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !matches!(
+            status(&admin).await.p2p.pairing,
+            Some(PairingState::Open { .. })
+        ) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the Host kept waiting for a device that left");
+    // Nothing was added, and the Host cannot confirm the departed device.
+    let RemoteAccessResponse::Devices(devices) =
+        remote_access(&admin, RemoteAccessRequest::ListDevices).await
+    else {
+        panic!("expected devices");
+    };
+    assert!(devices.is_empty());
+    assert!(
+        admin
+            .request(Request::RemoteAccess(RemoteAccessRequest::ConfirmPairing {
+                endpoint_id: endpoint.id(),
+                preset: DevicePreset::Full,
+            }))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_second_holder_of_the_code_withdraws_the_invitation() {
     let temp = tempfile::tempdir().unwrap();
     let admin = start_host(temp.path()).await;

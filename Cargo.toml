@@ -83,6 +83,8 @@ resvg = "0.45.1"
 yttt-agent-core = { path = "crates/yttt-agent-core" }
 yttt-agent-providers = { path = "crates/yttt-agent-providers" }
 yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }
+gethostname = "1"
+rand = "0.8"
 zeroize = "1"
 yttt-transport-tls = { path = "crates/yttt-transport-tls" }
 notify = "7.0.0"
@@ -126,6 +128,7 @@ yttt-protocol = { path = "crates/yttt-protocol" }
 yttt-project-core = { path = "crates/yttt-project-core" }
 yttt-transport-local = { path = "crates/yttt-transport-local" }
 yttt-transport = { path = "crates/yttt-transport" }
+yttt-transport-iroh = { path = "crates/yttt-transport-iroh" }
 yttt-ssh = { path = "crates/yttt-ssh" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 yttt-terminal = { path = "crates/yttt-terminal" }

@@ -132,7 +132,7 @@ impl RecoveryHost {
             storage,
             connector,
             identity,
-            token,
+            token.into(),
             environment,
             id.into(),
         )
