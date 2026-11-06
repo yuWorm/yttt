@@ -1,0 +1,193 @@
+//! A paid iroh relay node.
+//!
+//! The node forwards end-to-end encrypted QUIC datagrams between EndpointIds.
+//! It admits a connection only with a ticket the control plane signed, paces
+//! each account with one bucket shared by all its connections, reports what
+//! each account sent, and drops accounts the control plane suspends. It holds
+//! no key that could open, forge or redirect traffic between devices.
+
+mod config;
+mod framing;
+mod http;
+mod node;
+mod report;
+
+use std::{net::SocketAddr, sync::Arc, time::Duration};
+
+use tokio::{net::TcpListener, task::JoinSet};
+use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
+use yttt_relay_ticket::{TicketVerifier, api::AccountStanding};
+
+pub use config::{ControlConfig, NodeConfig, TlsFiles};
+pub use node::AccountSnapshot;
+
+const EXPIRY_TICK: Duration = Duration::from_secs(1);
+
+#[derive(Debug, thiserror::Error)]
+pub enum StartError {
+    #[error("ticket key {0:?} is not 32 bytes of hex")]
+    TicketKey(String),
+    #[error("a node needs at least one ticket key")]
+    NoTicketKeys,
+    #[error("QUIC address discovery needs TLS")]
+    QuicWithoutTls,
+    #[error("could not load TLS files: {0}")]
+    Tls(String),
+    #[error("could not bind {addr}: {source}")]
+    Bind {
+        addr: SocketAddr,
+        source: std::io::Error,
+    },
+    #[error("could not start QUIC address discovery: {0}")]
+    Quic(String),
+}
+
+/// A running relay node. Dropping it does not stop it; call [`Self::shutdown`].
+pub struct RelayNode {
+    node: Arc<node::Node>,
+    addr: SocketAddr,
+    quic_addr: Option<SocketAddr>,
+    cancel: CancellationToken,
+    tasks: JoinSet<()>,
+    quic: Option<iroh_relay::server::Server>,
+}
+
+impl RelayNode {
+    pub async fn spawn(config: NodeConfig) -> Result<Self, StartError> {
+        let keys = config
+            .ticket_keys
+            .iter()
+            .map(|key| {
+                yttt_relay_ticket::parse_key(key).ok_or_else(|| StartError::TicketKey(key.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if keys.is_empty() {
+            return Err(StartError::NoTicketKeys);
+        }
+        let verifier =
+            TicketVerifier::new(&keys).map_err(|_| StartError::TicketKey(String::new()))?;
+        let node = Arc::new(node::Node::new(config.node_id.clone(), verifier));
+        let tls = config.tls.as_ref().map(load_tls).transpose()?;
+        let cancel = CancellationToken::new();
+        let mut tasks = JoinSet::new();
+
+        let listener = bind(config.listen).await?;
+        let addr = listener.local_addr().map_err(|source| StartError::Bind {
+            addr: config.listen,
+            source,
+        })?;
+        tasks.spawn(http::serve(
+            listener,
+            tls.clone().map(TlsAcceptor::from),
+            node.clone(),
+            cancel.clone(),
+        ));
+        if let (Some(_), Some(captive)) = (&tls, config.captive_portal_listen) {
+            tasks.spawn(http::serve_captive_portal(
+                bind(captive).await?,
+                cancel.clone(),
+            ));
+        }
+
+        let quic = match config.quic_listen {
+            None => None,
+            Some(quic_addr) => {
+                let tls = tls.as_ref().ok_or(StartError::QuicWithoutTls)?;
+                let mut quic = iroh_relay::server::QuicConfig::new(quic_addr);
+                quic.server_config = Some((**tls).clone());
+                let mut server = iroh_relay::server::ServerConfig::default();
+                server.quic = Some(quic);
+                Some(
+                    iroh_relay::server::Server::spawn(server)
+                        .await
+                        .map_err(|error| StartError::Quic(error.to_string()))?,
+                )
+            }
+        };
+        let quic_addr = quic.as_ref().and_then(|server| server.quic_addr());
+
+        tasks.spawn({
+            let node = node.clone();
+            let cancel = cancel.clone();
+            async move {
+                let mut tick = tokio::time::interval(EXPIRY_TICK);
+                loop {
+                    tokio::select! {
+                        () = cancel.cancelled() => return,
+                        _ = tick.tick() => node.expire(node::now_unix()),
+                    }
+                }
+            }
+        });
+        if let Some(control) = config.control.clone() {
+            tasks.spawn(report::run(
+                node.clone(),
+                config.node_id.clone(),
+                control,
+                cancel.clone(),
+            ));
+        }
+
+        Ok(Self {
+            node,
+            addr,
+            quic_addr,
+            cancel,
+            tasks,
+            quic,
+        })
+    }
+
+    /// The address serving `/relay`.
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    pub fn quic_addr(&self) -> Option<SocketAddr> {
+        self.quic_addr
+    }
+
+    /// The account's connections and bytes on this node, if it has any.
+    pub fn account(&self, account_id: u64) -> Option<AccountSnapshot> {
+        self.node.snapshot(account_id)
+    }
+
+    /// Applies standings directly, as the control plane's replies do.
+    pub fn apply_standings(&self, standings: &[AccountStanding]) {
+        self.node.apply(standings);
+    }
+
+    pub async fn shutdown(mut self) {
+        self.cancel.cancel();
+        self.node.clients.shutdown().await;
+        if let Some(quic) = self.quic.take() {
+            let _ = quic.shutdown().await;
+        }
+        while self.tasks.join_next().await.is_some() {}
+    }
+}
+
+async fn bind(addr: SocketAddr) -> Result<TcpListener, StartError> {
+    TcpListener::bind(addr)
+        .await
+        .map_err(|source| StartError::Bind { addr, source })
+}
+
+fn load_tls(files: &TlsFiles) -> Result<Arc<rustls::ServerConfig>, StartError> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject as _};
+    let chain = CertificateDer::pem_file_iter(&files.cert_chain)
+        .and_then(|certs| certs.collect::<Result<Vec<_>, _>>())
+        .map_err(|error| StartError::Tls(format!("{}: {error}", files.cert_chain.display())))?;
+    let key = PrivateKeyDer::from_pem_file(&files.private_key)
+        .map_err(|error| StartError::Tls(format!("{}: {error}", files.private_key.display())))?;
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+    .map_err(|error| StartError::Tls(error.to_string()))?
+    .with_no_client_auth()
+    .with_single_cert(chain, key)
+    .map_err(|error| StartError::Tls(error.to_string()))?;
+    Ok(Arc::new(config))
+}

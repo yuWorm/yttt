@@ -1,0 +1,36 @@
+[package]
+name = "yttt-relay"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytes = "1"
+data-encoding = "2"
+futures-sink = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+# Pinned with iroh: the relay protocol and its embedder API must match the clients'.
+iroh-base = { version = "=1.4.1", default-features = false, features = ["key"] }
+iroh-relay = { version = "=1.4.1", default-features = false, features = ["server"] }
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+sha1 = "0.11"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-util = "0.7"
+tokio-websockets = { version = "0.13", default-features = false, features = ["server", "ring"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+yttt-relay-ticket = { path = "../yttt-relay-ticket" }
+
+[dev-dependencies]
+yttt-transport = { path = "../yttt-transport" }
+yttt-transport-iroh = { path = "../yttt-transport-iroh" }
+iroh-dns = "=1.4.1"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }

@@ -4,6 +4,8 @@
 //! node, and carries the bandwidth the account paid for. It never says anything
 //! about which Host a device may reach; that stays end-to-end between devices.
 
+pub mod api;
+
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
@@ -192,7 +194,8 @@ impl DeviceProof {
         if self.issued_unix.abs_diff(now_unix) > DEVICE_PROOF_SKEW_SECS {
             return Err(TicketError::Expired);
         }
-        let key = VerifyingKey::from_bytes(&self.endpoint_id).map_err(|_| TicketError::Malformed)?;
+        let key =
+            VerifyingKey::from_bytes(&self.endpoint_id).map_err(|_| TicketError::Malformed)?;
         let message =
             device_proof_message(purpose, account_id, &self.endpoint_id, self.issued_unix);
         key.verify_strict(
@@ -330,12 +333,19 @@ mod tests {
             tampered[index] ^= 0x01;
             let tampered = data_encoding::BASE64URL_NOPAD.encode(&tampered);
             assert!(
-                verifier.verify(&tampered, &endpoint, "tokyo-1", NOW).is_err(),
+                verifier
+                    .verify(&tampered, &endpoint, "tokyo-1", NOW)
+                    .is_err(),
                 "byte {index} was not covered"
             );
         }
         assert_eq!(
-            verifier.verify(&"A".repeat(MAX_TICKET_TOKEN_BYTES + 1), &endpoint, "tokyo-1", NOW),
+            verifier.verify(
+                &"A".repeat(MAX_TICKET_TOKEN_BYTES + 1),
+                &endpoint,
+                "tokyo-1",
+                NOW
+            ),
             Err(TicketError::Malformed)
         );
     }
@@ -356,7 +366,10 @@ mod tests {
     fn a_device_proof_binds_its_key_purpose_account_and_time() {
         let proof = DeviceProof::sign(&[9; 32], ProofPurpose::RegisterDevice, 7, NOW);
         assert_eq!(proof.endpoint_id, public_key(&[9; 32]));
-        assert_eq!(proof.verify(ProofPurpose::RegisterDevice, 7, NOW + 10), Ok(()));
+        assert_eq!(
+            proof.verify(ProofPurpose::RegisterDevice, 7, NOW + 10),
+            Ok(())
+        );
         assert_eq!(
             proof.verify(ProofPurpose::IssueTicket, 7, NOW),
             Err(TicketError::BadSignature)
