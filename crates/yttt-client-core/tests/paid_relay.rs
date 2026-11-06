@@ -9,7 +9,7 @@ use std::{fs, path::Path, sync::Arc, time::Duration};
 
 use yttt_client_core::{
     ClientCore, ConnectionState,
-    control::{ControlClient, ControlSession},
+    control::{ControlClient, ControlSession, DeviceKind},
     p2p::pair,
 };
 use yttt_control::{Control, ControlConfig, NodeEntry, PlanConfig};
@@ -34,7 +34,6 @@ use std::os::unix::fs::PermissionsExt as _;
 const TOKEN: [u8; 32] = [0x5c; 32];
 const PROFILE: &str = "paid-relay";
 const NODE: &str = "local-1";
-const NODE_TOKEN: &str = "node-token";
 const PHONE: [u8; 32] = [61; 32];
 
 fn build() -> BuildIdentity {
@@ -133,6 +132,13 @@ async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>) ->
 /// A fresh database on the test server, a control plane on it, and a node
 /// reporting to it every second.
 async fn paid_relay() -> (Control, RelayNode, String) {
+    let (control, mut nodes, control_url) = paid_relay_nodes(&[NODE]).await;
+    (control, nodes.remove(0), control_url)
+}
+
+/// A control plane and one reporting relay node per id; the first is where
+/// accounts start.
+async fn paid_relay_nodes(ids: &[&str]) -> (Control, Vec<RelayNode>, String) {
     let server = std::env::var("YTTT_TEST_DATABASE_URL")
         .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
     // Tests in this file run side by side, each on its own database.
@@ -160,17 +166,20 @@ async fn paid_relay() -> (Control, RelayNode, String) {
         .unwrap();
     let control_url = format!("http://{control_addr}");
     let ticket_secret = [3; 32];
-    let mut node_config = NodeConfig::local(
-        NODE,
-        "127.0.0.1:0".parse().unwrap(),
-        &[yttt_relay_ticket::public_key(&ticket_secret)],
-    );
-    node_config.control = Some(NodeControl::from_parts(
-        control_url.clone(),
-        NODE_TOKEN.into(),
-        1,
-    ));
-    let node = RelayNode::spawn(node_config).await.unwrap();
+    let mut nodes = Vec::new();
+    for id in ids {
+        let mut node_config = NodeConfig::local(
+            *id,
+            "127.0.0.1:0".parse().unwrap(),
+            &[yttt_relay_ticket::public_key(&ticket_secret)],
+        );
+        node_config.control = Some(NodeControl::from_parts(
+            control_url.clone(),
+            format!("{id}-token"),
+            1,
+        ));
+        nodes.push(RelayNode::spawn(node_config).await.unwrap());
+    }
     let control = Control::spawn(ControlConfig {
         listen: control_addr,
         public_url: None,
@@ -192,15 +201,19 @@ async fn paid_relay() -> (Control, RelayNode, String) {
             throttled_rate_bps: 10_000,
             max_devices: 5,
         }],
-        nodes: vec![NodeEntry {
-            id: NODE.into(),
-            url: format!("http://{}", node.addr()),
-            token: NODE_TOKEN.into(),
-        }],
+        nodes: ids
+            .iter()
+            .zip(&nodes)
+            .map(|(id, node)| NodeEntry {
+                id: (*id).into(),
+                url: format!("http://{}", node.addr()),
+                token: format!("{id}-token"),
+            })
+            .collect(),
     })
     .await
     .unwrap();
-    (control, node, control_url)
+    (control, nodes, control_url)
 }
 
 async fn account(control_url: &str) -> ControlSession {
@@ -267,9 +280,16 @@ async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
     })
     .await;
 
-    // The phone registers itself, gets a ticket, and has no direct paths.
-    session.register_device(&PHONE, "phone").await.unwrap();
-    let ticket = session.ticket(&PHONE).await.unwrap();
+    // The phone registers its key for this Host, gets a ticket for the
+    // Host's node, and has no direct paths.
+    let phone_kind = DeviceKind::Client {
+        host: host_status.endpoint_id.unwrap().0,
+    };
+    session
+        .register_device(&PHONE, "phone", phone_kind)
+        .await
+        .unwrap();
+    let ticket = session.ticket(&PHONE, phone_kind).await.unwrap();
     let phone = IrohEndpoint::bind(EndpointConfig {
         secret: PHONE,
         relay: RelaySetup::Use(ticket.target()),
@@ -351,7 +371,7 @@ async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
     })
     .await
     .expect("the session outlived the suspension");
-    assert!(session.ticket(&PHONE).await.is_err());
+    assert!(session.ticket(&PHONE, phone_kind).await.is_err());
 
     node.shutdown().await;
     control.shutdown().await;
@@ -459,5 +479,145 @@ async fn the_app_and_a_headless_device_sign_in_without_a_password() {
         finished.await.unwrap(),
         Err(yttt_client_core::control::ControlError::Denied)
     ));
+    control.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_host_moves_to_another_node_and_its_device_follows() {
+    let (control, nodes, control_url) = paid_relay_nodes(&[NODE, "local-2"]).await;
+    let (first, second) = (&nodes[0], &nodes[1]);
+    let second_url = format!("http://{}", second.addr());
+    let session = account(&control_url).await;
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetRelayAccount {
+            account: Some(RelayAccount {
+                control_url: control_url.clone(),
+                account_id: session.account_id,
+                session: SecretText(session.token.clone()),
+            }),
+        },
+    )
+    .await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetP2p {
+            enabled: true,
+            relay_url: None,
+        },
+    )
+    .await;
+    let host_key = status(&admin).await.p2p.endpoint_id.unwrap();
+    let phone_kind = DeviceKind::Client { host: host_key.0 };
+    session
+        .register_device(&PHONE, "phone", phone_kind)
+        .await
+        .unwrap();
+    let ticket = session.ticket(&PHONE, phone_kind).await.unwrap();
+    assert_eq!(ticket.node_id, NODE);
+    let phone = IrohEndpoint::bind(EndpointConfig {
+        secret: PHONE,
+        relay: RelaySetup::Use(ticket.target()),
+        alpns: Vec::new(),
+        gate: Arc::new(OpenGate),
+        direct: DirectPaths::Off,
+    })
+    .await
+    .unwrap();
+    let RemoteAccessResponse::PairingInvitation { code, .. } =
+        remote_access(&admin, RemoteAccessRequest::StartPairing).await
+    else {
+        panic!("expected an invitation");
+    };
+    let code = PairingCode::decode(&code.0).unwrap();
+    let pairing = tokio::spawn({
+        let phone = phone.clone();
+        async move { pair(&phone, &code, "phone", |_| {}).await }
+    });
+    let endpoint_id = eventually("the phone asking to pair", async || {
+        match status(&admin).await.p2p.pairing {
+            Some(PairingState::AwaitingConfirmation { endpoint_id, .. }) => Some(endpoint_id),
+            _ => None,
+        }
+    })
+    .await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::ConfirmPairing {
+            endpoint_id,
+            preset: DevicePreset::Full,
+        },
+    )
+    .await;
+    let mut paired = pairing.await.unwrap().unwrap();
+    let client = ClientCore::connect(
+        paired.connector(phone.clone()),
+        identity("phone", Some(paired.environment_id.clone())),
+        paired.credential(PHONE),
+    )
+    .await
+    .unwrap();
+    client.request(Request::ListResources).await.unwrap();
+
+    // The Host lists the nodes it may move to, then moves.
+    let RemoteAccessResponse::RelayNodes(choices) =
+        remote_access(&admin, RemoteAccessRequest::ListRelayNodes).await
+    else {
+        panic!("expected relay nodes");
+    };
+    assert_eq!(choices.len(), 2);
+    assert!(choices.iter().all(|choice| choice.latency_ms.is_some()));
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetRelayNode {
+            node_id: "local-2".into(),
+        },
+    )
+    .await;
+    let account = status(&admin).await.p2p.relay_account.unwrap();
+    assert_eq!(account.node_id.as_deref(), Some("local-2"));
+    assert_eq!(account.relay_url.as_deref(), Some(second_url.as_str()));
+
+    // The old node lets go of both: the Host left, and the phone is refused.
+    eventually("the old node dropping the account", async || {
+        first
+            .account(session.account_id)
+            .is_none_or(|account| account.connections == 0)
+            .then_some(())
+    })
+    .await;
+    drop(client);
+    phone.close().await;
+
+    // Reconnecting, the phone asks again and lands on the Host's new node.
+    let ticket = session.ticket(&PHONE, phone_kind).await.unwrap();
+    assert_eq!(ticket.node_id, "local-2");
+    paired.relay_url = Some(ticket.relay_url.clone());
+    let phone = IrohEndpoint::bind(EndpointConfig {
+        secret: PHONE,
+        relay: RelaySetup::Use(ticket.target()),
+        alpns: Vec::new(),
+        gate: Arc::new(OpenGate),
+        direct: DirectPaths::Off,
+    })
+    .await
+    .unwrap();
+    let client = ClientCore::connect(
+        paired.connector(phone),
+        identity("phone-again", Some(paired.environment_id.clone())),
+        paired.credential(PHONE),
+    )
+    .await
+    .unwrap();
+    client.request(Request::ListResources).await.unwrap();
+    eventually("both on the new node", async || {
+        second
+            .account(session.account_id)
+            .filter(|account| account.connections >= 2)
+    })
+    .await;
     control.shutdown().await;
 }

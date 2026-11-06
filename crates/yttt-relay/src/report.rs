@@ -36,7 +36,7 @@ pub(crate) async fn run(
         }
         let report = node.take_usage();
         match send(&client, &url, &control.node_token, &report).await {
-            Ok(reply) => node.apply(&reply.accounts),
+            Ok(reply) => node.apply_reply(&reply),
             Err(error) => {
                 warn!(%error, "usage report failed; keeping the bytes for the next one");
                 node.restore(&report);

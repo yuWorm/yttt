@@ -921,8 +921,20 @@
       "account_id",
       "control_url",
       "error",
+      "node_id",
       "relay_url",
       "ticket_expires_unix"
+    ]
+  },
+  "RelayNode": {
+    "": [
+      "full",
+      "id",
+      "latency_ms",
+      "load_percent",
+      "name",
+      "region",
+      "relay_url"
     ]
   },
   "RemoteAccessRequest": {
@@ -937,6 +949,7 @@
     ],
     "ExportConnectionInfo": [],
     "ListDevices": [],
+    "ListRelayNodes": [],
     "ResetCredentials": [],
     "RevokeDevice": [
       "endpoint_id",
@@ -954,6 +967,9 @@
     "SetRelayAccount": [
       "account"
     ],
+    "SetRelayNode": [
+      "node_id"
+    ],
     "StartPairing": [],
     "Status": []
   },
@@ -964,6 +980,7 @@
       "code",
       "expires_millis"
     ],
+    "RelayNodes": [],
     "Status": []
   },
   "RemoteAccessSettings": {

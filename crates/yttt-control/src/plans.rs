@@ -12,7 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row as _};
 
-use crate::{AppState, Failure, admin::audit, auth::AdminSession, clamp_i64, now_unix};
+use crate::{AppState, Failure, admin::audit, auth::AdminSession, clamp_i64, now_unix, placement};
 
 type Shared = State<Arc<AppState>>;
 
@@ -29,6 +29,9 @@ pub(crate) struct PlanView {
     monthly_bytes: u64,
     throttled_rate_bps: u32,
     max_devices: u32,
+    max_nodes: u32,
+    /// The nodes the plan may use.
+    nodes: Vec<String>,
     archived: bool,
     sort: i32,
     accounts: i64,
@@ -45,8 +48,14 @@ pub(crate) struct NewPlan {
     monthly_bytes: u64,
     throttled_rate_bps: u32,
     max_devices: u32,
+    #[serde(default = "one")]
+    max_nodes: u32,
     #[serde(default)]
     sort: i32,
+}
+
+fn one() -> u32 {
+    1
 }
 
 #[derive(Deserialize)]
@@ -58,8 +67,11 @@ pub(crate) struct PlanChange {
     monthly_bytes: Option<u64>,
     throttled_rate_bps: Option<u32>,
     max_devices: Option<u32>,
+    max_nodes: Option<u32>,
     archived: Option<bool>,
     sort: Option<i32>,
+    /// Replaces the nodes the plan may use.
+    nodes: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -104,6 +116,10 @@ pub(crate) async fn list(
     )
     .fetch_all(&state.pool)
     .await?;
+    let open: Vec<(String, String)> =
+        sqlx::query_as("SELECT plan_id, node_id FROM plan_nodes ORDER BY node_id")
+            .fetch_all(&state.pool)
+            .await?;
     Ok(Json(
         rows.iter()
             .map(|row| PlanView {
@@ -115,6 +131,12 @@ pub(crate) async fn list(
                 monthly_bytes: row.get::<i64, _>("monthly_bytes") as u64,
                 throttled_rate_bps: row.get::<i32, _>("throttled_rate_bps") as u32,
                 max_devices: row.get::<i32, _>("max_devices") as u32,
+                max_nodes: row.get::<i32, _>("max_nodes") as u32,
+                nodes: open
+                    .iter()
+                    .filter(|(plan, _)| *plan == row.get::<String, _>("id"))
+                    .map(|(_, node)| node.clone())
+                    .collect(),
                 archived: row.get("archived"),
                 sort: row.get("sort"),
                 accounts: row.get("accounts"),
@@ -178,8 +200,8 @@ pub(crate) async fn create(
     let mut tx = state.pool.begin().await?;
     let inserted = sqlx::query(
         "INSERT INTO plans (id, name, description, rate_bps, burst_bytes, monthly_bytes,
-                            throttled_rate_bps, max_devices, sort, created_unix)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                            throttled_rate_bps, max_devices, sort, created_unix, max_nodes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(&plan.id)
     .bind(&name)
@@ -191,6 +213,7 @@ pub(crate) async fn create(
     .bind(devices)
     .bind(plan.sort)
     .bind(clamp_i64(now_unix()))
+    .bind(positive(plan.max_nodes, "the node limit must be positive")?)
     .execute(&mut *tx)
     .await;
     match inserted {
@@ -200,6 +223,7 @@ pub(crate) async fn create(
         }
         Err(error) => return Err(error.into()),
     }
+    placement::open_plan(&mut *tx, &plan.id).await?;
     let detail = format!(
         "{name}: {rate} bps, burst {burst} B, {} B/month, then {throttled} bps, {devices} devices",
         plan.monthly_bytes
@@ -280,6 +304,11 @@ pub(crate) async fn change(
         change.max_devices,
         "the device limit must be positive",
     )?;
+    let max_nodes = int(
+        "max_nodes",
+        change.max_nodes,
+        "the node limit must be positive",
+    )?;
     let monthly = change
         .monthly_bytes
         .map_or_else(|| current.get("monthly_bytes"), clamp_i64);
@@ -290,6 +319,7 @@ pub(crate) async fn change(
         ("burst_bytes", burst),
         ("throttled_rate_bps", throttled),
         ("max_devices", devices),
+        ("max_nodes", max_nodes),
         ("sort", sort),
     ] {
         note(
@@ -308,13 +338,53 @@ pub(crate) async fn change(
         current.get::<bool, _>("archived").to_string(),
         archived.to_string(),
     );
+    if let Some(nodes) = &change.nodes {
+        let before: Vec<String> = sqlx::query_scalar(
+            "SELECT node_id FROM plan_nodes WHERE plan_id = $1 ORDER BY node_id",
+        )
+        .bind(&plan_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut after = nodes.clone();
+        after.sort();
+        after.dedup();
+        if after.is_empty() {
+            return Err(Failure::bad_request("a plan needs at least one node"));
+        }
+        if before != after {
+            sqlx::query("DELETE FROM plan_nodes WHERE plan_id = $1")
+                .bind(&plan_id)
+                .execute(&mut *tx)
+                .await?;
+            for node in &after {
+                let added = sqlx::query(
+                    "INSERT INTO plan_nodes (plan_id, node_id) SELECT $1, id FROM nodes WHERE id = $2",
+                )
+                .bind(&plan_id)
+                .bind(node)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+                if added == 0 {
+                    return Err(Failure::bad_request("no such node"));
+                }
+            }
+            // Hosts on a node the plan lost return to their default node at
+            // their next ticket.
+            changes.push(format!(
+                "nodes: {} -> {}",
+                before.join(","),
+                after.join(",")
+            ));
+        }
+    }
     if changes.is_empty() {
         return Ok(StatusCode::NO_CONTENT);
     }
     sqlx::query(
         "UPDATE plans SET name = $2, description = $3, rate_bps = $4, burst_bytes = $5,
                           monthly_bytes = $6, throttled_rate_bps = $7, max_devices = $8,
-                          archived = $9, sort = $10
+                          archived = $9, sort = $10, max_nodes = $11
          WHERE id = $1",
     )
     .bind(&plan_id)
@@ -327,6 +397,7 @@ pub(crate) async fn change(
     .bind(devices)
     .bind(archived)
     .bind(sort)
+    .bind(max_nodes)
     .execute(&mut *tx)
     .await?;
     let detail = format!("{plan_id}: {}", changes.join("; "));

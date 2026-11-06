@@ -341,6 +341,35 @@ async fn a_removed_device_is_dropped_and_only_a_newer_ticket_readmits_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_device_that_moved_away_is_dropped_and_refused_on_its_old_ticket() {
+    let node = node().await;
+    let issued = now() - 10;
+    let old = issued_ticket(&ALICE_PHONE, FAST, FAST, issued, now() + 600);
+    let mut phone = connect(&node, &ALICE_PHONE, Some(old.clone()))
+        .await
+        .unwrap();
+    let mut laptop = connect(&node, &ALICE_LAPTOP, Some(fast_ticket(&ALICE_LAPTOP)))
+        .await
+        .unwrap();
+    let mut bob = connect(&node, &BOB, Some(fast_ticket(&BOB))).await.unwrap();
+
+    // The control plane's list, as a restarted node receives it.
+    node.apply_revocations(&[yttt_relay_ticket::api::Revocation {
+        id: 7,
+        endpoint_id: yttt_relay_ticket::hex(&public_key(&ALICE_PHONE.secret)),
+        revoked_unix: issued + 5,
+    }]);
+    dropped(&mut phone).await;
+    assert!(connect(&node, &ALICE_PHONE, Some(old)).await.is_err());
+    send(&mut laptop, &BOB, 100).await;
+    receive(&mut bob, 100).await;
+    // Coming back later takes a ticket issued after the move.
+    let back = issued_ticket(&ALICE_PHONE, FAST, FAST, issued + 6, now() + 600);
+    assert!(connect(&node, &ALICE_PHONE, Some(back)).await.is_ok());
+    node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_suspended_account_is_dropped_and_refused_until_reinstated() {
     let node = node().await;
     let mut laptop = connect(&node, &ALICE_LAPTOP, Some(fast_ticket(&ALICE_LAPTOP)))

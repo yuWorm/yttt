@@ -495,6 +495,18 @@ pub(crate) async fn remove_device(
 ) -> Result<StatusCode, Failure> {
     let key = yttt_relay_ticket::parse_key(&endpoint_id).ok_or_else(Failure::not_found)?;
     let mut tx = state.pool.begin().await?;
+    // The device's node, and its Clients' if it is a Host, refuse them.
+    sqlx::query(
+        "INSERT INTO node_revocations (node_id, endpoint_id, revoked_unix)
+         SELECT node_id, endpoint_id, $3 FROM devices
+         WHERE (endpoint_id = $1 OR follows_host = $1)
+           AND (SELECT account_id FROM devices WHERE endpoint_id = $1) = $2",
+    )
+    .bind(&key[..])
+    .bind(account_id)
+    .bind(clamp_i64(now_unix()))
+    .execute(&mut *tx)
+    .await?;
     let removed = sqlx::query("DELETE FROM devices WHERE endpoint_id = $1 AND account_id = $2")
         .bind(&key[..])
         .bind(account_id)

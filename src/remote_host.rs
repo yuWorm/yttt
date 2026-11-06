@@ -478,9 +478,10 @@ fn connect_paired(
         .build()
         .map_err(|error| error.to_string())?;
     let logs = launch.local_profile.paths().logs.clone();
-    // A signed-in relay account puts this device on the account's relay node,
-    // where the Host of the same account is too. Without one, or if the
-    // control plane cannot be reached, the relay hint from pairing is used.
+    // A signed-in relay account puts this device on the node of the Host it
+    // connects to, as the control plane says. Without one, or if the control
+    // plane cannot be reached or the Host is not on the account, the relay
+    // hint from pairing is used.
     let account = crate::relay_account::load_session(&crate::relay_account::session_store(
         &launch.local_profile,
     ))
@@ -489,7 +490,12 @@ fn connect_paired(
     let mut host = host;
     let ticket = account.as_ref().and_then(|session| {
         let label = crate::relay_account::device_label(&label);
-        match runtime.block_on(crate::relay_account::ticket_for(session, &secret, &label)) {
+        match runtime.block_on(crate::relay_account::ticket_for(
+            session,
+            &secret,
+            &label,
+            host.host.0,
+        )) {
             Ok(ticket) => Some(ticket),
             Err(error) => {
                 let line = format!("relay account unavailable, using the pairing relay: {error}");
@@ -524,6 +530,7 @@ fn connect_paired(
         runtime.spawn(yttt_control_client::keep_ticket(
             session,
             *secret,
+            yttt_control_client::DeviceKind::Client { host: host.host.0 },
             endpoint.clone(),
             ticket,
             |_| {},

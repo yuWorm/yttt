@@ -12,18 +12,20 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use yttt_relay_ticket::{
     DeviceProof, ProofPurpose,
     api::{
-        ApiError, DeviceEntry, DeviceList, DeviceProofBody, Login, RegisterDevice, SessionGranted,
-        TicketGranted, TicketRequest,
+        ApiError, DeviceEntry, DeviceList, DeviceProofBody, DeviceRole, Login, RegisterDevice,
+        SessionGranted, SwitchNode, TicketGranted, TicketRequest,
     },
 };
 use yttt_transport_iroh::{IrohEndpoint, RelayTarget};
 
 pub use sign_in::{BrowserLogin, DeviceLogin};
-pub use yttt_relay_ticket::api::AccountView;
+pub use yttt_relay_ticket::api::{AccountView, NodeChoice, NodePlacement};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const FIRST_RETRY: Duration = Duration::from_secs(30);
 const LAST_RETRY: Duration = Duration::from_secs(15 * 60);
+/// How often a device asks whether its node changed.
+const NODE_CHECK: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ControlError {
@@ -43,6 +45,31 @@ impl ControlError {
     /// The session is no longer valid and the user must log in again.
     pub fn needs_login(&self) -> bool {
         matches!(self, Self::Refused { status: 401, .. })
+    }
+}
+
+/// What a device key is for, which decides the node it relays through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceKind {
+    /// A Host's own key; the Host chooses its node.
+    Host,
+    /// A key for connecting to one Host, on that Host's node.
+    Client { host: [u8; 32] },
+}
+
+impl DeviceKind {
+    fn role(self) -> DeviceRole {
+        match self {
+            Self::Host => DeviceRole::Host,
+            Self::Client { .. } => DeviceRole::Client,
+        }
+    }
+
+    fn host(self) -> Option<[u8; 32]> {
+        match self {
+            Self::Host => None,
+            Self::Client { host } => Some(host),
+        }
     }
 }
 
@@ -193,12 +220,13 @@ impl ControlSession {
             .await
     }
 
-    /// Registers this device's key with the account; repeating it only
-    /// updates the label.
+    /// Registers this device's key with the account as `kind`; repeating it
+    /// only updates the label. A key's kind is fixed once registered.
     pub async fn register_device(
         &self,
         device_secret: &[u8; 32],
         label: &str,
+        kind: DeviceKind,
     ) -> Result<DeviceEntry, ControlError> {
         let client = self.client()?;
         client
@@ -210,6 +238,45 @@ impl ControlSession {
                     .json(&RegisterDevice {
                         label: label.to_owned(),
                         proof: self.proof(device_secret, ProofPurpose::RegisterDevice),
+                        role: Some(kind.role()),
+                        follows_host: kind.host().map(|host| yttt_relay_ticket::hex(&host)),
+                    }),
+            )
+            .await
+    }
+
+    /// The nodes the account's plan may use.
+    pub async fn nodes(&self) -> Result<Vec<NodeChoice>, ControlError> {
+        let client = self.client()?;
+        client
+            .send(
+                client
+                    .http
+                    .get(client.url("/v1/nodes"))
+                    .bearer_auth(&self.token),
+            )
+            .await
+    }
+
+    /// Moves this Host, and the Clients that follow it, to `node_id`. It
+    /// proves it holds the Host's key; a plan of one node moves the whole
+    /// account.
+    pub async fn switch_node(
+        &self,
+        host_secret: &[u8; 32],
+        node_id: &str,
+    ) -> Result<NodePlacement, ControlError> {
+        let client = self.client()?;
+        let host = yttt_relay_ticket::hex(&yttt_relay_ticket::public_key(host_secret));
+        client
+            .send(
+                client
+                    .http
+                    .put(client.url(&format!("/v1/devices/{host}/node")))
+                    .bearer_auth(&self.token)
+                    .json(&SwitchNode {
+                        node_id: node_id.to_owned(),
+                        proof: Some(self.proof(host_secret, ProofPurpose::SwitchNode)),
                     }),
             )
             .await
@@ -251,7 +318,13 @@ impl ControlSession {
             .await
     }
 
-    pub async fn ticket(&self, device_secret: &[u8; 32]) -> Result<RelayTicket, ControlError> {
+    /// A ticket for this key's node: a Host's own, or for a Client the node
+    /// of its Host.
+    pub async fn ticket(
+        &self,
+        device_secret: &[u8; 32],
+        kind: DeviceKind,
+    ) -> Result<RelayTicket, ControlError> {
         let client = self.client()?;
         let granted: TicketGranted = client
             .send(
@@ -261,6 +334,7 @@ impl ControlSession {
                     .bearer_auth(&self.token)
                     .json(&TicketRequest {
                         proof: self.proof(device_secret, ProofPurpose::IssueTicket),
+                        host: kind.host().map(|host| yttt_relay_ticket::hex(&host)),
                     }),
             )
             .await?;
@@ -290,9 +364,13 @@ impl ControlSession {
 /// iroh keeps the token a relay connection started with, so a renewal on the
 /// same URL only reaches relay connections opened afterwards. A long-running
 /// endpoint must still be rebuilt before its first ticket expires.
+///
+/// It also asks every few minutes, so a device follows its node when it
+/// moves: the old node refuses it silently, as iroh retries without saying.
 pub async fn keep_ticket(
     session: ControlSession,
     device_secret: [u8; 32],
+    kind: DeviceKind,
     endpoint: IrohEndpoint,
     mut current: RelayTicket,
     mut renewed: impl FnMut(&RelayTicket) + Send,
@@ -300,16 +378,23 @@ pub async fn keep_ticket(
 ) {
     let mut retry = FIRST_RETRY;
     loop {
-        let wait = current.renew_at_unix().saturating_sub(now_unix());
+        let wait = current
+            .renew_at_unix()
+            .saturating_sub(now_unix())
+            .min(NODE_CHECK.as_secs());
         tokio::time::sleep(Duration::from_secs(wait)).await;
-        match session.ticket(&device_secret).await {
+        match session.ticket(&device_secret, kind).await {
             Ok(ticket) => {
                 retry = FIRST_RETRY;
-                if let Err(error) = endpoint.set_relay(&ticket.target()).await {
-                    tracing::warn!(%error, "could not apply a renewed relay ticket");
+                // The same node within its renewal window keeps the ticket it has.
+                let moved = ticket.relay_url != current.relay_url;
+                if moved || now_unix() >= current.renew_at_unix() {
+                    if let Err(error) = endpoint.set_relay(&ticket.target()).await {
+                        tracing::warn!(%error, "could not apply a renewed relay ticket");
+                    }
+                    renewed(&ticket);
+                    current = ticket;
                 }
-                renewed(&ticket);
-                current = ticket;
             }
             Err(error) => {
                 failed(&error);

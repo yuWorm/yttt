@@ -192,6 +192,11 @@ impl RelayNode {
         self.node.apply(standings);
     }
 
+    /// Applies revocations directly, as the control plane's replies do.
+    pub fn apply_revocations(&self, revocations: &[yttt_relay_ticket::api::Revocation]) {
+        self.node.revoke(revocations);
+    }
+
     pub async fn shutdown(mut self) {
         self.cancel.cancel();
         self.node.clients.shutdown().await;

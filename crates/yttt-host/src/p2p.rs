@@ -181,6 +181,40 @@ pub(crate) struct StoredRelayAccount {
     pub ticket: Option<RelayTicket>,
 }
 
+/// The round trip to a relay node: the median of three TCP connects to its
+/// address, resolved once beforehand so DNS and TLS do not count. `None` when
+/// it does not answer within a few seconds.
+pub(crate) async fn relay_latency_ms(relay_url: String) -> Option<u32> {
+    let (secure, rest) = match relay_url.split_once("://")? {
+        ("https", rest) => (true, rest),
+        ("http", rest) => (false, rest),
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let target = if authority.rsplit_once(':').is_some_and(|(host, port)| {
+        port.parse::<u16>().is_ok() && (!host.contains(':') || host.ends_with(']'))
+    }) {
+        authority.to_owned()
+    } else {
+        format!("{authority}:{}", if secure { 443 } else { 80 })
+    };
+    let probe = async {
+        let address = tokio::net::lookup_host(target).await.ok()?.next()?;
+        let mut samples = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            tokio::net::TcpStream::connect(address).await.ok()?;
+            samples.push(started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32);
+        }
+        samples.sort_unstable();
+        Some(samples[1])
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(5), probe)
+        .await
+        .ok()
+        .flatten()
+}
+
 pub(crate) fn load_relay_account(root: &Path) -> io::Result<Option<StoredRelayAccount>> {
     read_private_json(&root.join(RELAY_ACCOUNT_FILE))
 }

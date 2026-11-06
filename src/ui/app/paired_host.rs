@@ -749,9 +749,9 @@ fn pair_with_host(
         .ok()
         .flatten();
     runtime.block_on(async {
-        // With a relay account the new key joins the account's relay node,
-        // where the account's Host waits; a Host reachable only through that
-        // relay can then still be paired.
+        // With a relay account the new key joins the node of the Host it
+        // pairs with, as the control plane says; a Host reachable only through
+        // that relay can then still be paired.
         let host_name = if name.is_empty() {
             format!("P2P Host {}", &code.host.to_string()[..8])
         } else {
@@ -762,6 +762,7 @@ fn pair_with_host(
                 session,
                 &secret,
                 &crate::relay_account::device_label(&host_name),
+                code.host.0,
             )
             .await
             .ok(),

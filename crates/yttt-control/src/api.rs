@@ -10,15 +10,15 @@ use yttt_relay_ticket::{
     ProofPurpose, Ticket,
     api::{
         AccountCreated, AccountStanding, AccountView, CreateAccount, DeviceEntry, DeviceList,
-        DeviceProofBody, Login, RegisterDevice, SessionGranted, SetSuspended, Standing,
-        TicketGranted, TicketRequest, UsageReply, UsageReport,
+        DeviceProofBody, DeviceRole, Login, RegisterDevice, Revocation, SessionGranted,
+        SetSuspended, Standing, TicketGranted, TicketRequest, UsageReply, UsageReport,
     },
 };
 
 use crate::{
     AppState, Failure,
     auth::{self, AnySession, Attempt, Session},
-    clamp_i64, day_of, month_of, now_unix, sha256,
+    clamp_i64, day_of, month_of, now_unix, placement, sha256,
     web::{check_password, normalize_email},
 };
 
@@ -28,6 +28,8 @@ type Shared = State<Arc<AppState>>;
 const MAX_LABEL_CHARS: usize = 64;
 /// More accounts than one node report may carry.
 const MAX_REPORTED_ACCOUNTS: usize = 100_000;
+/// Revocations per reply; a longer backlog arrives over the next reports.
+const MAX_REVOCATIONS_PER_REPLY: i64 = 5_000;
 
 pub(crate) async fn create_account(
     State(state): Shared,
@@ -149,92 +151,48 @@ pub(crate) async fn register_device(
         return Err(Failure::bad_request("a device label is 1 to 64 characters"));
     }
     let endpoint_id = proven_device(&request.proof, ProofPurpose::RegisterDevice, &session)?;
-
+    let follows_host = request
+        .follows_host
+        .as_deref()
+        .map(|host| {
+            yttt_relay_ticket::parse_key(host)
+                .ok_or(Failure::bad_request("the Host key must be 64 hex digits"))
+        })
+        .transpose()?;
     let mut tx = state.pool.begin().await?;
-    // Serializes registrations per account so the device limit holds.
-    let max_devices: i32 = sqlx::query_scalar(
-        "SELECT p.max_devices FROM accounts a JOIN plans p ON p.id = a.plan_id
-         WHERE a.id = $1 FOR UPDATE OF a",
+    let status = placement::register(
+        &mut tx,
+        session.account_id,
+        &endpoint_id,
+        label,
+        request.role.unwrap_or(DeviceRole::Unknown),
+        follows_host,
     )
-    .bind(session.account_id)
+    .await?;
+    let row = sqlx::query(&format!(
+        "SELECT {} FROM devices WHERE endpoint_id = $1",
+        placement::DEVICE_COLUMNS
+    ))
+    .bind(&endpoint_id[..])
     .fetch_one(&mut *tx)
     .await?;
-    let owner: Option<i64> =
-        sqlx::query_scalar("SELECT account_id FROM devices WHERE endpoint_id = $1")
-            .bind(&endpoint_id[..])
-            .fetch_optional(&mut *tx)
-            .await?;
-    let now = clamp_i64(now_unix());
-    let status = match owner {
-        Some(owner) if owner != session.account_id => {
-            return Err(Failure::conflict("the device belongs to another account"));
-        }
-        Some(_) => {
-            sqlx::query("UPDATE devices SET label = $2 WHERE endpoint_id = $1")
-                .bind(&endpoint_id[..])
-                .bind(label)
-                .execute(&mut *tx)
-                .await?;
-            StatusCode::OK
-        }
-        None => {
-            let count: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE account_id = $1")
-                    .bind(session.account_id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            if count >= i64::from(max_devices) {
-                return Err(Failure::forbidden("the plan's device limit is reached"));
-            }
-            sqlx::query(
-                "INSERT INTO devices (endpoint_id, account_id, label, registered_unix)
-                 VALUES ($1, $2, $3, $4)",
-            )
-            .bind(&endpoint_id[..])
-            .bind(session.account_id)
-            .bind(label)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
-            StatusCode::CREATED
-        }
-    };
-    let registered: i64 =
-        sqlx::query_scalar("SELECT registered_unix FROM devices WHERE endpoint_id = $1")
-            .bind(&endpoint_id[..])
-            .fetch_one(&mut *tx)
-            .await?;
     tx.commit().await?;
-    Ok((
-        status,
-        Json(DeviceEntry {
-            endpoint_id: yttt_relay_ticket::hex(&endpoint_id),
-            label: label.to_owned(),
-            registered_unix: registered as u64,
-        }),
-    ))
+    Ok((status, Json(placement::entry(&row))))
 }
 
 pub(crate) async fn list_devices(
     State(state): Shared,
     session: Session,
 ) -> AppResult<Json<DeviceList>> {
-    let rows = sqlx::query(
-        "SELECT endpoint_id, label, registered_unix FROM devices
-         WHERE account_id = $1 ORDER BY registered_unix, endpoint_id",
-    )
+    let rows = sqlx::query(&format!(
+        "SELECT {} FROM devices WHERE account_id = $1 ORDER BY registered_unix, endpoint_id",
+        placement::DEVICE_COLUMNS
+    ))
     .bind(session.account_id)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(DeviceList {
-        devices: rows
-            .iter()
-            .map(|row| DeviceEntry {
-                endpoint_id: yttt_relay_ticket::hex(&row.get::<Vec<u8>, _>("endpoint_id")),
-                label: row.get("label"),
-                registered_unix: row.get::<i64, _>("registered_unix") as u64,
-            })
-            .collect(),
+        devices: rows.iter().map(placement::entry).collect(),
     }))
 }
 
@@ -244,15 +202,24 @@ pub(crate) async fn remove_device(
     Path(endpoint_id): Path<String>,
 ) -> AppResult<StatusCode> {
     let endpoint_id = yttt_relay_ticket::parse_key(&endpoint_id).ok_or_else(Failure::not_found)?;
-    let removed = sqlx::query("DELETE FROM devices WHERE endpoint_id = $1 AND account_id = $2")
-        .bind(&endpoint_id[..])
-        .bind(session.account_id)
-        .execute(&state.pool)
-        .await?
-        .rows_affected();
-    if removed == 0 {
+    let mut tx = state.pool.begin().await?;
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM devices WHERE endpoint_id = $1 AND account_id = $2)",
+    )
+    .bind(&endpoint_id[..])
+    .bind(session.account_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !owned {
         return Err(Failure::not_found());
     }
+    // A Host takes its Clients along.
+    placement::revoke_removed(&mut tx, &endpoint_id).await?;
+    sqlx::query("DELETE FROM devices WHERE endpoint_id = $1")
+        .bind(&endpoint_id[..])
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -262,24 +229,31 @@ pub(crate) async fn issue_ticket(
     Json(request): Json<TicketRequest>,
 ) -> AppResult<Json<TicketGranted>> {
     let endpoint_id = proven_device(&request.proof, ProofPurpose::IssueTicket, &session)?;
+    let host = request
+        .host
+        .as_deref()
+        .map(|host| {
+            yttt_relay_ticket::parse_key(host)
+                .ok_or(Failure::bad_request("the Host key must be 64 hex digits"))
+        })
+        .transpose()?;
+    let mut tx = state.pool.begin().await?;
+    let node_id = placement::ticket_node(&mut tx, session.account_id, &endpoint_id, host).await?;
     let row = sqlx::query(
-        "SELECT a.suspended, a.node_id, n.url, p.rate_bps, p.burst_bytes, p.monthly_bytes,
+        "SELECT a.suspended, n.url, p.rate_bps, p.burst_bytes, p.monthly_bytes,
                 p.throttled_rate_bps, COALESCE(u.upstream_bytes, 0) AS used
-         FROM devices d
-         JOIN accounts a ON a.id = d.account_id
+         FROM accounts a
          JOIN plans p ON p.id = a.plan_id
-         JOIN nodes n ON n.id = a.node_id
-         LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $3
-         WHERE d.endpoint_id = $1 AND d.account_id = $2",
+         JOIN nodes n ON n.id = $3
+         LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $2
+         WHERE a.id = $1",
     )
-    .bind(&endpoint_id[..])
     .bind(session.account_id)
     .bind(month_of(now_unix()))
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(Failure::forbidden(
-        "the device is not registered to this account",
-    ))?;
+    .bind(&node_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
     if row.get::<bool, _>("suspended") {
         return Err(Failure::forbidden("the account is suspended"));
     }
@@ -293,7 +267,6 @@ pub(crate) async fn issue_ticket(
             row.get::<i32, _>("burst_bytes") as u32,
         )
     };
-    let node_id: String = row.get("node_id");
     let issued_unix = now_unix();
     let expires_unix = issued_unix + state.config.ticket_ttl().as_secs();
     let token = state.signer.issue(&Ticket {
@@ -358,29 +331,69 @@ pub(crate) async fn node_usage(
         return Err(Failure::bad_request("too many accounts in one report"));
     }
 
-    let month = month_of(now_unix());
-    let day = day_of(now_unix());
+    let now = now_unix();
+    let month = month_of(now);
+    let day = day_of(now);
+    let reported: Vec<Vec<u8>> = report
+        .accounts
+        .iter()
+        .flat_map(|usage| &usage.endpoints)
+        .filter_map(|key| yttt_relay_ticket::parse_key(key))
+        .map(|key| key.to_vec())
+        .collect();
+    let ids: Vec<i64> = report
+        .accounts
+        .iter()
+        .map(|usage| clamp_i64(usage.account_id))
+        .collect();
     let mut tx = state.pool.begin().await?;
+    let registered: Vec<(Vec<u8>, i64, String)> = sqlx::query_as(
+        "SELECT endpoint_id, account_id, node_id FROM devices WHERE endpoint_id = ANY($1)",
+    )
+    .bind(&reported)
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE devices SET last_seen_unix = $3 WHERE endpoint_id = ANY($1) AND node_id = $2",
+    )
+    .bind(&reported)
+    .bind(&node_id)
+    .bind(clamp_i64(now))
+    .execute(&mut *tx)
+    .await?;
+    let on_node: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE node_id = $1 AND id = ANY($2)
+         UNION
+         SELECT account_id FROM devices WHERE node_id = $1 AND account_id = ANY($2)",
+    )
+    .bind(&node_id)
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    // A node bills and steers only accounts it has to do with: it is their
+    // default node or one of their devices belongs on it. Reporting someone
+    // else's device keys, which are public, earns nothing. A device that just
+    // moved away relays unbilled here until its revocation lands.
+    let related = |account: u64| on_node.contains(&clamp_i64(account));
     for usage in report
         .accounts
         .iter()
-        .filter(|usage| usage.upstream_bytes > 0)
+        .filter(|usage| usage.upstream_bytes > 0 && related(usage.account_id))
     {
         sqlx::query(
             "INSERT INTO usage_months (account_id, month, upstream_bytes)
-             SELECT id, $2, $3 FROM accounts WHERE id = $1 AND node_id = $4
+             SELECT id, $2, $3 FROM accounts WHERE id = $1
              ON CONFLICT (account_id, month)
              DO UPDATE SET upstream_bytes = usage_months.upstream_bytes + EXCLUDED.upstream_bytes",
         )
         .bind(clamp_i64(usage.account_id))
         .bind(month)
         .bind(clamp_i64(usage.upstream_bytes))
-        .bind(&node_id)
         .execute(&mut *tx)
         .await?;
         sqlx::query(
             "INSERT INTO usage_days (account_id, day, node_id, upstream_bytes)
-             SELECT id, $2, $4, $3 FROM accounts WHERE id = $1 AND node_id = $4
+             SELECT id, $2, $4, $3 FROM accounts WHERE id = $1
              ON CONFLICT (account_id, day, node_id)
              DO UPDATE SET upstream_bytes = usage_days.upstream_bytes + EXCLUDED.upstream_bytes",
         )
@@ -391,36 +404,33 @@ pub(crate) async fn node_usage(
         .execute(&mut *tx)
         .await?;
     }
-    let ids: Vec<i64> = report
-        .accounts
-        .iter()
-        .map(|usage| clamp_i64(usage.account_id))
-        .collect();
     let rows = sqlx::query(
         "SELECT a.id, a.suspended, p.rate_bps, p.burst_bytes, p.monthly_bytes,
                 p.throttled_rate_bps, COALESCE(u.upstream_bytes, 0) AS used
          FROM accounts a
          JOIN plans p ON p.id = a.plan_id
          LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $2
-         WHERE a.id = ANY($1) AND a.node_id = $3",
+         WHERE a.id = ANY($1)",
     )
     .bind(&ids)
     .bind(month)
-    .bind(&node_id)
     .fetch_all(&mut *tx)
     .await?;
-    let reported: Vec<Vec<u8>> = report
-        .accounts
-        .iter()
-        .flat_map(|usage| &usage.endpoints)
-        .filter_map(|key| yttt_relay_ticket::parse_key(key))
-        .map(|key| key.to_vec())
-        .collect();
-    let registered: Vec<(Vec<u8>, i64)> =
-        sqlx::query_as("SELECT endpoint_id, account_id FROM devices WHERE endpoint_id = ANY($1)")
-            .bind(&reported)
-            .fetch_all(&mut *tx)
-            .await?;
+    sqlx::query("DELETE FROM node_revocations WHERE revoked_unix < $1")
+        .bind(clamp_i64(
+            now.saturating_sub(placement::REVOCATION_KEEP_SECS),
+        ))
+        .execute(&mut *tx)
+        .await?;
+    let revocations: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
+        "SELECT id, endpoint_id, revoked_unix FROM node_revocations
+         WHERE node_id = $1 AND id > $2 ORDER BY id LIMIT $3",
+    )
+    .bind(&node_id)
+    .bind(clamp_i64(report.revocations_after.unwrap_or(0)))
+    .bind(MAX_REVOCATIONS_PER_REPLY)
+    .fetch_all(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     let standings = report
@@ -429,10 +439,11 @@ pub(crate) async fn node_usage(
         .map(|usage| {
             let row = rows
                 .iter()
-                .find(|row| row.get::<i64, _>("id") as u64 == usage.account_id);
+                .find(|row| row.get::<i64, _>("id") as u64 == usage.account_id)
+                .filter(|_| related(usage.account_id));
             let standing = match row {
-                // Unknown or deleted accounts, and everyone on a disabled node,
-                // get nothing.
+                // Unknown or deleted accounts, accounts this node has nothing
+                // to do with, and everyone on a disabled node get nothing.
                 _ if disabled => Standing::Suspended,
                 None => Standing::Suspended,
                 Some(row) if row.get::<bool, _>("suspended") => Standing::Suspended,
@@ -448,8 +459,8 @@ pub(crate) async fn node_usage(
                     burst_bytes: row.get::<i32, _>("burst_bytes") as u32,
                 },
             };
-            // A device stays only while it is registered to this account. An
-            // account on another node learns nothing from this node's report.
+            // A device stays only while it is registered to this account and
+            // belongs on this node. An unrelated account learns nothing.
             let revoked_endpoints = if row.is_none() {
                 Vec::new()
             } else {
@@ -460,8 +471,10 @@ pub(crate) async fn node_usage(
                         let Some(key) = yttt_relay_ticket::parse_key(key) else {
                             return false;
                         };
-                        !registered.iter().any(|(endpoint, account)| {
-                            endpoint[..] == key[..] && *account as u64 == usage.account_id
+                        !registered.iter().any(|(endpoint, account, node)| {
+                            endpoint[..] == key[..]
+                                && *account as u64 == usage.account_id
+                                && *node == node_id
                         })
                     })
                     .cloned()
@@ -476,6 +489,14 @@ pub(crate) async fn node_usage(
         .collect();
     Ok(Json(UsageReply {
         accounts: standings,
+        revocations: revocations
+            .into_iter()
+            .map(|(id, endpoint, at)| Revocation {
+                id: id as u64,
+                endpoint_id: yttt_relay_ticket::hex(&endpoint),
+                revoked_unix: at.max(0) as u64,
+            })
+            .collect(),
     }))
 }
 

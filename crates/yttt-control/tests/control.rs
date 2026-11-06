@@ -12,8 +12,8 @@ use yttt_relay_ticket::{
     DeviceProof, ProofPurpose, TicketVerifier,
     api::{
         AccountCreated, AccountStanding, AccountUsage, AccountView, CreateAccount, DeviceList,
-        DeviceProofBody, Login, RegisterDevice, SessionGranted, SetSuspended, Standing,
-        TicketGranted, TicketRequest, UsageReply, UsageReport,
+        DeviceProofBody, DeviceRole, Login, NodeChoice, RegisterDevice, SessionGranted,
+        SetSuspended, Standing, SwitchNode, TicketGranted, TicketRequest, UsageReply, UsageReport,
     },
     public_key,
 };
@@ -211,6 +211,8 @@ impl Harness {
             "/v1/devices",
             Some(session),
             &RegisterDevice {
+                role: None,
+                follows_host: None,
                 label: "laptop".into(),
                 proof: proof(device, ProofPurpose::RegisterDevice, account),
             },
@@ -228,6 +230,7 @@ impl Harness {
             "/v1/tickets",
             Some(session),
             &TicketRequest {
+                host: None,
                 proof: proof(device, ProofPurpose::IssueTicket, account),
             },
         )
@@ -254,6 +257,7 @@ impl Harness {
             &format!("/v1/nodes/{NODE}/usage"),
             Some(token),
             &UsageReport {
+                revocations_after: None,
                 version: None,
                 accounts: usage
                     .iter()
@@ -338,6 +342,8 @@ async fn a_device_registers_only_with_proof_of_its_key_and_within_the_plan() {
 
     // A proof for another purpose, another account, or another key fails.
     let stolen = RegisterDevice {
+        role: None,
+        follows_host: None,
         label: "laptop".into(),
         proof: proof(&LAPTOP, ProofPurpose::IssueTicket, alice),
     };
@@ -348,6 +354,8 @@ async fn a_device_registers_only_with_proof_of_its_key_and_within_the_plan() {
         StatusCode::FORBIDDEN
     );
     let replayed = RegisterDevice {
+        role: None,
+        follows_host: None,
         label: "laptop".into(),
         proof: proof(&LAPTOP, ProofPurpose::RegisterDevice, bob),
     };
@@ -360,6 +368,8 @@ async fn a_device_registers_only_with_proof_of_its_key_and_within_the_plan() {
     let mut claimed = proof(&LAPTOP, ProofPurpose::RegisterDevice, alice);
     claimed.endpoint_id = yttt_relay_ticket::hex(&public_key(&PHONE));
     let claimed = RegisterDevice {
+        role: None,
+        follows_host: None,
         label: "phone".into(),
         proof: claimed,
     };
@@ -607,6 +617,7 @@ async fn a_node_cannot_bill_or_probe_accounts_of_another_node() {
             "/v1/nodes/other-1/usage",
             Some("other-token"),
             &UsageReport {
+                revocations_after: None,
                 version: None,
                 accounts: vec![AccountUsage {
                     account_id: alice,
@@ -1010,6 +1021,7 @@ async fn a_node_deploys_from_a_one_time_command_and_comes_online() {
             .post(format!("{}/v1/nodes/osaka-1/usage", harness.base))
             .bearer_auth(token)
             .json(&UsageReport {
+                revocations_after: None,
                 version: Some("0.3.21".into()),
                 accounts: Vec::new(),
             })
@@ -1072,6 +1084,7 @@ async fn a_node_deploys_from_a_one_time_command_and_comes_online() {
         .post(format!("{}/v1/nodes/osaka-1/usage", harness.base))
         .bearer_auth(&node_token)
         .json(&UsageReport {
+            revocations_after: None,
             version: None,
             accounts: vec![AccountUsage {
                 account_id: carol,
@@ -2061,5 +2074,355 @@ async fn the_console_signs_in_with_github_and_links_it_only_to_its_owner() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    harness.control.shutdown().await;
+}
+
+const HOST: [u8; 32] = [31; 32];
+const HOST_CLIENT: [u8; 32] = [32; 32];
+const SECOND_HOST: [u8; 32] = [33; 32];
+const SECOND_CLIENT: [u8; 32] = [34; 32];
+
+fn key_hex(device: &[u8; 32]) -> String {
+    yttt_relay_ticket::hex(&public_key(device))
+}
+
+/// Registers `device` as a Host, or as a Client of `follows`.
+async fn place(
+    harness: &Harness,
+    session: &str,
+    account: u64,
+    device: &[u8; 32],
+    follows: Option<&[u8; 32]>,
+) -> StatusCode {
+    harness
+        .status(
+            "/v1/devices",
+            Some(session),
+            &RegisterDevice {
+                label: "device".into(),
+                proof: proof(device, ProofPurpose::RegisterDevice, account),
+                role: Some(if follows.is_some() {
+                    DeviceRole::Client
+                } else {
+                    DeviceRole::Host
+                }),
+                follows_host: follows.map(key_hex),
+            },
+        )
+        .await
+}
+
+async fn ticket_to(
+    harness: &Harness,
+    session: &str,
+    account: u64,
+    device: &[u8; 32],
+    host: Option<&[u8; 32]>,
+) -> Result<TicketGranted, StatusCode> {
+    harness
+        .call(
+            "/v1/tickets",
+            Some(session),
+            &TicketRequest {
+                proof: proof(device, ProofPurpose::IssueTicket, account),
+                host: host.map(key_hex),
+            },
+        )
+        .await
+}
+
+/// Asks to move `host`, proving with `signer`'s key, as the app does.
+async fn switch(
+    harness: &Harness,
+    session: &str,
+    account: u64,
+    host: &[u8; 32],
+    signer: &[u8; 32],
+    node: &str,
+) -> StatusCode {
+    harness
+        .http
+        .put(format!(
+            "{}/v1/devices/{}/node",
+            harness.base,
+            key_hex(host)
+        ))
+        .bearer_auth(session)
+        .json(&SwitchNode {
+            node_id: node.into(),
+            proof: Some(proof(signer, ProofPurpose::SwitchNode, account)),
+        })
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn report_on(
+    harness: &Harness,
+    node: &str,
+    token: &str,
+    usage: &[(u64, u64, &[[u8; 32]])],
+    revocations_after: Option<u64>,
+) -> UsageReply {
+    harness
+        .call(
+            &format!("/v1/nodes/{node}/usage"),
+            Some(token),
+            &UsageReport {
+                revocations_after,
+                version: None,
+                accounts: usage
+                    .iter()
+                    .map(|(account_id, upstream_bytes, devices)| AccountUsage {
+                        account_id: *account_id,
+                        upstream_bytes: *upstream_bytes,
+                        endpoints: devices.iter().map(key_hex).collect(),
+                    })
+                    .collect(),
+            },
+        )
+        .await
+        .unwrap()
+}
+
+async fn with_room(nodes: &[(&str, &str)]) -> Harness {
+    Harness::start_with(nodes, |config| config.plans[0].max_devices = 10).await
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_moves() {
+    let harness = with_room(&[(NODE, NODE_TOKEN), ("other-1", "other-token")]).await;
+    let (alice, session) = harness.account("alice@example.com").await;
+    assert_eq!(
+        place(&harness, &session, alice, &HOST, None).await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        place(&harness, &session, alice, &HOST_CLIENT, Some(&HOST)).await,
+        StatusCode::CREATED
+    );
+    // A Client of a Host that is not on the account is not registered at all.
+    assert_eq!(
+        place(
+            &harness,
+            &session,
+            alice,
+            &SECOND_CLIENT,
+            Some(&SECOND_HOST)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    let devices: DeviceList = harness.get("/v1/devices", &session).await.unwrap();
+    assert_eq!(devices.devices.len(), 2);
+    let client = devices
+        .devices
+        .iter()
+        .find(|device| device.endpoint_id == key_hex(&HOST_CLIENT))
+        .unwrap();
+    assert_eq!(client.role, DeviceRole::Client);
+    assert_eq!(
+        client.follows_host.as_deref(),
+        Some(key_hex(&HOST).as_str())
+    );
+    // Roles are fixed.
+    assert_eq!(
+        place(&harness, &session, alice, &HOST_CLIENT, None).await,
+        StatusCode::CONFLICT
+    );
+
+    let ticket = ticket_to(&harness, &session, alice, &HOST_CLIENT, Some(&HOST))
+        .await
+        .unwrap();
+    assert_eq!(ticket.node_id, NODE);
+    assert_eq!(
+        ticket_to(&harness, &session, alice, &HOST_CLIENT, Some(&SECOND_HOST))
+            .await
+            .unwrap_err(),
+        StatusCode::CONFLICT
+    );
+    let nodes: Vec<NodeChoice> = harness.get("/v1/nodes", &session).await.unwrap();
+    assert_eq!(nodes.len(), 2);
+
+    // Only the Host's own key moves it; with one node, the account moves.
+    assert_eq!(
+        switch(&harness, &session, alice, &HOST, &HOST_CLIENT, "other-1").await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        switch(&harness, &session, alice, &HOST, &HOST, "other-1").await,
+        StatusCode::OK
+    );
+    let me: AccountView = harness.get("/v1/accounts/me", &session).await.unwrap();
+    assert_eq!(me.node_id, "other-1");
+    let ticket = ticket_to(&harness, &session, alice, &HOST_CLIENT, Some(&HOST))
+        .await
+        .unwrap();
+    assert_eq!(ticket.node_id, "other-1");
+    assert_eq!(
+        switch(&harness, &session, alice, &HOST, &HOST, NODE).await,
+        StatusCode::CONFLICT,
+        "a Host waits between its own moves"
+    );
+
+    // The old node is told to refuse both, once, and bills nothing more.
+    let reply = report_on(&harness, NODE, NODE_TOKEN, &[(alice, 500, &[HOST])], None).await;
+    assert_eq!(reply.accounts[0].standing, Standing::Suspended);
+    let mut revoked: Vec<_> = reply
+        .revocations
+        .iter()
+        .map(|revocation| revocation.endpoint_id.clone())
+        .collect();
+    revoked.sort();
+    let mut expected = vec![key_hex(&HOST), key_hex(&HOST_CLIENT)];
+    expected.sort();
+    assert_eq!(revoked, expected);
+    let last = reply
+        .revocations
+        .iter()
+        .map(|revocation| revocation.id)
+        .max();
+    let again = report_on(&harness, NODE, NODE_TOKEN, &[], last).await;
+    assert!(again.revocations.is_empty());
+    let me: AccountView = harness.get("/v1/accounts/me", &session).await.unwrap();
+    assert_eq!(me.month_upstream_bytes, 0);
+
+    // The new node bills and steers the account.
+    let reply = report_on(
+        &harness,
+        "other-1",
+        "other-token",
+        &[(alice, 500, &[HOST])],
+        None,
+    )
+    .await;
+    assert!(matches!(
+        reply.accounts[0].standing,
+        Standing::Active { .. }
+    ));
+    assert!(reply.accounts[0].revoked_endpoints.is_empty());
+    let me: AccountView = harness.get("/v1/accounts/me", &session).await.unwrap();
+    assert_eq!(me.month_upstream_bytes, 500);
+    let devices: DeviceList = harness.get("/v1/devices", &session).await.unwrap();
+    assert!(
+        devices
+            .devices
+            .iter()
+            .any(|device| device.endpoint_id == key_hex(&HOST) && device.online)
+    );
+    harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_shrinks() {
+    let harness = with_room(&[
+        (NODE, NODE_TOKEN),
+        ("other-1", "other-token"),
+        ("far-1", "far-token"),
+    ])
+    .await;
+    let admin = admin_session(&harness, "admin@example.com").await;
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PATCH,
+        "/v1/admin/plans/basic",
+        Some(serde_json::json!({"max_nodes": 2})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (alice, session) = harness.account("alice@example.com").await;
+    for (device, follows) in [
+        (&HOST, None),
+        (&HOST_CLIENT, Some(&HOST)),
+        (&SECOND_HOST, None),
+        (&SECOND_CLIENT, Some(&SECOND_HOST)),
+    ] {
+        assert_eq!(
+            place(&harness, &session, alice, device, follows).await,
+            StatusCode::CREATED
+        );
+    }
+
+    // Two nodes at once: the default and one more.
+    assert_eq!(
+        switch(&harness, &session, alice, &HOST, &HOST, "other-1").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        switch(
+            &harness,
+            &session,
+            alice,
+            &SECOND_HOST,
+            &SECOND_HOST,
+            "far-1"
+        )
+        .await,
+        StatusCode::CONFLICT
+    );
+    let ticket = ticket_to(&harness, &session, alice, &HOST_CLIENT, Some(&HOST))
+        .await
+        .unwrap();
+    assert_eq!(ticket.node_id, "other-1");
+    let second = ticket_to(
+        &harness,
+        &session,
+        alice,
+        &SECOND_CLIENT,
+        Some(&SECOND_HOST),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.node_id, NODE, "the other Host stayed");
+
+    // The plan loses other-1: the Host goes home at its next ticket.
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PATCH,
+        "/v1/admin/plans/basic",
+        Some(serde_json::json!({"nodes": [NODE, "far-1"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let ticket = ticket_to(&harness, &session, alice, &HOST, None)
+        .await
+        .unwrap();
+    assert_eq!(ticket.node_id, NODE);
+    let reply = report_on(&harness, "other-1", "other-token", &[], None).await;
+    assert_eq!(reply.revocations.len(), 2, "the Host and its Client");
+
+    // The console moves any Host, without waiting.
+    let console = harness.console("alice@example.com").await;
+    for host in [&SECOND_HOST, &SECOND_HOST] {
+        let status = harness
+            .http
+            .put(format!(
+                "{}/v1/devices/{}/node",
+                harness.base,
+                key_hex(host)
+            ))
+            .console(&console)
+            .json(&serde_json::json!({"node_id": "far-1"}))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::OK);
+    }
+    let second = ticket_to(
+        &harness,
+        &session,
+        alice,
+        &SECOND_CLIENT,
+        Some(&SECOND_HOST),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.node_id, "far-1");
     harness.control.shutdown().await;
 }

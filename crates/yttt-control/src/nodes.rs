@@ -23,7 +23,7 @@ use crate::{
     AppState, Failure,
     admin::{NodeView, audit, nodes},
     auth::{self, AdminSession, Attempt},
-    clamp_i64, now_unix, sha256,
+    clamp_i64, now_unix, placement, sha256,
 };
 
 type Shared = State<Arc<AppState>>;
@@ -127,6 +127,7 @@ pub(crate) async fn create(
         }
         Err(error) => return Err(error.into()),
     }
+    placement::open_node(&mut *tx, &id).await?;
     let (token, expires_unix) = new_enrollment(&mut tx, &id).await?;
     audit(
         &mut tx,
@@ -284,12 +285,8 @@ pub(crate) async fn move_accounts(
             "move accounts to an enrolled, enabled node",
         ));
     }
-    let moved = sqlx::query("UPDATE accounts SET node_id = $2 WHERE node_id = $1")
-        .bind(&from)
-        .bind(&to)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+    // Hosts, their Clients and the accounts that default here all move.
+    let moved = placement::move_node(&mut tx, &from, &to).await?;
     audit(
         &mut tx,
         admin.account_id,
@@ -309,10 +306,13 @@ pub(crate) async fn remove(
     Path(id): Path<String>,
 ) -> Result<StatusCode, Failure> {
     let mut tx = state.pool.begin().await?;
-    let accounts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts WHERE node_id = $1")
-        .bind(&id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let accounts: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM accounts WHERE node_id = $1)
+              + (SELECT COUNT(*) FROM devices WHERE node_id = $1)",
+    )
+    .bind(&id)
+    .fetch_one(&mut *tx)
+    .await?;
     if accounts > 0 {
         return Err(Failure::conflict(
             "move the node's accounts elsewhere first",

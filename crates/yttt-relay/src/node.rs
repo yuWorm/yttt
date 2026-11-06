@@ -25,7 +25,7 @@ use iroh_relay::{
 use parking_lot::Mutex;
 use yttt_relay_ticket::{
     TicketVerifier,
-    api::{AccountStanding, AccountUsage, Standing, UsageReport},
+    api::{AccountStanding, AccountUsage, Revocation, Standing, UsageReply, UsageReport},
 };
 
 /// Bucket refill granularity; the same as iroh's own per-client limiter.
@@ -89,6 +89,8 @@ impl Account {
 struct Live {
     endpoint: EndpointId,
     account: u64,
+    /// When the control plane issued the ticket it connected with.
+    issued_unix: u64,
 }
 
 #[derive(Debug, Default)]
@@ -97,8 +99,13 @@ struct State {
     connections: HashMap<ConnectionId, Live>,
     /// The latest standing the control plane gave each account.
     standings: HashMap<u64, Standing>,
-    /// Removed devices, by when they were removed.
+    /// Endpoints to refuse, by the latest time a ticket of theirs is
+    /// refused from: devices removed from their account, and devices that
+    /// moved to another node.
     revoked: HashMap<[u8; 32], u64>,
+    /// The last revocation from the control plane's list applied here;
+    /// `None` until the first reply, so a restarted node gets them all again.
+    revocations_after: Option<u64>,
 }
 
 impl State {
@@ -207,6 +214,7 @@ impl Node {
             Live {
                 endpoint: request.endpoint_id(),
                 account: ticket.account_id,
+                issued_unix: ticket.issued_unix,
             },
         );
         Access::Allow
@@ -227,6 +235,7 @@ impl Node {
             connections,
             standings,
             revoked,
+            ..
         } = &mut *state;
         accounts.retain(|id, account| {
             account.unreported.load(Ordering::Relaxed) > 0
@@ -235,6 +244,48 @@ impl Node {
         standings
             .retain(|id, standing| *standing == Standing::Suspended || accounts.contains_key(id));
         revoked.retain(|_, at| now_unix.saturating_sub(*at) < REVOCATION_MEMORY_SECS);
+    }
+
+    /// Applies a reply to a usage report: standings, then the control plane's
+    /// list of endpoints to refuse.
+    pub(crate) fn apply_reply(&self, reply: &UsageReply) {
+        self.apply(&reply.accounts);
+        self.revoke(&reply.revocations);
+    }
+
+    /// Refuses endpoints from the control plane's list: their tickets issued
+    /// at or before the revocation, and their connections made with those.
+    pub(crate) fn revoke(&self, revocations: &[Revocation]) {
+        let mut dropped = Vec::new();
+        {
+            let mut state = self.state.lock();
+            for revocation in revocations {
+                let after = state.revocations_after.unwrap_or(0).max(revocation.id);
+                state.revocations_after = Some(after);
+                let Some(key) = yttt_relay_ticket::parse_key(&revocation.endpoint_id) else {
+                    continue;
+                };
+                let at = state.revoked.entry(key).or_insert(0);
+                *at = (*at).max(revocation.revoked_unix);
+                dropped.extend(
+                    state
+                        .connections
+                        .iter()
+                        .filter(|(_, live)| {
+                            live.endpoint.as_bytes() == &key
+                                && live.issued_unix <= revocation.revoked_unix
+                        })
+                        .map(|(id, live)| (live.endpoint, *id)),
+                );
+            }
+            // An empty first reply still means the node is up to date.
+            if state.revocations_after.is_none() {
+                state.revocations_after = Some(0);
+            }
+        }
+        for (endpoint, connection) in dropped {
+            self.clients.disconnect(endpoint, Some(connection));
+        }
     }
 
     /// Applies the control plane's standings: new paces, removed devices, and
@@ -314,6 +365,7 @@ impl Node {
         UsageReport {
             accounts,
             version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            revocations_after: state.revocations_after,
         }
     }
 

@@ -44,9 +44,15 @@ pub(crate) enum P2pCommand {
         password_email: Option<String>,
     },
     Logout,
+    /// The relay account's nodes, with this Host's latency to each.
+    Nodes,
+    /// Moves this Host, and the devices that connect to it, to another node.
+    Node {
+        node_id: String,
+    },
 }
 
-pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]|login <control url> [--password <email>]|logout> [--profile <id>] [--state-root <absolute path>]";
+pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]|login <control url> [--password <email>]|logout|nodes|node <id>> [--profile <id>] [--state-root <absolute path>]";
 
 /// Parses what follows `p2p`, leaving `--profile` and `--state-root` for the caller.
 pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError> {
@@ -70,6 +76,14 @@ pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError>
         "pair" => P2pCommand::Pair,
         "devices" => P2pCommand::Devices,
         "logout" => P2pCommand::Logout,
+        "nodes" => P2pCommand::Nodes,
+        "node" => {
+            if args.is_empty() {
+                return Err(usage());
+            }
+            let node_id = args.remove(0).into_string().map_err(|_| usage())?;
+            P2pCommand::Node { node_id }
+        }
         "login" => {
             let password_email = match args.iter().position(|argument| argument == "--password") {
                 Some(index) => {
@@ -247,6 +261,16 @@ pub(crate) async fn run(paths: ServerPaths, command: P2pCommand) -> Result<(), S
                 .await?;
             write_json(&Summary::of(&admin.status().await?))
         }
+        P2pCommand::Nodes => match admin.send(RemoteAccessRequest::ListRelayNodes).await? {
+            RemoteAccessResponse::RelayNodes(nodes) => write_json(&nodes),
+            _ => Err(ServerError::UnexpectedLifecycleResponse),
+        },
+        P2pCommand::Node { node_id } => {
+            admin
+                .send(RemoteAccessRequest::SetRelayNode { node_id })
+                .await?;
+            write_json(&Summary::of(&admin.status().await?))
+        }
     }
 }
 
@@ -311,6 +335,8 @@ struct Summary {
     endpoint_id: Option<String>,
     relay_url: Option<String>,
     relay_account: Option<String>,
+    /// The node the Host relays through, with a relay account.
+    node: Option<String>,
     error: Option<String>,
     /// Remote clients connected now, by their device key or client ID.
     clients: Vec<String>,
@@ -335,6 +361,9 @@ impl Summary {
             relay_account: relay_account
                 .as_ref()
                 .map(|account| format!("{} at {}", account.account_id, account.control_url)),
+            node: relay_account
+                .as_ref()
+                .and_then(|account| account.node_id.clone()),
             error: error.clone(),
             clients: status
                 .clients
@@ -506,6 +535,13 @@ mod tests {
             }
         );
         assert_eq!(parsed(&["pair"]).unwrap().0, P2pCommand::Pair);
+        assert_eq!(parsed(&["nodes"]).unwrap().0, P2pCommand::Nodes);
+        assert_eq!(
+            parsed(&["node", "tokyo-1"]).unwrap().0,
+            P2pCommand::Node {
+                node_id: "tokyo-1".into()
+            }
+        );
         assert_eq!(
             parsed(&["login", "https://control.example"]).unwrap().0,
             P2pCommand::Login {
@@ -530,6 +566,7 @@ mod tests {
         for bad in [
             &["enable", "--relay"][..],
             &["login"],
+            &["node"],
             &["login", "control.example"],
             &["login", "https://control.example", "--password"],
             &["enable", "--relay", "relay.example"],

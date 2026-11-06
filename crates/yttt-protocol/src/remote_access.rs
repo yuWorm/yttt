@@ -156,6 +156,23 @@ pub struct RelayAccountStatus {
     pub relay_url: Option<String>,
     pub ticket_expires_unix: Option<u64>,
     pub error: Option<String>,
+    /// The node the Host's ticket is for.
+    pub node_id: Option<String>,
+}
+
+/// A relay node the Host's account may use, as the Host sees it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RelayNode {
+    pub id: String,
+    pub name: String,
+    pub region: String,
+    pub relay_url: String,
+    pub load_percent: Option<u32>,
+    /// A full node cannot be chosen.
+    pub full: bool,
+    /// Round trip from the Host to the node, when it answered.
+    pub latency_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +223,13 @@ pub enum RemoteAccessRequest {
     SetRelayAccount {
         account: Option<RelayAccount>,
     },
+    /// The nodes the relay account may use, with the Host's latency to each.
+    ListRelayNodes,
+    /// Moves the Host, and the devices that connect to it, to another node
+    /// of its relay account. A plan of one node moves the whole account.
+    SetRelayNode {
+        node_id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,4 +242,5 @@ pub enum RemoteAccessResponse {
         expires_millis: u64,
     },
     Devices(Vec<PairedDevice>),
+    RelayNodes(Vec<RelayNode>),
 }

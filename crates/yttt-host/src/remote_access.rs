@@ -25,7 +25,7 @@ use tokio::{
     sync::{Semaphore, mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
-use yttt_control_client::{ControlSession, RelayTicket};
+use yttt_control_client::{ControlSession, DeviceKind, RelayTicket};
 use yttt_core::model::ids::ClientInstanceId;
 use yttt_protocol::{
     EndpointKey, FailureCode, ProtocolFailure,
@@ -555,6 +555,55 @@ impl Manager {
                     self.restart_p2p().await;
                 }
             }
+            RemoteAccessRequest::ListRelayNodes => {
+                let session = self.relay_session()?;
+                let nodes = session
+                    .nodes()
+                    .await
+                    .map_err(|error| failure(format!("relay account: {error}")))?;
+                // Measured side by side; each gives up after a few seconds.
+                let probes: Vec<_> = nodes
+                    .iter()
+                    .map(|node| tokio::spawn(p2p::relay_latency_ms(node.relay_url.clone())))
+                    .collect();
+                let mut latencies = Vec::with_capacity(probes.len());
+                for probe in probes {
+                    latencies.push(probe.await.ok().flatten());
+                }
+                return Ok(RemoteAccessResponse::RelayNodes(
+                    nodes
+                        .into_iter()
+                        .zip(latencies)
+                        .map(|(node, latency_ms)| RelayNode {
+                            id: node.id,
+                            name: node.name,
+                            region: node.region,
+                            relay_url: node.relay_url,
+                            load_percent: node.load_percent,
+                            full: node.full,
+                            latency_ms,
+                        })
+                        .collect(),
+                ));
+            }
+            RemoteAccessRequest::SetRelayNode { node_id } => {
+                let session = self.relay_session()?;
+                let root = self.store.lock().root().to_path_buf();
+                let secret = p2p::load_or_create_host_key(&root).map_err(io_failure)?;
+                session
+                    .switch_node(&secret, &node_id)
+                    .await
+                    .map_err(|error| failure(format!("relay account: {error}")))?;
+                // The next start fetches a ticket for the new node.
+                let stored = StoredRelayAccount {
+                    session,
+                    ticket: None,
+                };
+                p2p::save_relay_account(&root, &stored).map_err(io_failure)?;
+                if self.p2p.is_some() {
+                    self.restart_p2p().await;
+                }
+            }
             RemoteAccessRequest::StartPairing => return self.start_pairing(),
             RemoteAccessRequest::ConfirmPairing {
                 endpoint_id,
@@ -701,6 +750,7 @@ impl Manager {
                 };
                 status.relay_url = ticket.as_ref().map(|ticket| ticket.relay_url.clone());
                 status.ticket_expires_unix = ticket.as_ref().map(|ticket| ticket.expires_unix);
+                status.node_id = ticket.as_ref().map(|ticket| ticket.node_id.clone());
                 relay_account = Some(Arc::new(Mutex::new(status)));
                 let setup = ticket.as_ref().map_or(RelaySetup::Pending, |ticket| {
                     RelaySetup::Use(ticket.target())
@@ -793,6 +843,16 @@ impl Manager {
             self.p2p_failed(error.message);
         }
     }
+    /// The relay account's session, for asking the control plane on the
+    /// Host's behalf.
+    fn relay_session(&self) -> Result<ControlSession, ProtocolFailure> {
+        let root = self.store.lock().root().to_path_buf();
+        p2p::load_relay_account(&root)
+            .map_err(io_failure)?
+            .map(|stored| stored.session)
+            .ok_or_else(|| failure("sign in to a relay account first"))
+    }
+
     /// Registers the Host's own key with its account and gets it a ticket.
     async fn fetch_ticket(
         &self,
@@ -803,8 +863,10 @@ impl Manager {
             .chars()
             .take(64)
             .collect();
-        session.register_device(secret, &label).await?;
-        session.ticket(secret).await
+        session
+            .register_device(secret, &label, DeviceKind::Host)
+            .await?;
+        session.ticket(secret, DeviceKind::Host).await
     }
     async fn stop_network(&mut self) {
         if let Some(network) = self.network.take() {
@@ -1093,9 +1155,11 @@ async fn keep_relay_ticket(
     });
     let failed_status = status.clone();
     let cached = session.clone();
+    let mut node = current.node_id.clone();
     yttt_control_client::keep_ticket(
         session,
         secret,
+        DeviceKind::Host,
         endpoint,
         current,
         move |ticket| {
@@ -1110,18 +1174,26 @@ async fn keep_relay_ticket(
                 let mut status = status.lock();
                 status.relay_url = Some(ticket.relay_url.clone());
                 status.ticket_expires_unix = Some(ticket.expires_unix);
+                status.node_id = Some(ticket.node_id.clone());
                 status.error = None;
             }
             *relay_url.lock() = Some(ticket.relay_url.clone());
-            // The first ticket this endpoint's relay connection presents.
-            let _ = restart_after_unix.compare_exchange(
-                0,
-                ticket
-                    .expires_unix
-                    .saturating_sub(RESTART_BEFORE_EXPIRY_SECS),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            );
+            let restart_at = ticket
+                .expires_unix
+                .saturating_sub(RESTART_BEFORE_EXPIRY_SECS);
+            if ticket.node_id != node {
+                // A new node's relay connection starts with this ticket.
+                node = ticket.node_id.clone();
+                restart_after_unix.store(restart_at, Ordering::Relaxed);
+            } else {
+                // The first ticket this endpoint's relay connection presents.
+                let _ = restart_after_unix.compare_exchange(
+                    0,
+                    restart_at,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+            }
         },
         move |error| {
             failed_status.lock().error = Some(format!("relay account: {error}"));

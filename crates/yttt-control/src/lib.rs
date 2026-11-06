@@ -12,6 +12,7 @@ mod config;
 mod identity;
 mod nodes;
 mod oauth;
+mod placement;
 mod plans;
 mod web;
 
@@ -161,6 +162,11 @@ fn router(state: Arc<AppState>) -> Router {
             post(api::register_device).get(api::list_devices),
         )
         .route("/v1/devices/{endpoint_id}", delete(api::remove_device))
+        .route(
+            "/v1/devices/{endpoint_id}/node",
+            axum::routing::put(placement::switch_node),
+        )
+        .route("/v1/nodes", get(placement::list_nodes))
         .route("/v1/tickets", post(api::issue_ticket))
         .route("/v1/nodes/{node_id}/usage", post(api::node_usage))
         .route("/v1/accounts", post(web::sign_up))
@@ -325,7 +331,7 @@ pub async fn create_admin(
         .expect("hashing never panics");
     let now = clamp_i64(now_unix());
     let mut tx = pool.begin().await?;
-    sqlx::query(
+    let created_node = sqlx::query(
         "INSERT INTO nodes (id, url, token_hash, name, state, created_unix)
          VALUES ($1, '', NULL, $1, 'pending', $2)
          ON CONFLICT (id) DO NOTHING",
@@ -333,7 +339,11 @@ pub async fn create_admin(
     .bind(&node)
     .bind(now)
     .execute(&mut *tx)
-    .await?;
+    .await?
+    .rows_affected();
+    if created_node == 1 {
+        placement::open_node(&mut *tx, &node).await?;
+    }
     sqlx::query(
         "UPDATE settings SET signup_plan = COALESCE(signup_plan, $1),
                              signup_node = COALESCE(signup_node, $2)",
@@ -392,10 +402,11 @@ async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> 
             .bind(now)
             .execute(&mut *tx)
             .await?;
+            placement::open_plan(&mut *tx, &plan.id).await?;
         }
     }
     for node in &config.nodes {
-        sqlx::query(
+        let created = sqlx::query(
             "INSERT INTO nodes (id, url, token_hash, name, state, created_unix, enrolled_unix)
              VALUES ($1, $2, $3, $1, 'active', $4, $4)
              ON CONFLICT (id) DO NOTHING",
@@ -405,7 +416,11 @@ async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> 
         .bind(sha256(node.token.as_bytes()))
         .bind(now)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+        if created == 1 {
+            placement::open_node(&mut *tx, &node.id).await?;
+        }
     }
     // Names that do not exist yet stay empty until the console sets them.
     let signup = config.signup.as_ref();
@@ -439,6 +454,9 @@ impl Failure {
     }
     pub(crate) fn not_found() -> Self {
         Self(StatusCode::NOT_FOUND, "not found")
+    }
+    pub(crate) fn missing(reason: &'static str) -> Self {
+        Self(StatusCode::NOT_FOUND, reason)
     }
     pub(crate) fn unavailable(reason: &'static str) -> Self {
         Self(StatusCode::SERVICE_UNAVAILABLE, reason)

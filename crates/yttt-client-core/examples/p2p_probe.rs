@@ -66,9 +66,11 @@ async fn main() -> Result<(), String> {
         Some((control_url, email)) => Some(sign_in(control_url, email).await?),
         None => None,
     };
+    // The probe's key reaches only this Host, through the Host's node.
+    let kind = yttt_control_client::DeviceKind::Client { host: code.host.0 };
     if let Some(session) = &session {
         session
-            .register_device(&secret, "p2p probe")
+            .register_device(&secret, "p2p probe", kind)
             .await
             .map_err(|error| error.to_string())?;
     }
@@ -77,7 +79,7 @@ async fn main() -> Result<(), String> {
         let relay = match &session {
             Some(session) => {
                 let ticket = session
-                    .ticket(&secret)
+                    .ticket(&secret, kind)
                     .await
                     .map_err(|error| error.to_string())?;
                 println!("ticket for {} at {}", ticket.node_id, ticket.relay_url);

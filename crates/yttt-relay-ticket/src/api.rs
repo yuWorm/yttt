@@ -12,6 +12,10 @@ pub struct UsageReport {
     /// The node's software version, shown in the console.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The last revocation this node applied; absent after a restart, when
+    /// the control plane sends every revocation still in force.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocations_after: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +31,21 @@ pub struct AccountUsage {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageReply {
     pub accounts: Vec<AccountStanding>,
+    /// Endpoints this node must refuse, oldest first, after
+    /// `revocations_after`. A long backlog arrives over several reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revocations: Vec<Revocation>,
+}
+
+/// An endpoint that no longer belongs on a node, e.g. its Host moved to
+/// another node or it was removed from its account. The node drops it and
+/// refuses its tickets issued at or before `revoked_unix` (control-plane time).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Revocation {
+    /// Increases with every revocation; the node reports the last it applied.
+    pub id: u64,
+    pub endpoint_id: String,
+    pub revoked_unix: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +213,24 @@ impl std::fmt::Debug for DeviceAuthorization {
 pub struct RegisterDevice {
     pub label: String,
     pub proof: DeviceProofBody,
+    /// What the key is for; absent from older clients. Fixed once set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<DeviceRole>,
+    /// For a Client: the hex key of the Host it connects to, whose node it
+    /// always shares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows_host: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceRole {
+    /// A computer others connect to; it chooses its node.
+    Host,
+    /// A key a device holds for one Host; it relays through that Host's node.
+    Client,
+    /// Registered by a version that did not say; uses the account's default node.
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +238,51 @@ pub struct DeviceEntry {
     pub endpoint_id: String,
     pub label: String,
     pub registered_unix: u64,
+    #[serde(default = "unknown_role")]
+    pub role: DeviceRole,
+    /// The node the device relays through.
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows_host: Option<String>,
+    /// Whether a node reported it connected within the last two reports.
+    #[serde(default)]
+    pub online: bool,
+}
+
+fn unknown_role() -> DeviceRole {
+    DeviceRole::Unknown
+}
+
+/// `GET /v1/nodes`: a node the account's plan may use.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeChoice {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub region: String,
+    pub relay_url: String,
+    /// Connections against the node's limit, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_percent: Option<u32>,
+    /// Full nodes cannot be chosen.
+    #[serde(default)]
+    pub full: bool,
+}
+
+/// `PUT /v1/devices/{host}/node`. From the app or the CLI, the Host proves it
+/// holds its own key; the console's session needs no proof.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SwitchNode {
+    pub node_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof: Option<DeviceProofBody>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodePlacement {
+    pub node_id: String,
+    pub relay_url: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,6 +293,9 @@ pub struct DeviceList {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TicketRequest {
     pub proof: DeviceProofBody,
+    /// For a Client: the Host it connects to. The ticket is for that Host's node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
