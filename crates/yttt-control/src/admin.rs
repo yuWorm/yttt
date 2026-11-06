@@ -10,7 +10,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Row as _, Transaction};
+use sqlx::Row as _;
 
 use crate::{
     AppState, Failure,
@@ -185,16 +185,18 @@ pub(crate) async fn overview(
     .fetch_one(&state.pool)
     .await?;
     let now = now_unix();
-    let month: Option<i64> =
-        sqlx::query_scalar("SELECT SUM(upstream_bytes)::BIGINT FROM usage_months WHERE month = $1")
-            .bind(month_of(now))
-            .fetch_one(&state.pool)
-            .await?;
-    let today: Option<i64> =
-        sqlx::query_scalar("SELECT SUM(upstream_bytes)::BIGINT FROM usage_days WHERE day = $1")
-            .bind(day_of(now))
-            .fetch_one(&state.pool)
-            .await?;
+    let month: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(SUM(upstream_bytes) AS BIGINT) FROM usage_months WHERE month = $1",
+    )
+    .bind(month_of(now))
+    .fetch_one(&state.pool)
+    .await?;
+    let today: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(SUM(upstream_bytes) AS BIGINT) FROM usage_days WHERE day = $1",
+    )
+    .bind(day_of(now))
+    .fetch_one(&state.pool)
+    .await?;
     let accounts_today: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM accounts WHERE created_unix >= $1")
             .bind(i64::from(day_of(now)) * 86_400)
@@ -223,7 +225,7 @@ pub(crate) async fn nodes(state: &AppState) -> Result<Vec<NodeView>, Failure> {
                 n.version, n.reachable, n.region, n.max_connections,
                 (SELECT COUNT(*) FROM accounts a WHERE a.node_id = n.id) AS accounts,
                 (SELECT COUNT(*) FROM devices d WHERE d.node_id = n.id) AS devices,
-                (SELECT COALESCE(SUM(d.upstream_bytes), 0)::BIGINT FROM usage_days d
+                (SELECT CAST(COALESCE(SUM(d.upstream_bytes), 0) AS BIGINT) FROM usage_days d
                   WHERE d.node_id = n.id AND d.day >= $1) AS month_bytes,
                 (SELECT MAX(e.expires_unix) FROM node_enrollments e
                   WHERE e.node_id = n.id AND e.used_unix IS NULL) AS enrollment_expires
@@ -258,7 +260,7 @@ pub(crate) async fn nodes(state: &AppState) -> Result<Vec<NodeView>, Failure> {
                     .get::<Option<i32>, _>("last_connected_devices")
                     .map(|count| count as u32),
                 version: row.get("version"),
-                reachable: row.get("reachable"),
+                reachable: crate::db::maybe_flag(row, "reachable"),
                 accounts: row.get("accounts"),
                 devices: row.get("devices"),
                 region: row.get("region"),
@@ -278,14 +280,14 @@ const ACCOUNT_COLUMNS: &str = "a.id, a.email, a.role, a.plan_id, a.node_id, a.su
     a.created_unix, COALESCE(u.upstream_bytes, 0) AS used,
     (SELECT COUNT(*) FROM devices d WHERE d.account_id = a.id) AS devices";
 
-fn account_row(row: &sqlx::postgres::PgRow) -> AccountRow {
+fn account_row(row: &crate::db::Row) -> AccountRow {
     AccountRow {
         account_id: row.get::<i64, _>("id") as u64,
         email: row.get("email"),
         role: row.get("role"),
         plan: row.get("plan_id"),
         node_id: row.get("node_id"),
-        suspended: row.get("suspended"),
+        suspended: crate::db::flag(row, "suspended"),
         created_unix: row.get::<i64, _>("created_unix") as u64,
         month_upstream_bytes: row.get::<i64, _>("used") as u64,
         devices: row.get::<i64, _>("devices") as u32,
@@ -316,7 +318,7 @@ pub(crate) async fn accounts(
         Some("admin") => "AND a.role = 'admin'",
         Some(_) => return Err(Failure::bad_request("unknown status filter")),
     };
-    let filter = format!("a.email LIKE $1 AND ($2::TEXT IS NULL OR a.plan_id = $2) {status}");
+    let filter = format!("a.email LIKE $1 AND ($2 IS NULL OR a.plan_id = $2) {status}");
     let plan = query.plan.filter(|plan| !plan.is_empty());
     let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM accounts a WHERE {filter}"))
         .bind(&pattern)
@@ -399,21 +401,24 @@ pub(crate) async fn change_account(
     {
         return Err(Failure::bad_request("a role is user or admin"));
     }
-    let mut tx = state.pool.begin().await?;
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
-            .bind(account_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let exists: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT id FROM accounts WHERE id = $1{}",
+        state.dialect.for_update()
+    ))
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if exists.is_none() {
         return Err(Failure::not_found());
     }
     if let Some(plan) = &change.plan {
-        let archived: Option<bool> = sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
-            .bind(plan)
-            .fetch_optional(&mut *tx)
-            .await?;
-        if archived == Some(true) {
+        let archived: Option<crate::db::Flag> =
+            sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
+                .bind(plan)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if archived.map(bool::from) == Some(true) {
             return Err(Failure::bad_request("the plan is archived"));
         }
         set(&mut tx, account_id, "plan_id", plan).await?;
@@ -476,7 +481,7 @@ pub(crate) async fn change_account(
 }
 
 async fn set(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut crate::db::Tx<'_>,
     account_id: i64,
     column: &'static str,
     value: &str,
@@ -504,7 +509,7 @@ pub(crate) async fn remove_device(
     Path((account_id, endpoint_id)): Path<(i64, String)>,
 ) -> Result<StatusCode, Failure> {
     let key = yttt_relay_ticket::parse_key(&endpoint_id).ok_or_else(Failure::not_found)?;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     // The device's node, and its Clients' if it is a Host, refuse them.
     sqlx::query(
         "INSERT INTO node_revocations (node_id, endpoint_id, revoked_unix)
@@ -549,12 +554,13 @@ pub(crate) async fn create_account(
     if request.role != "user" && request.role != "admin" {
         return Err(Failure::bad_request("a role is user or admin"));
     }
-    let mut tx = state.pool.begin().await?;
-    let archived: Option<bool> = sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
-        .bind(&request.plan)
-        .fetch_optional(&mut *tx)
-        .await?;
-    match archived {
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let archived: Option<crate::db::Flag> =
+        sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
+            .bind(&request.plan)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match archived.map(bool::from) {
         None => return Err(Failure::bad_request("unknown plan")),
         Some(true) => return Err(Failure::bad_request("the plan is archived")),
         Some(false) => {}
@@ -627,7 +633,7 @@ pub(crate) async fn reset_password(
     let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
         .await
         .expect("hashing never panics");
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let updated = sqlx::query("UPDATE accounts SET password_hash = $2 WHERE id = $1")
         .bind(account_id)
         .bind(hash)
@@ -689,7 +695,7 @@ pub(crate) async fn audit_log(
 }
 
 pub(crate) async fn audit(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut crate::db::Tx<'_>,
     admin_id: i64,
     action: &str,
     target_account: Option<i64>,

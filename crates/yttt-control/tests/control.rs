@@ -1,5 +1,6 @@
-//! The control plane against a real PostgreSQL. Each test gets its own
-//! database on the server `YTTT_TEST_DATABASE_URL` names, e.g.
+//! The control plane against a real database. Each test gets its own: a
+//! SQLite file by default, or with `YTTT_TEST_DATABASE_URL` a database on
+//! that PostgreSQL server, e.g.
 //! `postgres://postgres:yttt@127.0.0.1:55433/postgres`
 //! (see packaging/relay-dev/docker-compose.full.yml).
 
@@ -65,12 +66,20 @@ impl Harness {
     }
 
     async fn start_with(nodes: &[(&str, &str)], edit: impl FnOnce(&mut ControlConfig)) -> Self {
-        let server = std::env::var("YTTT_TEST_DATABASE_URL")
-            .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
         let name = format!("yttt_control_test_{:016x}", rand_suffix());
-        let admin = sqlx_admin(&server).await;
-        sqlx_execute(&admin, &format!("CREATE DATABASE {name}")).await;
-        let (prefix, _) = server.rsplit_once('/').unwrap();
+        let database_url = match std::env::var("YTTT_TEST_DATABASE_URL") {
+            Ok(server) => {
+                let admin = sqlx_admin(&server).await;
+                sqlx_execute(&admin, &format!("CREATE DATABASE {name}")).await;
+                let (prefix, _) = server.rsplit_once('/').unwrap();
+                format!("{prefix}/{name}")
+            }
+            Err(_) => {
+                let dir = std::env::temp_dir().join(&name);
+                std::fs::create_dir_all(&dir).unwrap();
+                format!("sqlite://{}", dir.join("control.db").display())
+            }
+        };
         let config = ControlConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
             public_url: Some("http://127.0.0.1".into()),
@@ -82,7 +91,7 @@ impl Harness {
                 plan: "basic".into(),
                 node: NODE.into(),
             }),
-            database_url: format!("{prefix}/{name}"),
+            database_url,
             ticket_secret: yttt_relay_ticket::hex(&[1; 32]),
             secrets_key: None,
             ticket_ttl_secs: 30 * 24 * 3600,
@@ -290,12 +299,19 @@ async fn sqlx_admin(url: &str) -> sqlx::PgPool {
     sqlx::PgPool::connect(url).await.unwrap()
 }
 
+/// The test's own database, PostgreSQL or SQLite.
+async fn database(harness: &Harness) -> sqlx::AnyPool {
+    sqlx::any::install_default_drivers();
+    sqlx::AnyPool::connect(&harness.config.database_url)
+        .await
+        .unwrap()
+}
+
 async fn sqlx_execute(pool: &sqlx::PgPool, statement: &str) {
     sqlx::raw_sql(statement).execute(pool).await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn only_the_right_password_opens_a_session() {
     let harness = Harness::start().await;
     harness.account("alice@example.com").await;
@@ -335,7 +351,6 @@ async fn only_the_right_password_opens_a_session() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_device_registers_only_with_proof_of_its_key_and_within_the_plan() {
     let harness = Harness::start().await;
     let (alice, alice_session) = harness.account("alice@example.com").await;
@@ -425,7 +440,6 @@ async fn a_device_registers_only_with_proof_of_its_key_and_within_the_plan() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_ticket_is_issued_only_to_a_registered_device_and_verifies_on_the_node() {
     let harness = Harness::start().await;
     let (alice, session) = harness.account("alice@example.com").await;
@@ -466,7 +480,6 @@ async fn a_ticket_is_issued_only_to_a_registered_device_and_verifies_on_the_node
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn usage_accumulates_and_decides_each_accounts_standing() {
     let harness = Harness::start().await;
     let (alice, alice_session) = harness.account("alice@example.com").await;
@@ -547,7 +560,6 @@ async fn usage_accumulates_and_decides_each_accounts_standing() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_node_learns_which_connected_devices_left_their_account() {
     let harness = Harness::start().await;
     let (alice, alice_session) = harness.account("alice@example.com").await;
@@ -605,7 +617,6 @@ async fn a_node_learns_which_connected_devices_left_their_account() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_node_cannot_bill_or_probe_accounts_of_another_node() {
     let harness =
         Harness::start_with_nodes(&[(NODE, NODE_TOKEN), ("other-1", "other-token")]).await;
@@ -684,7 +695,6 @@ impl Browser<'_> {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_browser_signs_up_and_keeps_a_cookie_session_that_forgery_cannot_use() {
     let harness = Harness::start().await;
     let mut browser = Browser {
@@ -770,7 +780,6 @@ async fn a_browser_signs_up_and_keeps_a_cookie_session_that_forgery_cannot_use()
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn guessing_passwords_is_slowed_for_every_login_door() {
     let harness = Harness::start().await;
     harness.account("victim@example.com").await;
@@ -795,7 +804,6 @@ async fn guessing_passwords_is_slowed_for_every_login_door() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn only_administrators_manage_accounts_and_every_change_is_audited() {
     let harness = Harness::start().await;
     let (_, admin_token) = harness.account("admin@example.com").await;
@@ -880,13 +888,10 @@ async fn only_administrators_manage_accounts_and_every_change_is_audited() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_disabled_node_drops_its_devices_and_restarts_keep_managed_nodes() {
     let harness = Harness::start().await;
     let (alice, _) = harness.account("alice@example.com").await;
-    let pool = sqlx::PgPool::connect(&harness.config.database_url)
-        .await
-        .unwrap();
+    let pool = database(&harness).await;
     sqlx::raw_sql(&format!(
         "UPDATE nodes SET state = 'disabled' WHERE id = '{NODE}'"
     ))
@@ -925,7 +930,6 @@ fn enrollment_token(command: &str) -> String {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_node_deploys_from_a_one_time_command_and_comes_online() {
     let harness = Harness::start().await;
     harness.account("admin@example.com").await;
@@ -1119,7 +1123,6 @@ fn sha2_hex_string(text: &str) -> String {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_fresh_deployment_gets_its_first_administrator_before_any_node() {
     let harness = Harness::start_with_nodes(&[]).await;
     let sign_up = || {
@@ -1233,7 +1236,6 @@ async fn send(
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn plans_are_run_from_the_console_and_reach_nodes_on_their_next_report() {
     let harness = Harness::start().await;
     let admin = admin_session(&harness, "admin@example.com").await;
@@ -1429,7 +1431,6 @@ async fn plans_are_run_from_the_console_and_reach_nodes_on_their_next_report() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn administrators_open_accounts_reset_passwords_and_see_daily_traffic() {
     let harness = Harness::start().await;
     let admin = admin_session(&harness, "admin@example.com").await;
@@ -1540,7 +1541,6 @@ fn query_value(url: &str, name: &str) -> Option<String> {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn the_app_signs_in_through_the_browser_and_gets_only_a_device_session() {
     let harness = Harness::start().await;
     let cookie = admin_session(&harness, "admin@example.com").await;
@@ -1678,7 +1678,6 @@ async fn the_app_signs_in_through_the_browser_and_gets_only_a_device_session() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_headless_device_signs_in_once_someone_confirms_its_short_code() {
     let harness = Harness::start().await;
     harness.account("alice@example.com").await;
@@ -1924,7 +1923,6 @@ fn set_cookie(response: &reqwest::Response, name: &str) -> String {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn the_console_signs_in_with_github_and_links_it_only_to_its_owner() {
     let github = fake_github().await;
     let harness = Harness::start_with(&[(NODE, NODE_TOKEN)], |config| {
@@ -2192,7 +2190,6 @@ async fn with_room(nodes: &[(&str, &str)]) -> Harness {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_moves() {
     let harness = with_room(&[(NODE, NODE_TOKEN), ("other-1", "other-token")]).await;
     let (alice, session) = harness.account("alice@example.com").await;
@@ -2317,7 +2314,6 @@ async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_shrinks() {
     let harness = with_room(&[
         (NODE, NODE_TOKEN),
@@ -2429,7 +2425,6 @@ async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_s
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_full_node_takes_no_new_hosts_or_accounts_and_its_load_is_kept() {
     let harness = with_room(&[(NODE, NODE_TOKEN), ("other-1", "other-token")]).await;
     let admin = admin_session(&harness, "admin@example.com").await;
@@ -2544,7 +2539,6 @@ async fn a_full_node_takes_no_new_hosts_or_accounts_and_its_load_is_kept() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn sign_in_providers_are_set_up_in_the_console_with_their_secrets_sealed() {
     let github = fake_github().await;
     let harness = Harness::start_with(&[(NODE, NODE_TOKEN)], |config| {
@@ -2580,9 +2574,7 @@ async fn sign_in_providers_are_set_up_in_the_console_with_their_secrets_sealed()
         "http://127.0.0.1/v1/auth/github/callback"
     );
     assert!(settings.to_string().find("github-secret").is_none());
-    let pool = sqlx::PgPool::connect(&harness.config.database_url)
-        .await
-        .unwrap();
+    let pool = database(&harness).await;
     let sealed: Vec<u8> = sqlx::query_scalar(
         "SELECT client_secret_sealed FROM oauth_providers WHERE provider = 'github'",
     )

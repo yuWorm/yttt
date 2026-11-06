@@ -99,6 +99,7 @@
 ## 5. PostgreSQL 与 SQLite 双后端
 
 - `database_url` 决定后端：`postgres://…` 或 `sqlite:///var/lib/yttt-control/control.db`。
+- 结果：采用 `sqlx::Any`。SQLite 下 `Any` 不认 `BOOLEAN`/`BYTEA` 声明类型、也不把整数解码成 `bool`，因此 SQLite 迁移只用 `INTEGER`/`TEXT`/`BLOB`，布尔值统一经 `db::Flag` 读取；`= ANY(数组)` 改为分批 `IN (…)`；单行 `settings` 显式写 `id = TRUE`（SQLite 的 `INTEGER PRIMARY KEY` 是 rowid，不取默认值）。
 - 方案：先用 `sqlx::Any` 做一次可行性验证（类型映射：`BYTEA`/`BLOB`、整型、`bool`），可行就用它让查询只写一份；不可行则用按后端泛型的查询函数（`sqlx::Database` 泛型 + 少量按方言分支），而不是每条查询写两份。
 - SQL 改写规则：
   - 类型转换统一为 `CAST(x AS BIGINT)`、`CAST($2 AS TEXT)`，两边都支持；不能直接去掉（PostgreSQL 的 `SUM(bigint)` 返回 NUMERIC，`$2 IS NULL` 无法推断参数类型）。

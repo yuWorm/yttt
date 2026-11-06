@@ -251,11 +251,12 @@ pub(crate) async fn token(
         } => redeem_code(&state, &code, &code_verifier, &redirect_uri).await?,
         TokenRequest::DeviceCode { device_code } => redeem_device(&state, &device_code).await?,
     };
-    let suspended: bool = sqlx::query_scalar("SELECT suspended FROM accounts WHERE id = $1")
-        .bind(account_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if suspended {
+    let suspended: crate::db::Flag =
+        sqlx::query_scalar("SELECT suspended FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if suspended.0 {
         return Err(Failure::forbidden("the account is suspended"));
     }
     let (token, expires_unix) = auth::open_session(&state, account_id, Scope::Device).await?;
@@ -295,24 +296,27 @@ async fn redeem_code(
 async fn redeem_device(state: &AppState, device_code: &str) -> Result<i64, Failure> {
     let hash = sha256(device_code.as_bytes());
     let now = now_unix();
-    // Records this poll and reads the one before it, in one statement.
-    let row = sqlx::query(
-        "WITH old AS (
-             SELECT last_poll_unix FROM device_grants WHERE device_code_hash = $1 FOR UPDATE
-         )
-         UPDATE device_grants g SET last_poll_unix = $2 FROM old
-         WHERE g.device_code_hash = $1
-         RETURNING g.account_id, g.denied, g.expires_unix, old.last_poll_unix AS previous",
-    )
+    // Records this poll and reads the one before it, together.
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let row = sqlx::query(&format!(
+        "SELECT account_id, denied, expires_unix, last_poll_unix AS previous
+         FROM device_grants WHERE device_code_hash = $1{}",
+        state.dialect.for_update()
+    ))
     .bind(&hash)
-    .bind(clamp_i64(now))
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(Failure::bad_request(token_error::INVALID))?;
+    sqlx::query("UPDATE device_grants SET last_poll_unix = $2 WHERE device_code_hash = $1")
+        .bind(&hash)
+        .bind(clamp_i64(now))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     if row.get::<i64, _>("expires_unix") <= clamp_i64(now) {
         return Err(Failure::bad_request(token_error::EXPIRED));
     }
-    if row.get::<bool, _>("denied") {
+    if crate::db::flag(&row, "denied") {
         delete_grant(state, &hash).await?;
         return Err(Failure::bad_request(token_error::DENIED));
     }

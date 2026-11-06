@@ -86,7 +86,7 @@ pub(crate) async fn create_account(
     if !settings.signup_enabled {
         return Err(Failure::not_found());
     }
-    let ready: Option<bool> = sqlx::query_scalar(
+    let ready: Option<crate::db::Flag> = sqlx::query_scalar(
         "SELECT n.state = 'active' AND NOT p.archived FROM nodes n, plans p
          WHERE n.id = $1 AND p.id = $2",
     )
@@ -94,7 +94,7 @@ pub(crate) async fn create_account(
     .bind(&settings.signup_plan)
     .fetch_optional(&state.pool)
     .await?;
-    if ready != Some(true) {
+    if ready.map(bool::from) != Some(true) {
         return Err(Failure::unavailable(
             "sign-up is closed: no relay node is ready",
         ));
@@ -107,7 +107,7 @@ pub(crate) async fn create_account(
            AND (n.max_connections IS NULL
                 OR COALESCE(n.last_connected_devices, 0) < n.max_connections)
          ORDER BY n.id <> $1,
-                  CAST(COALESCE(n.last_connected_devices, 0) AS FLOAT8)
+                  CAST(COALESCE(n.last_connected_devices, 0) AS REAL)
                       / COALESCE(n.max_connections, 1000000),
                   n.id
          LIMIT 1",
@@ -205,7 +205,7 @@ pub(crate) async fn change_password(
         return Err(Failure::forbidden("the account is suspended"));
     }
     check_password(&request.new)?;
-    let (email, has_password): (String, bool) =
+    let (email, crate::db::Flag(has_password)): (String, crate::db::Flag) =
         sqlx::query_as("SELECT email, password_hash IS NOT NULL FROM accounts WHERE id = $1")
             .bind(session.account_id)
             .fetch_one(&state.pool)
@@ -274,8 +274,8 @@ pub(crate) async fn daily(
     let today = day_of(now_unix());
     let first = today - days + 1;
     let rows: Vec<(i32, i64)> = sqlx::query_as(
-        "SELECT day, SUM(upstream_bytes)::BIGINT FROM usage_days
-         WHERE day >= $1 AND ($2::BIGINT IS NULL OR account_id = $2)
+        "SELECT day, CAST(SUM(upstream_bytes) AS BIGINT) FROM usage_days
+         WHERE day >= $1 AND ($2 IS NULL OR account_id = $2)
          GROUP BY day",
     )
     .bind(first)

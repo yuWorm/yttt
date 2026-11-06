@@ -114,7 +114,7 @@ pub(crate) async fn create(
     let domain = valid_domain(request.domain)?;
     let base = deploy_base(&state)?;
     let name = request.name.trim().chars().take(64).collect::<String>();
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let inserted = sqlx::query(
         "INSERT INTO nodes (id, url, token_hash, name, state, created_unix)
          VALUES ($1, '', NULL, $2, 'pending', $3)",
@@ -169,12 +169,14 @@ pub(crate) async fn regenerate(
             .domain,
     )?;
     let base = deploy_base(&state)?;
-    let mut tx = state.pool.begin().await?;
-    let exists: Option<String> =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE id = $1 FOR UPDATE")
-            .bind(&id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let exists: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT id FROM nodes WHERE id = $1{}",
+        state.dialect.for_update()
+    ))
+    .bind(&id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if exists.is_none() {
         return Err(Failure::not_found());
     }
@@ -206,12 +208,14 @@ pub(crate) async fn change(
     Path(id): Path<String>,
     Json(change): Json<NodeChange>,
 ) -> Result<StatusCode, Failure> {
-    let mut tx = state.pool.begin().await?;
-    let current: Option<String> =
-        sqlx::query_scalar("SELECT state FROM nodes WHERE id = $1 FOR UPDATE")
-            .bind(&id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let current: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT state FROM nodes WHERE id = $1{}",
+        state.dialect.for_update()
+    ))
+    .bind(&id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let current = current.ok_or_else(Failure::not_found)?;
     if let Some(name) = &change.name {
         let name: String = name.trim().chars().take(64).collect();
@@ -313,7 +317,7 @@ pub(crate) async fn move_accounts(
     admin: AdminSession,
     Path((from, to)): Path<(String, String)>,
 ) -> Result<Json<u64>, Failure> {
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let target: Option<String> = sqlx::query_scalar("SELECT state FROM nodes WHERE id = $1")
         .bind(&to)
         .fetch_optional(&mut *tx)
@@ -343,7 +347,7 @@ pub(crate) async fn remove(
     admin: AdminSession,
     Path(id): Path<String>,
 ) -> Result<StatusCode, Failure> {
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let accounts: i64 = sqlx::query_scalar(
         "SELECT (SELECT COUNT(*) FROM accounts WHERE node_id = $1)
               + (SELECT COUNT(*) FROM devices WHERE node_id = $1)",
@@ -520,7 +524,7 @@ pub(crate) async fn probe_loop(state: Arc<AppState>) {
 }
 
 async fn new_enrollment(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut crate::db::Tx<'_>,
     node_id: &str,
 ) -> Result<(String, u64), Failure> {
     let mut token = [0_u8; 32];

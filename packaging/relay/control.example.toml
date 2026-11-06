@@ -7,7 +7,8 @@ public_url = "https://relay.example.com"
 trusted_proxy = true
 web_root = "/usr/share/yttt-control/web"
 relay_binaries_dir = "/usr/share/yttt-control/bin"
-# The password must match POSTGRES_PASSWORD.
+# PostgreSQL; the password must match POSTGRES_PASSWORD. For one small
+# server, SQLite needs nothing else: "sqlite:///var/lib/yttt-control/control.db".
 database_url = "postgres://postgres:CHANGE-ME@postgres:5432/postgres"
 # 32 random bytes as hex, e.g. `openssl rand -hex 32`. Changing it invalidates
 # every relay ticket and needs every node redeployed.

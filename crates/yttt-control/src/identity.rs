@@ -93,7 +93,7 @@ impl Provider {
         let Some(row) = row else {
             return Ok(file.cloned());
         };
-        if !row.get::<bool, _>("enabled") {
+        if !crate::db::flag(&row, "enabled") {
             return Ok(None);
         }
         let sealed = Sealed {
@@ -185,7 +185,7 @@ fn callback_url(state: &AppState, provider: Provider) -> String {
 /// Moves providers from `control.toml` into the console's settings, once:
 /// a provider the console already has is left alone.
 pub(crate) async fn import_providers(
-    pool: &sqlx::PgPool,
+    pool: &crate::db::Pool,
     config: &crate::ControlConfig,
     sealer: &Sealer,
 ) -> Result<(), sqlx::Error> {
@@ -627,7 +627,7 @@ async fn record(
     action: &str,
     provider: Provider,
 ) -> Result<(), Failure> {
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     audit(
         &mut tx,
         account_id,
@@ -662,7 +662,7 @@ pub(crate) async fn methods(
     State(state): Shared,
     session: ConsoleSession,
 ) -> Result<Json<SignInMethods>, Failure> {
-    let has_password: bool =
+    let has_password: crate::db::Flag =
         sqlx::query_scalar("SELECT password_hash IS NOT NULL FROM accounts WHERE id = $1")
             .bind(session.account_id)
             .fetch_one(&state.pool)
@@ -682,7 +682,7 @@ pub(crate) async fn methods(
     })
     .collect();
     Ok(Json(SignInMethods {
-        has_password,
+        has_password: has_password.0,
         may_set_password: web::may_set_password(&session),
         identities,
         providers: enabled_providers(&state).await?,
@@ -697,16 +697,17 @@ pub(crate) async fn unlink(
     Path(provider): Path<String>,
 ) -> Result<StatusCode, Failure> {
     let provider = Provider::parse(&provider)?;
-    let mut tx = state.pool.begin().await?;
-    let row = sqlx::query(
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let row = sqlx::query(&format!(
         "SELECT a.password_hash IS NOT NULL AS has_password,
                 (SELECT COUNT(*) FROM identities i WHERE i.account_id = a.id) AS identities
-         FROM accounts a WHERE a.id = $1 FOR UPDATE",
-    )
+         FROM accounts a WHERE a.id = $1{}",
+        state.dialect.for_update()
+    ))
     .bind(session.account_id)
     .fetch_one(&mut *tx)
     .await?;
-    if !row.get::<bool, _>("has_password") && row.get::<i64, _>("identities") <= 1 {
+    if !crate::db::flag(&row, "has_password") && row.get::<i64, _>("identities") <= 1 {
         return Err(Failure::conflict(
             "set a password or link another provider before unlinking the last one",
         ));
@@ -882,7 +883,7 @@ pub(crate) async fn oauth_settings(
     State(state): Shared,
     _admin: crate::auth::AdminSession,
 ) -> Result<Json<OAuthSettings>, Failure> {
-    let rows: Vec<(String, String, bool)> =
+    let rows: Vec<(String, String, crate::db::Flag)> =
         sqlx::query_as("SELECT provider, client_id, enabled FROM oauth_providers")
             .fetch_all(&state.pool)
             .await?;
@@ -903,7 +904,7 @@ pub(crate) async fn oauth_settings(
                         .or_else(|| file.map(|file| file.client_id.clone()))
                         .unwrap_or_default(),
                     has_secret: row.is_some() || file.is_some(),
-                    enabled: row.map_or(file.is_some(), |(_, _, enabled)| *enabled),
+                    enabled: row.map_or(file.is_some(), |(_, _, enabled)| enabled.0),
                     from_file: row.is_none() && file.is_some(),
                 }
             })
@@ -947,14 +948,14 @@ pub(crate) async fn change_oauth(
     if secret.is_some_and(|secret| secret.len() > 512) {
         return Err(Failure::bad_request("the client secret is too long"));
     }
-    let mut tx = state.pool.begin().await?;
-    let exists: bool =
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let exists: crate::db::Flag =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM oauth_providers WHERE provider = $1)")
             .bind(provider.name())
             .fetch_one(&mut *tx)
             .await?;
     let now = clamp_i64(now_unix());
-    match (secret, exists) {
+    match (secret, exists.0) {
         (Some(secret), _) => {
             let sealed = sealer.seal(provider.name(), secret);
             sqlx::query(
@@ -1021,7 +1022,7 @@ pub(crate) async fn remove_oauth(
     Path(provider): Path<String>,
 ) -> Result<StatusCode, Failure> {
     let provider = Provider::parse(&provider)?;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     sqlx::query("DELETE FROM oauth_providers WHERE provider = $1")
         .bind(provider.name())
         .execute(&mut *tx)

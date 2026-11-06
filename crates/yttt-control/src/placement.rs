@@ -14,7 +14,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use sqlx::{Postgres, Row as _, Transaction};
+use sqlx::Row as _;
 use yttt_relay_ticket::{
     ProofPurpose,
     api::{DeviceEntry, DeviceRole, NodeChoice, NodePlacement, SwitchNode},
@@ -27,7 +27,7 @@ use crate::{
 };
 
 type Shared = State<Arc<AppState>>;
-type Tx<'a> = Transaction<'a, Postgres>;
+use crate::db::Tx;
 
 /// How long a Host waits between moves it asks for itself; the console is
 /// not held to it.
@@ -63,11 +63,16 @@ struct Account {
 }
 
 async fn lock_account(tx: &mut Tx<'_>, account_id: i64) -> Result<Account, Failure> {
-    let row = sqlx::query(
+    let row = sqlx::query(&format!(
         "SELECT a.node_id, a.plan_id, p.max_devices, p.max_nodes
          FROM accounts a JOIN plans p ON p.id = a.plan_id
-         WHERE a.id = $1 FOR UPDATE OF a",
-    )
+         WHERE a.id = $1{}",
+        if crate::db::Dialect::of(tx) == crate::db::Dialect::Postgres {
+            " FOR UPDATE OF a"
+        } else {
+            ""
+        }
+    ))
     .bind(account_id)
     .fetch_one(&mut **tx)
     .await?;
@@ -266,7 +271,7 @@ pub(crate) async fn ticket_node(
 
 /// Whether `node_id` is active and open to `plan_id`.
 async fn node_allowed(tx: &mut Tx<'_>, plan_id: &str, node_id: &str) -> Result<bool, Failure> {
-    Ok(sqlx::query_scalar(
+    Ok(sqlx::query_scalar::<_, crate::db::Flag>(
         "SELECT EXISTS (
              SELECT 1 FROM plan_nodes pn JOIN nodes n ON n.id = pn.node_id
              WHERE pn.plan_id = $1 AND pn.node_id = $2 AND n.state = 'active'
@@ -275,7 +280,8 @@ async fn node_allowed(tx: &mut Tx<'_>, plan_id: &str, node_id: &str) -> Result<b
     .bind(plan_id)
     .bind(node_id)
     .fetch_one(&mut **tx)
-    .await?)
+    .await?
+    .0)
 }
 
 /// The nodes an account uses: its Hosts' nodes and its default node. With
@@ -290,7 +296,7 @@ async fn nodes_in_use(
     let mut nodes: Vec<String> = sqlx::query_scalar(
         "SELECT DISTINCT node_id FROM devices
          WHERE account_id = $1 AND role = 'host'
-           AND (CAST($2 AS BYTEA) IS NULL OR endpoint_id <> $2)",
+           AND ($2 IS NULL OR endpoint_id <> $2)",
     )
     .bind(account_id)
     .bind(moving)
@@ -402,11 +408,11 @@ pub(crate) async fn move_node(tx: &mut Tx<'_>, from: &str, to: &str) -> Result<u
 
 /// Opens a new node to every plan; administrators narrow it in the console.
 pub(crate) async fn open_node(
-    executor: impl sqlx::PgExecutor<'_>,
+    executor: impl sqlx::Executor<'_, Database = sqlx::Any>,
     node_id: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO plan_nodes (plan_id, node_id) SELECT id, $1 FROM plans
+        "INSERT INTO plan_nodes (plan_id, node_id) SELECT id, $1 FROM plans WHERE TRUE
          ON CONFLICT DO NOTHING",
     )
     .bind(node_id)
@@ -417,11 +423,11 @@ pub(crate) async fn open_node(
 
 /// Opens a new plan to every node.
 pub(crate) async fn open_plan(
-    executor: impl sqlx::PgExecutor<'_>,
+    executor: impl sqlx::Executor<'_, Database = sqlx::Any>,
     plan_id: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO plan_nodes (plan_id, node_id) SELECT $1, id FROM nodes
+        "INSERT INTO plan_nodes (plan_id, node_id) SELECT $1, id FROM nodes WHERE TRUE
          ON CONFLICT DO NOTHING",
     )
     .bind(plan_id)
@@ -431,7 +437,7 @@ pub(crate) async fn open_plan(
 }
 
 /// A device as the account's device list shows it.
-pub(crate) fn entry(row: &sqlx::postgres::PgRow) -> DeviceEntry {
+pub(crate) fn entry(row: &crate::db::Row) -> DeviceEntry {
     let last_seen = row.get::<i64, _>("last_seen_unix").max(0) as u64;
     DeviceEntry {
         endpoint_id: yttt_relay_ticket::hex(&row.get::<Vec<u8>, _>("endpoint_id")),
@@ -483,7 +489,7 @@ pub(crate) async fn list_nodes(
 }
 
 /// A node's load against its connection limit, and whether it is full.
-fn load(row: &sqlx::postgres::PgRow) -> (Option<u32>, bool) {
+fn load(row: &crate::db::Row) -> (Option<u32>, bool) {
     let limit: Option<i32> = row.get("max_connections");
     let connected = row
         .get::<Option<i32>, _>("last_connected_devices")
@@ -530,7 +536,7 @@ pub(crate) async fn switch_node(
         }
     }
     let now = now_unix();
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let account = lock_account(&mut tx, session.account_id).await?;
     let current = device(&mut tx, &host)
         .await?

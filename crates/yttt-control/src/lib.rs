@@ -9,6 +9,7 @@ mod admin;
 mod api;
 mod auth;
 mod config;
+mod db;
 mod identity;
 mod nodes;
 mod oauth;
@@ -30,7 +31,6 @@ use axum::{
     routing::{any, delete, get, patch, post},
 };
 use sha2::{Digest as _, Sha256};
-use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use yttt_relay_ticket::TicketSigner;
 use zeroize::Zeroizing;
@@ -55,7 +55,8 @@ pub enum StartError {
 }
 
 pub(crate) struct AppState {
-    pool: PgPool,
+    pool: db::Pool,
+    dialect: db::Dialect,
     signer: TicketSigner,
     config: ControlConfig,
     limits: auth::Limits,
@@ -85,12 +86,8 @@ impl Control {
             ),
             None => None,
         };
-        let pool = PgPoolOptions::new()
-            .max_connections(16)
-            .connect(&config.database_url)
-            .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
-        seed(&pool, &config).await?;
+        let (pool, dialect) = db::open(&config.database_url, 16).await?;
+        seed(&pool, dialect, &config).await?;
         if let Some(sealer) = &sealer {
             identity::import_providers(&pool, &config, sealer).await?;
         }
@@ -111,6 +108,7 @@ impl Control {
             pool,
             signer,
             config,
+            dialect,
             limits: auth::Limits::default(),
             sealer,
         });
@@ -295,11 +293,7 @@ async fn security_headers(mut response: Response) -> Response {
 /// Makes the account with `email` an administrator; the first administrator
 /// can only come from here.
 pub async fn promote_admin(config: &ControlConfig, email: &str) -> Result<bool, StartError> {
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&config.database_url)
-        .await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    let (pool, _) = db::open(&config.database_url, 1).await?;
     let updated = sqlx::query("UPDATE accounts SET role = 'admin' WHERE email = $1")
         .bind(email.trim().to_ascii_lowercase())
         .execute(&pool)
@@ -321,12 +315,8 @@ pub async fn create_admin(
         .map_err(|_| StartError::Refused("the email address is invalid"))?;
     web::check_password(password)
         .map_err(|_| StartError::Refused("a password is 8 to 256 characters"))?;
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&config.database_url)
-        .await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
-    seed(&pool, config).await?;
+    let (pool, dialect) = db::open(&config.database_url, 1).await?;
+    seed(&pool, dialect, config).await?;
     let settings = plans::settings(&pool).await?;
     let plan = match settings.signup_plan {
         Some(plan) => plan,
@@ -399,9 +389,13 @@ pub async fn create_admin(
 /// Seeds an empty database from the configuration: plans, nodes and the
 /// sign-up settings. What the database already has is managed in the console
 /// and left alone.
-async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    let has_plans: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM plans)")
+async fn seed(
+    pool: &db::Pool,
+    dialect: db::Dialect,
+    config: &ControlConfig,
+) -> Result<(), sqlx::Error> {
+    let mut tx = db::begin(pool, dialect).await?;
+    let crate::db::Flag(has_plans) = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM plans)")
         .fetch_one(&mut *tx)
         .await?;
     let now = clamp_i64(now_unix());
@@ -445,8 +439,8 @@ async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> 
     // Names that do not exist yet stay empty until the console sets them.
     let signup = config.signup.as_ref();
     sqlx::query(
-        "INSERT INTO settings (signup_enabled, signup_plan, signup_node)
-         VALUES ($1, (SELECT id FROM plans WHERE id = $2), (SELECT id FROM nodes WHERE id = $3))
+        "INSERT INTO settings (id, signup_enabled, signup_plan, signup_node)
+         VALUES (TRUE, $1, (SELECT id FROM plans WHERE id = $2), (SELECT id FROM nodes WHERE id = $3))
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(signup.is_some_and(|signup| signup.enabled))

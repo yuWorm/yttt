@@ -129,7 +129,7 @@ impl FromRequestParts<Arc<AppState>> for AnySession {
         Ok(Self {
             account_id: row.get("id"),
             token_hash,
-            suspended: row.get("suspended"),
+            suspended: crate::db::flag(&row, "suspended"),
             role: row.get("role"),
             console: from_cookie,
             signed_in_unix: row.get::<i64, _>("signed_in_unix").max(0) as u64,
@@ -333,13 +333,11 @@ pub(crate) async fn end_sessions(
     account_id: i64,
     except: Option<&[u8]>,
 ) -> Result<(), Failure> {
-    sqlx::query(
-        "DELETE FROM sessions WHERE account_id = $1 AND ($2::BYTEA IS NULL OR token_hash <> $2)",
-    )
-    .bind(account_id)
-    .bind(except)
-    .execute(&state.pool)
-    .await?;
+    sqlx::query("DELETE FROM sessions WHERE account_id = $1 AND ($2 IS NULL OR token_hash <> $2)")
+        .bind(account_id)
+        .bind(except)
+        .execute(&state.pool)
+        .await?;
     Ok(())
 }
 

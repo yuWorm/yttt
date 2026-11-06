@@ -10,7 +10,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row as _};
+use sqlx::Row as _;
 
 use crate::{AppState, Failure, admin::audit, auth::AdminSession, clamp_i64, now_unix, placement};
 
@@ -88,7 +88,7 @@ pub(crate) struct SettingsChange {
     signup_node: Option<String>,
 }
 
-pub(crate) async fn settings(pool: &PgPool) -> Result<Settings, sqlx::Error> {
+pub(crate) async fn settings(pool: &crate::db::Pool) -> Result<Settings, sqlx::Error> {
     let row = sqlx::query("SELECT signup_enabled, signup_plan, signup_node FROM settings")
         .fetch_optional(pool)
         .await?;
@@ -99,7 +99,7 @@ pub(crate) async fn settings(pool: &PgPool) -> Result<Settings, sqlx::Error> {
             signup_node: None,
         },
         |row| Settings {
-            signup_enabled: row.get("signup_enabled"),
+            signup_enabled: crate::db::flag(&row, "signup_enabled"),
             signup_plan: row.get("signup_plan"),
             signup_node: row.get("signup_node"),
         },
@@ -137,7 +137,7 @@ pub(crate) async fn list(
                     .filter(|(plan, _)| *plan == row.get::<String, _>("id"))
                     .map(|(_, node)| node.clone())
                     .collect(),
-                archived: row.get("archived"),
+                archived: crate::db::flag(row, "archived"),
                 sort: row.get("sort"),
                 accounts: row.get("accounts"),
             })
@@ -197,7 +197,7 @@ pub(crate) async fn create(
         "the throttled rate must be positive",
     )?;
     let devices = positive(plan.max_devices, "the device limit must be positive")?;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let inserted = sqlx::query(
         "INSERT INTO plans (id, name, description, rate_bps, burst_bytes, monthly_bytes,
                             throttled_rate_bps, max_devices, sort, created_unix, max_nodes)
@@ -247,12 +247,15 @@ pub(crate) async fn change(
     Path(plan_id): Path<String>,
     Json(change): Json<PlanChange>,
 ) -> Result<StatusCode, Failure> {
-    let mut tx = state.pool.begin().await?;
-    let current = sqlx::query("SELECT * FROM plans WHERE id = $1 FOR UPDATE")
-        .bind(&plan_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(Failure::not_found)?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let current = sqlx::query(&format!(
+        "SELECT * FROM plans WHERE id = $1{}",
+        state.dialect.for_update()
+    ))
+    .bind(&plan_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(Failure::not_found)?;
     if change.archived == Some(true) {
         let signup: Option<String> = sqlx::query_scalar("SELECT signup_plan FROM settings")
             .fetch_optional(&mut *tx)
@@ -312,7 +315,9 @@ pub(crate) async fn change(
     let monthly = change
         .monthly_bytes
         .map_or_else(|| current.get("monthly_bytes"), clamp_i64);
-    let archived = change.archived.unwrap_or_else(|| current.get("archived"));
+    let archived = change
+        .archived
+        .unwrap_or_else(|| crate::db::flag(&current, "archived"));
     let sort = change.sort.unwrap_or_else(|| current.get("sort"));
     for (field, after) in [
         ("rate_bps", rate),
@@ -335,7 +340,7 @@ pub(crate) async fn change(
     );
     note(
         "archived",
-        current.get::<bool, _>("archived").to_string(),
+        crate::db::flag(&current, "archived").to_string(),
         archived.to_string(),
     );
     if let Some(nodes) = &change.nodes {
@@ -419,12 +424,13 @@ pub(crate) async fn remove(
     admin: AdminSession,
     Path(plan_id): Path<String>,
 ) -> Result<StatusCode, Failure> {
-    let mut tx = state.pool.begin().await?;
-    let row = sqlx::query(
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let row = sqlx::query(&format!(
         "SELECT (SELECT COUNT(*) FROM accounts a WHERE a.plan_id = p.id) AS accounts,
                 EXISTS (SELECT 1 FROM settings s WHERE s.signup_plan = p.id) AS signup
-         FROM plans p WHERE p.id = $1 FOR UPDATE",
-    )
+         FROM plans p WHERE p.id = $1{}",
+        state.dialect.for_update()
+    ))
     .bind(&plan_id)
     .fetch_optional(&mut *tx)
     .await?
@@ -434,7 +440,7 @@ pub(crate) async fn remove(
             "accounts use this plan; move them or archive the plan instead",
         ));
     }
-    if row.get::<bool, _>("signup") {
+    if crate::db::flag(&row, "signup") {
         return Err(Failure::conflict(
             "new accounts get this plan; choose another sign-up plan first",
         ));
@@ -468,13 +474,14 @@ pub(crate) async fn change_settings(
     admin: AdminSession,
     Json(change): Json<SettingsChange>,
 ) -> Result<StatusCode, Failure> {
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     if let Some(plan) = &change.signup_plan {
-        let archived: Option<bool> = sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
-            .bind(plan)
-            .fetch_optional(&mut *tx)
-            .await?;
-        match archived {
+        let archived: Option<crate::db::Flag> =
+            sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
+                .bind(plan)
+                .fetch_optional(&mut *tx)
+                .await?;
+        match archived.map(bool::from) {
             None => return Err(Failure::bad_request("unknown plan")),
             Some(true) => return Err(Failure::bad_request("the plan is archived")),
             Some(false) => {}
@@ -493,8 +500,8 @@ pub(crate) async fn change_settings(
         }
     }
     sqlx::query(
-        "INSERT INTO settings (signup_enabled, signup_plan, signup_node)
-         VALUES (COALESCE($1, FALSE), $2, $3)
+        "INSERT INTO settings (id, signup_enabled, signup_plan, signup_node)
+         VALUES (TRUE, COALESCE($1, FALSE), $2, $3)
          ON CONFLICT (id) DO UPDATE SET
              signup_enabled = COALESCE($1, settings.signup_enabled),
              signup_plan = COALESCE($2, settings.signup_plan),

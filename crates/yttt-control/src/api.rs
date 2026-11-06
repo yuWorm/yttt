@@ -18,7 +18,9 @@ use yttt_relay_ticket::{
 use crate::{
     AppState, Failure,
     auth::{self, AnySession, Attempt, Session},
-    clamp_i64, day_of, month_of, now_unix, placement, sha256,
+    clamp_i64, day_of,
+    db::{BATCH, placeholders},
+    month_of, now_unix, placement, sha256,
     web::{check_password, normalize_email},
 };
 
@@ -129,7 +131,7 @@ pub(crate) async fn me(State(state): Shared, session: AnySession) -> AppResult<J
         relay_url: row.get("url"),
         month_upstream_bytes: row.get::<i64, _>("used") as u64,
         monthly_bytes: row.get::<i64, _>("monthly_bytes") as u64,
-        suspended: row.get("suspended"),
+        suspended: crate::db::flag(&row, "suspended"),
         devices: row.get::<i64, _>("devices") as u32,
         max_devices: row.get::<i32, _>("max_devices") as u32,
         role: session.role,
@@ -159,7 +161,7 @@ pub(crate) async fn register_device(
                 .ok_or(Failure::bad_request("the Host key must be 64 hex digits"))
         })
         .transpose()?;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let status = placement::register(
         &mut tx,
         session.account_id,
@@ -202,15 +204,15 @@ pub(crate) async fn remove_device(
     Path(endpoint_id): Path<String>,
 ) -> AppResult<StatusCode> {
     let endpoint_id = yttt_relay_ticket::parse_key(&endpoint_id).ok_or_else(Failure::not_found)?;
-    let mut tx = state.pool.begin().await?;
-    let owned: bool = sqlx::query_scalar(
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let owned: crate::db::Flag = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM devices WHERE endpoint_id = $1 AND account_id = $2)",
     )
     .bind(&endpoint_id[..])
     .bind(session.account_id)
     .fetch_one(&mut *tx)
     .await?;
-    if !owned {
+    if !owned.0 {
         return Err(Failure::not_found());
     }
     // A Host takes its Clients along.
@@ -237,7 +239,7 @@ pub(crate) async fn issue_ticket(
                 .ok_or(Failure::bad_request("the Host key must be 64 hex digits"))
         })
         .transpose()?;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let node_id = placement::ticket_node(&mut tx, session.account_id, &endpoint_id, host).await?;
     let row = sqlx::query(
         "SELECT a.suspended, n.url, p.rate_bps, p.burst_bytes, p.monthly_bytes,
@@ -254,7 +256,7 @@ pub(crate) async fn issue_ticket(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
-    if row.get::<bool, _>("suspended") {
+    if crate::db::flag(&row, "suspended") {
         return Err(Failure::forbidden("the account is suspended"));
     }
     let over_quota = row.get::<i64, _>("used") >= row.get::<i64, _>("monthly_bytes");
@@ -358,30 +360,42 @@ pub(crate) async fn node_usage(
         .iter()
         .map(|usage| clamp_i64(usage.account_id))
         .collect();
-    let mut tx = state.pool.begin().await?;
-    let registered: Vec<(Vec<u8>, i64, String)> = sqlx::query_as(
-        "SELECT endpoint_id, account_id, node_id FROM devices WHERE endpoint_id = ANY($1)",
-    )
-    .bind(&reported)
-    .fetch_all(&mut *tx)
-    .await?;
-    sqlx::query(
-        "UPDATE devices SET last_seen_unix = $3 WHERE endpoint_id = ANY($1) AND node_id = $2",
-    )
-    .bind(&reported)
-    .bind(&node_id)
-    .bind(clamp_i64(now))
-    .execute(&mut *tx)
-    .await?;
-    let on_node: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE node_id = $1 AND id = ANY($2)
-         UNION
-         SELECT account_id FROM devices WHERE node_id = $1 AND account_id = ANY($2)",
-    )
-    .bind(&node_id)
-    .bind(&ids)
-    .fetch_all(&mut *tx)
-    .await?;
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let mut registered: Vec<(Vec<u8>, i64, String)> = Vec::new();
+    for keys in reported.chunks(BATCH) {
+        let list = placeholders(1, keys.len());
+        let sql = format!(
+            "SELECT endpoint_id, account_id, node_id FROM devices WHERE endpoint_id IN ({list})"
+        );
+        let mut found = sqlx::query_as(&sql);
+        for key in keys {
+            found = found.bind(key.clone());
+        }
+        registered.extend(found.fetch_all(&mut *tx).await?);
+        let list = placeholders(3, keys.len());
+        let sql = format!(
+            "UPDATE devices SET last_seen_unix = $1 WHERE node_id = $2 AND endpoint_id IN ({list})"
+        );
+        let mut seen = sqlx::query(&sql).bind(clamp_i64(now)).bind(&node_id);
+        for key in keys {
+            seen = seen.bind(key.clone());
+        }
+        seen.execute(&mut *tx).await?;
+    }
+    let mut on_node: Vec<i64> = Vec::new();
+    for accounts in ids.chunks(BATCH) {
+        let list = placeholders(2, accounts.len());
+        let sql = format!(
+            "SELECT id FROM accounts WHERE node_id = $1 AND id IN ({list})
+             UNION
+             SELECT account_id FROM devices WHERE node_id = $1 AND account_id IN ({list})"
+        );
+        let mut query = sqlx::query_scalar::<_, i64>(&sql).bind(&node_id);
+        for account in accounts {
+            query = query.bind(*account);
+        }
+        on_node.extend(query.fetch_all(&mut *tx).await?);
+    }
     // A node bills and steers only accounts it has to do with: it is their
     // default node or one of their devices belongs on it. Reporting someone
     // else's device keys, which are public, earns nothing. A device that just
@@ -416,18 +430,23 @@ pub(crate) async fn node_usage(
         .execute(&mut *tx)
         .await?;
     }
-    let rows = sqlx::query(
-        "SELECT a.id, a.suspended, p.rate_bps, p.burst_bytes, p.monthly_bytes,
-                p.throttled_rate_bps, COALESCE(u.upstream_bytes, 0) AS used
-         FROM accounts a
-         JOIN plans p ON p.id = a.plan_id
-         LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $2
-         WHERE a.id = ANY($1)",
-    )
-    .bind(&ids)
-    .bind(month)
-    .fetch_all(&mut *tx)
-    .await?;
+    let mut rows = Vec::new();
+    for accounts in ids.chunks(BATCH) {
+        let list = placeholders(2, accounts.len());
+        let sql = format!(
+            "SELECT a.id, a.suspended, p.rate_bps, p.burst_bytes, p.monthly_bytes,
+                    p.throttled_rate_bps, COALESCE(u.upstream_bytes, 0) AS used
+             FROM accounts a
+             JOIN plans p ON p.id = a.plan_id
+             LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $1
+             WHERE a.id IN ({list})"
+        );
+        let mut query = sqlx::query(&sql).bind(month);
+        for account in accounts {
+            query = query.bind(*account);
+        }
+        rows.extend(query.fetch_all(&mut *tx).await?);
+    }
     sqlx::query("DELETE FROM node_revocations WHERE revoked_unix < $1")
         .bind(clamp_i64(
             now.saturating_sub(placement::REVOCATION_KEEP_SECS),
@@ -458,7 +477,7 @@ pub(crate) async fn node_usage(
                 // to do with, and everyone on a disabled node get nothing.
                 _ if disabled => Standing::Suspended,
                 None => Standing::Suspended,
-                Some(row) if row.get::<bool, _>("suspended") => Standing::Suspended,
+                Some(row) if crate::db::flag(row, "suspended") => Standing::Suspended,
                 Some(row) if row.get::<i64, _>("used") >= row.get::<i64, _>("monthly_bytes") => {
                     let rate = row.get::<i32, _>("throttled_rate_bps") as u32;
                     Standing::Throttled {
@@ -526,25 +545,26 @@ async fn record_load(
     upstream_bytes: u64,
 ) -> AppResult<()> {
     let connected = i32::try_from(connected).unwrap_or(i32::MAX);
-    let mut tx = state.pool.begin().await?;
-    sqlx::query(
+    let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
+    let greatest = state.dialect.greatest();
+    sqlx::query(&format!(
         "INSERT INTO node_samples (node_id, bucket_unix, connections_max, upstream_bytes)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (node_id, bucket_unix) DO UPDATE SET
-             connections_max = GREATEST(node_samples.connections_max, EXCLUDED.connections_max),
-             upstream_bytes = node_samples.upstream_bytes + EXCLUDED.upstream_bytes",
-    )
+             connections_max = {greatest}(node_samples.connections_max, EXCLUDED.connections_max),
+             upstream_bytes = node_samples.upstream_bytes + EXCLUDED.upstream_bytes"
+    ))
     .bind(node_id)
     .bind(clamp_i64(now - now % SAMPLE_SECS))
     .bind(connected)
     .bind(clamp_i64(upstream_bytes))
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
+    sqlx::query(&format!(
         "INSERT INTO node_days (node_id, day, connections_max) VALUES ($1, $2, $3)
          ON CONFLICT (node_id, day) DO UPDATE SET
-             connections_max = GREATEST(node_days.connections_max, EXCLUDED.connections_max)",
-    )
+             connections_max = {greatest}(node_days.connections_max, EXCLUDED.connections_max)"
+    ))
     .bind(node_id)
     .bind(day_of(now))
     .bind(connected)
