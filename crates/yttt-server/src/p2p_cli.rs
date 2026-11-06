@@ -13,7 +13,8 @@ use yttt_protocol::{
     ConnectionChannel, EndpointKey, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
     p2p::{DevicePreset, PairedDevice},
     remote_access::{
-        P2pStatus, PairingState, RemoteAccessRequest, RemoteAccessResponse, RemoteAccessStatus,
+        P2pStatus, PairingState, RelayAccount, RemoteAccessRequest, RemoteAccessResponse,
+        RemoteAccessStatus, SecretText,
     },
 };
 use yttt_transport_local::{ClientIdentity, LocalConnector};
@@ -35,9 +36,16 @@ pub(crate) enum P2pCommand {
         endpoint_id: EndpointKey,
         reset_tls: bool,
     },
+    /// Joins the relay of a paid relay account; the password comes from
+    /// `YTTT_RELAY_PASSWORD` or the terminal.
+    Login {
+        control_url: String,
+        email: String,
+    },
+    Logout,
 }
 
-pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]> [--profile <id>] [--state-root <absolute path>]";
+pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]|login <control url> <email>|logout> [--profile <id>] [--state-root <absolute path>]";
 
 /// Parses what follows `p2p`, leaving `--profile` and `--state-root` for the caller.
 pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError> {
@@ -60,6 +68,20 @@ pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError>
         "disable" => P2pCommand::Disable,
         "pair" => P2pCommand::Pair,
         "devices" => P2pCommand::Devices,
+        "logout" => P2pCommand::Logout,
+        "login" => {
+            if args.len() < 2 {
+                return Err(usage());
+            }
+            let control_url = args.remove(0).into_string().map_err(|_| usage())?;
+            let email = args.remove(0).into_string().map_err(|_| usage())?;
+            if !(control_url.starts_with("http://") || control_url.starts_with("https://")) {
+                return Err(ServerError::InvalidArgument(
+                    "the control plane must be an http:// or https:// URL".into(),
+                ));
+            }
+            P2pCommand::Login { control_url, email }
+        }
         "enable" => {
             let relay_url = match args.iter().position(|argument| argument == "--relay") {
                 Some(index) => {
@@ -161,6 +183,36 @@ pub(crate) async fn run(paths: ServerPaths, command: P2pCommand) -> Result<(), S
             write_json(&listed(admin.devices().await?))
         }
         P2pCommand::Pair => pair(&admin).await,
+        P2pCommand::Login { control_url, email } => {
+            let password = match std::env::var("YTTT_RELAY_PASSWORD") {
+                Ok(password) => password,
+                Err(_) => prompt("password: ")
+                    .await?
+                    .trim_end_matches(['\r', '\n'])
+                    .to_owned(),
+            };
+            let session = yttt_control_client::ControlClient::new(&control_url)
+                .map_err(|error| ServerError::InvalidArgument(error.to_string()))?
+                .login(&email, &password)
+                .await
+                .map_err(|error| ServerError::InvalidArgument(error.to_string()))?;
+            admin
+                .send(RemoteAccessRequest::SetRelayAccount {
+                    account: Some(RelayAccount {
+                        control_url: session.control_url.clone(),
+                        account_id: session.account_id,
+                        session: SecretText(session.token.clone()),
+                    }),
+                })
+                .await?;
+            write_json(&Summary::of(&admin.status().await?))
+        }
+        P2pCommand::Logout => {
+            admin
+                .send(RemoteAccessRequest::SetRelayAccount { account: None })
+                .await?;
+            write_json(&Summary::of(&admin.status().await?))
+        }
     }
 }
 

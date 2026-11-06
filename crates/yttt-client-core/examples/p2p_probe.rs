@@ -3,6 +3,12 @@
 //! takes. For testing P2P between machines without a desktop.
 //!
 //!     cargo run -p yttt-client-core --example p2p_probe -- '<pairing code>' [--relay-only] [--seconds 30]
+//!         [--account <control url> <email>]
+//!
+//! With `--account` the probe signs in to a paid relay account (password from
+//! `YTTT_RELAY_PASSWORD` or the terminal), registers its key and joins the
+//! relay with a ticket, as the desktop app does; it removes the key from the
+//! account when it ends.
 //!
 //! The device key lives only in this process: revoke the device on the Host
 //! afterwards.
@@ -23,9 +29,10 @@ async fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let code = args
         .next()
-        .ok_or("usage: p2p_probe '<pairing code>' [--relay-only] [--seconds N]")?;
+        .ok_or("usage: p2p_probe '<pairing code>' [--relay-only] [--seconds N] [--account <control url> <email>]")?;
     let mut direct = DirectPaths::Any;
     let mut seconds = 30_u64;
+    let mut account = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--relay-only" => direct = DirectPaths::Off,
@@ -35,6 +42,12 @@ async fn main() -> Result<(), String> {
                     .and_then(|value| value.parse().ok())
                     .ok_or("--seconds needs a number")?;
             }
+            "--account" => {
+                let (Some(control_url), Some(email)) = (args.next(), args.next()) else {
+                    return Err("--account needs a control URL and an email".into());
+                };
+                account = Some((control_url, email));
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -42,13 +55,37 @@ async fn main() -> Result<(), String> {
 
     let mut secret = [0_u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut secret);
-    let endpoint = IrohEndpoint::bind(EndpointConfig {
-        secret,
-        relay: code
+    let session = match &account {
+        Some((control_url, email)) => Some(sign_in(control_url, email).await?),
+        None => None,
+    };
+    let relay = match &session {
+        Some(session) => {
+            session
+                .register_device(&secret, "p2p probe")
+                .await
+                .map_err(|error| error.to_string())?;
+            let ticket = session
+                .ticket(&secret)
+                .await
+                .map_err(|error| error.to_string())?;
+            println!("ticket for {} at {}", ticket.node_id, ticket.relay_url);
+            if code.relay_url.as_deref() != Some(ticket.relay_url.as_str()) {
+                println!(
+                    "note: the Host invited through {:?}; this account's relay is {}",
+                    code.relay_url, ticket.relay_url
+                );
+            }
+            Some(ticket.target())
+        }
+        None => code
             .relay_url
             .clone()
-            .map(|url| RelayTarget { url, token: None })
-            .into(),
+            .map(|url| RelayTarget { url, token: None }),
+    };
+    let endpoint = IrohEndpoint::bind(EndpointConfig {
+        secret,
+        relay: relay.into(),
         alpns: Vec::new(),
         gate: Arc::new(OpenGate),
         direct,
@@ -116,5 +153,37 @@ async fn main() -> Result<(), String> {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     endpoint.close().await;
+    if let Some(session) = session {
+        let key = yttt_relay_ticket::public_key(&secret);
+        if let Err(error) = session.remove_device(&key).await {
+            println!("could not remove the probe's key from the account: {error}");
+        }
+    }
     Ok(())
+}
+
+async fn sign_in(
+    control_url: &str,
+    email: &str,
+) -> Result<yttt_control_client::ControlSession, String> {
+    let password = match std::env::var("YTTT_RELAY_PASSWORD") {
+        Ok(password) => password,
+        Err(_) => {
+            use std::io::Write as _;
+            print!("password for {email}: ");
+            std::io::stdout()
+                .flush()
+                .map_err(|error| error.to_string())?;
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|error| error.to_string())?;
+            line.trim_end_matches(['\r', '\n']).to_owned()
+        }
+    };
+    yttt_control_client::ControlClient::new(control_url)
+        .map_err(|error| error.to_string())?
+        .login(email, &password)
+        .await
+        .map_err(|error| error.to_string())
 }

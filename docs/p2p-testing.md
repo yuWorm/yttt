@@ -85,6 +85,21 @@ Host 开启 P2P 时填这个地址；设备不用单独设置，配对码里带�
 4. 照常配对：设备已登录时，配对与之后的连接都经账号的 relay 节点，即使配对码里的 relay 地址不同。
 5. 在 Host 页面的账号信息里应能看到本月用量增长；在控制面封停账号（`POST /v1/dev/accounts/<id>/suspension {"suspended":true}`）后，只走 relay 的会话约 30 秒内断开。
 
+没有桌面时用命令行走同样的流程：
+
+```sh
+# Host（无桌面）：登录账号后 Host 自动登记密钥、取 ticket 并加入账号的 relay
+yttt-server p2p enable
+YTTT_RELAY_PASSWORD='…' yttt-server p2p login https://<控制面> me@example.com
+yttt-server p2p pair
+
+# 设备：--account 让 probe 也登录同一账号，带 ticket 加入 relay；结束时从账号移除它的密钥
+YTTT_RELAY_PASSWORD='…' p2p_probe '<配对码>' --relay-only --seconds 30 \
+    --account https://<控制面> me@example.com
+```
+
+不设 `YTTT_RELAY_PASSWORD` 时会在终端询问密码（输入可见）。`yttt-server p2p logout` 让 Host 退出账号。
+
 每把设备密钥各占套餐的一个设备名额：Host 一个，每台设备对每台 Host 各一个。忘记一台配对的 Host 时会从账号移除对应的密钥。
 
 ## 6. 出问题时收集什么

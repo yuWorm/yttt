@@ -13661,6 +13661,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "yttt-client-core",
+ "yttt-control-client",
  "yttt-core",
  "yttt-host",
  "yttt-protocol",
