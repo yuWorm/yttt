@@ -13,6 +13,16 @@ database_url = "postgres://postgres:CHANGE-ME@postgres:5432/postgres"
 # every relay ticket and needs every node redeployed.
 ticket_secret = "CHANGE-ME"
 
+# Optional: sign in to the console with GitHub or Google. Callbacks go to
+# {public_url}/v1/auth/github/callback and .../google/callback; Google needs
+# public_url on https://.
+# [oauth.github]
+# client_id = "…"
+# client_secret = "…"
+# [oauth.google]
+# client_id = "…"
+# client_secret = "…"
+
 # Seeds for an empty database only; afterwards plans and sign-up are managed
 # in the console.
 [signup]

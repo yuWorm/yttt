@@ -90,7 +90,8 @@ Host 开启 P2P 时填这个地址；设备不用单独设置，配对码里带�
 ```sh
 # Host（无桌面）：登录账号后 Host 自动登记密钥、取 ticket 并加入账号的 relay
 yttt-server p2p enable
-YTTT_RELAY_PASSWORD='…' yttt-server p2p login https://<控制面> me@example.com
+yttt-server p2p login https://<控制面>    # 显示短码与二维码，在控制台 /device 确认
+# 或：YTTT_RELAY_PASSWORD='…' yttt-server p2p login https://<控制面> --password me@example.com
 yttt-server p2p pair
 
 # 设备：--account 让 probe 也登录同一账号，带 ticket 加入 relay；结束时从账号移除它的密钥

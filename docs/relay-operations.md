@@ -39,6 +39,35 @@ docker compose exec -T control yttt-control create-admin --config /etc/yttt/cont
 
 账号落在注册设置（首次启动时取自 `[signup]`）的套餐和节点上；该节点不存在时会以“待部署”状态建出来，登录控制台后在节点页“重新生成部署命令”把它部署起来，注册随即开放。已有账号要升为管理员用 `yttt-control promote-admin --config control.toml <email>`。
 
+### GitHub / Google 登录（可选）
+
+配置后，控制台的登录、注册页出现“使用 GitHub / Google 登录”，账号页可以关联、解除关联，用户可以完全不设密码。需要 `public_url`，Google 还要求它是 `https://`；不满足时控制面拒绝启动并说明原因。
+
+- GitHub：Settings → Developer settings → **OAuth Apps** → New OAuth App（不是 GitHub App）。Homepage URL 填 `public_url`，Authorization callback URL 填 `{public_url}/v1/auth/github/callback`。
+- Google：Google Cloud Console → APIs & Services → Credentials → Create credentials → OAuth client ID，类型 Web application，Authorized redirect URIs 填 `{public_url}/v1/auth/google/callback`；OAuth consent screen 只需 `openid`、`email`。
+
+```toml
+[oauth.github]
+client_id = "…"
+client_secret = "…"
+
+[oauth.google]
+client_id = "…"
+client_secret = "…"
+```
+
+改完重启控制面（`docker compose up -d`）。规则：
+
+- 同一个 GitHub / Google 账号只认它的不变 id，不认邮箱。新邮箱直接注册（遵守注册设置），**已被注册的邮箱不会自动合并**：提示用户用密码登录后在“账号”页关联；如果该邮箱是别人抢注的，由管理员处理。
+- 没有密码的账号只能在刚登录后 5 分钟内设置密码，也不能解除最后一种登录方式。
+
+### 应用与无屏 Host 的登录
+
+- 应用“在浏览器中登录”打开控制台的授权页，用户点“允许”后浏览器把结果交回本机应用（只回到 `127.0.0.1`）。
+- `yttt-server p2p login <控制面地址>` 显示短码和二维码，在任意设备上打开 `{public_url}/device` 输入或扫码确认；`--password <邮箱>` 仍可用密码（脚本化部署）。
+- 这两种方式得到的是**设备会话**：只能登记设备、取 ticket、查看账号，不能修改账号与登录方式、确认别的登录或进入管理页。即使用户被骗点了“允许”，交出去的也只有 relay 用量。
+- 升级到支持这些登录的版本后，已有的登录一律按设备会话处理：应用照常可用，控制台需要重新登录一次。
+
 ## 2. 部署节点
 
 1. 控制台 → 节点 → 新建节点：填 ID（如 `tokyo-1`）、显示名，可选域名。
@@ -83,7 +112,8 @@ packaging/relay-dev/rehearse-node.sh '<控制台给出的部署命令>' linux/ar
 
 ## 4. 安全边界
 
-- 登录、注册、节点登记共用按来源的限流；同一邮箱连续失败 10 次锁定 15 分钟。
-- 浏览器会话是 HttpOnly、SameSite=Strict 的 cookie，所有修改请求还要带控制台专用请求头。
+- 登录、注册、节点登记、发起第三方登录、发起与确认短码共用按来源的限流；同一邮箱连续失败 10 次锁定 15 分钟。限流计数在进程内存里，多个控制面实例各算各的；登录流程本身的状态都在数据库，重启不丢。
+- 浏览器会话是 HttpOnly、SameSite=Strict 的 cookie，所有修改请求还要带控制台专用请求头。cookie 里只认控制台会话；应用与命令行的设备会话放进 cookie 也不算登录。
+- 应用的浏览器登录用 PKCE，授权码只发往 `127.0.0.1` / `[::1]`，60 秒内有效、只能用一次；短码 10 分钟有效。
 - 节点只能为自己节点上的账号计费、取得它们的状态。
 - 控制面分发节点程序：控制面一旦被攻破，攻击者能控制之后新部署的节点，但仍然接触不到任何用户的电脑；用户设备之间的身份与授权只在设备之间建立。

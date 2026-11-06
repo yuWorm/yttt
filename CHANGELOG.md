@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 应用里的 relay 账号改为“在浏览器中登录”：在控制台点“允许”即可，不再输入密码；无桌面 Host 用 `yttt-server p2p login <控制面>` 显示短码，在任意设备上确认。原邮箱密码登录保留为备选（命令行用 `--password <邮箱>`）。
+- The relay account in the app now signs in through the browser: click Allow on the console instead of typing a password. Headless Hosts run `yttt-server p2p login <control plane>` and confirm the short code it shows from any device. Email and password remain available (`--password <email>` on the command line).
+- relay 控制台支持用 GitHub、Google 登录与注册，可在账号页关联或解除关联；同邮箱的已有账号不会被自动合并。应用与命令行的登录只能使用 relay，不能修改账号或进入管理页；升级后控制台需要重新登录一次。
+- The relay console signs in and signs up with GitHub or Google, which can be linked and unlinked on the account page; an existing account with the same email is never merged automatically. Sign-ins from the app and the command line can only use the relay, not change the account or administer; after upgrading, the console asks to sign in once more.
+
 ## 0.4.0 - 2026-11-06
 
 - 新增 P2P 远程访问：Host 显示二维码或配对码，设备扫码配对后无需公网 IP 或端口转发即可连接；设备之间优先直连，打不通时经 relay 中转。配对与连接的身份验证只在 Host 与设备之间进行，relay 与控制面只转发端到端加密的流量。

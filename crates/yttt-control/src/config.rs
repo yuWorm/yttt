@@ -180,3 +180,33 @@ fn default_ticket_ttl_secs() -> u64 {
 fn default_session_ttl_secs() -> u64 {
     30 * 24 * 3600
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXAMPLE: &str = include_str!("../../../packaging/relay/control.example.toml");
+
+    #[test]
+    fn the_example_configuration_parses_with_and_without_oauth() {
+        let config = ControlConfig::from_toml(EXAMPLE).unwrap();
+        assert!(config.oauth.github.is_none());
+        let enabled = EXAMPLE
+            .lines()
+            .map(|line| {
+                let uncommented = line.strip_prefix("# ").unwrap_or(line);
+                if uncommented.starts_with("[oauth.")
+                    || uncommented.starts_with("client_id")
+                    || uncommented.starts_with("client_secret")
+                {
+                    uncommented
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let config = ControlConfig::from_toml(&enabled).unwrap();
+        assert!(config.oauth.github.is_some() && config.oauth.google.is_some());
+    }
+}
