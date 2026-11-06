@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- 新增 P2P 远程访问：Host 显示二维码或配对码，设备扫码配对后无需公网 IP 或端口转发即可连接；设备之间优先直连，打不通时经 relay 中转。配对与连接的身份验证只在 Host 与设备之间进行，relay 与控制面只转发端到端加密的流量。
+- Add P2P remote access: the Host shows a QR code or pairing code, and a device that scans it connects without a public IP or port forwarding. Devices connect directly when they can and through a relay otherwise. Pairing and connections are authenticated only between the Host and its devices; relays and the control plane carry end-to-end encrypted traffic.
+- 新增付费 relay 账号：在“远程访问此电脑”里登录账号后，Host 与设备经账号所在的 relay 节点互通，按套餐限速、计量。无桌面 Host 用 `yttt-server p2p login`。
+- Add paid relay accounts: once signed in under "Remote access to this computer", the Host and its devices meet through the account's relay node, rate-limited and metered by plan. Headless Hosts use `yttt-server p2p login`.
+- 新增 relay 服务端：控制面与网页控制台（账号、设备、用量、套餐、节点、设置、审计日志）、一键复制的节点部署命令（自动登记上线，可选域名自动申请证书），镜像发布在 `ghcr.io/yuworm/yttt-relay`。
+- Add the relay service: a control plane with a web console (accounts, devices, usage, plans, nodes, settings, audit log), one-command node deployment that enrolls the node and optionally obtains a certificate for its domain, and an image published as `ghcr.io/yuworm/yttt-relay`.
+
 ## 0.3.21 - 2026-11-04
 
 - 修复远程 TLS 连接无法在已有终端中输入：同一时刻由一个客户端控制 Host 上的全部终端，新连接的客户端首次使用终端时自动接管；失去控制的客户端重连后保持只读，可以在状态栏或只读终端顶部点「接管终端」拿回控制。控制方断开超过 60 秒后，控制权交给最近连上的客户端。

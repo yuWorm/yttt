@@ -1,0 +1,35 @@
+# A production control plane: PostgreSQL and the published image. Put an
+# HTTPS reverse proxy in front of port 8080 (set trusted_proxy = true and an
+# https:// public_url in control.toml), then deploy relay nodes from the
+# console. See docs/relay-operations.md.
+#
+#   cp control.example.toml control.toml   # and fill it in
+#   POSTGRES_PASSWORD=… docker compose up -d
+#   docker compose exec -T control yttt-control create-admin \
+#       --config /etc/yttt/control.toml you@example.com   # password on stdin
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 30
+
+  control:
+    image: ghcr.io/yuworm/yttt-relay:${YTTT_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - ./control.toml:/etc/yttt/control.toml:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -290,9 +290,92 @@ jobs:
           path: dist/yttt-server-*
           if-no-files-found: error
 
+  relay:
+    name: Build relay service (linux-${{ matrix.arch }})
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
+    needs:
+      - metadata
+      - validation-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            docker: amd64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            docker: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+      # Static binaries: relay nodes download them onto any Linux server, and
+      # the control-plane image runs on a bare Debian base.
+      - name: Activate pinned Rust toolchain with the musl target
+        run: |
+          rustup show active-toolchain
+          rustup target add "${{ matrix.arch }}-unknown-linux-musl"
+      - name: Install musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
+      - name: Restore bounded Rust compiler cache
+        uses: ./.github/actions/rust-cache
+      - name: Build relay node and control plane
+        env:
+          CC: musl-gcc
+        run: |
+          cargo build --locked --release -p yttt-relay -p yttt-control \
+            --target "${{ matrix.arch }}-unknown-linux-musl"
+      - name: Package static binaries
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          out="target/$ARCH-unknown-linux-musl/release"
+          strip "$out/yttt-relay" "$out/yttt-control"
+          file "$out/yttt-relay" | grep -q "statically linked"
+          mkdir -p dist
+          cp "$out/yttt-relay" "dist/yttt-relay-$VERSION-linux-$ARCH"
+          cp "$out/yttt-control" "dist/yttt-control-$VERSION-linux-$ARCH"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-relay-${{ matrix.arch }}
+          retention-days: 1
+          path: dist/yttt-*
+          if-no-files-found: error
+
+  console:
+    name: Build relay web console
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
+    needs:
+      - metadata
+      - validation-gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.18.0
+      - name: Build console
+        working-directory: web/control-console
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-console
+          retention-days: 1
+          path: web/control-console/dist
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    if: ${{ !cancelled() && needs.validation-gate.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.server.result == 'success' }}
+    if: ${{ !cancelled() && needs.validation-gate.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.server.result == 'success' && needs.relay.result == 'success' && needs.console.result == 'success' }}
     needs:
       - metadata
       - validation-gate
@@ -300,6 +383,8 @@ jobs:
       - windows
       - linux
       - server
+      - relay
+      - console
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -348,10 +433,76 @@ jobs:
             --title "$RELEASE_TAG" \
             --notes-file release-notes.md
 
+  image:
+    name: Publish relay service image to GHCR
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    needs:
+      - metadata
+      - publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+      - name: Download relay binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-relay-*
+          path: staging
+          merge-multiple: true
+      - name: Download console
+        uses: actions/download-artifact@v8
+        with:
+          name: image-console
+          path: packaging/relay/image/web
+      - name: Lay out the image context
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          context=packaging/relay/image
+          mkdir -p "$context/bin"
+          for pair in x86_64:amd64 aarch64:arm64; do
+            arch="${pair%%:*}" docker="${pair##*:}"
+            install -m 755 "staging/yttt-control-$VERSION-linux-$arch" "$context/control-$docker"
+            install -m 755 "staging/yttt-relay-$VERSION-linux-$arch" "$context/relay-$docker"
+            # Names the node install script asks for.
+            install -m 755 "staging/yttt-relay-$VERSION-linux-$arch" "$context/bin/yttt-relay-linux-$arch"
+          done
+          (cd "$context/bin" && sha256sum yttt-relay-linux-* > SHA256SUMS)
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/yttt-relay" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: packaging/relay
+          file: packaging/relay/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE }}:${{ needs.metadata.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=yttt relay control plane, web console and relay node
+
   cleanup:
     name: Delete published staging artifacts
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
-    needs: publish
+    needs:
+      - publish
+      - image
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -364,7 +515,7 @@ jobs:
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
               owner, repo, run_id: context.runId, per_page: 100,
             });
-            for (const artifact of artifacts.filter(a => a.name.startsWith('release-'))) {
+            for (const artifact of artifacts.filter(a => a.name.startsWith('release-') || a.name.startsWith('image-'))) {
               await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: artifact.id });
               core.info(`Deleted staging artifact ${artifact.name}; Release assets are unchanged`);
             }

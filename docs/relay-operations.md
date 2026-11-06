@@ -4,13 +4,17 @@
 
 ## 1. 控制面
 
-镜像 `packaging/relay-dev/Dockerfile` 同时包含控制面、网页控制台和发给节点的静态 relay 二进制（x86_64 与 aarch64 各一个：构建机自身架构用 musl-gcc，另一个用 Zig 交叉编译）：
+每次发布（`v*` 标签）都会推送镜像 `ghcr.io/yuworm/yttt-relay:<版本>` 与 `:latest`（linux/amd64、linux/arm64），内含控制面、网页控制台和发给节点的两种架构静态 relay 二进制；同样的静态二进制也附在 GitHub Release 里。生产部署用 `packaging/relay/` 下的 compose 文件与配置模板：
 
 ```sh
-docker build -f packaging/relay-dev/Dockerfile -t yttt-relay .
+cd packaging/relay
+cp control.example.toml control.toml        # 填写 public_url、数据库密码、ticket_secret
+POSTGRES_PASSWORD=… docker compose up -d     # YTTT_VERSION=0.4.0 可固定版本
 ```
 
-已验证的是在 aarch64 构建机上产出两种二进制。在 x86_64 构建机上交叉编译 aarch64 时，Zig 0.13 可能不认 rustc 为 aarch64 传的链接参数 `--fix-cortex-a53-843419`；遇到时升级 `cargo-zigbuild`，或在 aarch64 机器上构建。
+控制面只监听本机 8080，前面放 HTTPS 反向代理（并设 `trusted_proxy = true`）。升级：改 `YTTT_VERSION` 后 `docker compose up -d`，数据库迁移自动执行；已部署的节点用 `sudo yttt-relay-install --upgrade` 换成新镜像里的 relay。
+
+开发时也可以从源码构建整套镜像：`docker build -f packaging/relay-dev/Dockerfile -t yttt-relay-dev .`（构建机自身架构用 musl-gcc，另一个架构用 Zig 交叉编译；在 x86_64 上交叉编译 aarch64 时 Zig 0.13 可能不认 `--fix-cortex-a53-843419`，遇到时在 aarch64 机器上构建）。
 
 控制面配置（TOML）的关键项：
 
@@ -30,7 +34,7 @@ docker build -f packaging/relay-dev/Dockerfile -t yttt-relay .
 新部署还没有可用节点，注册是关闭的。第一个管理员用命令行创建（密码从标准输入读）：
 
 ```sh
-yttt-control create-admin --config control.toml you@example.com
+docker compose exec -T control yttt-control create-admin --config /etc/yttt/control.toml you@example.com
 ```
 
 账号落在注册设置（首次启动时取自 `[signup]`）的套餐和节点上；该节点不存在时会以“待部署”状态建出来，登录控制台后在节点页“重新生成部署命令”把它部署起来，注册随即开放。已有账号要升为管理员用 `yttt-control promote-admin --config control.toml <email>`。

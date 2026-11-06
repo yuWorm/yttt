@@ -1,0 +1,29 @@
+# Control plane configuration. Keep this file private: it holds the database
+# password and the ticket signing key.
+listen = "0.0.0.0:8080"
+# Where browsers and new relay nodes reach the console; https:// in production.
+public_url = "https://relay.example.com"
+# The console sits behind a reverse proxy that sets X-Forwarded-For.
+trusted_proxy = true
+web_root = "/usr/share/yttt-control/web"
+relay_binaries_dir = "/usr/share/yttt-control/bin"
+# The password must match POSTGRES_PASSWORD.
+database_url = "postgres://postgres:CHANGE-ME@postgres:5432/postgres"
+# 32 random bytes as hex, e.g. `openssl rand -hex 32`. Changing it invalidates
+# every relay ticket and needs every node redeployed.
+ticket_secret = "CHANGE-ME"
+
+# Seeds for an empty database only; afterwards plans and sign-up are managed
+# in the console.
+[signup]
+enabled = true
+plan = "free"
+node = "node-1"
+
+[[plans]]
+id = "free"
+rate_bps = 250_000              # bytes per second (2 Mbps)
+burst_bytes = 250_000
+monthly_bytes = 10_737_418_240  # 10 GiB
+throttled_rate_bps = 16_000     # after the quota (128 Kbps)
+max_devices = 3
