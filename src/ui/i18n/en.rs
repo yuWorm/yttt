@@ -1051,43 +1051,67 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAddPaired => "Pair with a Host (P2P)",
         UiTextKey::PairedHostTitle => "Pair with a Host",
         UiTextKey::PairedHostEditTitle => "Edit paired Host",
-        UiTextKey::PairedHostDescription => "On the Host, open Remote access, choose “Pair a new device” under P2P pairing, and paste the pairing code here.",
+        UiTextKey::PairedHostDescription => {
+            "On the Host, open Remote access, choose “Pair a new device” under P2P pairing, and paste the pairing code here."
+        }
         UiTextKey::PairingCodeLabel => "Pairing code",
         UiTextKey::PairingCodePlaceholder => "YTTT-PAIR:1:…",
         UiTextKey::PairingCodeInvalid => "This is not a valid pairing code.",
         UiTextKey::PairingStart => "Pair",
         UiTextKey::PairingReaching => "Reaching the Host…",
         UiTextKey::PairingCompare => "Check that the Host shows the same numbers:",
-        UiTextKey::PairingCompareHint => "The Host user should accept this device only if the numbers match.",
+        UiTextKey::PairingCompareHint => {
+            "The Host user should accept this device only if the numbers match."
+        }
         UiTextKey::PairingCancelled => "Pairing was cancelled.",
         UiTextKey::PairedHostRelayLabel => "Relay address (hint)",
         UiTextKey::PairedHostAddressesLabel => "Direct addresses (hint)",
-        UiTextKey::PairedHostAddressesHint => "Comma-separated host:port. Hints only help find the Host; they never change which Host is trusted.",
+        UiTextKey::PairedHostAddressesHint => {
+            "Comma-separated host:port. Hints only help find the Host; they never change which Host is trusted."
+        }
         UiTextKey::PairedHostAddressesInvalid => "Each direct address must be IP:port.",
-        UiTextKey::PairedHostRelayInvalid => "The relay address must start with http:// or https://.",
+        UiTextKey::PairedHostRelayInvalid => {
+            "The relay address must start with http:// or https://."
+        }
         UiTextKey::PairedHostForgetTitle => "Forget this Host?",
-        UiTextKey::PairedHostForgetDescription => "This removes the pairing and this device's key for the Host. The Host keeps listing this device until it is revoked there.",
+        UiTextKey::PairedHostForgetDescription => {
+            "This removes the pairing and this device's key for the Host. The Host keeps listing this device until it is revoked there."
+        }
         UiTextKey::PairedHostForget => "Forget",
-        UiTextKey::PairedHostRepair => "Pair this Host again from Remote connections to replace its key.",
+        UiTextKey::PairedHostRepair => {
+            "Pair this Host again from Remote connections to replace its key."
+        }
         UiTextKey::P2pTitle => "P2P pairing",
-        UiTextKey::P2pDescription => "Paired devices reach this computer by their device key, directly or through a relay. Traffic is end-to-end encrypted; a relay only forwards it.",
+        UiTextKey::P2pDescription => {
+            "Paired devices reach this computer by their device key, directly or through a relay. Traffic is end-to-end encrypted; a relay only forwards it."
+        }
         UiTextKey::P2pRelayLabel => "Relay (optional)",
-        UiTextKey::P2pRelayHint => "Leave empty for direct connections only. Changing it restarts P2P and ends P2P sessions.",
+        UiTextKey::P2pRelayHint => {
+            "Leave empty for direct connections only. Changing it restarts P2P and ends P2P sessions."
+        }
         UiTextKey::P2pRelayAccount => "Using relay account {account}: {relay}",
-        UiTextKey::P2pRelayAccountDevices => "Devices that have not signed in to a relay account can only connect directly.",
+        UiTextKey::P2pRelayAccountDevices => {
+            "Devices that have not signed in to a relay account can only connect directly."
+        }
         UiTextKey::P2pThisKey => "This computer's key",
         UiTextKey::P2pPairDevice => "Pair a new device",
-        UiTextKey::P2pPairingOpen => "Scan the code or paste it on the device. It expires in {seconds} s.",
+        UiTextKey::P2pPairingOpen => {
+            "Scan the code or paste it on the device. It expires in {seconds} s."
+        }
         UiTextKey::P2pShowCode => "Show code",
         UiTextKey::P2pHideCode => "Hide code",
         UiTextKey::P2pCopyCode => "Copy code",
         UiTextKey::P2pCodeCopied => "Copied. The clipboard is cleared when this invitation ends.",
-        UiTextKey::P2pCodeWarning => "Anyone who sees this code or QR can ask to pair; you still decide for each device below.",
+        UiTextKey::P2pCodeWarning => {
+            "Anyone who sees this code or QR can ask to pair; you still decide for each device below."
+        }
         UiTextKey::P2pAwaiting => "“{device}” wants to pair. Accept only if the device shows:",
         UiTextKey::P2pAllowObserve => "Allow viewing only",
         UiTextKey::P2pAllowFull => "Allow full control",
         UiTextKey::P2pDecline => "Decline",
-        UiTextKey::P2pCompromised => "A second device used this code, so the invitation was withdrawn. The code may have leaked.",
+        UiTextKey::P2pCompromised => {
+            "A second device used this code, so the invitation was withdrawn. The code may have leaked."
+        }
         UiTextKey::P2pAcknowledge => "OK",
         UiTextKey::P2pDevices => "Paired devices",
         UiTextKey::P2pNoDevices => "No paired devices.",
@@ -1097,7 +1121,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pLastSeen => "last seen {time}",
         UiTextKey::P2pRevoke => "Revoke",
         UiTextKey::P2pRevokeTitle => "Revoke this device?",
-        UiTextKey::P2pRevokeDescription => "The device is disconnected now and cannot connect again unless it pairs anew.",
+        UiTextKey::P2pRevokeDescription => {
+            "The device is disconnected now and cannot connect again unless it pairs anew."
+        }
         UiTextKey::P2pRevokeAndResetTls => "Revoke and reset TLS",
         UiTextKey::RemoteEdit => "Edit",
         UiTextKey::RemoteSaveConnect => "Save and connect",

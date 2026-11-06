@@ -639,7 +639,11 @@ impl Manager {
             .ok_or_else(|| failure("turn on P2P remote access before pairing a device"))?;
         let endpoint = &p2p.shared.endpoint;
         let invitation = self.pairing.lock().open(super::now_millis());
-        let mut direct_addrs = endpoint.direct_addrs();
+        let mut direct_addrs: Vec<_> = endpoint
+            .direct_addrs()
+            .into_iter()
+            .filter(|address| advertisable(address.ip()))
+            .collect();
         direct_addrs.truncate(MAX_DIRECT_ADDRS);
         let code = PairingCode {
             host: endpoint.id(),
@@ -1049,6 +1053,18 @@ fn io_failure(error: io::Error) -> ProtocolFailure {
     ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)
 }
 
+/// Whether a pairing code should name this address. Loopback and link-local
+/// addresses cannot reach another machine; leaving them out keeps the code
+/// short and reveals less about this computer's network.
+fn advertisable(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => !(ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()),
+        IpAddr::V6(ip) => {
+            !(ip.is_loopback() || ip.is_unspecified() || (ip.segments()[0] & 0xffc0) == 0xfe80)
+        }
+    }
+}
+
 /// Keeps the Host's relay ticket fresh, caches each one for restarts, and
 /// schedules the endpoint rebuild its first ticket requires.
 #[allow(clippy::too_many_arguments)]
@@ -1107,6 +1123,34 @@ async fn keep_relay_ticket(
         },
     )
     .await;
+}
+
+#[cfg(test)]
+mod advertise_tests {
+    use super::advertisable;
+
+    #[test]
+    fn pairing_codes_name_only_addresses_another_machine_can_dial() {
+        for address in [
+            "192.168.1.20",
+            "10.0.0.5",
+            "203.0.113.7",
+            "2001:db8::20",
+            "fd00::1",
+        ] {
+            assert!(advertisable(address.parse().unwrap()), "{address}");
+        }
+        for address in [
+            "127.0.0.1",
+            "169.254.10.1",
+            "0.0.0.0",
+            "::1",
+            "fe80::1",
+            "::",
+        ] {
+            assert!(!advertisable(address.parse().unwrap()), "{address}");
+        }
+    }
 }
 
 #[cfg(test)]

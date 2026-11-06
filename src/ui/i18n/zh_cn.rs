@@ -857,7 +857,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAddPaired => "配对 Host（P2P）",
         UiTextKey::PairedHostTitle => "配对 Host",
         UiTextKey::PairedHostEditTitle => "编辑配对的 Host",
-        UiTextKey::PairedHostDescription => "在 Host 上打开“远程访问此电脑”，在“P2P 配对”中点“配对新设备”，再把配对码粘贴到这里。",
+        UiTextKey::PairedHostDescription => {
+            "在 Host 上打开“远程访问此电脑”，在“P2P 配对”中点“配对新设备”，再把配对码粘贴到这里。"
+        }
         UiTextKey::PairingCodeLabel => "配对码",
         UiTextKey::PairingCodePlaceholder => "YTTT-PAIR:1:…",
         UiTextKey::PairingCodeInvalid => "这不是有效的配对码。",
@@ -868,15 +870,21 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PairingCancelled => "已取消配对。",
         UiTextKey::PairedHostRelayLabel => "relay 地址（提示）",
         UiTextKey::PairedHostAddressesLabel => "直连地址（提示）",
-        UiTextKey::PairedHostAddressesHint => "用英文逗号分隔的 主机:端口。提示只用于找到 Host，不会改变信任的是哪台 Host。",
+        UiTextKey::PairedHostAddressesHint => {
+            "用英文逗号分隔的 主机:端口。提示只用于找到 Host，不会改变信任的是哪台 Host。"
+        }
         UiTextKey::PairedHostAddressesInvalid => "每个直连地址都必须是 IP:端口。",
         UiTextKey::PairedHostRelayInvalid => "relay 地址必须以 http:// 或 https:// 开头。",
         UiTextKey::PairedHostForgetTitle => "忘记这台 Host？",
-        UiTextKey::PairedHostForgetDescription => "这会删除配对记录和本机为这台 Host 保存的密钥。在 Host 上撤销之前，Host 仍会列出此设备。",
+        UiTextKey::PairedHostForgetDescription => {
+            "这会删除配对记录和本机为这台 Host 保存的密钥。在 Host 上撤销之前，Host 仍会列出此设备。"
+        }
         UiTextKey::PairedHostForget => "忘记",
         UiTextKey::PairedHostRepair => "如需更换密钥，请在“远程连接”中重新配对这台 Host。",
         UiTextKey::P2pTitle => "P2P 配对",
-        UiTextKey::P2pDescription => "已配对的设备凭各自的设备密钥连接本机，直连或经 relay。流量端到端加密，relay 只负责转发。",
+        UiTextKey::P2pDescription => {
+            "已配对的设备凭各自的设备密钥连接本机，直连或经 relay。流量端到端加密，relay 只负责转发。"
+        }
         UiTextKey::P2pRelayLabel => "relay 地址（可选）",
         UiTextKey::P2pRelayHint => "留空则只允许直连。修改会重启 P2P，并断开当前的 P2P 会话。",
         UiTextKey::P2pRelayAccount => "正在使用 relay 账号 {account}：{relay}",
@@ -888,7 +896,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pHideCode => "隐藏配对码",
         UiTextKey::P2pCopyCode => "复制配对码",
         UiTextKey::P2pCodeCopied => "已复制。邀请结束时会清空剪贴板。",
-        UiTextKey::P2pCodeWarning => "看到此配对码或二维码的人都可以请求配对；每台设备仍需你在下方确认。",
+        UiTextKey::P2pCodeWarning => {
+            "看到此配对码或二维码的人都可以请求配对；每台设备仍需你在下方确认。"
+        }
         UiTextKey::P2pAwaiting => "“{device}”请求配对。只有设备上显示的是以下数字时才接受：",
         UiTextKey::P2pAllowObserve => "只允许查看",
         UiTextKey::P2pAllowFull => "允许完全控制",

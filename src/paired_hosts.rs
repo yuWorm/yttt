@@ -205,7 +205,12 @@ mod tests {
 
     impl KeyStore for MemoryStore {
         fn load(&self, id: &CredentialId) -> Result<Option<Zeroizing<String>>, String> {
-            Ok(self.0.borrow().get(id.as_str()).cloned().map(Zeroizing::new))
+            Ok(self
+                .0
+                .borrow()
+                .get(id.as_str())
+                .cloned()
+                .map(Zeroizing::new))
         }
         fn save(&self, id: &CredentialId, value: &str) -> Result<(), String> {
             self.0

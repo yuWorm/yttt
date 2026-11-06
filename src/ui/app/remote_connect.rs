@@ -396,7 +396,10 @@ impl RemoteConnectView {
                 self.error = Some(error);
                 if self.launch.saved_target.is_some()
                     && self.replacement_credentials.is_none()
-                    && !matches!(&self.launch.target, crate::remote_launch::RemoteTarget::PairedHost { .. })
+                    && !matches!(
+                        &self.launch.target,
+                        crate::remote_launch::RemoteTarget::PairedHost { .. }
+                    )
                     && !matches!(&self.launch.target, crate::remote_launch::RemoteTarget::SshServer { connection, .. }
                         if connection.auth == crate::config::ssh::SshAuthPreference::Agent)
                 {

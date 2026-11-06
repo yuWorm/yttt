@@ -312,6 +312,7 @@ impl WorkbenchView {
     }
 
     pub fn close_ssh_connection_manager(&mut self) {
+        self.abandon_pairing();
         self.ssh.manager_open = false;
         self.close_ssh_connection_editor();
         self.ssh.remote_access_address = None;

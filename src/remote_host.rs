@@ -433,9 +433,7 @@ fn connect_paired(
     cancellation: RemoteConnectCancellation,
     label: String,
 ) -> Result<RemoteEnvironment, String> {
-    use yttt_transport_iroh::{
-        DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelayTarget,
-    };
+    use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelayTarget};
     // Read here rather than carried in the launch, so no long-lived key passes
     // between processes.
     let secret = crate::paired_hosts::load_device_key(

@@ -128,6 +128,21 @@ impl SshProjectPickerState {
         };
     }
 }
+/// The P2P part of "Remote access to this computer".
+#[derive(Default)]
+pub(in super::super) struct P2pPanelState {
+    /// The open invitation's code: shown once by the Host, kept only in memory
+    /// until the invitation ends.
+    pub(in super::super) code: Option<yttt_protocol::remote_access::SecretText>,
+    pub(in super::super) qr:
+        Option<std::sync::Arc<crate::ui::workbench::remote_access_p2p::QrMatrix>>,
+    pub(in super::super) show_code: bool,
+    pub(in super::super) copied: bool,
+    pub(in super::super) polling: bool,
+    pub(in super::super) relay: Option<Entity<InputState>>,
+    pub(in super::super) devices: Vec<yttt_protocol::p2p::PairedDevice>,
+}
+
 pub(in super::super) struct SshControllerState {
     pub(in super::super) connections: SshConnectionsConfig,
     pub(in super::super) statuses: HashMap<ConnectionId, ConnectionStatus>,
@@ -140,6 +155,7 @@ pub(in super::super) struct SshControllerState {
     pub(in super::super) remote_access_loaded: bool,
     pub(in super::super) remote_access_error: Option<String>,
     pub(in super::super) remote_access_address: Option<Entity<InputState>>,
+    pub(in super::super) p2p: P2pPanelState,
     pub(in super::super) form: Option<SshConnectionForm>,
     pub(in super::super) project_picker: SshProjectPickerState,
     pub(in super::super) pending_host_keys: VecDeque<HostKeyChallenge>,
@@ -171,6 +187,7 @@ impl SshControllerState {
                 remote_access_loaded: false,
                 remote_access_error: None,
                 remote_access_address: None,
+                p2p: P2pPanelState::default(),
                 form: None,
                 project_picker: SshProjectPickerState::default(),
                 pending_host_keys: VecDeque::new(),

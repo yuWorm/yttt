@@ -317,6 +317,9 @@ pub(super) fn render(
                     .cursor_pointer()
                     .child(root.ui_text.get(key))
                     .on_click(cx.listener(move |root, _, _, cx| {
+                        if page != RemoteServicesPage::ThisComputer {
+                            root.abandon_pairing();
+                        }
                         root.auxiliary_windows.remote_page = page;
                         cx.notify();
                     }))

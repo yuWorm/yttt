@@ -20,6 +20,7 @@ impl WorkbenchView {
         let style = appearance.style;
         let text = self.ui_text;
         let busy = self.ssh.remote_access_busy || runtime.is_none();
+        let p2p_section = self.p2p_settings_section(window, cx);
         let status = self.ssh.remote_access.as_ref();
         let enabled = status.is_some_and(|status| status.effective == RemoteAccessState::Listening);
         let state_key = match status.map(|status| status.effective) {
@@ -288,6 +289,7 @@ impl WorkbenchView {
                         ),
                     ),
             )
+            .child(p2p_section)
             .when_some(
                 status.and_then(|status| status.error.as_ref()),
                 |view, error| {
@@ -403,7 +405,7 @@ impl WorkbenchView {
         });
     }
 
-    fn begin_remote_access_action(&mut self, request: Request, cx: &mut Context<Self>) {
+    pub(super) fn begin_remote_access_action(&mut self, request: Request, cx: &mut Context<Self>) {
         let Some(runtime) = self
             .terminal
             .host_runtime
@@ -428,7 +430,11 @@ impl WorkbenchView {
             let _ = this.update(cx, |root, cx| {
                 root.ssh.remote_access_busy = false;
                 root.ssh.remote_access_loaded = true;
+                if let Ok(Response::RemoteAccess(response)) = &result {
+                    root.p2p_action_result(response, cx);
+                }
                 if let Ok(Response::RemoteAccess(RemoteAccessResponse::Status(status))) = status {
+                    root.p2p_action_result(&RemoteAccessResponse::Status(status.clone()), cx);
                     root.ssh.remote_access = Some(status);
                 }
                 match result {

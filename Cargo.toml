@@ -84,6 +84,7 @@ yttt-agent-core = { path = "crates/yttt-agent-core" }
 yttt-agent-providers = { path = "crates/yttt-agent-providers" }
 yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }
 gethostname = "1"
+qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 zeroize = "1"
 yttt-transport-tls = { path = "crates/yttt-transport-tls" }
@@ -172,6 +173,7 @@ features = ["wayland", "x11"]
 winresource = "0.1"
 
 [dev-dependencies]
+rqrr = "0.9"
 gpui = { workspace = true, features = ["test-support"] }
 
 # Vendored Apache-2.0 Alacritty Terminal 0.25.1 with Sixel support from

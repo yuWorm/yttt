@@ -8,8 +8,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use gpui::{
     AppContext as _, Context, Div, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    Window, div, px,
+    ParentElement as _, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window,
+    div, px,
 };
 use gpui_base::input::{InputEvent, InputState};
 use yttt_protocol::{
@@ -88,12 +88,16 @@ pub(crate) fn create(
                 .placeholder(text.get(UiTextKey::PairingCodePlaceholder))
                 .validate(|value, _| value.len() <= MAX_CODE_INPUT_BYTES)
         });
-        let subscription = cx.subscribe_in(&code, window, |view: &mut PairedHostForm, _, event, _, cx| {
-            if matches!(event, InputEvent::Change) && view.error.is_some() {
-                view.error = None;
-                cx.notify();
-            }
-        });
+        let subscription = cx.subscribe_in(
+            &code,
+            window,
+            |view: &mut PairedHostForm, _, event, _, cx| {
+                if matches!(event, InputEvent::Change) && view.error.is_some() {
+                    view.error = None;
+                    cx.notify();
+                }
+            },
+        );
         let records = paired_hosts::read_records(&profile);
         let (records, error) = match records {
             Ok(records) => (records, None),
@@ -294,7 +298,11 @@ impl PairedHostForm {
         }
         let addresses = self.addresses.read(cx).value().to_string();
         let mut direct_addrs = Vec::new();
-        for address in addresses.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+        for address in addresses
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+        {
             match address.parse::<SocketAddr>() {
                 Ok(address) => direct_addrs.push(address),
                 Err(_) => {
@@ -366,7 +374,12 @@ impl PairedHostForm {
     }
 
     /// Asks before forgetting: the key cannot come back without pairing again.
-    pub(crate) fn forget(&mut self, host: EndpointKey, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn forget(
+        &mut self,
+        host: EndpointKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy || paired_hosts::find(&self.records, host).is_none() {
             return;
         }
@@ -441,10 +454,24 @@ impl PairedHostForm {
                         .text_color(theme.text_muted)
                         .child(text.get(UiTextKey::PairedHostDescription)),
                 )
-                .child(div().text_sm().child(text.get(UiTextKey::RemoteConnectionName)))
-                .child(yttt_input(&self.name, YtttInputKind::Settings, theme, style))
+                .child(
+                    div()
+                        .text_sm()
+                        .child(text.get(UiTextKey::RemoteConnectionName)),
+                )
+                .child(yttt_input(
+                    &self.name,
+                    YtttInputKind::Settings,
+                    theme,
+                    style,
+                ))
                 .child(div().text_sm().child(text.get(UiTextKey::PairingCodeLabel)))
-                .child(yttt_input(&self.code, YtttInputKind::Settings, theme, style)),
+                .child(yttt_input(
+                    &self.code,
+                    YtttInputKind::Settings,
+                    theme,
+                    style,
+                )),
             PairStage::Reaching => div()
                 .text_sm()
                 .text_color(theme.text_muted)
@@ -493,9 +520,9 @@ impl PairedHostForm {
                         style,
                     )
                     .disabled(pairing)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.start_pairing(false, window, cx)
-                    })),
+                    .on_click(
+                        cx.listener(|view, _, window, cx| view.start_pairing(false, window, cx)),
+                    ),
                 )
                 .child(
                     yttt_button(
@@ -506,9 +533,9 @@ impl PairedHostForm {
                         style,
                     )
                     .disabled(pairing)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.start_pairing(true, window, cx)
-                    })),
+                    .on_click(
+                        cx.listener(|view, _, window, cx| view.start_pairing(true, window, cx)),
+                    ),
                 ),
             cx,
         )
@@ -522,12 +549,39 @@ impl PairedHostForm {
             .flex()
             .flex_col()
             .gap(style.spacing.md)
-            .child(div().text_sm().child(text.get(UiTextKey::RemoteConnectionName)))
-            .child(yttt_input(&self.name, YtttInputKind::Settings, theme, style))
-            .child(div().text_sm().child(text.get(UiTextKey::PairedHostRelayLabel)))
-            .child(yttt_input(&self.relay, YtttInputKind::Settings, theme, style))
-            .child(div().text_sm().child(text.get(UiTextKey::PairedHostAddressesLabel)))
-            .child(yttt_input(&self.addresses, YtttInputKind::Settings, theme, style))
+            .child(
+                div()
+                    .text_sm()
+                    .child(text.get(UiTextKey::RemoteConnectionName)),
+            )
+            .child(yttt_input(
+                &self.name,
+                YtttInputKind::Settings,
+                theme,
+                style,
+            ))
+            .child(
+                div()
+                    .text_sm()
+                    .child(text.get(UiTextKey::PairedHostRelayLabel)),
+            )
+            .child(yttt_input(
+                &self.relay,
+                YtttInputKind::Settings,
+                theme,
+                style,
+            ))
+            .child(
+                div()
+                    .text_sm()
+                    .child(text.get(UiTextKey::PairedHostAddressesLabel)),
+            )
+            .child(yttt_input(
+                &self.addresses,
+                YtttInputKind::Settings,
+                theme,
+                style,
+            ))
             .child(
                 div()
                     .text_xs()
@@ -563,9 +617,9 @@ impl PairedHostForm {
                         theme,
                         style,
                     )
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.save_edit(host, window, cx)
-                    })),
+                    .on_click(
+                        cx.listener(move |view, _, window, cx| view.save_edit(host, window, cx)),
+                    ),
                 ),
             cx,
         )
@@ -628,7 +682,10 @@ pub(crate) fn format_short_code(code: u32) -> String {
 
 /// What the Host's device list will call this computer.
 fn device_label() -> String {
-    let name = gethostname::gethostname().to_string_lossy().trim().to_string();
+    let name = gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_string();
     let mut label = String::new();
     for character in name.chars() {
         if label.len() + character.len_utf8() > MAX_DEVICE_LABEL_BYTES {
@@ -682,7 +739,11 @@ fn pair_with_host(
         };
         endpoint.close().await;
         let host = result?;
-        paired_hosts::save_device_key(&paired_hosts::device_key_store(profile), host.host, &secret)?;
+        paired_hosts::save_device_key(
+            &paired_hosts::device_key_store(profile),
+            host.host,
+            &secret,
+        )?;
         let record = PairedHostRecord { name, host };
         let mut records = paired_hosts::read_records(profile)?;
         paired_hosts::upsert(&mut records, record.clone())?;

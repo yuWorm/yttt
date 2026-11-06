@@ -58,6 +58,7 @@ mod performance;
 mod persistence;
 mod project_files;
 mod remote_access;
+mod remote_access_p2p;
 mod remote_connections;
 mod render;
 mod resize;
