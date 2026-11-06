@@ -3,6 +3,8 @@
 mod diagnostics;
 mod mirror;
 pub mod p2p;
+/// Paid-relay accounts: log in, register this device, fetch relay tickets.
+pub use yttt_control_client as control;
 
 use std::{
     collections::{HashMap, HashSet},

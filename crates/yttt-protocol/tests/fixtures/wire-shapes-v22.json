@@ -598,7 +598,8 @@
       "effective",
       "endpoint_id",
       "error",
-      "pairing"
+      "pairing",
+      "relay_account"
     ]
   },
   "PairedDevice": {
@@ -908,6 +909,22 @@
       "supported"
     ]
   },
+  "RelayAccount": {
+    "": [
+      "account_id",
+      "control_url",
+      "session"
+    ]
+  },
+  "RelayAccountStatus": {
+    "": [
+      "account_id",
+      "control_url",
+      "error",
+      "relay_url",
+      "ticket_expires_unix"
+    ]
+  },
   "RemoteAccessRequest": {
     "CancelPairing": [],
     "ConfirmPairing": [
@@ -933,6 +950,9 @@
     "SetP2p": [
       "enabled",
       "relay_url"
+    ],
+    "SetRelayAccount": [
+      "account"
     ],
     "StartPairing": [],
     "Status": []

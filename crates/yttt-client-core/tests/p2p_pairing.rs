@@ -18,7 +18,7 @@ use yttt_protocol::{
     workspace::WorkspaceProjectConfig,
 };
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
-use yttt_transport_iroh::{EndpointConfig, IrohEndpoint, OpenGate};
+use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelaySetup};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -135,11 +135,11 @@ async fn invitation(admin: &ClientCore) -> PairingCode {
 async fn device_endpoint(secret: [u8; 32]) -> IrohEndpoint {
     IrohEndpoint::bind(EndpointConfig {
         secret,
-        relay: None,
+        relay: RelaySetup::Off,
         alpns: Vec::new(),
         gate: Arc::new(OpenGate),
         // Like a real Client: the Host advertises its interface addresses.
-        bind_addr: None,
+        direct: DirectPaths::Any,
     })
     .await
     .unwrap()
@@ -382,13 +382,13 @@ async fn a_device_pairs_and_works_with_only_the_relay_as_a_hint() {
     let secret = [28; 32];
     let endpoint = IrohEndpoint::bind(EndpointConfig {
         secret,
-        relay: Some(yttt_transport_iroh::RelayTarget {
+        relay: RelaySetup::Use(yttt_transport_iroh::RelayTarget {
             url: relay_url,
             token: None,
         }),
         alpns: Vec::new(),
         gate: Arc::new(OpenGate),
-        bind_addr: None,
+        direct: DirectPaths::Any,
     })
     .await
     .unwrap();

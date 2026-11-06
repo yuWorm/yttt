@@ -134,6 +134,28 @@ pub struct P2pStatus {
     pub endpoint_id: Option<EndpointKey>,
     pub error: Option<String>,
     pub pairing: Option<PairingState>,
+    pub relay_account: Option<Box<RelayAccountStatus>>,
+}
+
+/// A paid-relay account the Host uses for its own relay ticket. It buys
+/// transport only: nothing in it lets anyone reach the Host.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayAccount {
+    pub control_url: String,
+    pub account_id: u64,
+    /// The control-plane session the local user logged in with.
+    pub session: SecretText,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RelayAccountStatus {
+    pub control_url: String,
+    pub account_id: u64,
+    /// The relay the Host joined with its ticket, once it has one.
+    pub relay_url: Option<String>,
+    pub ticket_expires_unix: Option<u64>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +201,9 @@ pub enum RemoteAccessRequest {
         endpoint_id: EndpointKey,
         reset_tls: bool,
     },
+    /// Uses a paid-relay account for the Host's relay ticket, replacing the
+    /// plain relay URL while set; `None` forgets the account.
+    SetRelayAccount { account: Option<RelayAccount> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

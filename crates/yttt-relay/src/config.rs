@@ -44,6 +44,14 @@ pub struct ControlConfig {
 }
 
 impl ControlConfig {
+    pub fn from_parts(url: String, node_token: String, report_interval_secs: u64) -> Self {
+        Self {
+            url,
+            node_token,
+            report_interval_secs,
+        }
+    }
+
     pub fn report_interval(&self) -> Duration {
         Duration::from_secs(self.report_interval_secs.max(1))
     }

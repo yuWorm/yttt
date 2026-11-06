@@ -14,6 +14,7 @@ sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
 yttt-agent-core = { path = "../yttt-agent-core" }
+yttt-control-client = { path = "../yttt-control-client" }
 yttt-core = { path = "../yttt-core" }
 yttt-protocol = { path = "../yttt-protocol" }
 yttt-transport = { path = "../yttt-transport" }
@@ -27,3 +28,8 @@ yttt-host = { path = "../yttt-host" }
 yttt-transport-local = { path = "../yttt-transport-local" }
 yttt-transport-tls = { path = "../yttt-transport-tls" }
 rcgen = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+yttt-control = { path = "../yttt-control" }
+yttt-relay = { path = "../yttt-relay" }
+yttt-relay-ticket = { path = "../yttt-relay-ticket" }

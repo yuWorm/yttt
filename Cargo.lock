@@ -13384,16 +13384,22 @@ dependencies = [
  "parking_lot",
  "rand 0.8.6",
  "rcgen 0.13.2",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "yttt-agent-core",
+ "yttt-control",
+ "yttt-control-client",
  "yttt-core",
  "yttt-host",
  "yttt-protocol",
+ "yttt-relay",
+ "yttt-relay-ticket",
  "yttt-transport",
  "yttt-transport-iroh",
  "yttt-transport-local",
@@ -13419,6 +13425,19 @@ dependencies = [
  "tracing-subscriber",
  "yttt-relay-ticket",
  "zeroize",
+]
+
+[[package]]
+name = "yttt-control-client"
+version = "0.3.21"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "yttt-relay-ticket",
+ "yttt-transport-iroh",
 ]
 
 [[package]]
@@ -13463,6 +13482,7 @@ dependencies = [
  "yttt-agent-core",
  "yttt-agent-providers",
  "yttt-agent-runtime",
+ "yttt-control-client",
  "yttt-core",
  "yttt-project-core",
  "yttt-protocol",

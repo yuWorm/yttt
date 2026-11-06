@@ -23,6 +23,7 @@ use tokio::{
     sync::{Semaphore, oneshot, watch},
     task::JoinSet,
 };
+use yttt_control_client::{ControlSession, RelayTicket};
 use yttt_protocol::{
     EndpointKey,
     p2p::{
@@ -30,7 +31,7 @@ use yttt_protocol::{
         PAIRING_TTL_MILLIS, PairMac, PairMessage, PairNonce, PairRejectReason, PairTranscript,
         PairedDevice, WORK_ALPN, commit_host_nonce,
     },
-    remote_access::{MAX_PENDING_HANDSHAKES, PairingState},
+    remote_access::{MAX_PENDING_HANDSHAKES, PairingState, RelayAccountStatus},
 };
 use yttt_transport::{
     Credential, DeviceKeyCredential, IngressKind, TransportStream, receive_pairing, send_pairing,
@@ -42,6 +43,7 @@ use super::ConnectionContext;
 
 const DEVICES_FILE: &str = "devices.json";
 const KEY_FILE: &str = "p2p-key.json";
+const RELAY_ACCOUNT_FILE: &str = "relay-account.json";
 const MAX_STATE_FILE_BYTES: usize = 256 * 1024;
 /// How long a pairing peer may take to send its request.
 const PAIR_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -168,6 +170,35 @@ pub(crate) fn load_or_create_host_key(root: &Path) -> io::Result<Zeroizing<[u8; 
         Zeroizing::new(serde_json::to_vec(&KeyFile { secret: *secret }).map_err(io::Error::other)?);
     super::workspace::atomic_write(&path, &bytes, uuid::Uuid::new_v4().as_u128() as u64)?;
     Ok(secret)
+}
+
+/// The paid-relay account and the last ticket it got, so a restart while the
+/// control plane is down still reaches the relay. It buys transport only.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct StoredRelayAccount {
+    pub session: ControlSession,
+    #[serde(default)]
+    pub ticket: Option<RelayTicket>,
+}
+
+pub(crate) fn load_relay_account(root: &Path) -> io::Result<Option<StoredRelayAccount>> {
+    read_private_json(&root.join(RELAY_ACCOUNT_FILE))
+}
+
+pub(crate) fn save_relay_account(root: &Path, account: &StoredRelayAccount) -> io::Result<()> {
+    let bytes = Zeroizing::new(serde_json::to_vec(account).map_err(io::Error::other)?);
+    super::workspace::atomic_write(
+        &root.join(RELAY_ACCOUNT_FILE),
+        &bytes,
+        uuid::Uuid::new_v4().as_u128() as u64,
+    )
+}
+
+pub(crate) fn forget_relay_account(root: &Path) -> io::Result<()> {
+    match fs::remove_file(root.join(RELAY_ACCOUNT_FILE)) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
 }
 
 fn read_private_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
@@ -576,6 +607,21 @@ pub(crate) struct P2pGeneration {
     pub shared: P2pShared,
     pub cancel: watch::Sender<bool>,
     pub task: tokio::task::JoinHandle<()>,
+    /// The relay this endpoint uses now, which pairing codes advertise.
+    pub relay_url: Arc<Mutex<Option<String>>>,
+    pub relay_account: Option<Arc<Mutex<RelayAccountStatus>>>,
+    /// Renews the paid-relay ticket.
+    pub keeper: Option<tokio::task::JoinHandle<()>>,
+    /// Unix time to rebuild the endpoint by, because its relay connection keeps
+    /// the ticket it started with; 0 when none is due.
+    pub restart_after_unix: Arc<AtomicU64>,
+}
+
+impl P2pGeneration {
+    pub fn restart_due(&self, now_unix: u64) -> bool {
+        let due = self.restart_after_unix.load(Ordering::Relaxed);
+        due != 0 && due <= now_unix
+    }
 }
 
 #[cfg(test)]

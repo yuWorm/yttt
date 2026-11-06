@@ -1,7 +1,10 @@
 use super::{
     ConnectionContext,
     device_settings::DeviceSettingsStore,
-    p2p::{self, Decision, DeviceRegistry, HostGate, P2pGeneration, P2pShared, PairingSlot},
+    p2p::{
+        self, Decision, DeviceRegistry, HostGate, P2pGeneration, P2pShared, PairingSlot,
+        StoredRelayAccount,
+    },
 };
 use parking_lot::Mutex;
 use rand::RngCore as _;
@@ -22,6 +25,7 @@ use tokio::{
     sync::{Semaphore, mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
+use yttt_control_client::{ControlSession, RelayTicket};
 use yttt_core::model::ids::ClientInstanceId;
 use yttt_protocol::{
     EndpointKey, FailureCode, ProtocolFailure,
@@ -32,7 +36,7 @@ use yttt_protocol::{
     remote_access::*,
 };
 use yttt_transport::{AuthToken, Credential, IngressKind};
-use yttt_transport_iroh::{EndpointConfig, IrohEndpoint, RelayTarget};
+use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, RelaySetup, RelayTarget};
 use yttt_transport_tls::TlsListener;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -278,6 +282,8 @@ struct NetworkGeneration {
 /// open or stopped on its own, doubling up to the maximum.
 const FIRST_REBIND_DELAY: Duration = Duration::from_secs(1);
 const MAX_REBIND_DELAY: Duration = Duration::from_secs(30);
+/// How long before its first relay ticket expires a P2P endpoint is rebuilt.
+const RESTART_BEFORE_EXPIRY_SECS: u64 = 3600;
 
 struct Rebind {
     at: tokio::time::Instant,
@@ -362,6 +368,11 @@ pub(crate) async fn run(
                     manager.stop_p2p().await;
                     manager.p2p_failed("P2P endpoint stopped unexpectedly".to_string());
                 }
+                if manager.p2p.as_ref().is_some_and(|p2p| p2p.restart_due(yttt_control_client::now_unix())) {
+                    // Its relay connection still presents the first ticket, which
+                    // is about to expire; a new endpoint starts with the renewed one.
+                    manager.restart_p2p().await;
+                }
             }
         }
     }
@@ -410,6 +421,11 @@ impl Manager {
                 endpoint_id: self.p2p.as_ref().map(|p2p| p2p.shared.endpoint.id()),
                 error: self.p2p_error.clone(),
                 pairing: self.pairing.lock().state(now),
+                relay_account: self
+                    .p2p
+                    .as_ref()
+                    .and_then(|p2p| p2p.relay_account.as_ref())
+                    .map(|status| Box::new(status.lock().clone())),
             },
         }
     }
@@ -512,6 +528,31 @@ impl Manager {
                     return Err(error);
                 }
             }
+            RemoteAccessRequest::SetRelayAccount { account } => {
+                let root = self.store.lock().root().to_path_buf();
+                match account {
+                    Some(account) => {
+                        if account.control_url.len() > MAX_RELAY_URL_BYTES
+                            || !account.control_url.starts_with("http")
+                        {
+                            return Err(failure("the control URL must be an http or https URL"));
+                        }
+                        let stored = StoredRelayAccount {
+                            session: ControlSession {
+                                control_url: account.control_url.clone(),
+                                account_id: account.account_id,
+                                token: account.session.0.clone(),
+                            },
+                            ticket: None,
+                        };
+                        p2p::save_relay_account(&root, &stored).map_err(io_failure)?;
+                    }
+                    None => p2p::forget_relay_account(&root).map_err(io_failure)?,
+                }
+                if self.p2p.is_some() {
+                    self.restart_p2p().await;
+                }
+            }
             RemoteAccessRequest::StartPairing => return self.start_pairing(),
             RemoteAccessRequest::ConfirmPairing {
                 endpoint_id,
@@ -602,7 +643,7 @@ impl Manager {
         direct_addrs.truncate(MAX_DIRECT_ADDRS);
         let code = PairingCode {
             host: endpoint.id(),
-            relay_url: self.store.lock().settings().p2p.relay_url.clone(),
+            relay_url: p2p.relay_url.lock().clone(),
             direct_addrs,
             invitation_id: invitation.id,
             secret: *invitation.secret,
@@ -620,15 +661,58 @@ impl Manager {
         let root = self.store.lock().root().to_path_buf();
         let secret = Arc::new(p2p::load_or_create_host_key(&root).map_err(io_failure)?);
         let devices = self.devices()?;
+        let account = p2p::load_relay_account(&root).map_err(io_failure)?;
+        let mut relay_account = None;
+        let mut first_ticket = None;
+        let relay = match &account {
+            None => RelaySetup::from(relay_url.map(|url| RelayTarget { url, token: None })),
+            Some(stored) => {
+                let mut status = RelayAccountStatus {
+                    control_url: stored.session.control_url.clone(),
+                    account_id: stored.session.account_id,
+                    ..RelayAccountStatus::default()
+                };
+                let fetched = self.fetch_ticket(&stored.session, &secret).await;
+                let ticket = match fetched {
+                    Ok(ticket) => {
+                        let cached = StoredRelayAccount {
+                            session: stored.session.clone(),
+                            ticket: Some(ticket.clone()),
+                        };
+                        if let Err(error) = p2p::save_relay_account(&root, &cached) {
+                            eprintln!("could not cache the relay ticket: {error}");
+                        }
+                        Some(ticket)
+                    }
+                    Err(error) => {
+                        status.error = Some(format!("relay account: {error}"));
+                        let now = yttt_control_client::now_unix();
+                        stored.ticket.clone().filter(|ticket| ticket.usable(now))
+                    }
+                };
+                status.relay_url = ticket.as_ref().map(|ticket| ticket.relay_url.clone());
+                status.ticket_expires_unix = ticket.as_ref().map(|ticket| ticket.expires_unix);
+                relay_account = Some(Arc::new(Mutex::new(status)));
+                let setup = ticket.as_ref().map_or(RelaySetup::Pending, |ticket| {
+                    RelaySetup::Use(ticket.target())
+                });
+                first_ticket = ticket;
+                setup
+            }
+        };
+        let advertised = match &relay {
+            RelaySetup::Use(target) => Some(target.url.clone()),
+            RelaySetup::Off | RelaySetup::Pending => None,
+        };
         let endpoint = IrohEndpoint::bind(EndpointConfig {
             secret: **secret,
-            relay: relay_url.map(|url| RelayTarget { url, token: None }),
+            relay,
             alpns: vec![WORK_ALPN.to_vec(), PAIR_ALPN.to_vec()],
             gate: Arc::new(HostGate {
                 devices: devices.clone(),
                 pairing: self.pairing.clone(),
             }),
-            bind_addr: None,
+            direct: DirectPaths::Any,
         })
         .await
         .map_err(|error| failure(format!("cannot open the P2P endpoint: {error}")))?;
@@ -645,10 +729,34 @@ impl Manager {
         };
         self.admission.open(IngressKind::P2pWork);
         let task = tokio::spawn(p2p::accept_loop(shared.clone(), context));
+        let relay_url = Arc::new(Mutex::new(advertised));
+        let restart_after_unix =
+            Arc::new(AtomicU64::new(first_ticket.as_ref().map_or(0, |ticket| {
+                ticket
+                    .expires_unix
+                    .saturating_sub(RESTART_BEFORE_EXPIRY_SECS)
+            })));
+        let keeper = match (account, &relay_account) {
+            (Some(stored), Some(status)) => Some(tokio::spawn(keep_relay_ticket(
+                root,
+                stored.session,
+                **shared.secret,
+                shared.endpoint.clone(),
+                first_ticket,
+                status.clone(),
+                relay_url.clone(),
+                restart_after_unix.clone(),
+            ))),
+            _ => None,
+        };
         self.p2p = Some(P2pGeneration {
             shared,
             cancel,
             task,
+            relay_url,
+            relay_account,
+            keeper,
+            restart_after_unix,
         });
         self.p2p_effective = RemoteAccessState::Listening;
         Ok(())
@@ -660,10 +768,34 @@ impl Manager {
                 .lock()
                 .close(PairRejectReason::InvitationClosed);
             self.admission.close(IngressKind::P2pWork);
+            if let Some(keeper) = &p2p.keeper {
+                keeper.abort();
+            }
             p2p.cancel.send_replace(true);
             let _ = p2p.task.await;
         }
         self.p2p_effective = RemoteAccessState::Disabled;
+    }
+    /// Rebuilds the P2P endpoint with the current settings and relay account.
+    async fn restart_p2p(&mut self) {
+        let relay_url = self.store.lock().settings().p2p.relay_url.clone();
+        self.stop_p2p().await;
+        if let Err(error) = self.start_p2p(relay_url).await {
+            self.p2p_failed(error.message);
+        }
+    }
+    /// Registers the Host's own key with its account and gets it a ticket.
+    async fn fetch_ticket(
+        &self,
+        session: &ControlSession,
+        secret: &[u8; 32],
+    ) -> Result<RelayTicket, yttt_control_client::ControlError> {
+        let label: String = format!("yttt Host {}", self.context.identity.environment_id)
+            .chars()
+            .take(64)
+            .collect();
+        session.register_device(secret, &label).await?;
+        session.ticket(secret).await
     }
     async fn stop_network(&mut self) {
         if let Some(network) = self.network.take() {
@@ -915,6 +1047,66 @@ fn failure(message: impl Into<String>) -> ProtocolFailure {
 }
 fn io_failure(error: io::Error) -> ProtocolFailure {
     ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)
+}
+
+/// Keeps the Host's relay ticket fresh, caches each one for restarts, and
+/// schedules the endpoint rebuild its first ticket requires.
+#[allow(clippy::too_many_arguments)]
+async fn keep_relay_ticket(
+    root: std::path::PathBuf,
+    session: ControlSession,
+    secret: [u8; 32],
+    endpoint: IrohEndpoint,
+    first: Option<RelayTicket>,
+    status: Arc<Mutex<RelayAccountStatus>>,
+    relay_url: Arc<Mutex<Option<String>>>,
+    restart_after_unix: Arc<AtomicU64>,
+) {
+    // Without a ticket yet, renew right away.
+    let current = first.unwrap_or_else(|| RelayTicket {
+        relay_url: String::new(),
+        node_id: String::new(),
+        token: String::new(),
+        received_unix: 0,
+        expires_unix: 0,
+    });
+    let failed_status = status.clone();
+    let cached = session.clone();
+    yttt_control_client::keep_ticket(
+        session,
+        secret,
+        endpoint,
+        current,
+        move |ticket| {
+            let stored = StoredRelayAccount {
+                session: cached.clone(),
+                ticket: Some(ticket.clone()),
+            };
+            if let Err(error) = p2p::save_relay_account(&root, &stored) {
+                eprintln!("could not cache the relay ticket: {error}");
+            }
+            {
+                let mut status = status.lock();
+                status.relay_url = Some(ticket.relay_url.clone());
+                status.ticket_expires_unix = Some(ticket.expires_unix);
+                status.error = None;
+            }
+            *relay_url.lock() = Some(ticket.relay_url.clone());
+            // The first ticket this endpoint's relay connection presents.
+            let _ = restart_after_unix.compare_exchange(
+                0,
+                ticket
+                    .expires_unix
+                    .saturating_sub(RESTART_BEFORE_EXPIRY_SECS),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        },
+        move |error| {
+            failed_status.lock().error = Some(format!("relay account: {error}"));
+        },
+    )
+    .await;
 }
 
 #[cfg(test)]

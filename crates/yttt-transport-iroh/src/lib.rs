@@ -63,13 +63,40 @@ impl fmt::Debug for RelayTarget {
 
 pub struct EndpointConfig {
     pub secret: [u8; 32],
-    /// `None` allows only direct paths.
-    pub relay: Option<RelayTarget>,
+    pub relay: RelaySetup,
     /// ALPNs this endpoint accepts; an endpoint that only dials passes none.
     pub alpns: Vec<Vec<u8>>,
     pub gate: Arc<dyn PeerGate>,
-    /// Local UDP address; `None` binds an ephemeral port on all interfaces.
-    pub bind_addr: Option<SocketAddr>,
+    pub direct: DirectPaths,
+}
+
+/// Whether an endpoint keeps a home relay.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RelaySetup {
+    /// Direct paths only; a relay can never be added.
+    #[default]
+    Off,
+    /// No relay yet, but one may come with [`IrohEndpoint::set_relay`].
+    Pending,
+    Use(RelayTarget),
+}
+
+impl From<Option<RelayTarget>> for RelaySetup {
+    fn from(relay: Option<RelayTarget>) -> Self {
+        relay.map_or(Self::Off, Self::Use)
+    }
+}
+
+/// Whether, and where, an endpoint takes direct UDP paths.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DirectPaths {
+    /// An ephemeral port on all interfaces.
+    #[default]
+    Any,
+    Bind(SocketAddr),
+    /// None at all: every packet goes through the relay, and the endpoint
+    /// never reveals its addresses to peers.
+    Off,
 }
 
 /// How to reach a peer: its key plus hints, all of which may be stale.
@@ -150,11 +177,14 @@ pub struct IrohEndpoint {
 impl IrohEndpoint {
     pub async fn bind(config: EndpointConfig) -> Result<Self, TransportError> {
         let registry = Arc::new(PeerRegistry::default());
-        let relay = config.relay.as_ref().map(relay_config).transpose()?;
-        let relay_url = relay.as_ref().map(|relay| relay.url.clone());
-        let relay_mode = match relay {
-            Some(relay) => RelayMode::Custom(RelayMap::from(relay)),
-            None => RelayMode::Disabled,
+        let (relay_mode, relay_url) = match &config.relay {
+            RelaySetup::Off => (RelayMode::Disabled, None),
+            RelaySetup::Pending => (RelayMode::Custom(RelayMap::empty()), None),
+            RelaySetup::Use(target) => {
+                let relay = relay_config(target)?;
+                let url = relay.url.clone();
+                (RelayMode::Custom(RelayMap::from(relay)), Some(url))
+            }
         };
         let transport = QuicTransportConfig::builder()
             .keep_alive_interval(KEEP_ALIVE)
@@ -168,11 +198,15 @@ impl IrohEndpoint {
                 gate: config.gate.clone(),
                 registry: registry.clone(),
             });
-        if let Some(address) = config.bind_addr {
-            builder = builder
-                .clear_ip_transports()
-                .bind_addr(address)
-                .map_err(other)?;
+        match config.direct {
+            DirectPaths::Any => {}
+            DirectPaths::Bind(address) => {
+                builder = builder
+                    .clear_ip_transports()
+                    .bind_addr(address)
+                    .map_err(other)?;
+            }
+            DirectPaths::Off => builder = builder.clear_ip_transports(),
         }
         let endpoint = builder.bind().await.map_err(other)?;
         Ok(Self {

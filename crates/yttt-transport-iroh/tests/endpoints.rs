@@ -8,8 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use yttt_protocol::EndpointKey;
 use yttt_transport::TransportConnector as _;
 use yttt_transport_iroh::{
-    EndpointConfig, IrohConnector, IrohEndpoint, OpenGate, PathKind, PeerAddr, PeerGate,
-    endpoint_key,
+    DirectPaths, EndpointConfig, IrohConnector, IrohEndpoint, OpenGate, PathKind, PeerAddr,
+    PeerGate, RelaySetup, endpoint_key,
 };
 
 const ALPN: &[u8] = b"yttt/test/1";
@@ -38,10 +38,10 @@ impl PeerGate for ListGate {
 async fn host(gate: Arc<ListGate>) -> IrohEndpoint {
     IrohEndpoint::bind(EndpointConfig {
         secret: HOST_SECRET,
-        relay: None,
+        relay: RelaySetup::Off,
         alpns: vec![ALPN.to_vec()],
         gate,
-        bind_addr: Some("127.0.0.1:0".parse().unwrap()),
+        direct: DirectPaths::Bind("127.0.0.1:0".parse().unwrap()),
     })
     .await
     .unwrap()
@@ -50,10 +50,10 @@ async fn host(gate: Arc<ListGate>) -> IrohEndpoint {
 async fn client() -> IrohEndpoint {
     IrohEndpoint::bind(EndpointConfig {
         secret: CLIENT_SECRET,
-        relay: None,
+        relay: RelaySetup::Off,
         alpns: Vec::new(),
         gate: Arc::new(OpenGate),
-        bind_addr: Some("127.0.0.1:0".parse().unwrap()),
+        direct: DirectPaths::Bind("127.0.0.1:0".parse().unwrap()),
     })
     .await
     .unwrap()

@@ -76,7 +76,8 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `RemoteAccessRequest` 追加 `SetP2p`、`StartPairing`、`ConfirmPairing`、`CancelPairing`、`ListDevices`、`RevokeDevice`,
   `RemoteAccessResponse` 追加 `PairingInvitation`、`Devices`;`RemoteAccessSettings.p2p`、`RemoteAccessStatus.p2p`、
   `RemoteClientSummary.device` 带缺省。配对使用独立 ALPN 与新帧类型 `FrameKind::Pairing = 7`(5、6 保留不复用),
-  消息 `p2p::PairMessage` 不进入握手枚举。
+  消息 `p2p::PairMessage` 不进入握手枚举。之后追加 `RemoteAccessRequest::SetRelayAccount`(付费 relay 账号,
+  只买传输)与 `P2pStatus.relay_account`(带缺省)。
   v22 内追加(未升版本):`AgentSnapshot.turn_seq`(`#[serde(default)]`,旧端读作 0),Agent 每开始一轮加一;
   `PaneConfig` 追加 `role`(省略即 worker)与 `spawned_by`(省略即无),`NewTab::Agent` 追加同名字段,
   `WorkspaceIntent::SetPaneOwner` 新意图(旧 Host 拒绝该意图);`PaneConfig` 追加 `controller`(省略即 auto)与

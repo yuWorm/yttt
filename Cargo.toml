@@ -16,6 +16,7 @@ members = [
     "crates/yttt-relay-ticket",
     "crates/yttt-relay",
     "crates/yttt-control",
+    "crates/yttt-control-client",
     "crates/yttt-core",
     "crates/yttt-terminal-core",
     "crates/yttt-ssh",
