@@ -446,13 +446,15 @@ async fn prompt(question: &str) -> Result<String, ServerError> {
 /// The code as a QR code drawn with half-block characters, for a phone camera.
 /// This machine's name, for the console to show what is signing in.
 fn host_name() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .or_else(|| std::env::var("COMPUTERNAME").ok())
-        .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "this machine".into())
+    let name = gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    if name.is_empty() {
+        "this machine".into()
+    } else {
+        name
+    }
 }
 
 fn qr_text(code: &str) -> String {
