@@ -20,11 +20,24 @@ pub struct NodeConfig {
     pub quic_listen: Option<SocketAddr>,
     /// Hex Ed25519 keys whose tickets this node accepts: the control plane's
     /// current key, and its previous one during a rotation.
+    #[serde(default)]
     pub ticket_keys: Vec<String>,
+    /// Self-hosted mode: relay for any endpoint without a ticket. Traffic
+    /// stays end-to-end encrypted, but anyone who finds the node can use its
+    /// bandwidth up to this rate per endpoint.
+    #[serde(default)]
+    pub open: Option<OpenConfig>,
     /// Where usage goes. Without it the node relays and limits on tickets
     /// alone and nothing is billed, which is only for local development.
     #[serde(default)]
     pub control: Option<ControlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenConfig {
+    pub rate_bps: u32,
+    pub burst_bytes: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -85,6 +98,7 @@ impl NodeConfig {
                 .iter()
                 .map(|key| yttt_relay_ticket::hex(key))
                 .collect(),
+            open: None,
             control: None,
         }
     }

@@ -1,0 +1,16 @@
+# systemd user unit that keeps a yttt Host (and its P2P access) running on a
+# machine without a desktop. Install for your user:
+#   mkdir -p ~/.config/systemd/user && cp yttt-host.service ~/.config/systemd/user/
+#   systemctl --user enable --now yttt-host
+#   loginctl enable-linger "$USER"   # keep it running while logged out
+# %h is your home directory; adjust the version and target directory to the
+# yttt-server the desktop app installed, or point it at your own build.
+[Unit]
+Description=yttt Host
+
+[Service]
+ExecStart=%h/.local/share/yttt/server/VERSION/TARGET/yttt-server serve --profile default
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

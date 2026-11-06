@@ -1,0 +1,16 @@
+# systemd unit for a self-hosted relay. Install the binary to
+# /usr/local/bin/yttt-relay and the config to /etc/yttt/relay.toml, then:
+#   sudo systemctl enable --now yttt-relay
+[Unit]
+Description=yttt relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/yttt-relay --config /etc/yttt/relay.toml
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

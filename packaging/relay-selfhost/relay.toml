@@ -1,0 +1,19 @@
+# A self-hosted yttt relay: relays for any device, no account or ticket.
+# Traffic stays end-to-end encrypted between your devices; the relay only
+# forwards it. Anyone who finds the address can use its bandwidth up to the
+# rate below, so keep it modest and do not publish the address.
+node_id = "self-hosted"
+listen = "0.0.0.0:3341"
+
+[open]
+rate_bps = 5_000_000      # per device
+burst_bytes = 1_000_000
+
+# With a certificate (e.g. from certbot) serve HTTPS instead, and enable QUIC
+# address discovery, which needs TLS:
+# listen = "0.0.0.0:443"
+# captive_portal_listen = "0.0.0.0:80"
+# quic_listen = "0.0.0.0:7842"
+# [tls]
+# cert_chain = "/etc/letsencrypt/live/relay.example.com/fullchain.pem"
+# private_key = "/etc/letsencrypt/live/relay.example.com/privkey.pem"

@@ -141,7 +141,9 @@ pub struct AccountSnapshot {
 #[derive(Debug)]
 pub(crate) struct Node {
     node_id: String,
-    verifier: TicketVerifier,
+    verifier: Option<TicketVerifier>,
+    /// Self-hosted mode: admit every endpoint at this rate, each on its own.
+    open: Option<Rate>,
     pub(crate) clients: Clients,
     pub(crate) key_cache: KeyCache,
     pub(crate) metrics: Arc<Metrics>,
@@ -149,10 +151,15 @@ pub(crate) struct Node {
 }
 
 impl Node {
-    pub(crate) fn new(node_id: String, verifier: TicketVerifier) -> Self {
+    pub(crate) fn new(
+        node_id: String,
+        verifier: Option<TicketVerifier>,
+        open: Option<Rate>,
+    ) -> Self {
         Self {
             node_id,
             verifier,
+            open,
             clients: Clients::default(),
             key_cache: KeyCache::new(4096),
             metrics: Arc::new(Metrics::default()),
@@ -161,16 +168,16 @@ impl Node {
     }
 
     fn admit(&self, request: &ClientRequest) -> Access {
-        let Some(token) = request.auth_token() else {
-            return deny("a relay ticket is required");
-        };
         let endpoint = *request.endpoint_id().as_bytes();
-        let ticket = match self
-            .verifier
-            .verify(&token, &endpoint, &self.node_id, now_unix())
-        {
-            Ok(ticket) => ticket,
-            Err(error) => return deny(&error.to_string()),
+        let ticket = match (request.auth_token(), &self.verifier, self.open) {
+            (Some(token), Some(verifier), _) => {
+                match verifier.verify(&token, &endpoint, &self.node_id, now_unix()) {
+                    Ok(ticket) => ticket,
+                    Err(error) => return deny(&error.to_string()),
+                }
+            }
+            (_, _, Some(rate)) => open_ticket(&endpoint, rate),
+            _ => return deny("a relay ticket is required"),
         };
         let mut state = self.state.lock();
         if state.standings.get(&ticket.account_id) == Some(&Standing::Suspended) {
@@ -350,6 +357,29 @@ impl AccessControl for Gate {
 
     fn on_disconnect(&self, _endpoint_id: EndpointId, connection_id: ConnectionId) {
         self.0.state.lock().connections.remove(&connection_id);
+    }
+}
+
+/// What a self-hosted node admits an endpoint with: an account of its own, so
+/// one busy device cannot use up another's rate.
+fn open_ticket(endpoint: &[u8; 32], rate: Rate) -> yttt_relay_ticket::Ticket {
+    let mut id = [0_u8; 8];
+    id.copy_from_slice(&endpoint[..8]);
+    yttt_relay_ticket::Ticket {
+        account_id: u64::from_be_bytes(id) | (1 << 63),
+        endpoint_id: *endpoint,
+        node_id: String::new(),
+        rate_bps: rate.bytes_per_second,
+        burst_bytes: rate.burst_bytes,
+        issued_unix: now_unix(),
+        expires_unix: u64::MAX,
+    }
+}
+
+pub(crate) fn open_rate(rate_bps: u32, burst_bytes: u32) -> Rate {
+    Rate {
+        bytes_per_second: rate_bps,
+        burst_bytes,
     }
 }
 

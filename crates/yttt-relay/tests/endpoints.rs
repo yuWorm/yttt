@@ -249,3 +249,60 @@ async fn an_endpoint_waiting_for_a_ticket_joins_the_node_once_it_has_one() {
     host.close().await;
     node.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_self_hosted_node_relays_for_endpoints_without_tickets() {
+    let mut config = NodeConfig::local(NODE, "127.0.0.1:0".parse().unwrap(), &[]);
+    config.open = Some(yttt_relay::OpenConfig {
+        rate_bps: 10_000_000,
+        burst_bytes: 1_000_000,
+    });
+    let node = RelayNode::spawn(config).await.unwrap();
+    let url = format!("http://{}", node.addr());
+    let host = endpoint(DirectPaths::Off, HOST, &url, None, vec![ALPN.to_vec()]).await;
+    let server = tokio::spawn({
+        let host = host.clone();
+        async move {
+            let connection = host.accept().await.unwrap();
+            let mut stream = connection.accept_stream().await.unwrap();
+            let mut buffer = [0_u8; 5];
+            stream.read_exact(&mut buffer).await.unwrap();
+            stream.write_all(&buffer).await.unwrap();
+            connection.closed().await;
+        }
+    });
+    let phone = endpoint(DirectPaths::Off, PHONE, &url, None, Vec::new()).await;
+    let connector = IrohConnector::new(
+        phone.clone(),
+        PeerAddr {
+            key: host.id(),
+            relay_url: Some(url.clone()),
+            direct_addrs: Vec::new(),
+        },
+        ALPN,
+    );
+    let mut stream = connector.connect().await.unwrap();
+    stream.write_all(b"hello").await.unwrap();
+    let mut reply = [0_u8; 5];
+    tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&reply, b"hello");
+    phone.close().await;
+    host.close().await;
+    server.abort();
+    node.shutdown().await;
+
+    let mut both = NodeConfig::local(NODE, "127.0.0.1:0".parse().unwrap(), &[]);
+    both.open = Some(yttt_relay::OpenConfig {
+        rate_bps: 1,
+        burst_bytes: 1,
+    });
+    both.control = Some(yttt_relay::ControlConfig::from_parts(
+        "http://control".into(),
+        "token".into(),
+        15,
+    ));
+    assert!(RelayNode::spawn(both).await.is_err());
+}
