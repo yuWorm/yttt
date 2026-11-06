@@ -8,6 +8,7 @@
 //! no key that could open, forge or redirect traffic between devices.
 
 mod config;
+pub mod enroll;
 mod framing;
 mod http;
 mod node;
@@ -20,7 +21,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use yttt_relay_ticket::{TicketVerifier, api::AccountStanding};
 
-pub use config::{ControlConfig, NodeConfig, OpenConfig, TlsFiles};
+pub use config::{AcmeSettings, ControlConfig, NodeConfig, OpenConfig, TlsFiles};
 pub use node::AccountSnapshot;
 
 const PRUNE_TICK: Duration = Duration::from_secs(10);
@@ -35,6 +36,8 @@ pub enum StartError {
     OpenWithControl,
     #[error("QUIC address discovery needs TLS")]
     QuicWithoutTls,
+    #[error("set either [tls] or [acme], not both")]
+    TlsAndAcme,
     #[error("could not load TLS files: {0}")]
     Tls(String),
     #[error("could not bind {addr}: {source}")]
@@ -80,9 +83,26 @@ impl RelayNode {
             .open
             .map(|open| node::open_rate(open.rate_bps, open.burst_bytes));
         let node = Arc::new(node::Node::new(config.node_id.clone(), verifier, open));
-        let tls = config.tls.as_ref().map(load_tls).transpose()?;
         let cancel = CancellationToken::new();
         let mut tasks = JoinSet::new();
+        let (tls, server_config) = match (&config.tls, &config.acme) {
+            (Some(_), Some(_)) => return Err(StartError::TlsAndAcme),
+            (Some(files), None) => {
+                let server_config = load_tls(files)?;
+                (
+                    Some(http::Tls::Manual(TlsAcceptor::from(server_config.clone()))),
+                    Some(server_config),
+                )
+            }
+            (None, Some(acme)) => {
+                let (acceptor, server_config) = start_acme(acme, &mut tasks, cancel.clone());
+                (
+                    Some(http::Tls::Acme(acceptor, server_config.clone())),
+                    Some(server_config),
+                )
+            }
+            (None, None) => (None, None),
+        };
 
         let listener = bind(config.listen).await?;
         let addr = listener.local_addr().map_err(|source| StartError::Bind {
@@ -91,11 +111,11 @@ impl RelayNode {
         })?;
         tasks.spawn(http::serve(
             listener,
-            tls.clone().map(TlsAcceptor::from),
+            tls.clone(),
             node.clone(),
             cancel.clone(),
         ));
-        if let (Some(_), Some(captive)) = (&tls, config.captive_portal_listen) {
+        if let (Some(_), Some(captive)) = (&server_config, config.captive_portal_listen) {
             tasks.spawn(http::serve_captive_portal(
                 bind(captive).await?,
                 cancel.clone(),
@@ -105,8 +125,10 @@ impl RelayNode {
         let quic = match config.quic_listen {
             None => None,
             Some(quic_addr) => {
-                let tls = tls.as_ref().ok_or(StartError::QuicWithoutTls)?;
+                let tls = server_config.as_ref().ok_or(StartError::QuicWithoutTls)?;
                 let mut quic = iroh_relay::server::QuicConfig::new(quic_addr);
+                // With ACME this shares the certificate resolver, so QUIC
+                // picks up each new certificate too.
                 quic.server_config = Some((**tls).clone());
                 let mut server = iroh_relay::server::ServerConfig::default();
                 server.quic = Some(quic);
@@ -184,6 +206,53 @@ async fn bind(addr: SocketAddr) -> Result<TcpListener, StartError> {
     TcpListener::bind(addr)
         .await
         .map_err(|source| StartError::Bind { addr, source })
+}
+
+/// Starts requesting and renewing certificates; connections are served with
+/// whatever certificate the resolver holds, and fail TLS until the first one
+/// arrives.
+fn start_acme(
+    settings: &AcmeSettings,
+    tasks: &mut JoinSet<()>,
+    cancel: CancellationToken,
+) -> (tokio_rustls_acme::AcmeAcceptor, Arc<rustls::ServerConfig>) {
+    use futures_util::StreamExt as _;
+    // tokio-rustls-acme builds its own configs from the process default.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut state = tokio_rustls_acme::AcmeConfig::new(&settings.domains)
+        .contact(settings.contact.iter().map(|contact| {
+            if contact.starts_with("mailto:") {
+                contact.clone()
+            } else {
+                format!("mailto:{contact}")
+            }
+        }))
+        .directory_lets_encrypt(!settings.staging)
+        .cache_option(Some(tokio_rustls_acme::caches::DirCache::new(
+            settings.cache_dir.clone(),
+        )))
+        .state();
+    let acceptor = state.acceptor();
+    let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring supports the default TLS versions")
+    .with_no_client_auth()
+    .with_cert_resolver(state.resolver());
+    tasks.spawn(async move {
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => return,
+                event = state.next() => match event {
+                    Some(Ok(event)) => tracing::info!(?event, "certificate"),
+                    Some(Err(error)) => tracing::warn!(?error, "certificate request failed; retrying"),
+                    None => return,
+                },
+            }
+        }
+    });
+    (acceptor, Arc::new(server_config))
 }
 
 fn load_tls(files: &TlsFiles) -> Result<Arc<rustls::ServerConfig>, StartError> {

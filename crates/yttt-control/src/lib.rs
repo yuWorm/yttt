@@ -9,6 +9,7 @@ mod admin;
 mod api;
 mod auth;
 mod config;
+mod nodes;
 mod web;
 
 use std::{
@@ -21,7 +22,7 @@ use axum::{
     Json, Router,
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{any, delete, get, post},
+    routing::{any, delete, get, patch, post},
 };
 use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -86,12 +87,14 @@ impl Control {
             source,
         })?;
         let ticket_key = signer.public_key();
-        let router = router(Arc::new(AppState {
+        let state = Arc::new(AppState {
             pool,
             signer,
             config,
             limits: auth::Limits::default(),
-        }));
+        });
+        let probe = tokio::spawn(nodes::probe_loop(state.clone()));
+        let router = router(state);
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             let _ = axum::serve(
@@ -102,6 +105,7 @@ impl Control {
                 let _ = stopped.await;
             })
             .await;
+            probe.abort();
         });
         Ok(Self {
             addr,
@@ -155,6 +159,23 @@ fn router(state: Arc<AppState>) -> Router {
             delete(admin::remove_device),
         )
         .route("/v1/admin/plans", get(admin::plans))
+        .route("/v1/admin/nodes", get(nodes::list).post(nodes::create))
+        .route(
+            "/v1/admin/nodes/{node_id}",
+            patch(nodes::change).delete(nodes::remove),
+        )
+        .route(
+            "/v1/admin/nodes/{node_id}/enrollment",
+            post(nodes::regenerate),
+        )
+        .route(
+            "/v1/admin/nodes/{node_id}/accounts/move/{to}",
+            post(nodes::move_accounts),
+        )
+        .route("/v1/nodes/enroll", post(nodes::enroll))
+        .route("/install/relay.sh", get(nodes::install_script))
+        .route("/install/bin/{file}", get(nodes::install_binary))
+        .route("/install/{*rest}", any(|| async { Failure::not_found() }))
         .route("/v1/admin/audit", get(admin::audit_log))
         // Unknown API paths answer as the API, never with the console page.
         .route("/v1/{*rest}", any(|| async { Failure::not_found() }));

@@ -22,6 +22,8 @@ sha1 = "0.11"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+# The same version iroh-relay uses for its own automatic certificates.
+tokio-rustls-acme = "0.9"
 tokio-util = "0.7"
 tokio-websockets = { version = "0.13", default-features = false, features = ["server", "ring"] }
 toml = "0.8"
@@ -30,6 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 yttt-relay-ticket = { path = "../yttt-relay-ticket" }
 
 [dev-dependencies]
+tempfile = "3"
 yttt-transport = { path = "../yttt-transport" }
 yttt-transport-iroh = { path = "../yttt-transport-iroh" }
 iroh-dns = "=1.4.1"

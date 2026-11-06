@@ -23,6 +23,7 @@ use iroh_relay::{
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls_acme::AcmeAcceptor;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -41,9 +42,18 @@ const CHALLENGE_RESPONSE_HEADER: &str = "X-Iroh-Response";
 
 type Body = Full<Bytes>;
 
+/// How the relay listener speaks TLS, when it does.
+#[derive(Clone)]
+pub(crate) enum Tls {
+    Manual(TlsAcceptor),
+    /// Certificates from Let's Encrypt; also answers its TLS-ALPN-01
+    /// validation connections.
+    Acme(AcmeAcceptor, Arc<rustls::ServerConfig>),
+}
+
 pub(crate) async fn serve(
     listener: TcpListener,
-    tls: Option<TlsAcceptor>,
+    tls: Option<Tls>,
     node: Arc<Node>,
     cancel: CancellationToken,
 ) {
@@ -72,18 +82,35 @@ pub(crate) async fn serve(
     }
 }
 
-async fn serve_connection(stream: TcpStream, tls: Option<TlsAcceptor>, node: Arc<Node>) {
+async fn serve_connection(stream: TcpStream, tls: Option<Tls>, node: Arc<Node>) {
     // The relay protocol sends many small frames; never hold them back.
     let _ = stream.set_nodelay(true);
-    let io = match tls {
-        None => MaybeTlsStream::Plain(stream),
-        Some(acceptor) => {
-            match tokio::time::timeout(ESTABLISH_TIMEOUT, acceptor.accept(stream)).await {
-                Ok(Ok(stream)) => MaybeTlsStream::Tls(stream),
-                Ok(Err(error)) => return debug!(%error, "TLS handshake failed"),
-                Err(_) => return debug!("TLS handshake timed out"),
-            }
+    let accepted = match tls {
+        None => Ok(Ok(Some(MaybeTlsStream::Plain(stream)))),
+        Some(Tls::Manual(acceptor)) => {
+            tokio::time::timeout(ESTABLISH_TIMEOUT, acceptor.accept(stream))
+                .await
+                .map(|accepted| accepted.map(|stream| Some(MaybeTlsStream::Tls(stream))))
         }
+        Some(Tls::Acme(acceptor, config)) => {
+            tokio::time::timeout(ESTABLISH_TIMEOUT, async move {
+                match acceptor.accept(stream).await? {
+                    // A certificate authority's validation, answered already.
+                    None => Ok(None),
+                    Some(start) => start
+                        .into_stream(config)
+                        .await
+                        .map(|stream| Some(MaybeTlsStream::Tls(stream))),
+                }
+            })
+            .await
+        }
+    };
+    let io = match accepted {
+        Ok(Ok(Some(io))) => io,
+        Ok(Ok(None)) => return,
+        Ok(Err(error)) => return debug!(%error, "TLS handshake failed"),
+        Err(_) => return debug!("TLS handshake timed out"),
     };
     let plain = matches!(io, MaybeTlsStream::Plain(_));
     let service = service_fn(move |request| {

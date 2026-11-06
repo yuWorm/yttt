@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use yttt_relay::{NodeConfig, RelayNode};
 
-const USAGE: &str = "usage: yttt-relay --config <path.toml>";
+const USAGE: &str = "usage: yttt-relay --config <path.toml> | enroll … | --version";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -13,17 +13,33 @@ async fn main() -> ExitCode {
         )
         .init();
     let mut args = std::env::args().skip(1);
-    let path = match (args.next().as_deref(), args.next()) {
-        (Some("--config"), Some(path)) => path,
+    let path = match args.next().as_deref() {
+        Some("--version") => {
+            println!("yttt-relay {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Some("enroll") => {
+            return match yttt_relay::enroll::run(args).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("yttt-relay enroll: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Some("--config") => match args.next() {
+            Some(path) => path,
+            None => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
     };
-    let config = match std::fs::read_to_string(&path)
-        .map_err(|error| error.to_string())
-        .and_then(|text| NodeConfig::from_toml(&text).map_err(|error| error.to_string()))
-    {
+    let config = match NodeConfig::load(std::path::Path::new(&path)) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{path}: {error}");

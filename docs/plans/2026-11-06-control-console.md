@@ -28,7 +28,7 @@
 
 ## 4. 防暴力尝试
 
-登录与注册按来源 IP 限流（内存令牌桶：每 IP 每分钟 10 次，突发 5 次；超过返回 429）。来源 IP 取 TCP 对端地址；配置 `trusted_proxy = true` 时取 `X-Forwarded-For` 最后一跳。argon2 校验本身已在阻塞线程池执行。
+登录与注册按来源 IP 限流（内存令牌桶：每 IP 每分钟 20 次，突发 10 次；超过返回 429；同一邮箱连续失败 10 次锁定 15 分钟）。来源 IP 取 TCP 对端地址；配置 `trusted_proxy = true` 时取 `X-Forwarded-For` 最后一跳。argon2 校验本身已在阻塞线程池执行。
 
 ## 5. 后端变更（`yttt-control`）
 

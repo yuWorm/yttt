@@ -30,8 +30,8 @@ pub(crate) const COOKIE_SECURE: &str = "__Host-yttt_session";
 pub(crate) const COOKIE_PLAIN: &str = "yttt_session";
 
 /// Guesses per source before it must wait, and how fast it earns them back.
-const ATTEMPT_BURST: f64 = 5.0;
-const ATTEMPTS_PER_MINUTE: f64 = 10.0;
+const ATTEMPT_BURST: f64 = 10.0;
+const ATTEMPTS_PER_MINUTE: f64 = 20.0;
 /// Failed logins in a row before an email is locked for a while.
 const MAX_EMAIL_FAILURES: u32 = 10;
 const EMAIL_LOCK: Duration = Duration::from_secs(15 * 60);
@@ -284,16 +284,15 @@ pub(crate) async fn end_sessions(
 }
 
 /// The caller's address: the TCP peer, or the last `X-Forwarded-For` hop
-/// behind one trusted proxy. IPv6 callers are grouped by /64, the smallest
-/// block one user commonly holds.
-pub(crate) fn client_key(
-    parts_headers: &HeaderMap,
+/// behind one trusted proxy.
+pub(crate) fn client_ip(
+    headers: &HeaderMap,
     peer: Option<SocketAddr>,
     trusted_proxy: bool,
 ) -> IpAddr {
     let forwarded = trusted_proxy
         .then(|| {
-            parts_headers
+            headers
                 .get("x-forwarded-for")?
                 .to_str()
                 .ok()?
@@ -304,10 +303,19 @@ pub(crate) fn client_key(
                 .ok()
         })
         .flatten();
-    let ip = forwarded
+    forwarded
         .or(peer.map(|peer| peer.ip()))
-        .unwrap_or(IpAddr::from([0, 0, 0, 0]));
-    match ip {
+        .unwrap_or(IpAddr::from([0, 0, 0, 0]))
+}
+
+/// The caller as rate limits count it: IPv6 callers are grouped by /64, the
+/// smallest block one user commonly holds.
+pub(crate) fn client_key(
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    trusted_proxy: bool,
+) -> IpAddr {
+    match client_ip(headers, peer, trusted_proxy) {
         IpAddr::V6(ip) => {
             let mut segments = ip.segments();
             segments[4..].fill(0);

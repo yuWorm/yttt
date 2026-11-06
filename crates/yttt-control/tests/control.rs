@@ -58,7 +58,7 @@ impl Harness {
         let (prefix, _) = server.rsplit_once('/').unwrap();
         let config = ControlConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
-            public_url: None,
+            public_url: Some("http://127.0.0.1".into()),
             web_root: None,
             relay_binaries_dir: None,
             trusted_proxy: false,
@@ -724,7 +724,7 @@ async fn guessing_passwords_is_slowed_for_every_login_door() {
     let harness = Harness::start().await;
     harness.account("victim@example.com").await;
     let mut statuses = Vec::new();
-    for _ in 0..8 {
+    for _ in 0..14 {
         statuses.push(
             harness
                 .status(
@@ -865,4 +865,200 @@ async fn a_disabled_node_drops_its_devices_and_restarts_keep_managed_nodes() {
 fn sha2_hex(text: &str) -> Vec<u8> {
     use sha2::Digest as _;
     sha2::Sha256::digest(text.as_bytes()).to_vec()
+}
+
+fn enrollment_token(command: &str) -> String {
+    let start = command.find("YTTT_ENROLL='").unwrap() + "YTTT_ENROLL='".len();
+    command[start..].split('\'').next().unwrap().to_string()
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_node_deploys_from_a_one_time_command_and_comes_online() {
+    let harness = Harness::start().await;
+    let (_, admin_token) = harness.account("admin@example.com").await;
+    yttt_control::promote_admin(&harness.config, "admin@example.com")
+        .await
+        .unwrap();
+    let admin = |method: reqwest::Method, path: &str| {
+        harness
+            .http
+            .request(method, format!("{}{path}", harness.base))
+            .bearer_auth(&admin_token)
+    };
+    let created: serde_json::Value = admin(reqwest::Method::POST, "/v1/admin/nodes")
+        .json(&serde_json::json!({"id": "osaka-1", "name": "Osaka"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(created["node"]["status"], "pending");
+    let command = created["command"].as_str().unwrap().to_string();
+    let first = enrollment_token(&command);
+
+    // The command pins the installer it was generated with.
+    let script = harness
+        .http
+        .get(format!("{}/install/relay.sh", harness.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(command.contains(&sha2_hex_string(&script)));
+    assert!(script.contains("CONTROL='http://127.0.0.1'"));
+
+    let enroll = |token: &str| {
+        harness
+            .http
+            .post(format!("{}/v1/nodes/enroll", harness.base))
+            .json(&serde_json::json!({"token": token, "port": 4433}))
+            .send()
+    };
+    let enrolled: serde_json::Value = enroll(&first).await.unwrap().json().await.unwrap();
+    assert_eq!(enrolled["node_id"], "osaka-1");
+    assert_eq!(enrolled["url"], "http://127.0.0.1:4433");
+    assert_eq!(
+        enrolled["ticket_keys"][0],
+        yttt_relay_ticket::hex(&harness.control.ticket_key())
+    );
+    let first_node_token = enrolled["node_token"].as_str().unwrap().to_string();
+    assert_eq!(
+        enroll(&first).await.unwrap().status(),
+        StatusCode::FORBIDDEN,
+        "single use"
+    );
+
+    // A regenerated command voids the old unused one and rotates the node token on use.
+    let again: serde_json::Value =
+        admin(reqwest::Method::POST, "/v1/admin/nodes/osaka-1/enrollment")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let unused: serde_json::Value =
+        admin(reqwest::Method::POST, "/v1/admin/nodes/osaka-1/enrollment")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(
+        enroll(&enrollment_token(again["command"].as_str().unwrap()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let rotated: serde_json::Value = enroll(&enrollment_token(unused["command"].as_str().unwrap()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let node_token = rotated["node_token"].as_str().unwrap().to_string();
+    let report = |token: String| {
+        harness
+            .http
+            .post(format!("{}/v1/nodes/osaka-1/usage", harness.base))
+            .bearer_auth(token)
+            .json(&UsageReport {
+                version: Some("0.3.21".into()),
+                accounts: Vec::new(),
+            })
+            .send()
+    };
+    assert_eq!(
+        report(first_node_token).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        report(node_token.clone())
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let nodes: serde_json::Value = admin(reqwest::Method::GET, "/v1/admin/nodes")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let osaka = nodes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "osaka-1")
+        .unwrap();
+    assert_eq!(osaka["status"], "online");
+    assert_eq!(osaka["version"], "0.3.21");
+
+    // Accounts move there, then the node is disabled: they are suspended on it.
+    let (carol, _) = harness.account("carol@example.com").await;
+    let moved = admin(
+        reqwest::Method::PATCH,
+        &format!("/v1/admin/accounts/{carol}"),
+    )
+    .json(&serde_json::json!({"node": "osaka-1"}))
+    .send()
+    .await
+    .unwrap()
+    .status();
+    assert_eq!(moved, StatusCode::NO_CONTENT);
+    assert_eq!(
+        admin(reqwest::Method::DELETE, "/v1/admin/nodes/osaka-1")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    admin(reqwest::Method::PATCH, "/v1/admin/nodes/osaka-1")
+        .json(&serde_json::json!({"disabled": true}))
+        .send()
+        .await
+        .unwrap();
+    let reply: UsageReply = harness
+        .http
+        .post(format!("{}/v1/nodes/osaka-1/usage", harness.base))
+        .bearer_auth(&node_token)
+        .json(&UsageReport {
+            version: None,
+            accounts: vec![AccountUsage {
+                account_id: carol,
+                upstream_bytes: 0,
+                endpoints: Vec::new(),
+            }],
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reply.accounts[0].standing, Standing::Suspended);
+    let audit: serde_json::Value = admin(reqwest::Method::GET, "/v1/admin/audit")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(audit[0]["action"], "disable_node");
+    harness.control.shutdown().await;
+}
+
+fn sha2_hex_string(text: &str) -> String {
+    sha2_hex(text)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

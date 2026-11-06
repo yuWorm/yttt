@@ -12,6 +12,10 @@ pub struct NodeConfig {
     pub listen: SocketAddr,
     #[serde(default)]
     pub tls: Option<TlsFiles>,
+    /// Certificates from Let's Encrypt instead of files; needs `listen` on 443
+    /// reachable from the internet.
+    #[serde(default)]
+    pub acme: Option<AcmeSettings>,
     /// Plain HTTP for captive-portal probes when `listen` is HTTPS.
     #[serde(default)]
     pub captive_portal_listen: Option<SocketAddr>,
@@ -42,6 +46,20 @@ pub struct OpenConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AcmeSettings {
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub contact: Vec<String>,
+    /// Where the account key and certificates persist; losing it means asking
+    /// Let's Encrypt again, which it limits.
+    pub cache_dir: PathBuf,
+    /// Let's Encrypt's staging directory, for trying a setup out.
+    #[serde(default)]
+    pub staging: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TlsFiles {
     pub cert_chain: PathBuf,
     pub private_key: PathBuf,
@@ -51,7 +69,12 @@ pub struct TlsFiles {
 #[serde(deny_unknown_fields)]
 pub struct ControlConfig {
     pub url: String,
+    #[serde(default)]
     pub node_token: String,
+    /// Reads the token from a file instead. A relative path is looked up in
+    /// systemd's `$CREDENTIALS_DIRECTORY` when set, else beside the config.
+    #[serde(default)]
+    pub node_token_file: Option<PathBuf>,
     #[serde(default = "default_report_interval_secs")]
     pub report_interval_secs: u64,
 }
@@ -61,6 +84,7 @@ impl ControlConfig {
         Self {
             url,
             node_token,
+            node_token_file: None,
             report_interval_secs,
         }
     }
@@ -92,6 +116,7 @@ impl NodeConfig {
             node_id: node_id.into(),
             listen,
             tls: None,
+            acme: None,
             captive_portal_listen: None,
             quic_listen: None,
             ticket_keys: ticket_keys
@@ -105,6 +130,39 @@ impl NodeConfig {
 
     pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
+    }
+
+    /// Reads a config file and the node token it points at.
+    pub fn load(path: &std::path::Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+        let mut config = Self::from_toml(&text).map_err(|error| error.to_string())?;
+        if let Some(control) = &mut config.control
+            && let Some(file) = &control.node_token_file
+        {
+            let file = if file.is_relative() {
+                match std::env::var_os("CREDENTIALS_DIRECTORY") {
+                    Some(directory) => PathBuf::from(directory).join(file),
+                    None => path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join(file),
+                }
+            } else {
+                file.clone()
+            };
+            control.node_token = std::fs::read_to_string(&file)
+                .map_err(|error| format!("{}: {error}", file.display()))?
+                .trim()
+                .to_owned();
+        }
+        if config
+            .control
+            .as_ref()
+            .is_some_and(|control| control.node_token.is_empty())
+        {
+            return Err("[control] needs node_token or node_token_file".into());
+        }
+        Ok(config)
     }
 }
 
