@@ -176,7 +176,7 @@ TLS 入口沿用现有行为（等同 `full`），不受设备 ACL 约束（见 
 YTTT-PAIR:1:<BASE32(cbor{host, relay, direct_hint, inv, s, env, profile})>
 ```
 
-全部使用大写字母、数字和 `:`、`-`，二维码可以使用更紧凑的字母数字模式；解析时不区分大小写。字段：Host EndpointId、relay URL、Host 当前直连地址提示、16B 邀请 ID、32B 邀请秘密、EnvironmentId、ProfileId。二维码只在应用内扫描；不写入剪贴板，不注册为系统 URL handler（遵守现有设计中“秘密不进 argv 或 deep-link”的约束）。桌面 Client 没有摄像头时，在应用内粘贴同一字符串；也可以经 `RemoteLaunch` 的私有 stdin 传入。
+全部使用大写字母、数字和 `:`、`-`，二维码可以使用更紧凑的字母数字模式；解析时不区分大小写。字段：Host EndpointId、relay URL、Host 当前直连地址提示、16B 邀请 ID、32B 邀请秘密、EnvironmentId、ProfileId。二维码只在应用内扫描；不注册为系统 URL handler（遵守现有设计中“秘密不进 argv 或 deep-link”的约束）。桌面 Client 没有摄像头时，在应用内粘贴同一字符串。为此允许 Host 用户主动复制文本（默认只显示二维码，文本需点开）；邀请结束时若剪贴板仍是该码则清空。码单次有效、5 分钟过期、需 Host 用户核对 6 位码，第二个持码者会使邀请作废，泄露的影响有上限（2026-11-06 修订，见 [p2p-app-integration](2026-11-06-p2p-app-integration.md) §2.4）。
 
 ### 7.2 消息流程
 
