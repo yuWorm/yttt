@@ -30,6 +30,17 @@ const LAPTOP: [u8; 32] = [21; 32];
 const PHONE: [u8; 32] = [22; 32];
 const TABLET: [u8; 32] = [23; 32];
 
+/// Sends a request as the console does: its cookie and its header.
+trait AsConsole {
+    fn console(self, cookie: &str) -> Self;
+}
+
+impl AsConsole for reqwest::RequestBuilder {
+    fn console(self, cookie: &str) -> Self {
+        self.header("cookie", cookie).header("x-yttt-web", "1")
+    }
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -165,6 +176,27 @@ impl Harness {
             .unwrap();
         assert_eq!(session.account_id, created.account_id);
         (created.account_id, session.token)
+    }
+
+    /// Signs in on the console and returns its cookie: administration and
+    /// sign-in settings take nothing else.
+    async fn console(&self, email: &str) -> String {
+        let response = self
+            .http
+            .post(format!("{}/v1/web/session", self.base))
+            .header("x-yttt-web", "1")
+            .json(&serde_json::json!({"email": email, "password": "correct horse"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        response.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
     }
 
     async fn register(&self, session: &str, account: u64, device: &[u8; 32]) -> StatusCode {
@@ -763,11 +795,12 @@ async fn only_administrators_manage_accounts_and_every_change_is_audited() {
             .await
             .unwrap()
     );
+    let admin_cookie = harness.console("admin@example.com").await;
     let admin = |method: reqwest::Method, path: &str| {
         harness
             .http
             .request(method, format!("{}{path}", harness.base))
-            .bearer_auth(&admin_token)
+            .console(&admin_cookie)
     };
     let overview: serde_json::Value = admin(reqwest::Method::GET, "/v1/admin/overview")
         .send()
@@ -876,15 +909,16 @@ fn enrollment_token(command: &str) -> String {
 #[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_node_deploys_from_a_one_time_command_and_comes_online() {
     let harness = Harness::start().await;
-    let (_, admin_token) = harness.account("admin@example.com").await;
+    harness.account("admin@example.com").await;
     yttt_control::promote_admin(&harness.config, "admin@example.com")
         .await
         .unwrap();
+    let admin_cookie = harness.console("admin@example.com").await;
     let admin = |method: reqwest::Method, path: &str| {
         harness
             .http
             .request(method, format!("{}{path}", harness.base))
-            .bearer_auth(&admin_token)
+            .console(&admin_cookie)
     };
     let created: serde_json::Value = admin(reqwest::Method::POST, "/v1/admin/nodes")
         .json(&serde_json::json!({"id": "osaka-1", "name": "Osaka"}))
@@ -1108,8 +1142,15 @@ async fn a_fresh_deployment_gets_its_first_administrator_before_any_node() {
     assert_eq!(me.role, "admin");
 
     // The sign-up node waits to be deployed from the console.
+    let cookie = harness.console("admin@example.com").await;
     let nodes: serde_json::Value = harness
-        .get("/v1/admin/nodes", &session.token)
+        .http
+        .get(format!("{}/v1/admin/nodes", harness.base))
+        .console(&cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
         .await
         .unwrap();
     assert_eq!(nodes[0]["id"], NODE);
@@ -1117,7 +1158,7 @@ async fn a_fresh_deployment_gets_its_first_administrator_before_any_node() {
     let deploy: serde_json::Value = harness
         .http
         .post(format!("{}/v1/admin/nodes/{NODE}/enrollment", harness.base))
-        .bearer_auth(&session.token)
+        .console(&cookie)
         .send()
         .await
         .unwrap()
@@ -1139,19 +1180,20 @@ async fn a_fresh_deployment_gets_its_first_administrator_before_any_node() {
 }
 
 /// An administrator session and a request builder for it.
+/// A console cookie for a new administrator.
 async fn admin_session(harness: &Harness, email: &str) -> String {
-    let (_, token) = harness.account(email).await;
+    harness.account(email).await;
     assert!(
         yttt_control::promote_admin(&harness.config, email)
             .await
             .unwrap()
     );
-    token
+    harness.console(email).await
 }
 
 async fn send(
     harness: &Harness,
-    token: &str,
+    cookie: &str,
     method: reqwest::Method,
     path: &str,
     body: Option<serde_json::Value>,
@@ -1159,7 +1201,7 @@ async fn send(
     let mut request = harness
         .http
         .request(method, format!("{}{path}", harness.base))
-        .bearer_auth(token);
+        .console(cookie);
     if let Some(body) = body {
         request = request.json(&body);
     }
@@ -1330,7 +1372,7 @@ async fn plans_are_run_from_the_console_and_reach_nodes_on_their_next_report() {
     let plans: serde_json::Value = harness
         .http
         .get(format!("{base}/v1/admin/plans"))
-        .bearer_auth(&admin)
+        .console(&admin)
         .send()
         .await
         .unwrap()
@@ -1348,7 +1390,7 @@ async fn plans_are_run_from_the_console_and_reach_nodes_on_their_next_report() {
     let audit: serde_json::Value = harness
         .http
         .get(format!("{base}/v1/admin/audit"))
-        .bearer_auth(&admin)
+        .console(&admin)
         .send()
         .await
         .unwrap()
@@ -1460,5 +1502,233 @@ async fn administrators_open_accounts_reset_passwords_and_see_daily_traffic() {
     )
     .await;
     assert_eq!(page["total"], 1);
+    harness.control.shutdown().await;
+}
+
+/// RFC 7636 Appendix B.
+const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+const REDIRECT: &str = "http://127.0.0.1:53682/callback";
+
+fn query_value(url: &str, name: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then(|| value.to_string())
+    })
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn the_app_signs_in_through_the_browser_and_gets_only_a_device_session() {
+    let harness = Harness::start().await;
+    let cookie = admin_session(&harness, "admin@example.com").await;
+    let authorize = |body: serde_json::Value| {
+        send(
+            &harness,
+            &cookie,
+            reqwest::Method::POST,
+            "/v1/oauth/authorize",
+            Some(body),
+        )
+    };
+    let request = |allow: Option<bool>, redirect: &str| {
+        serde_json::json!({
+            "redirect_uri": redirect,
+            "state": "app-state",
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "label": "laptop",
+            "allow": allow,
+        })
+    };
+
+    // The page checks the request first and never follows a foreign redirect.
+    let (status, checked) = authorize(request(None, REDIRECT)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(checked["label"], "laptop");
+    assert!(checked.get("redirect").is_none());
+    let (status, _) = authorize(request(Some(true), "http://127.0.0.1:1@evil.example/cb")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut plain = request(Some(true), REDIRECT);
+    plain["code_challenge_method"] = "plain".into();
+    assert_eq!(authorize(plain).await.0, StatusCode::BAD_REQUEST);
+
+    // Denying goes back to the app with the state.
+    let (_, denied) = authorize(request(Some(false), REDIRECT)).await;
+    let denied = denied["redirect"].as_str().unwrap();
+    assert!(denied.starts_with(REDIRECT));
+    assert_eq!(
+        query_value(denied, "error").as_deref(),
+        Some("access_denied")
+    );
+    assert_eq!(query_value(denied, "state").as_deref(), Some("app-state"));
+
+    let exchange = |code: &str, verifier: &str| {
+        harness
+            .http
+            .post(format!("{}/v1/oauth/token", harness.base))
+            .json(&serde_json::json!({
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": verifier,
+                "redirect_uri": REDIRECT,
+            }))
+            .send()
+    };
+    let code_from = |answer: serde_json::Value| {
+        let redirect = answer["redirect"].as_str().unwrap().to_string();
+        assert_eq!(
+            query_value(&redirect, "state").as_deref(),
+            Some("app-state")
+        );
+        query_value(&redirect, "code").unwrap()
+    };
+
+    // A code without its verifier is worthless, and burns.
+    let (_, allowed) = authorize(request(Some(true), REDIRECT)).await;
+    let stolen = code_from(allowed);
+    let wrong = exchange(&stolen, &"x".repeat(43)).await.unwrap();
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        exchange(&stolen, VERIFIER).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let (_, allowed) = authorize(request(Some(true), REDIRECT)).await;
+    let code = code_from(allowed);
+    let granted: SessionGranted = exchange(&code, VERIFIER)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let again = exchange(&code, VERIFIER).await.unwrap();
+    assert_eq!(again.status(), StatusCode::BAD_REQUEST, "a code works once");
+
+    // The session does what a device does …
+    let me: AccountView = harness
+        .get("/v1/accounts/me", &granted.token)
+        .await
+        .unwrap();
+    assert_eq!(me.email, "admin@example.com");
+    assert_eq!(
+        harness
+            .register(&granted.token, granted.account_id, &LAPTOP)
+            .await,
+        StatusCode::CREATED
+    );
+    // … and nothing a console session does, not even carried in a cookie.
+    let as_cookie = format!("yttt_session={}", granted.token);
+    for (method, path) in [
+        (reqwest::Method::GET, "/v1/admin/overview"),
+        (reqwest::Method::POST, "/v1/accounts/me/password"),
+        (reqwest::Method::POST, "/v1/oauth/authorize"),
+        (reqwest::Method::POST, "/v1/oauth/device/confirm"),
+    ] {
+        let body = serde_json::json!({"current": "correct horse", "new": "another horse", "user_code": "ABCD-EFGH"});
+        for request in [
+            harness
+                .http
+                .request(method.clone(), format!("{}{path}", harness.base))
+                .bearer_auth(&granted.token),
+            harness
+                .http
+                .request(method.clone(), format!("{}{path}", harness.base))
+                .console(&as_cookie),
+        ] {
+            let status = request.json(&body).send().await.unwrap().status();
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
+        }
+    }
+    harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_headless_device_signs_in_once_someone_confirms_its_short_code() {
+    let harness = Harness::start().await;
+    harness.account("alice@example.com").await;
+    let cookie = harness.console("alice@example.com").await;
+    let start = || async {
+        let response = harness
+            .http
+            .post(format!("{}/v1/oauth/device", harness.base))
+            .json(&serde_json::json!({"label": "nas"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.json::<serde_json::Value>().await.unwrap()
+    };
+    let shared = &harness;
+    let poll = |device_code: String| async move {
+        let response = shared
+            .http
+            .post(format!("{}/v1/oauth/token", shared.base))
+            .json(&serde_json::json!({"grant_type": "device_code", "device_code": device_code}))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        (status, response.json::<serde_json::Value>().await.unwrap())
+    };
+    let confirm = |body: serde_json::Value| {
+        send(
+            &harness,
+            &cookie,
+            reqwest::Method::POST,
+            "/v1/oauth/device/confirm",
+            Some(body),
+        )
+    };
+
+    let grant = start().await;
+    let device_code = grant["device_code"].as_str().unwrap().to_string();
+    let user_code = grant["user_code"].as_str().unwrap().to_string();
+    assert_eq!(user_code.len(), 9);
+    assert_eq!(grant["verification_uri"], "http://127.0.0.1/device");
+    assert_eq!(grant["interval"], 5);
+
+    let (status, body) = poll(device_code.clone()).await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("authorization_pending"))
+    );
+    let (_, body) = poll(device_code.clone()).await;
+    assert_eq!(body["error"], "slow_down");
+
+    // Whoever confirms sees what asked, typed loosely.
+    let (status, _) = confirm(serde_json::json!({"user_code": "ZZZZ-ZZZZ"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, seen) =
+        confirm(serde_json::json!({"user_code": user_code.to_lowercase().replace('-', " ")})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(seen["label"], "nas");
+    assert_eq!(seen["requester_ip"], "127.0.0.1");
+    let (status, _) = confirm(serde_json::json!({"user_code": user_code, "allow": true})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = confirm(serde_json::json!({"user_code": user_code, "allow": true})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a code is confirmed once");
+
+    let (status, granted) = poll(device_code.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let token = granted["token"].as_str().unwrap();
+    let me: AccountView = harness.get("/v1/accounts/me", token).await.unwrap();
+    assert_eq!(me.email, "alice@example.com");
+    let (_, body) = poll(device_code).await;
+    assert_eq!(
+        body["error"], "invalid_grant",
+        "the session is handed out once"
+    );
+
+    // Denied stays denied.
+    let grant = start().await;
+    let device_code = grant["device_code"].as_str().unwrap().to_string();
+    confirm(serde_json::json!({"user_code": grant["user_code"], "allow": false})).await;
+    let (_, body) = poll(device_code.clone()).await;
+    assert_eq!(body["error"], "access_denied");
+    let (_, body) = poll(device_code).await;
+    assert_eq!(body["error"], "invalid_grant");
     harness.control.shutdown().await;
 }

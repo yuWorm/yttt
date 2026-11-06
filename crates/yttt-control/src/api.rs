@@ -94,7 +94,7 @@ pub(crate) async fn login(
 ) -> AppResult<Json<SessionGranted>> {
     let email = request.email.trim().to_ascii_lowercase();
     let account_id = auth::check_login(&state, &email, &request.password).await?;
-    let (token, expires_unix) = auth::open_session(&state, account_id).await?;
+    let (token, expires_unix) = auth::open_session(&state, account_id, auth::Scope::Device).await?;
     Ok(Json(SessionGranted {
         token,
         account_id: account_id as u64,

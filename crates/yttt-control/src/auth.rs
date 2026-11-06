@@ -41,6 +41,26 @@ const MAX_TRACKED: usize = 50_000;
 /// whether or not the account exists.
 static DECOY_HASH: LazyLock<String> = LazyLock::new(|| hash_password("decoy password"));
 
+/// Where a session came from, which decides what it may reach.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Scope {
+    /// Signed in on the console; travels in its cookie.
+    Web,
+    /// The app or the CLI: a bearer token that registers devices and gets
+    /// tickets, nothing more. Anyone tricked into approving a sign-in hands
+    /// out only this.
+    Device,
+}
+
+impl Scope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Web => "web",
+            Self::Device => "device",
+        }
+    }
+}
+
 /// An authenticated account. `suspended` accounts reach only what tells them
 /// they are suspended.
 pub(crate) struct AnySession {
@@ -48,6 +68,18 @@ pub(crate) struct AnySession {
     pub token_hash: Vec<u8>,
     pub suspended: bool,
     pub role: String,
+    /// Whether this is a console session that arrived in the console's cookie.
+    pub console: bool,
+    pub signed_in_unix: u64,
+}
+
+/// A console session: the only kind that may change how the account signs
+/// in, approve other sign-ins, or administer.
+pub(crate) struct ConsoleSession {
+    pub account_id: i64,
+    pub token_hash: Vec<u8>,
+    pub suspended: bool,
+    pub signed_in_unix: u64,
 }
 
 /// An authenticated account that is not suspended.
@@ -79,7 +111,8 @@ impl FromRequestParts<Arc<AppState>> for AnySession {
         }
         let token_hash = sha256(token.as_bytes());
         let row = sqlx::query(
-            "SELECT a.id, a.suspended, a.role FROM sessions s JOIN accounts a ON a.id = s.account_id
+            "SELECT a.id, a.suspended, a.role, s.scope, s.signed_in_unix
+             FROM sessions s JOIN accounts a ON a.id = s.account_id
              WHERE s.token_hash = $1 AND s.expires_unix > $2",
         )
         .bind(&token_hash)
@@ -92,18 +125,25 @@ impl FromRequestParts<Arc<AppState>> for AnySession {
             token_hash,
             suspended: row.get("suspended"),
             role: row.get("role"),
+            console: from_cookie && row.get::<String, _>("scope") == Scope::Web.as_str(),
+            signed_in_unix: row.get::<i64, _>("signed_in_unix").max(0) as u64,
         })
     }
 }
 
-impl Session {
-    /// Narrows an already extracted session to one that is not suspended.
-    pub(crate) fn from_any(session: &AnySession) -> Result<Self, Failure> {
-        if session.suspended {
-            return Err(Failure::forbidden("the account is suspended"));
+impl FromRequestParts<Arc<AppState>> for ConsoleSession {
+    type Rejection = Failure;
+
+    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Failure> {
+        let session = AnySession::from_request_parts(parts, state).await?;
+        if !session.console {
+            return Err(Failure::forbidden("sign in on the console for this"));
         }
         Ok(Self {
             account_id: session.account_id,
+            token_hash: session.token_hash,
+            suspended: session.suspended,
+            signed_in_unix: session.signed_in_unix,
         })
     }
 }
@@ -127,7 +167,7 @@ impl FromRequestParts<Arc<AppState>> for AdminSession {
 
     async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Failure> {
         let session = AnySession::from_request_parts(parts, state).await?;
-        if session.suspended || session.role != "admin" {
+        if !session.console || session.suspended || session.role != "admin" {
             return Err(Failure::forbidden("administrators only"));
         }
         Ok(Self {
@@ -196,23 +236,35 @@ pub(crate) fn session_cookie(state: &AppState, token: Option<&str>, max_age_secs
 pub(crate) async fn open_session(
     state: &AppState,
     account_id: i64,
+    scope: Scope,
 ) -> Result<(String, u64), Failure> {
-    let mut token = [0_u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut token);
-    let token = data_encoding::BASE64URL_NOPAD.encode(&token);
-    let expires_unix = now_unix() + state.config.session_ttl().as_secs();
+    let token = random_token();
+    let now = now_unix();
+    let expires_unix = now + state.config.session_ttl().as_secs();
     sqlx::query("DELETE FROM sessions WHERE account_id = $1 AND expires_unix <= $2")
         .bind(account_id)
         .bind(clamp_i64(now_unix()))
         .execute(&state.pool)
         .await?;
-    sqlx::query("INSERT INTO sessions (token_hash, account_id, expires_unix) VALUES ($1, $2, $3)")
-        .bind(sha256(token.as_bytes()))
-        .bind(account_id)
-        .bind(clamp_i64(expires_unix))
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, account_id, expires_unix, scope, signed_in_unix)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(sha256(token.as_bytes()))
+    .bind(account_id)
+    .bind(clamp_i64(expires_unix))
+    .bind(scope.as_str())
+    .bind(clamp_i64(now))
+    .execute(&state.pool)
+    .await?;
     Ok((token, expires_unix))
+}
+
+/// 32 random bytes, base64url: session tokens, codes and states.
+pub(crate) fn random_token() -> String {
+    let mut token = [0_u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut token);
+    data_encoding::BASE64URL_NOPAD.encode(&token)
 }
 
 /// Checks a password against its account, taking the same time for unknown
@@ -230,10 +282,12 @@ pub(crate) async fn check_login(
         .fetch_optional(&state.pool)
         .await?;
     let (account_id, hash) = match &account {
-        Some(row) => (
-            Some(row.get::<i64, _>("id")),
-            row.get::<String, _>("password_hash"),
-        ),
+        // An account without a password still spends a verification, so
+        // timing does not tell it apart; nothing verifies against the decoy.
+        Some(row) => match row.get::<Option<String>, _>("password_hash") {
+            Some(hash) => (Some(row.get::<i64, _>("id")), hash),
+            None => (None, DECOY_HASH.clone()),
+        },
         None => (None, DECOY_HASH.clone()),
     };
     let password = password.to_owned();

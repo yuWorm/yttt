@@ -10,6 +10,7 @@ mod api;
 mod auth;
 mod config;
 mod nodes;
+mod oauth;
 mod plans;
 mod web;
 
@@ -139,6 +140,10 @@ fn router(state: Arc<AppState>) -> Router {
     let mut router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/sessions", post(api::login))
+        .route("/v1/oauth/authorize", post(oauth::authorize))
+        .route("/v1/oauth/device", post(oauth::start_device))
+        .route("/v1/oauth/device/confirm", post(oauth::confirm_device))
+        .route("/v1/oauth/token", post(oauth::token))
         .route("/v1/accounts/me", get(api::me))
         .route(
             "/v1/devices",

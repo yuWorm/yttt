@@ -15,7 +15,7 @@ use yttt_relay_ticket::api::Login;
 
 use crate::{
     AppState, Failure,
-    auth::{self, AnySession, Attempt, Session},
+    auth::{self, AnySession, Attempt, ConsoleSession, Scope},
     clamp_i64, day_of, month_of, now_unix, plans,
 };
 
@@ -26,6 +26,9 @@ const MAX_PASSWORD_BYTES: usize = 256;
 const MAX_EMAIL_BYTES: usize = 254;
 const HISTORY_MONTHS: usize = 12;
 const MAX_DAYS: u32 = 366;
+/// How recently an account without a password must have signed in to set
+/// one, so a stolen cookie cannot turn into a lasting password.
+const SET_PASSWORD_WITHIN_SECS: u64 = 5 * 60;
 
 #[derive(Deserialize)]
 pub(crate) struct SignUp {
@@ -41,7 +44,9 @@ pub(crate) struct WebSession {
 
 #[derive(Deserialize)]
 pub(crate) struct ChangePassword {
-    current: String,
+    /// Absent when the account has no password yet.
+    #[serde(default)]
+    current: Option<String>,
     new: String,
 }
 
@@ -120,13 +125,13 @@ pub(crate) async fn sign_in(
     signed_in(&state, account_id, role, StatusCode::OK).await
 }
 
-async fn signed_in(
+pub(crate) async fn signed_in(
     state: &AppState,
     account_id: i64,
     role: String,
     status: StatusCode,
 ) -> Result<Response, Failure> {
-    let (token, _) = auth::open_session(state, account_id).await?;
+    let (token, _) = auth::open_session(state, account_id, Scope::Web).await?;
     let cookie = auth::session_cookie(state, Some(&token), state.config.session_ttl().as_secs());
     let mut response = (
         status,
@@ -162,18 +167,29 @@ pub(crate) async fn sign_out(
 
 pub(crate) async fn change_password(
     State(state): Shared,
-    session: AnySession,
+    session: ConsoleSession,
     Json(request): Json<ChangePassword>,
 ) -> Result<StatusCode, Failure> {
-    let _ = Session::from_any(&session)?;
+    if session.suspended {
+        return Err(Failure::forbidden("the account is suspended"));
+    }
     check_password(&request.new)?;
-    let email: String = sqlx::query_scalar("SELECT email FROM accounts WHERE id = $1")
-        .bind(session.account_id)
-        .fetch_one(&state.pool)
-        .await?;
-    auth::check_login(&state, &email, &request.current)
+    let (email, has_password): (String, bool) =
+        sqlx::query_as("SELECT email, password_hash IS NOT NULL FROM accounts WHERE id = $1")
+            .bind(session.account_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if has_password {
+        auth::check_login(
+            &state,
+            &email,
+            request.current.as_deref().unwrap_or_default(),
+        )
         .await
         .map_err(|_| Failure::forbidden("the current password is wrong"))?;
+    } else if now_unix().saturating_sub(session.signed_in_unix) > SET_PASSWORD_WITHIN_SECS {
+        return Err(Failure::forbidden("sign in again to set a password"));
+    }
     let new = request.new;
     let hash = tokio::task::spawn_blocking(move || auth::hash_password(&new))
         .await

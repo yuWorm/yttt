@@ -116,6 +116,80 @@ impl std::fmt::Debug for SessionGranted {
     }
 }
 
+/// `POST /v1/oauth/token`: turns an approved sign-in into a session. A JSON
+/// endpoint for yttt's own clients, shaped after OAuth 2.0 but not its form
+/// encoding.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "grant_type", rename_all = "snake_case")]
+pub enum TokenRequest {
+    /// The app's browser sign-in (authorization code with PKCE).
+    AuthorizationCode {
+        code: String,
+        code_verifier: String,
+        redirect_uri: String,
+    },
+    /// A headless device whose short code someone confirmed.
+    DeviceCode { device_code: String },
+}
+
+impl std::fmt::Debug for TokenRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AuthorizationCode { redirect_uri, .. } => formatter
+                .debug_struct("AuthorizationCode")
+                .field("redirect_uri", redirect_uri)
+                .finish_non_exhaustive(),
+            Self::DeviceCode { .. } => formatter.write_str("DeviceCode"),
+        }
+    }
+}
+
+/// Why `/v1/oauth/token` has no session yet, in the `error` of a 400.
+pub mod token_error {
+    /// Nobody has confirmed the short code yet; poll again after the interval.
+    pub const PENDING: &str = "authorization_pending";
+    /// Polled sooner than the interval.
+    pub const SLOW_DOWN: &str = "slow_down";
+    pub const DENIED: &str = "access_denied";
+    pub const EXPIRED: &str = "expired_token";
+    /// The code is unknown, used, or does not match its verifier or redirect.
+    pub const INVALID: &str = "invalid_grant";
+}
+
+/// `POST /v1/oauth/device`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeviceAuthorizationRequest {
+    /// What the device calls itself; shown to whoever confirms the code.
+    pub label: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DeviceAuthorization {
+    pub device_code: String,
+    /// What a person types, e.g. `ABCD-EFGH`.
+    pub user_code: String,
+    /// The console page to confirm on, when the control plane knows its
+    /// public address; otherwise `/device` under the address the device used.
+    pub verification_uri: Option<String>,
+    /// Seconds between polls.
+    pub interval: u64,
+    /// Seconds until the codes expire.
+    pub expires_in: u64,
+}
+
+impl std::fmt::Debug for DeviceAuthorization {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeviceAuthorization")
+            .field("device_code", &"[redacted]")
+            .field("user_code", &self.user_code)
+            .field("verification_uri", &self.verification_uri)
+            .field("interval", &self.interval)
+            .field("expires_in", &self.expires_in)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegisterDevice {
     pub label: String,

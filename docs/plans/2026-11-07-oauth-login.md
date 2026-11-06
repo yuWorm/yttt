@@ -57,7 +57,7 @@
   - `identities (provider, subject, account_id, email, created_unix)`，`ON DELETE CASCADE`。
   - `oauth_codes (code_hash, account_id, challenge, redirect_uri, label, expires_unix)`
   - `sessions` 加 `scope` 与 `signed_in_unix`；已有会话无法区分来源，一律标为 `device`：应用照常可用，控制台需重新登录一次。只认 `web` 的接口同时要求会话来自 cookie。
-  - `device_grants (device_code_hash, user_code UNIQUE, label, requester_ip, account_id NULL, denied, failures, created_unix, expires_unix, last_poll_unix)`。
+  - `device_grants (device_code_hash, user_code UNIQUE, label, requester_ip, account_id NULL, denied, created_unix, expires_unix, last_poll_unix)`。
   - `login_states (state_hash, provider, verifier, next, link_account NULL, expires_unix)`。
   - 过期行在写入同类数据时顺带删除，与 `open_session` 清理过期会话的做法一致。
 - 配置（密钥属于部署，留在配置文件，和 `ticket_secret` 一样不进数据库）：
@@ -79,7 +79,7 @@
   - `redirect_uri` 用 URL 解析：只收 `http` 且主机为 `127.0.0.1` 或 `[::1]`，端口任意，拒绝 userinfo 与 fragment；换 token 时与存的完全相等；只收 S256。非法时页面只显示错误，绝不跳转；“拒绝”跳回时也带 `state`。
   - 授权码、设备码用 `DELETE … RETURNING` / 单条 `UPDATE` 原子地取用，只能用一次。
   - 授权、设备码确认要求账号未暂停。
-  - 设备码：发起与输入短码走现有按来源限速；轮询不走（device_code 256 位随机），只按固定 `interval` 回 `slow_down`；同一 grant 输错 5 次作废。短码比对前统一大写、去掉 `-` 与空格。`verification_uri` 用 `public_url`，没有时用 CLI 传入的控制面地址拼。
+  - 设备码：发起与输入短码走现有按来源限速；轮询不走（device_code 256 位随机），只按固定 `interval` 回 `slow_down`。输错的短码对应不到任何 grant，靠按来源限速、32⁸ 的码空间与 10 分钟有效期防猜。短码比对前统一大写、去掉 `-` 与空格。`verification_uri` 用 `public_url`，没有时用 CLI 传入的控制面地址拼。
   - `next` 必须以单个 `/` 开头，拒绝 `//`、`/\\`、反斜杠与控制字符；密码登录与第三方登录共用同一回跳逻辑。
   - `yttt_oauth` cookie 与会话 cookie 同样随 `public_url` 决定 `__Host-` 前缀与 `Secure`，`HttpOnly`、`Path=/`、`SameSite=Lax`；回调后清除并删除对应 `login_states`。
   - 回调成功返回 200 页面，用 `<meta http-equiv="refresh">` 站内跳转（不用 302），避免跨站重定向链不带 Strict cookie。
