@@ -1,0 +1,24 @@
+[package]
+name = "yttt-control"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+argon2 = { version = "0.5", features = ["std"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+data-encoding = "2"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+yttt-relay-ticket = { path = "../yttt-relay-ticket" }
+zeroize = "1"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = "1"

@@ -1,0 +1,9 @@
+# Development only: plain HTTP, and the key below matches control.toml's
+# public dev secret (`yttt-control public-key <secret>` prints it).
+node_id = "local-1"
+listen = "0.0.0.0:3341"
+ticket_keys = ["d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"]
+
+[control]
+url = "http://control:8080"
+node_token = "dev-node-token"

@@ -15,6 +15,7 @@ members = [
     "crates/yttt-transport-iroh",
     "crates/yttt-relay-ticket",
     "crates/yttt-relay",
+    "crates/yttt-control",
     "crates/yttt-core",
     "crates/yttt-terminal-core",
     "crates/yttt-ssh",

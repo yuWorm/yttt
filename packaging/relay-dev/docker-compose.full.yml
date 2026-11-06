@@ -1,0 +1,47 @@
+# The paid-relay stack for local development: PostgreSQL, the control plane
+# and one ticketed relay node. Development keys only; never expose it.
+#
+# Database alone, for the control plane's tests:
+#   docker compose -f packaging/relay-dev/docker-compose.full.yml up -d postgres
+#   YTTT_TEST_DATABASE_URL=postgres://postgres:yttt@127.0.0.1:55433/postgres \
+#     cargo test -p yttt-control -- --ignored
+#
+# Whole stack (control on :8080, relay node on :3341):
+#   docker compose -f packaging/relay-dev/docker-compose.full.yml --profile services up -d --build
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: yttt
+    ports:
+      - "127.0.0.1:55433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1s
+      retries: 30
+
+  control:
+    profiles: ["services"]
+    build:
+      context: ../..
+      dockerfile: packaging/relay-dev/Dockerfile
+    image: yttt-relay-dev
+    command: ["yttt-control", "--config", "/etc/yttt/control.toml"]
+    volumes:
+      - ./control.toml:/etc/yttt/control.toml:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  relay:
+    profiles: ["services"]
+    image: yttt-relay-dev
+    command: ["yttt-relay", "--config", "/etc/yttt/relay.toml"]
+    volumes:
+      - ./relay.toml:/etc/yttt/relay.toml:ro
+    ports:
+      - "127.0.0.1:3341:3341"
+    depends_on:
+      - control

@@ -1,0 +1,18 @@
+# Development only: the ticket secret and node token below are public.
+listen = "0.0.0.0:8080"
+database_url = "postgres://postgres:yttt@postgres:5432/postgres"
+ticket_secret = "1111111111111111111111111111111111111111111111111111111111111111"
+dev_mode = true
+
+[[plans]]
+id = "basic"
+rate_bps = 2_000_000
+burst_bytes = 500_000
+monthly_bytes = 50_000_000_000
+throttled_rate_bps = 64_000
+max_devices = 5
+
+[[nodes]]
+id = "local-1"
+url = "http://127.0.0.1:3341"
+token = "dev-node-token"
