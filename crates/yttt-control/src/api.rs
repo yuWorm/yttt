@@ -334,6 +334,18 @@ pub(crate) async fn node_usage(
     let now = now_unix();
     let month = month_of(now);
     let day = day_of(now);
+    record_load(
+        &state,
+        &node_id,
+        now,
+        connected,
+        report
+            .accounts
+            .iter()
+            .map(|usage| usage.upstream_bytes)
+            .sum(),
+    )
+    .await?;
     let reported: Vec<Vec<u8>> = report
         .accounts
         .iter()
@@ -498,6 +510,58 @@ pub(crate) async fn node_usage(
             })
             .collect(),
     }))
+}
+
+/// Five-minute samples kept for the console's day view.
+const SAMPLE_SECS: u64 = 5 * 60;
+const SAMPLES_KEEP_SECS: u64 = 48 * 3600;
+const NODE_DAYS_KEEP: i32 = 90;
+
+/// Adds one report to the node's load history.
+async fn record_load(
+    state: &AppState,
+    node_id: &str,
+    now: u64,
+    connected: usize,
+    upstream_bytes: u64,
+) -> AppResult<()> {
+    let connected = i32::try_from(connected).unwrap_or(i32::MAX);
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO node_samples (node_id, bucket_unix, connections_max, upstream_bytes)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (node_id, bucket_unix) DO UPDATE SET
+             connections_max = GREATEST(node_samples.connections_max, EXCLUDED.connections_max),
+             upstream_bytes = node_samples.upstream_bytes + EXCLUDED.upstream_bytes",
+    )
+    .bind(node_id)
+    .bind(clamp_i64(now - now % SAMPLE_SECS))
+    .bind(connected)
+    .bind(clamp_i64(upstream_bytes))
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO node_days (node_id, day, connections_max) VALUES ($1, $2, $3)
+         ON CONFLICT (node_id, day) DO UPDATE SET
+             connections_max = GREATEST(node_days.connections_max, EXCLUDED.connections_max)",
+    )
+    .bind(node_id)
+    .bind(day_of(now))
+    .bind(connected)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM node_samples WHERE node_id = $1 AND bucket_unix < $2")
+        .bind(node_id)
+        .bind(clamp_i64(now.saturating_sub(SAMPLES_KEEP_SECS)))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM node_days WHERE node_id = $1 AND day < $2")
+        .bind(node_id)
+        .bind(day_of(now) - NODE_DAYS_KEEP)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Checks that the caller holds the device key the proof names, for this

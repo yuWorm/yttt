@@ -116,24 +116,43 @@ export function EmptyState({
 const CHART_HEIGHT = 180;
 const AXIS = 22;
 
-/** Daily traffic as bars, oldest on the left; hovering shows the day. */
-export function DailyChart({ days, height = CHART_HEIGHT }: { days: DayUsage[]; height?: number }) {
+export interface BarPoint {
+  key: string | number;
+  value: number;
+  /** Under the axis, when there is room. */
+  label: string;
+  /** Above the value while hovered. */
+  title: string;
+}
+
+/** Bars, oldest on the left; hovering shows one. */
+export function BarChart({
+  points,
+  format,
+  empty,
+  height = CHART_HEIGHT,
+}: {
+  points: BarPoint[];
+  format: (value: number) => string;
+  empty: string;
+  height?: number;
+}) {
   const [active, setActive] = useState<number>();
-  if (days.length === 0) {
+  if (points.length === 0) {
     return null;
   }
   const width = 720;
   const plot = height - AXIS;
-  const peak = Math.max(...days.map((day) => day.upstream_bytes));
+  const peak = Math.max(...points.map((point) => point.value));
   const top = Math.max(peak, 1);
-  const slot = width / days.length;
+  const slot = width / points.length;
   const bar = Math.max(slot * 0.62, 2);
-  const ticks = [0, 0.5, 1].map((fraction) => ({ fraction, label: formatBytes(top * fraction) }));
-  const labelEvery = Math.ceil(days.length / 8);
-  // The last day always gets a label; its neighbours give way to it.
+  const ticks = [0, 0.5, 1].map((fraction) => ({ fraction, label: format(top * fraction) }));
+  const labelEvery = Math.ceil(points.length / 8);
+  // The last bar always gets a label; its neighbours give way to it.
   const labelled = (index: number) =>
-    index === days.length - 1 || (index % labelEvery === 0 && days.length - 1 - index >= labelEvery / 2 + 1);
-  const hovered = active === undefined ? undefined : days[active];
+    index === points.length - 1 || (index % labelEvery === 0 && points.length - 1 - index >= labelEvery / 2 + 1);
+  const hovered = active === undefined ? undefined : points[active];
   return (
     <div className="chart" onMouseLeave={() => setActive(undefined)}>
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ height }} role="img">
@@ -149,10 +168,10 @@ export function DailyChart({ days, height = CHART_HEIGHT }: { days: DayUsage[]; 
             vectorEffect="non-scaling-stroke"
           />
         ))}
-        {days.map((day, index) => {
-          const barHeight = day.upstream_bytes > 0 ? Math.max((day.upstream_bytes / top) * (plot - 8), 2) : 0;
+        {points.map((point, index) => {
+          const barHeight = point.value > 0 ? Math.max((point.value / top) * (plot - 8), 2) : 0;
           return (
-            <g key={day.day} onMouseEnter={() => setActive(index)}>
+            <g key={point.key} onMouseEnter={() => setActive(index)}>
               <rect x={index * slot} y={0} width={slot} height={plot} fill="transparent" />
               <rect
                 className={`chart-bar${active === index ? " active" : ""}`}
@@ -167,20 +186,20 @@ export function DailyChart({ days, height = CHART_HEIGHT }: { days: DayUsage[]; 
         })}
       </svg>
       <div style={{ position: "relative", height: AXIS - 4, marginTop: -AXIS + 4 }}>
-        {days.map((day, index) =>
+        {points.map((point, index) =>
           labelled(index) ? (
             <span
-              key={day.day}
+              key={point.key}
               style={{
                 position: "absolute",
-                left: `${((index + 0.5) / days.length) * 100}%`,
+                left: `${((index + 0.5) / points.length) * 100}%`,
                 transform: "translateX(-50%)",
                 fontSize: 11,
                 whiteSpace: "nowrap",
                 color: "var(--semi-color-text-2)",
               }}
             >
-              {formatDay(day.day)}
+              {point.label}
             </span>
           ) : null,
         )}
@@ -201,16 +220,33 @@ export function DailyChart({ days, height = CHART_HEIGHT }: { days: DayUsage[]; 
             color: "var(--semi-color-text-2)",
           }}
         >
-          这段时间没有经 relay 转发的流量
+          {empty}
         </span>
       )}
       {hovered && active !== undefined && (
-        <div className="chart-tip" style={{ left: `${((active + 0.5) / days.length) * 100}%` }}>
-          <div style={{ color: "var(--semi-color-text-2)" }}>{formatDay(hovered.day)}</div>
-          <div style={{ fontWeight: 600 }}>{formatBytes(hovered.upstream_bytes)}</div>
+        <div className="chart-tip" style={{ left: `${((active + 0.5) / points.length) * 100}%` }}>
+          <div style={{ color: "var(--semi-color-text-2)" }}>{hovered.title}</div>
+          <div style={{ fontWeight: 600 }}>{format(hovered.value)}</div>
         </div>
       )}
     </div>
+  );
+}
+
+/** Daily traffic as bars, oldest on the left; hovering shows the day. */
+export function DailyChart({ days, height }: { days: DayUsage[]; height?: number }) {
+  return (
+    <BarChart
+      points={days.map((day) => ({
+        key: day.day,
+        value: day.upstream_bytes,
+        label: formatDay(day.day),
+        title: formatDay(day.day),
+      }))}
+      format={formatBytes}
+      empty="这段时间没有经 relay 转发的流量"
+      height={height}
+    />
   );
 }
 

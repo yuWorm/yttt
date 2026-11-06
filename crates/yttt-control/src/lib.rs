@@ -206,6 +206,7 @@ fn router(state: Arc<AppState>) -> Router {
             "/v1/admin/nodes/{node_id}",
             patch(nodes::change).delete(nodes::remove),
         )
+        .route("/v1/admin/nodes/{node_id}/stats", get(admin::node_stats))
         .route(
             "/v1/admin/nodes/{node_id}/enrollment",
             post(nodes::regenerate),

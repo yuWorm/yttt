@@ -2426,3 +2426,118 @@ async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_s
     assert_eq!(second.node_id, "far-1");
     harness.control.shutdown().await;
 }
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_full_node_takes_no_new_hosts_or_accounts_and_its_load_is_kept() {
+    let harness = with_room(&[(NODE, NODE_TOKEN), ("other-1", "other-token")]).await;
+    let admin = admin_session(&harness, "admin@example.com").await;
+    let (alice, session) = harness.account("alice@example.com").await;
+    assert_eq!(
+        place(&harness, &session, alice, &HOST, None).await,
+        StatusCode::CREATED
+    );
+    // other-1 has two devices connected and room for two.
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PATCH,
+        "/v1/admin/nodes/other-1",
+        Some(serde_json::json!({"max_connections": 2, "region": "Tokyo"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    report_on(
+        &harness,
+        "other-1",
+        "other-token",
+        &[(alice, 700, &[HOST_CLIENT, SECOND_CLIENT])],
+        None,
+    )
+    .await;
+
+    let nodes: Vec<NodeChoice> = harness.get("/v1/nodes", &session).await.unwrap();
+    let other = nodes.iter().find(|node| node.id == "other-1").unwrap();
+    assert_eq!((other.load_percent, other.full), (Some(100), true));
+    assert_eq!(other.region, "Tokyo");
+    assert_eq!(
+        switch(&harness, &session, alice, &HOST, &HOST, "other-1").await,
+        StatusCode::CONFLICT
+    );
+
+    let (_, stats) = send(
+        &harness,
+        &admin,
+        reqwest::Method::GET,
+        "/v1/admin/nodes/other-1/stats",
+        None,
+    )
+    .await;
+    assert_eq!(stats["samples"][0]["connections"], 2);
+    assert_eq!(stats["samples"][0]["upstream_bytes"], 700);
+    assert_eq!(stats["days"].as_array().unwrap().len(), 30);
+    assert_eq!(stats["days"][29]["connections_max"], 2);
+    let (_, overview) = send(
+        &harness,
+        &admin,
+        reqwest::Method::GET,
+        "/v1/admin/overview",
+        None,
+    )
+    .await;
+    let listed = overview["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "other-1")
+        .unwrap()
+        .clone();
+    assert_eq!(listed["max_connections"], 2);
+
+    // The sign-up node fills up: new accounts go to the one with room.
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PATCH,
+        "/v1/admin/nodes/other-1",
+        Some(serde_json::json!({"max_connections": 0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PATCH,
+        &format!("/v1/admin/nodes/{NODE}"),
+        Some(serde_json::json!({"max_connections": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    report_on(&harness, NODE, NODE_TOKEN, &[(alice, 0, &[HOST])], None).await;
+    let signed_up = harness
+        .http
+        .post(format!("{}/v1/accounts", harness.base))
+        .header("x-yttt-web", "1")
+        .json(&serde_json::json!({"email": "new@example.com", "password": "correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signed_up.status(), StatusCode::CREATED);
+    let cookie = signed_up.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let (_, me) = send(
+        &harness,
+        &cookie,
+        reqwest::Method::GET,
+        "/v1/accounts/me",
+        None,
+    )
+    .await;
+    assert_eq!(me["node_id"], "other-1");
+    harness.control.shutdown().await;
+}

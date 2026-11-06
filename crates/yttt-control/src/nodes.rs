@@ -67,6 +67,10 @@ pub(crate) struct NodeChange {
     name: Option<String>,
     url: Option<String>,
     disabled: Option<bool>,
+    region: Option<String>,
+    /// Devices connected at once before the node takes no new Hosts; 0 for
+    /// no limit.
+    max_connections: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -223,6 +227,40 @@ pub(crate) async fn change(
             None,
             Some(&id),
             &name,
+        )
+        .await?;
+    }
+    if let Some(region) = &change.region {
+        let region: String = region.trim().chars().take(64).collect();
+        sqlx::query("UPDATE nodes SET region = $2 WHERE id = $1")
+            .bind(&id)
+            .bind(&region)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            &mut tx,
+            admin.account_id,
+            "set_node_region",
+            None,
+            Some(&id),
+            &region,
+        )
+        .await?;
+    }
+    if let Some(limit) = change.max_connections {
+        let limit = (limit > 0).then(|| i32::try_from(limit).unwrap_or(i32::MAX));
+        sqlx::query("UPDATE nodes SET max_connections = $2 WHERE id = $1")
+            .bind(&id)
+            .bind(limit)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            &mut tx,
+            admin.account_id,
+            "set_node_limit",
+            None,
+            Some(&id),
+            &limit.map_or_else(|| "none".to_owned(), |limit| limit.to_string()),
         )
         .await?;
     }

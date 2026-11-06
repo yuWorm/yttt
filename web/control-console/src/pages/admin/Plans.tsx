@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { Banner, Button, Card, Dropdown, Form, Modal, SideSheet, Spin, Tag, Toast, Typography } from "@douyinfe/semi-ui";
 import { IconEdit, IconMore, IconPlus } from "@douyinfe/semi-icons";
-import { GIB, MBPS, type PlanView, type Settings, del, errorText, formatBytes, formatRate, get, patch, post } from "../../api";
+import {
+  GIB,
+  MBPS,
+  type NodeView,
+  type PlanView,
+  type Settings,
+  del,
+  errorText,
+  formatBytes,
+  formatRate,
+  get,
+  patch,
+  post,
+} from "../../api";
 import { EmptyState, PageHeader } from "../../components/ui";
 
 /** The form edits rates in Mbps and quota in GB; the API takes bytes. */
@@ -14,6 +27,8 @@ interface PlanForm {
   monthly_gb: number;
   throttled_mbps: number;
   max_devices: number;
+  max_nodes: number;
+  nodes: string[];
   sort: number;
 }
 
@@ -29,6 +44,8 @@ function toForm(plan: PlanView): PlanForm {
     monthly_gb: round(plan.monthly_bytes / GIB),
     throttled_mbps: round(plan.throttled_rate_bps / MBPS),
     max_devices: plan.max_devices,
+    max_nodes: plan.max_nodes,
+    nodes: plan.nodes,
     sort: plan.sort,
   };
 }
@@ -42,6 +59,7 @@ function toApi(form: PlanForm) {
     monthly_bytes: Math.round(form.monthly_gb * GIB),
     throttled_rate_bps: Math.round(form.throttled_mbps * MBPS),
     max_devices: form.max_devices,
+    max_nodes: form.max_nodes,
     sort: form.sort ?? 0,
   };
 }
@@ -52,6 +70,7 @@ const NEW_PLAN: Partial<PlanForm> = {
   monthly_gb: 50,
   throttled_mbps: 0.5,
   max_devices: 5,
+  max_nodes: 1,
   sort: 0,
 };
 
@@ -59,13 +78,16 @@ export function AdminPlans() {
   const [plans, setPlans] = useState<PlanView[]>();
   const [settings, setSettings] = useState<Settings>();
   const [editing, setEditing] = useState<PlanView | "new">();
+  const [nodes, setNodes] = useState<NodeView[]>([]);
   const load = useCallback(async () => {
-    const [nextPlans, nextSettings] = await Promise.all([
+    const [nextPlans, nextSettings, nextNodes] = await Promise.all([
       get<PlanView[]>("/v1/admin/plans"),
       get<Settings>("/v1/admin/settings"),
+      get<NodeView[]>("/v1/admin/nodes"),
     ]);
     setPlans(nextPlans);
     setSettings(nextSettings);
+    setNodes(nextNodes);
   }, []);
   useEffect(() => {
     void load();
@@ -178,6 +200,12 @@ export function AdminPlans() {
                 <Typography.Text>{plan.max_devices}</Typography.Text>
               </div>
               <div className="spec">
+                <Typography.Text type="tertiary">节点</Typography.Text>
+                <Typography.Text>
+                  {plan.nodes.length} 个可用，同时 {plan.max_nodes} 个
+                </Typography.Text>
+              </div>
+              <div className="spec">
                 <Typography.Text type="tertiary">使用中的账号</Typography.Text>
                 <Typography.Text strong>{plan.accounts}</Typography.Text>
               </div>
@@ -187,6 +215,7 @@ export function AdminPlans() {
       )}
       <PlanEditor
         plan={editing}
+        nodes={nodes}
         onClose={() => setEditing(undefined)}
         onSaved={async () => {
           setEditing(undefined);
@@ -199,10 +228,12 @@ export function AdminPlans() {
 
 function PlanEditor({
   plan,
+  nodes,
   onClose,
   onSaved,
 }: {
   plan: PlanView | "new" | undefined;
+  nodes: NodeView[];
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -213,9 +244,13 @@ function PlanEditor({
     try {
       if (creating) {
         await post("/v1/admin/plans", { id: form.id, ...toApi(form) });
+        // A new plan starts on every node; narrow it when fewer were chosen.
+        if (form.nodes?.length && form.nodes.length < nodes.length) {
+          await patch(`/v1/admin/plans/${form.id}`, { nodes: form.nodes });
+        }
         Toast.success("套餐已创建");
       } else if (plan) {
-        await patch(`/v1/admin/plans/${plan.id}`, toApi(form));
+        await patch(`/v1/admin/plans/${plan.id}`, { ...toApi(form), nodes: form.nodes });
         Toast.success("已保存，约 15 秒内对在用账号生效");
       }
       await onSaved();
@@ -238,7 +273,9 @@ function PlanEditor({
           key={creating ? "new" : (plan as PlanView).id}
           onSubmit={submit}
           labelPosition="top"
-          initValues={creating ? (NEW_PLAN as PlanForm) : toForm(plan as PlanView)}
+          initValues={
+            creating ? ({ ...NEW_PLAN, nodes: nodes.map((node) => node.id) } as PlanForm) : toForm(plan as PlanView)
+          }
         >
           {!creating && (plan as PlanView).accounts > 0 && (
             <Banner
@@ -303,6 +340,27 @@ function PlanEditor({
             precision={0}
             style={{ width: "100%" }}
             rules={[{ required: true, message: "请输入设备上限" }]}
+          />
+          <Form.Select
+            field="nodes"
+            label="可用节点"
+            multiple
+            style={{ width: "100%" }}
+            optionList={nodes.map((node) => ({
+              value: node.id,
+              label: node.region ? `${node.name}（${node.region}）` : node.name,
+            }))}
+            extraText="用户只能把 Host 放在这些节点上。移出某节点后，其上的 Host 在下次取 ticket 时回到账号默认节点。"
+            rules={[{ required: true, type: "array", min: 1, message: "至少选择一个节点" }]}
+          />
+          <Form.InputNumber
+            field="max_nodes"
+            label="同时使用的节点数"
+            min={1}
+            precision={0}
+            style={{ width: "100%" }}
+            extraText="每个节点各自限速，账号的 Host 分布在 N 个节点上最多得到 N 倍速率。为 1 时，切换节点会让整个账号一起迁移。"
+            rules={[{ required: true, message: "请输入节点数" }]}
           />
           <Form.InputNumber
             field="sort"

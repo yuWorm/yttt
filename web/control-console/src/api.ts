@@ -49,6 +49,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const get = <T>(path: string) => request<T>("GET", path);
 export const post = <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {});
 export const patch = <T>(path: string, body: unknown) => request<T>("PATCH", path, body);
+export const put = <T>(path: string, body: unknown) => request<T>("PUT", path, body);
 export const del = <T>(path: string) => request<T>("DELETE", path);
 
 export interface WebSession {
@@ -88,6 +89,26 @@ export interface DeviceEntry {
   endpoint_id: string;
   label: string;
   registered_unix: number;
+  /** A Host chooses its node; a Client relays through its Host's node. */
+  role: "host" | "client" | "unknown";
+  node_id: string;
+  follows_host?: string;
+  online: boolean;
+}
+
+/** A node the account's plan may use. */
+export interface NodeChoice {
+  id: string;
+  name: string;
+  region: string;
+  relay_url: string;
+  load_percent?: number;
+  full: boolean;
+}
+
+export interface NodeStats {
+  samples: { bucket_unix: number; connections: number; upstream_bytes: number }[];
+  days: { day: number; connections_max: number; upstream_bytes: number }[];
 }
 
 export interface MonthUsage {
@@ -111,6 +132,10 @@ export interface NodeView {
   version: string | null;
   reachable: boolean | null;
   accounts: number;
+  /** Devices assigned to the node. */
+  devices: number;
+  region: string;
+  max_connections: number | null;
   month_bytes: number;
   enrollment_expires_unix: number | null;
 }
@@ -160,6 +185,10 @@ export interface PlanView {
   monthly_bytes: number;
   throttled_rate_bps: number;
   max_devices: number;
+  /** Nodes the account's Hosts may use at once. */
+  max_nodes: number;
+  /** The nodes the plan may use. */
+  nodes: string[];
   archived: boolean;
   sort: number;
   accounts: number;

@@ -51,6 +51,10 @@ pub(crate) struct NodeView {
     pub version: Option<String>,
     pub reachable: Option<bool>,
     pub accounts: i64,
+    /// Devices assigned to the node.
+    pub devices: i64,
+    pub region: String,
+    pub max_connections: Option<u32>,
     /// Bytes relayed through the node this month.
     pub month_bytes: u64,
     /// For a pending node: when its newest enrollment token expires.
@@ -216,8 +220,9 @@ pub(crate) async fn overview(
 pub(crate) async fn nodes(state: &AppState) -> Result<Vec<NodeView>, Failure> {
     let rows = sqlx::query(
         "SELECT n.id, n.name, n.url, n.state, n.last_report_unix, n.last_connected_devices,
-                n.version, n.reachable,
+                n.version, n.reachable, n.region, n.max_connections,
                 (SELECT COUNT(*) FROM accounts a WHERE a.node_id = n.id) AS accounts,
+                (SELECT COUNT(*) FROM devices d WHERE d.node_id = n.id) AS devices,
                 (SELECT COALESCE(SUM(d.upstream_bytes), 0)::BIGINT FROM usage_days d
                   WHERE d.node_id = n.id AND d.day >= $1) AS month_bytes,
                 (SELECT MAX(e.expires_unix) FROM node_enrollments e
@@ -255,6 +260,11 @@ pub(crate) async fn nodes(state: &AppState) -> Result<Vec<NodeView>, Failure> {
                 version: row.get("version"),
                 reachable: row.get("reachable"),
                 accounts: row.get("accounts"),
+                devices: row.get("devices"),
+                region: row.get("region"),
+                max_connections: row
+                    .get::<Option<i32>, _>("max_connections")
+                    .map(|limit| limit as u32),
                 month_bytes: row.get::<i64, _>("month_bytes") as u64,
                 enrollment_expires_unix: row
                     .get::<Option<i64>, _>("enrollment_expires")
@@ -699,4 +709,84 @@ pub(crate) async fn audit(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+#[derive(Serialize)]
+pub(crate) struct NodeStats {
+    /// Five-minute samples over the last day, oldest first.
+    samples: Vec<NodeSample>,
+    /// The last 30 days, oldest first and with no gaps.
+    days: Vec<NodeDay>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct NodeSample {
+    bucket_unix: u64,
+    connections: u32,
+    upstream_bytes: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct NodeDay {
+    /// Days since the Unix epoch.
+    day: i32,
+    connections_max: u32,
+    upstream_bytes: u64,
+}
+
+/// `GET /v1/admin/nodes/{node_id}/stats`: the node's load over a day and a month.
+pub(crate) async fn node_stats(
+    State(state): Shared,
+    _admin: AdminSession,
+    Path(node_id): Path<String>,
+) -> Result<Json<NodeStats>, Failure> {
+    let now = now_unix();
+    let samples: Vec<(i64, i32, i64)> = sqlx::query_as(
+        "SELECT bucket_unix, connections_max, upstream_bytes FROM node_samples
+         WHERE node_id = $1 AND bucket_unix >= $2 ORDER BY bucket_unix",
+    )
+    .bind(&node_id)
+    .bind(clamp_i64(now.saturating_sub(24 * 3600)))
+    .fetch_all(&state.pool)
+    .await?;
+    let today = day_of(now);
+    let first = today - 29;
+    let peaks: Vec<(i32, i32)> = sqlx::query_as(
+        "SELECT day, connections_max FROM node_days WHERE node_id = $1 AND day >= $2",
+    )
+    .bind(&node_id)
+    .bind(first)
+    .fetch_all(&state.pool)
+    .await?;
+    let bytes: Vec<(i32, i64)> = sqlx::query_as(
+        "SELECT day, CAST(SUM(upstream_bytes) AS BIGINT) FROM usage_days
+         WHERE node_id = $1 AND day >= $2 GROUP BY day",
+    )
+    .bind(&node_id)
+    .bind(first)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(NodeStats {
+        samples: samples
+            .into_iter()
+            .map(|(bucket, connections, upstream)| NodeSample {
+                bucket_unix: bucket.max(0) as u64,
+                connections: connections.max(0) as u32,
+                upstream_bytes: upstream.max(0) as u64,
+            })
+            .collect(),
+        days: (first..=today)
+            .map(|day| NodeDay {
+                day,
+                connections_max: peaks
+                    .iter()
+                    .find(|(peak_day, _)| *peak_day == day)
+                    .map_or(0, |(_, peak)| (*peak).max(0) as u32),
+                upstream_bytes: bytes
+                    .iter()
+                    .find(|(bytes_day, _)| *bytes_day == day)
+                    .map_or(0, |(_, bytes)| (*bytes).max(0) as u64),
+            })
+            .collect(),
+    }))
 }

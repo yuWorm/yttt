@@ -99,6 +99,26 @@ pub(crate) async fn create_account(
             "sign-up is closed: no relay node is ready",
         ));
     }
+    // A full sign-up node hands new accounts to the least busy open node of
+    // the plan.
+    let node: Option<String> = sqlx::query_scalar(
+        "SELECT n.id FROM nodes n JOIN plan_nodes pn ON pn.node_id = n.id
+         WHERE pn.plan_id = $2 AND n.state = 'active'
+           AND (n.max_connections IS NULL
+                OR COALESCE(n.last_connected_devices, 0) < n.max_connections)
+         ORDER BY n.id <> $1,
+                  CAST(COALESCE(n.last_connected_devices, 0) AS FLOAT8)
+                      / COALESCE(n.max_connections, 1000000),
+                  n.id
+         LIMIT 1",
+    )
+    .bind(&settings.signup_node)
+    .bind(&settings.signup_plan)
+    .fetch_optional(&state.pool)
+    .await?;
+    let node = node.ok_or(Failure::unavailable(
+        "sign-up is closed: every relay node is full",
+    ))?;
     let created: Result<i64, sqlx::Error> = sqlx::query_scalar(
         "INSERT INTO accounts (email, password_hash, plan_id, node_id, created_unix)
          VALUES ($1, $2, $3, $4, $5) RETURNING id",
@@ -106,7 +126,7 @@ pub(crate) async fn create_account(
     .bind(email)
     .bind(password_hash)
     .bind(&settings.signup_plan)
-    .bind(&settings.signup_node)
+    .bind(&node)
     .bind(clamp_i64(now_unix()))
     .fetch_one(&state.pool)
     .await;

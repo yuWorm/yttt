@@ -16,17 +16,104 @@ import {
 import { IconMore, IconPlus } from "@douyinfe/semi-icons";
 import {
   type DeployCommand,
+  type NodeStats,
   type NodeView,
   ApiError,
   del,
   formatBytes,
+  formatDay,
   formatTime,
   get,
   patch,
   post,
 } from "../../api";
 import { NodeStatus } from "./status";
-import { EmptyState, PageHeader } from "../../components/ui";
+import { BarChart, EmptyState, PageHeader } from "../../components/ui";
+
+/** Connections now, against the node's limit when it has one. */
+function Load({ node }: { node: NodeView }) {
+  const connected = node.connected_devices ?? 0;
+  if (!node.max_connections) {
+    return <span>{node.connected_devices ?? "—"}</span>;
+  }
+  const percent = Math.round((connected / node.max_connections) * 100);
+  return (
+    <span style={{ color: percent >= 100 ? "var(--semi-color-danger)" : percent >= 80 ? "var(--semi-color-warning)" : undefined }}>
+      {connected} / {node.max_connections}
+      <Typography.Text type="tertiary" size="small" style={{ marginLeft: 6 }}>
+        {percent}%
+      </Typography.Text>
+    </span>
+  );
+}
+
+/** A node's connections over the last day and its daily peaks and traffic. */
+function NodeLoad({ node, onClose }: { node?: NodeView; onClose: () => void }) {
+  const [stats, setStats] = useState<NodeStats>();
+  useEffect(() => {
+    setStats(undefined);
+    if (node) {
+      get<NodeStats>(`/v1/admin/nodes/${node.id}/stats`).then(setStats, failed);
+    }
+  }, [node]);
+  const hour = (unix: number) => {
+    const date = new Date(unix * 1000);
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  };
+  return (
+    <SideSheet title={`节点负载 · ${node?.name ?? ""}`} visible={node !== undefined} onCancel={onClose} width={760}>
+      {stats && (
+        <Space vertical align="start" spacing={24} style={{ width: "100%" }}>
+          <div style={{ width: "100%" }}>
+            <Typography.Title heading={6} style={{ marginBottom: 8 }}>
+              近 24 小时在线设备（每 5 分钟峰值）
+            </Typography.Title>
+            <BarChart
+              points={stats.samples.map((sample) => ({
+                key: sample.bucket_unix,
+                value: sample.connections,
+                label: hour(sample.bucket_unix),
+                title: hour(sample.bucket_unix),
+              }))}
+              format={(value) => String(Math.round(value))}
+              empty="近 24 小时没有上报"
+            />
+          </div>
+          <div style={{ width: "100%" }}>
+            <Typography.Title heading={6} style={{ marginBottom: 8 }}>
+              近 30 天每日在线峰值
+            </Typography.Title>
+            <BarChart
+              points={stats.days.map((day) => ({
+                key: day.day,
+                value: day.connections_max,
+                label: formatDay(day.day),
+                title: formatDay(day.day),
+              }))}
+              format={(value) => String(Math.round(value))}
+              empty="近 30 天没有设备在线"
+            />
+          </div>
+          <div style={{ width: "100%" }}>
+            <Typography.Title heading={6} style={{ marginBottom: 8 }}>
+              近 30 天每日转发流量
+            </Typography.Title>
+            <BarChart
+              points={stats.days.map((day) => ({
+                key: day.day,
+                value: day.upstream_bytes,
+                label: formatDay(day.day),
+                title: formatDay(day.day),
+              }))}
+              format={formatBytes}
+              empty="近 30 天没有经此节点转发的流量"
+            />
+          </div>
+        </Space>
+      )}
+    </SideSheet>
+  );
+}
 
 function failed(failure: unknown) {
   Toast.error(failure instanceof ApiError ? failure.message : String(failure));
@@ -86,6 +173,7 @@ export function AdminNodes() {
   const [regenerating, setRegenerating] = useState<NodeView>();
   const [editing, setEditing] = useState<NodeView>();
   const [moving, setMoving] = useState<NodeView>();
+  const [inspecting, setInspecting] = useState<NodeView>();
   const [target, setTarget] = useState<string>();
   const load = useCallback(async () => {
     setNodes(await get<NodeView[]>("/v1/admin/nodes"));
@@ -116,13 +204,15 @@ export function AdminNodes() {
       failed(failure);
     }
   };
-  const edit = async (values: { name: string; url: string }) => {
+  const edit = async (values: { name: string; url: string; region?: string; max_connections?: number }) => {
     if (!editing) {
       return;
     }
     try {
       await patch(`/v1/admin/nodes/${editing.id}`, {
         name: values.name,
+        region: values.region ?? "",
+        max_connections: values.max_connections ?? 0,
         ...(values.url && values.url !== editing.url ? { url: values.url } : {}),
       });
       setEditing(undefined);
@@ -149,7 +239,7 @@ export function AdminNodes() {
   const remove = (node: NodeView) =>
     Modal.confirm({
       title: `删除节点 ${node.id}？`,
-      content: "节点上不能还有账号。删除后它的上报会被拒绝，记得在服务器上执行 sudo yttt-relay-install --uninstall。",
+      content: "节点上不能还有设备或默认账号。删除后它的上报会被拒绝，记得在服务器上执行 sudo yttt-relay-install --uninstall。",
       onOk: async () => {
         try {
           await del(`/v1/admin/nodes/${node.id}`);
@@ -205,7 +295,7 @@ export function AdminNodes() {
                 <div>
                   <Typography.Text strong>{node.name}</Typography.Text>
                   <Typography.Text type="tertiary" size="small" style={{ display: "block" }}>
-                    {node.id}
+                    {node.region ? `${node.id} · ${node.region}` : node.id}
                   </Typography.Text>
                 </div>
               ),
@@ -223,8 +313,9 @@ export function AdminNodes() {
                   "—"
                 ),
             },
-            { title: "在线设备", dataIndex: "connected_devices", render: (count: number | null) => count ?? "—" },
-            { title: "账号", dataIndex: "accounts" },
+            { title: "在线 / 上限", render: (_: unknown, node: NodeView) => <Load node={node} /> },
+            { title: "设备", dataIndex: "devices" },
+            { title: "默认账号", dataIndex: "accounts" },
             { title: "本月流量", dataIndex: "month_bytes", render: (bytes: number) => formatBytes(bytes) },
             { title: "版本", dataIndex: "version", render: (version: string | null) => version ?? "—" },
             { title: "最后上报", dataIndex: "last_report_unix", render: (unix: number | null) => formatTime(unix) },
@@ -237,9 +328,13 @@ export function AdminNodes() {
                   render={
                     <Dropdown.Menu>
                       <Dropdown.Item onClick={() => setRegenerating(node)}>重新生成部署命令</Dropdown.Item>
-                      <Dropdown.Item onClick={() => setEditing(node)}>编辑名称与地址</Dropdown.Item>
-                      <Dropdown.Item onClick={() => setMoving(node)} disabled={node.accounts === 0}>
-                        迁移账号到其他节点
+                      <Dropdown.Item onClick={() => setInspecting(node)}>负载</Dropdown.Item>
+                      <Dropdown.Item onClick={() => setEditing(node)}>编辑</Dropdown.Item>
+                      <Dropdown.Item
+                        onClick={() => setMoving(node)}
+                        disabled={node.accounts === 0 && node.devices === 0}
+                      >
+                        迁移到其他节点
                       </Dropdown.Item>
                       {node.status === "disabled" ? (
                         <Dropdown.Item onClick={() => setDisabled(node, false)}>启用</Dropdown.Item>
@@ -248,7 +343,11 @@ export function AdminNodes() {
                           停用
                         </Dropdown.Item>
                       )}
-                      <Dropdown.Item type="danger" onClick={() => remove(node)} disabled={node.accounts > 0}>
+                      <Dropdown.Item
+                        type="danger"
+                        onClick={() => remove(node)}
+                        disabled={node.accounts > 0 || node.devices > 0}
+                      >
                         删除
                       </Dropdown.Item>
                     </Dropdown.Menu>
@@ -310,8 +409,25 @@ export function AdminNodes() {
         width={440}
       >
         {editing && (
-          <Form onSubmit={edit} labelPosition="top" initValues={{ name: editing.name, url: editing.url }}>
+          <Form
+            onSubmit={edit}
+            labelPosition="top"
+            initValues={{
+              name: editing.name,
+              url: editing.url,
+              region: editing.region,
+              max_connections: editing.max_connections ?? 0,
+            }}
+          >
             <Form.Input field="name" label="显示名" />
+            <Form.Input field="region" label="地区" placeholder="香港" extraText="用户选择节点时看到。" />
+            <Form.InputNumber
+              field="max_connections"
+              label="在线设备上限"
+              min={0}
+              style={{ width: "100%" }}
+              extraText="达到上限后不再接收新的 Host 和新账号，已在其上的不受影响。0 为不限。"
+            />
             <Form.Input
               field="url"
               label="地址"
@@ -325,14 +441,14 @@ export function AdminNodes() {
       </SideSheet>
 
       <Modal
-        title={`迁移 ${moving?.id ?? ""} 上的 ${moving?.accounts ?? 0} 个账号`}
+        title={`迁移 ${moving?.id ?? ""} 上的设备与账号`}
         visible={moving !== undefined}
         onCancel={() => setMoving(undefined)}
         onOk={() => void move()}
         okButtonProps={{ disabled: !target }}
       >
         <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-          账号的设备在续签 ticket 后改用新节点；在此之前它们仍连在旧节点上。
+          节点上的 Host、连接它们的设备，以及以它为默认节点的 {moving?.accounts ?? 0} 个账号一起迁到目标节点。旧节点在下次上报（约 15 秒）时断开它们，设备随即改连新节点；目标节点会自动向这些账号的套餐开放。
         </Typography.Paragraph>
         <Select
           placeholder="目标节点"
@@ -346,6 +462,7 @@ export function AdminNodes() {
       </Modal>
 
       <CommandModal deploy={deploy} onClose={() => setDeploy(undefined)} />
+      <NodeLoad node={inspecting} onClose={() => setInspecting(undefined)} />
     </>
   );
 }
