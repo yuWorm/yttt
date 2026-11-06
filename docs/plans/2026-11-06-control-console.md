@@ -131,3 +131,53 @@ node = "local-1"
 - C5 打包：Dockerfile 加 node 构建阶段，compose 的 `control.toml` 加 `web_root` 与 `[signup]`；`.gitignore` 追加 `web/control-console/node_modules`、`web/control-console/dist`（只追加）。
 - C7 节点部署：迁移、登记接口、管理接口、安装脚本与二进制下发、`yttt-relay enroll`、ACME、公钥随回复下发；测试：令牌单次有效/过期/作废、登记后节点能上报、停用后回报被拒、脚本 `sh -n` 语法检查与在 docker 容器里的安装演练。
 - C6 验证：`npm run build`（含 `tsc --noEmit`），起 docker 全栈，用浏览器走一遍：注册 → 概览 → 提升管理员 → 管理端封停/改套餐 → 用户端看到状态；截图核对布局。
+
+## 10. 评审后修订（2026-11-06，与前文冲突处以本节为准）
+
+已修复：节点上报只计费、只回答本节点上的账号；其它账号一律 `Suspended`，不透露设备登记情况（`576d7df`）。
+
+### 10.1 控制台
+
+- 登录、注册、登记、设备用的 `/v1/sessions` 共用一个按来源限流器（IPv6 按 /64 聚合，表项过期淘汰），另加按邮箱的连续失败计数。注册对已占用邮箱返回 409，可被用来探测邮箱是否注册，接受此代价。
+- 登录与注册接口同样要求 `X-Yttt-Web: 1`，防登录 CSRF。
+- 配置新增 `public_url`（控制面对外地址）。cookie 是否加 `Secure` 由它的协议决定；cookie 名为 `__Host-yttt_session`（https）或 `yttt_session`（http 开发）。
+- 会话提取器拒绝已封停账号；管理员鉴权每次从库里读 `role`。封停或撤销管理员时注销该账号全部会话。
+- SPA 回退排除 `/v1/*`、`/install/*`、`/healthz`。CSP 追加 `font-src 'self' data:`。
+
+### 10.2 节点
+
+- 迁移合并为一份 `0002_console.sql`。`nodes.token_hash` 改为可空，鉴权时拒绝空值。配置里的 `nodes` 改为可选，只作首次种子：`ON CONFLICT DO NOTHING`，不再覆盖库里轮换过的令牌和改过的地址。
+- 停用节点：回报照常接收（200），但对该节点上的所有账号回答 `Suspended`，已连接的设备随即被断开；另提供“把该节点账号整体迁到另一节点”。
+- 登记令牌：
+  - 用一条原子语句消费：`UPDATE … WHERE token_hash=$1 AND used_unix IS NULL AND expires_unix>now RETURNING node_id`。
+  - “重新生成”在同一事务里删掉该节点所有未使用的令牌；正在运行的节点令牌只在新令牌真正登记成功时才轮换。
+  - 登记响应丢失时令牌已经用掉，只能重新生成。
+- 令牌不出现在进程参数里：部署命令为 `curl -fsSL <public_url>/install/relay.sh -o yttt-relay-install.sh && echo '<sha256>  yttt-relay-install.sh' | sha256sum -c && sudo YTTT_ENROLL=<令牌> sh yttt-relay-install.sh [--domain D]`。脚本经环境变量把令牌传给 `yttt-relay enroll`（从 stdin 读）。
+- 脚本完整性：
+  - 命令里内嵌脚本自身的 sha256，脚本主体包在函数里、末尾才调用，避免执行到一半；
+  - `SHA256SUMS` 与二进制同源，只能发现下载截断，不比 HTTPS 多提供完整性，这一点如实写进脚本注释；
+  - `public_url` 不是 https 且未开 `dev_mode` 时，拒绝生成部署命令。
+- I6 边界：由控制面分发 relay 二进制，意味着控制面一旦被攻破，攻击者能拿到之后新部署节点的 root。它仍然碰不到任何 Host，也碰不到 Host 的更新通道。这一点作为已接受的风险写进设计文档；以后改为用离线密钥签名二进制。
+- 节点地址：脚本可用 `--public-url` 显式给出。否则带域名时为 `https://<domain>`，不带域名时为 `http://<来源 IP>:3341`（IPv6 写成 `[addr]`）。控制面登记后主动回探节点的 `/healthz`，失败时在控制台标黄。地址视为基本不可变：改了以后，设备要到 ticket 续签才会换到新地址，所以推荐使用域名。
+- systemd：
+  - 节点令牌经 `LoadCredential=node-token:/etc/yttt-relay/node-token`，从 `$CREDENTIALS_DIRECTORY` 读取，配置项为 `node_token_file`；
+  - ACME 证书缓存放 `StateDirectory=yttt-relay`，保证持久化，避免撞上 Let's Encrypt 的重复签发限额；
+  - 继续用 `DynamicUser=yes`。
+- ACME：
+  - 接入方式照搬 iroh-relay：接受连接时区分 ACME 验证连接与普通 TLS 连接，另起一个任务驱动证书状态；
+  - QUIC 共用基于 resolver 的 TLS 配置；
+  - 443 必须公网直达，前面不能有 CDN 或 TLS 终结；
+  - 脚本先检查域名是否解析到本机；健康检查容忍证书还没签下来；配置支持 Let's Encrypt staging。
+- 版本与时钟：用量上报追加 `version`；登记响应带服务器时间，偏差超过 60 秒时脚本警告。
+- 注册时没有可用节点：返回 503，不把账号分到待登记的节点。待登记节点超过令牌有效期后，控制台显示“令牌已过期”。
+- 审计：生成令牌、停用节点、迁移账号都记审计。
+- 二进制：v1 只产出 `x86_64-unknown-linux-musl` 静态构建（docker 构建阶段用 cargo-zigbuild），放在控制面镜像的 `/usr/share/yttt-control/bin/`；aarch64 推后。
+- 脚本支持 `--no-systemd`（前台运行，便于在 docker 里演练）、`--upgrade`（只换二进制、不重新登记）、`--uninstall`。
+
+### 10.3 v1 不做
+
+ticket 公钥热替换（登记时下发一次；现在也没有签名密钥轮换能力）、aarch64 节点、注册时“自动选账号最少的节点”（`signup.node` 必须配置）。
+
+### 10.4 任务顺序
+
+C1（控制台后端）→ C7a（节点入库、种子改造、`node_token_file`、停用语义）→ C7b（登记接口、`yttt-relay enroll`、安装脚本、musl 二进制、docker 演练）→ C7c（ACME）→ C2–C4（前端）→ C5（打包）→ C6（全流程验证）。
