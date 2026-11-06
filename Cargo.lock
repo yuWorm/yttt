@@ -12584,6 +12584,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "yttt-relay-ticket"
+version = "0.3.21"
+dependencies = [
+ "ciborium",
+ "data-encoding",
+ "ed25519-dalek",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "yttt-server"
 version = "0.3.21"
 dependencies = [

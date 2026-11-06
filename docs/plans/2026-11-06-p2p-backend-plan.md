@@ -109,7 +109,7 @@
 
 - `Ticket { account_id, endpoint_id, node_id, rate_bps, burst, exp_unix }`，CBOR + Ed25519 签名，base64url 编码为 bearer token。
 - `verify(token, keys: &[VerifyingKey], node_id, now) -> Result<Ticket>`；支持两把公钥并存。
-- 设备登记与 ticket 申领的签名载荷：`device_proof(account_id, endpoint_id, nonce)`。
+- 设备登记与 ticket 申领的签名载荷：`DeviceProof{endpoint_id, issued_unix, signature}`，签名覆盖用途（登记/申领）、account_id、endpoint_id 与时间戳；控制面只接受 ±300 秒内的时间戳。实施时用时间戳代替服务端 nonce，省掉一次往返：重放窗口内的重放只能重复同一次登记或拿到绑定在该设备 EndpointId 上的 ticket，而 relay 握手要求持有该私钥，所以不扩大攻击面。
 - 测试：篡改、过期、错误节点、错误公钥、轮换。
 
 ### B2 `yttt-relay`（新 crate，二进制）

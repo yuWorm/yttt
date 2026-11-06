@@ -1,0 +1,13 @@
+[package]
+name = "yttt-relay-ticket"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ciborium = "0.2"
+data-encoding = "2"
+ed25519-dalek = "=3.0.0-rc.1"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+thiserror = "2"
+
