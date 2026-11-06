@@ -336,7 +336,8 @@ jobs:
         run: |
           out="target/$ARCH-unknown-linux-musl/release"
           strip "$out/yttt-relay" "$out/yttt-control"
-          file "$out/yttt-relay" | grep -q "statically linked"
+          # x86_64 musl links static-pie, which `file` names differently.
+          file "$out/yttt-relay" "$out/yttt-control" | grep -Ev "statically linked|static-pie linked" && exit 1 || true
           mkdir -p dist
           cp "$out/yttt-relay" "dist/yttt-relay-$VERSION-linux-$ARCH"
           cp "$out/yttt-control" "dist/yttt-control-$VERSION-linux-$ARCH"
