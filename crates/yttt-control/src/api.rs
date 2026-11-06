@@ -355,13 +355,15 @@ pub(crate) async fn issue_ticket(
         )
     };
     let node_id: String = row.get("node_id");
-    let expires_unix = now_unix() + state.config.ticket_ttl().as_secs();
+    let issued_unix = now_unix();
+    let expires_unix = issued_unix + state.config.ticket_ttl().as_secs();
     let token = state.signer.issue(&Ticket {
         account_id: session.account_id as u64,
         endpoint_id,
         node_id: node_id.clone(),
         rate_bps,
         burst_bytes,
+        issued_unix,
         expires_unix,
     });
     Ok(Json(TicketGranted {
@@ -415,8 +417,8 @@ pub(crate) async fn node_usage(
         .map(|usage| clamp_i64(usage.account_id))
         .collect();
     let rows = sqlx::query(
-        "SELECT a.id, a.suspended, p.monthly_bytes, p.throttled_rate_bps,
-                COALESCE(u.upstream_bytes, 0) AS used
+        "SELECT a.id, a.suspended, p.rate_bps, p.burst_bytes, p.monthly_bytes,
+                p.throttled_rate_bps, COALESCE(u.upstream_bytes, 0) AS used
          FROM accounts a
          JOIN plans p ON p.id = a.plan_id
          LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $2
@@ -426,6 +428,18 @@ pub(crate) async fn node_usage(
     .bind(month)
     .fetch_all(&mut *tx)
     .await?;
+    let reported: Vec<Vec<u8>> = report
+        .accounts
+        .iter()
+        .flat_map(|usage| &usage.endpoints)
+        .filter_map(|key| yttt_relay_ticket::parse_key(key))
+        .map(|key| key.to_vec())
+        .collect();
+    let registered: Vec<(Vec<u8>, i64)> =
+        sqlx::query_as("SELECT endpoint_id, account_id FROM devices WHERE endpoint_id = ANY($1)")
+            .bind(&reported)
+            .fetch_all(&mut *tx)
+            .await?;
     tx.commit().await?;
 
     let standings = report
@@ -446,11 +460,29 @@ pub(crate) async fn node_usage(
                         burst_bytes: rate,
                     }
                 }
-                Some(_) => Standing::Active,
+                Some(row) => Standing::Active {
+                    rate_bps: row.get::<i32, _>("rate_bps") as u32,
+                    burst_bytes: row.get::<i32, _>("burst_bytes") as u32,
+                },
             };
+            // A device stays only while it is registered to this account.
+            let revoked_endpoints = usage
+                .endpoints
+                .iter()
+                .filter(|key| {
+                    let Some(key) = yttt_relay_ticket::parse_key(key) else {
+                        return false;
+                    };
+                    !registered.iter().any(|(endpoint, account)| {
+                        endpoint[..] == key[..] && *account as u64 == usage.account_id
+                    })
+                })
+                .cloned()
+                .collect();
             AccountStanding {
                 account_id: usage.account_id,
                 standing,
+                revoked_endpoints,
             }
         })
         .collect();

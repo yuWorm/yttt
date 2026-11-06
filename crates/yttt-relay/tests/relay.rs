@@ -57,14 +57,33 @@ async fn node() -> RelayNode {
 }
 
 fn ticket(device: &Device, rate_bps: u32, burst_bytes: u32, expires_unix: u64) -> String {
+    issued_ticket(device, rate_bps, burst_bytes, now(), expires_unix)
+}
+
+fn issued_ticket(
+    device: &Device,
+    rate_bps: u32,
+    burst_bytes: u32,
+    issued_unix: u64,
+    expires_unix: u64,
+) -> String {
     TicketSigner::from_secret(CONTROL_SECRET).issue(&Ticket {
         account_id: device.account,
         endpoint_id: public_key(&device.secret),
         node_id: NODE.into(),
         rate_bps,
         burst_bytes,
+        issued_unix,
         expires_unix,
     })
+}
+
+fn standing(account_id: u64, standing: Standing) -> AccountStanding {
+    AccountStanding {
+        account_id,
+        standing,
+        revoked_endpoints: Vec::new(),
+    }
 }
 
 fn fast_ticket(device: &Device) -> String {
@@ -135,6 +154,7 @@ async fn a_device_without_a_valid_ticket_is_refused() {
         node_id: "elsewhere".into(),
         rate_bps: FAST,
         burst_bytes: FAST,
+        issued_unix: now(),
         expires_unix: now() + 600,
     });
     let untrusted = TicketSigner::from_secret([2; 32]).issue(&Ticket {
@@ -143,6 +163,7 @@ async fn a_device_without_a_valid_ticket_is_refused() {
         node_id: NODE.into(),
         rate_bps: FAST,
         burst_bytes: FAST,
+        issued_unix: now(),
         expires_unix: now() + 600,
     });
     for token in [
@@ -237,13 +258,13 @@ async fn throttling_an_account_slows_its_devices_down() {
         .await
         .unwrap();
     let mut bob = connect(&node, &BOB, Some(fast_ticket(&BOB))).await.unwrap();
-    node.apply_standings(&[AccountStanding {
-        account_id: ALICE_LAPTOP.account,
-        standing: Standing::Throttled {
+    node.apply_standings(&[standing(
+        ALICE_LAPTOP.account,
+        Standing::Throttled {
             rate_bps: 10_000,
             burst_bytes: 1_000,
         },
-    }]);
+    )]);
 
     let started = Instant::now();
     let sending = async {
@@ -257,20 +278,65 @@ async fn throttling_an_account_slows_its_devices_down() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_connection_ends_when_its_ticket_expires() {
+async fn a_live_connection_outlasts_its_ticket_but_cannot_reconnect_on_it() {
     let node = node().await;
-    let mut alice = connect(
-        &node,
-        &ALICE_LAPTOP,
-        Some(ticket(&ALICE_LAPTOP, FAST, FAST, now() + 2)),
-    )
-    .await
-    .unwrap();
-    dropped(&mut alice).await;
-    assert_eq!(
-        node.account(ALICE_LAPTOP.account).map(|a| a.connections),
-        Some(0)
+    let expiring = ticket(&ALICE_LAPTOP, FAST, FAST, now() + 2);
+    let mut alice = connect(&node, &ALICE_LAPTOP, Some(expiring.clone()))
+        .await
+        .unwrap();
+    let mut bob = connect(&node, &BOB, Some(fast_ticket(&BOB))).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // iroh reuses a relay connection's first token for every reconnect, so
+    // the node never cuts a live connection at expiry.
+    send(&mut alice, &BOB, 100).await;
+    receive(&mut bob, 100).await;
+    assert!(
+        connect(
+            &node,
+            &ALICE_PHONE,
+            Some(ticket(&ALICE_PHONE, FAST, FAST, now() - 1))
+        )
+        .await
+        .is_err()
     );
+    assert!(connect(&node, &ALICE_LAPTOP, Some(expiring)).await.is_err());
+    node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removed_device_is_dropped_and_only_a_newer_ticket_readmits_it() {
+    let node = node().await;
+    let mut laptop = connect(&node, &ALICE_LAPTOP, Some(fast_ticket(&ALICE_LAPTOP)))
+        .await
+        .unwrap();
+    let mut phone = connect(&node, &ALICE_PHONE, Some(fast_ticket(&ALICE_PHONE)))
+        .await
+        .unwrap();
+    let mut bob = connect(&node, &BOB, Some(fast_ticket(&BOB))).await.unwrap();
+
+    node.apply_standings(&[AccountStanding {
+        account_id: ALICE_PHONE.account,
+        standing: Standing::Active {
+            rate_bps: FAST,
+            burst_bytes: FAST,
+        },
+        revoked_endpoints: vec![yttt_relay_ticket::hex(&public_key(&ALICE_PHONE.secret))],
+    }]);
+    dropped(&mut phone).await;
+    assert!(
+        connect(&node, &ALICE_PHONE, Some(fast_ticket(&ALICE_PHONE)))
+            .await
+            .is_err()
+    );
+
+    // The account's other device keeps relaying.
+    send(&mut laptop, &BOB, 100).await;
+    receive(&mut bob, 100).await;
+
+    // Registering the phone again yields a ticket issued after the removal.
+    let newer = issued_ticket(&ALICE_PHONE, FAST, FAST, now() + 1, now() + 600);
+    assert!(connect(&node, &ALICE_PHONE, Some(newer)).await.is_ok());
     node.shutdown().await;
 }
 
@@ -285,10 +351,7 @@ async fn a_suspended_account_is_dropped_and_refused_until_reinstated() {
         .unwrap();
     let mut bob = connect(&node, &BOB, Some(fast_ticket(&BOB))).await.unwrap();
 
-    node.apply_standings(&[AccountStanding {
-        account_id: ALICE_LAPTOP.account,
-        standing: Standing::Suspended,
-    }]);
+    node.apply_standings(&[standing(ALICE_LAPTOP.account, Standing::Suspended)]);
     dropped(&mut laptop).await;
     dropped(&mut phone).await;
     assert!(
@@ -319,10 +382,13 @@ async fn a_suspended_account_is_dropped_and_refused_until_reinstated() {
     send(&mut carol, &BOB, 100).await;
     receive(&mut bob, 100).await;
 
-    node.apply_standings(&[AccountStanding {
-        account_id: ALICE_LAPTOP.account,
-        standing: Standing::Active,
-    }]);
+    node.apply_standings(&[standing(
+        ALICE_LAPTOP.account,
+        Standing::Active {
+            rate_bps: FAST,
+            burst_bytes: FAST,
+        },
+    )]);
     assert!(
         connect(&node, &ALICE_LAPTOP, Some(fast_ticket(&ALICE_LAPTOP)))
             .await

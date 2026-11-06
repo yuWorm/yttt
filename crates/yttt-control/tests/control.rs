@@ -22,6 +22,10 @@ const NODE: &str = "local-1";
 const NODE_TOKEN: &str = "node-token";
 const MONTHLY_BYTES: u64 = 10_000;
 const THROTTLED: u32 = 1_000;
+const PLAN_RATE: Standing = Standing::Active {
+    rate_bps: 1_000_000,
+    burst_bytes: 250_000,
+};
 const LAPTOP: [u8; 32] = [21; 32];
 const PHONE: [u8; 32] = [22; 32];
 const TABLET: [u8; 32] = [23; 32];
@@ -51,7 +55,7 @@ impl Harness {
             listen: "127.0.0.1:0".parse().unwrap(),
             database_url: format!("{prefix}/{name}"),
             ticket_secret: yttt_relay_ticket::hex(&[1; 32]),
-            ticket_ttl_secs: 600,
+            ticket_ttl_secs: 30 * 24 * 3600,
             session_ttl_secs: 3600,
             dev_mode: true,
             plans: vec![PlanConfig {
@@ -175,15 +179,34 @@ impl Harness {
     }
 
     async fn report(&self, token: &str, usage: &[(u64, u64)]) -> Result<UsageReply, StatusCode> {
+        self.report_devices(
+            token,
+            &usage
+                .iter()
+                .map(|(account, bytes)| (*account, *bytes, Vec::new()))
+                .collect::<Vec<_>>(),
+        )
+        .await
+    }
+
+    async fn report_devices(
+        &self,
+        token: &str,
+        usage: &[(u64, u64, Vec<[u8; 32]>)],
+    ) -> Result<UsageReply, StatusCode> {
         self.call(
             &format!("/v1/nodes/{NODE}/usage"),
             Some(token),
             &UsageReport {
                 accounts: usage
                     .iter()
-                    .map(|(account_id, upstream_bytes)| AccountUsage {
+                    .map(|(account_id, upstream_bytes, devices)| AccountUsage {
                         account_id: *account_id,
                         upstream_bytes: *upstream_bytes,
+                        endpoints: devices
+                            .iter()
+                            .map(|device| yttt_relay_ticket::hex(&public_key(device)))
+                            .collect(),
                     })
                     .collect(),
             },
@@ -398,15 +421,18 @@ async fn usage_accumulates_and_decides_each_accounts_standing() {
         vec![
             AccountStanding {
                 account_id: alice,
-                standing: Standing::Active
+                standing: PLAN_RATE,
+                revoked_endpoints: Vec::new(),
             },
             AccountStanding {
                 account_id: bob,
-                standing: Standing::Active
+                standing: PLAN_RATE,
+                revoked_endpoints: Vec::new(),
             },
             AccountStanding {
                 account_id: 999_999,
-                standing: Standing::Suspended
+                standing: Standing::Suspended,
+                revoked_endpoints: Vec::new(),
             },
         ]
     );
@@ -448,5 +474,63 @@ async fn usage_accumulates_and_decides_each_accounts_standing() {
         .await;
     let reply = harness.report(NODE_TOKEN, &[(bob, 0)]).await.unwrap();
     assert_eq!(reply.accounts[0].standing, Standing::Suspended);
+    harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_node_learns_which_connected_devices_left_their_account() {
+    let harness = Harness::start().await;
+    let (alice, alice_session) = harness.account("alice@example.com").await;
+    let (bob, bob_session) = harness.account("bob@example.com").await;
+    harness.register(&alice_session, alice, &LAPTOP).await;
+    harness.register(&alice_session, alice, &PHONE).await;
+    harness.register(&bob_session, bob, &TABLET).await;
+
+    // The phone is removed; the tablet is someone else's device presented
+    // under Alice's account.
+    let removed = harness
+        .http
+        .delete(format!(
+            "{}/v1/devices/{}",
+            harness.base,
+            yttt_relay_ticket::hex(&public_key(&PHONE))
+        ))
+        .bearer_auth(&alice_session)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(removed, StatusCode::NO_CONTENT);
+    let reply = harness
+        .report_devices(
+            NODE_TOKEN,
+            &[
+                (alice, 0, vec![LAPTOP, PHONE, TABLET]),
+                (bob, 0, vec![TABLET]),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.accounts[0].revoked_endpoints,
+        vec![
+            yttt_relay_ticket::hex(&public_key(&PHONE)),
+            yttt_relay_ticket::hex(&public_key(&TABLET)),
+        ]
+    );
+    assert!(reply.accounts[1].revoked_endpoints.is_empty());
+
+    // A ticket is long-lived and records when it was issued.
+    let granted = harness
+        .ticket(&alice_session, alice, &LAPTOP)
+        .await
+        .unwrap();
+    let ticket = TicketVerifier::new(&[harness.control.ticket_key()])
+        .unwrap()
+        .verify(&granted.token, &public_key(&LAPTOP), NODE, now())
+        .unwrap();
+    assert!(ticket.issued_unix.abs_diff(now()) < 60);
+    assert!(ticket.expires_unix >= now() + 29 * 24 * 3600);
     harness.control.shutdown().await;
 }

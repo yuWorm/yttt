@@ -3,7 +3,7 @@
 //! The node never learns what devices say to each other; it only sees opaque
 //! datagrams between EndpointIds. A ticket admits a connection, the account's
 //! shared bucket paces everything that account sends, and the control plane's
-//! standing can slow or drop the account at any time.
+//! standing can change the pace, drop a removed device, or drop the account.
 
 use std::{
     collections::HashMap,
@@ -32,6 +32,9 @@ use yttt_relay_ticket::{
 const REFILL_PERIOD: Duration = Duration::from_millis(100);
 /// The smallest rate a bucket accepts at that granularity.
 const MIN_RATE_BPS: u32 = 10;
+/// Longer than any ticket lives, so a remembered revocation outlasts every
+/// ticket it refuses.
+const REVOCATION_MEMORY_SECS: u64 = 400 * 24 * 3600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Rate {
@@ -86,15 +89,16 @@ impl Account {
 struct Live {
     endpoint: EndpointId,
     account: u64,
-    expires_unix: u64,
 }
 
 #[derive(Debug, Default)]
 struct State {
     accounts: HashMap<u64, Arc<Account>>,
     connections: HashMap<ConnectionId, Live>,
-    /// Only accounts whose standing is not `Active`.
+    /// The latest standing the control plane gave each account.
     standings: HashMap<u64, Standing>,
+    /// Removed devices, by when they were removed.
+    revoked: HashMap<[u8; 32], u64>,
 }
 
 impl State {
@@ -106,16 +110,22 @@ impl State {
             .collect()
     }
 
-    fn effective_rate(&self, account: u64, ticket_rate: Rate) -> Rate {
+    fn rate(&self, account: u64, ticket_rate: Rate) -> Rate {
         match self.standings.get(&account) {
-            Some(Standing::Throttled {
-                rate_bps,
-                burst_bytes,
-            }) => Rate {
+            Some(
+                Standing::Active {
+                    rate_bps,
+                    burst_bytes,
+                }
+                | Standing::Throttled {
+                    rate_bps,
+                    burst_bytes,
+                },
+            ) => Rate {
                 bytes_per_second: *rate_bps,
                 burst_bytes: *burst_bytes,
             },
-            _ => ticket_rate,
+            Some(Standing::Suspended) | None => ticket_rate,
         }
     }
 }
@@ -154,12 +164,11 @@ impl Node {
         let Some(token) = request.auth_token() else {
             return deny("a relay ticket is required");
         };
-        let ticket = match self.verifier.verify(
-            &token,
-            request.endpoint_id().as_bytes(),
-            &self.node_id,
-            now_unix(),
-        ) {
+        let endpoint = *request.endpoint_id().as_bytes();
+        let ticket = match self
+            .verifier
+            .verify(&token, &endpoint, &self.node_id, now_unix())
+        {
             Ok(ticket) => ticket,
             Err(error) => return deny(&error.to_string()),
         };
@@ -167,11 +176,18 @@ impl Node {
         if state.standings.get(&ticket.account_id) == Some(&Standing::Suspended) {
             return deny("the account is suspended");
         }
+        if state
+            .revoked
+            .get(&endpoint)
+            .is_some_and(|revoked| ticket.issued_unix <= *revoked)
+        {
+            return deny("the device was removed from its account");
+        }
         let ticket_rate = Rate {
             bytes_per_second: ticket.rate_bps,
             burst_bytes: ticket.burst_bytes,
         };
-        let rate = state.effective_rate(ticket.account_id, ticket_rate);
+        let rate = state.rate(ticket.account_id, ticket_rate);
         let account = state
             .accounts
             .entry(ticket.account_id)
@@ -184,7 +200,6 @@ impl Node {
             Live {
                 endpoint: request.endpoint_id(),
                 account: ticket.account_id,
-                expires_unix: ticket.expires_unix,
             },
         );
         Access::Allow
@@ -196,55 +211,59 @@ impl Node {
         state.accounts.get(&account).cloned()
     }
 
-    /// Drops connections whose ticket has run out, and forgets idle accounts
-    /// with nothing left to report.
-    pub(crate) fn expire(&self, now_unix: u64) {
-        let expired: Vec<_> = {
-            let mut state = self.state.lock();
-            let State {
-                accounts,
-                connections,
-                standings,
-            } = &mut *state;
-            accounts.retain(|id, account| {
-                standings.contains_key(id)
-                    || account.unreported.load(Ordering::Relaxed) > 0
-                    || connections.values().any(|live| live.account == *id)
-            });
-            connections
-                .iter()
-                .filter(|(_, live)| live.expires_unix <= now_unix)
-                .map(|(id, live)| (live.endpoint, *id))
-                .collect()
-        };
-        for (endpoint, connection) in expired {
-            self.clients.disconnect(endpoint, Some(connection));
-        }
+    /// Forgets idle accounts with nothing left to report, and revocations
+    /// older than any ticket.
+    pub(crate) fn prune(&self, now_unix: u64) {
+        let mut state = self.state.lock();
+        let State {
+            accounts,
+            connections,
+            standings,
+            revoked,
+        } = &mut *state;
+        accounts.retain(|id, account| {
+            account.unreported.load(Ordering::Relaxed) > 0
+                || connections.values().any(|live| live.account == *id)
+        });
+        standings
+            .retain(|id, standing| *standing == Standing::Suspended || accounts.contains_key(id));
+        revoked.retain(|_, at| now_unix.saturating_sub(*at) < REVOCATION_MEMORY_SECS);
     }
 
-    /// Applies the control plane's standings and drops what is now suspended.
+    /// Applies the control plane's standings: new paces, removed devices, and
+    /// suspended accounts.
     pub(crate) fn apply(&self, standings: &[AccountStanding]) {
+        let now = now_unix();
         let mut dropped = Vec::new();
         {
             let mut state = self.state.lock();
             for AccountStanding {
                 account_id,
                 standing,
+                revoked_endpoints,
             } in standings
             {
-                match standing {
-                    Standing::Active => {
-                        state.standings.remove(account_id);
-                    }
-                    other => {
-                        state.standings.insert(*account_id, *other);
-                    }
+                state.standings.insert(*account_id, *standing);
+                let revoked: Vec<[u8; 32]> = revoked_endpoints
+                    .iter()
+                    .filter_map(|key| yttt_relay_ticket::parse_key(key))
+                    .collect();
+                for key in &revoked {
+                    state.revoked.insert(*key, now);
                 }
                 if *standing == Standing::Suspended {
                     dropped.extend(state.connections_of(*account_id));
-                } else if let Some(account) = state.accounts.get(account_id) {
+                    continue;
+                }
+                dropped.extend(
+                    state
+                        .connections_of(*account_id)
+                        .into_iter()
+                        .filter(|(endpoint, _)| revoked.contains(endpoint.as_bytes())),
+                );
+                if let Some(account) = state.accounts.get(account_id) {
                     let ticket_rate = *account.ticket_rate.lock();
-                    account.pace(state.effective_rate(*account_id, ticket_rate));
+                    account.pace(state.rate(*account_id, ticket_rate));
                 }
             }
         }
@@ -260,9 +279,19 @@ impl Node {
         let mut accounts: Vec<_> = state
             .accounts
             .iter()
-            .map(|(id, account)| AccountUsage {
-                account_id: *id,
-                upstream_bytes: account.unreported.swap(0, Ordering::Relaxed),
+            .map(|(id, account)| {
+                let mut endpoints: Vec<_> = state
+                    .connections_of(*id)
+                    .into_iter()
+                    .map(|(endpoint, _)| yttt_relay_ticket::hex(endpoint.as_bytes()))
+                    .collect();
+                endpoints.sort();
+                endpoints.dedup();
+                AccountUsage {
+                    account_id: *id,
+                    upstream_bytes: account.unreported.swap(0, Ordering::Relaxed),
+                    endpoints,
+                }
             })
             .collect();
         for id in state.standings.keys() {
@@ -270,6 +299,7 @@ impl Node {
                 accounts.push(AccountUsage {
                     account_id: *id,
                     upstream_bytes: 0,
+                    endpoints: Vec::new(),
                 });
             }
         }

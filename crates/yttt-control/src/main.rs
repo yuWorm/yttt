@@ -2,7 +2,8 @@ use std::process::ExitCode;
 
 use yttt_control::{Control, ControlConfig};
 
-const USAGE: &str = "usage: yttt-control --config <path.toml>\n       yttt-control public-key <ticket_secret hex>";
+const USAGE: &str =
+    "usage: yttt-control --config <path.toml>\n       yttt-control public-key <ticket_secret hex>";
 
 #[tokio::main]
 async fn main() -> ExitCode {

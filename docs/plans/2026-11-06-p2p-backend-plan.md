@@ -16,7 +16,8 @@
 | `EndpointHooks::after_handshake` 在 TLS 完成后拿到对端 EndpointId 与 ALPN，可拒绝 | `endpoint/hooks.rs` | Host 的 ACL 首道检查放在这里 |
 | hook 中不得持有 `Connection`，要用 `weak_handle()` | 同上 | 连接登记表存 `WeakConnectionHandle` |
 | `Connection::close`、`paths()`、`remote_id()`、`accept_bi()` 均为公开 API | `endpoint/connection.rs` | 撤销、路径显示、逐流检查可实现 |
-| `Endpoint::insert_relay` / `remove_relay` 运行时可用 | `endpoint.rs` | ticket 续签与节点迁移不重建 endpoint |
+| `Endpoint::insert_relay` / `remove_relay` 运行时可用 | `endpoint.rs` | 节点迁移（换 URL）不重建 endpoint |
+| relay token 在 actor 启动时读取一次，此后重连沿用；同 URL 换 token 不生效（B 阶段核实，`socket/transports/relay/actor.rs`） | 同上 | ticket 改为长期准入凭据，实时控制走用量回报（见 B2 实施记录） |
 | 核心库的地址查找只有 `dns`、`pkarr`、`memory`；**没有内置 mDNS** | `address_lookup/` | 直连提示用 `MemoryLookup`；mDNS 推迟 |
 | relay 嵌入接口公开：`protos::handshake::serverside`、`RelayedStream::new`、`Clients::register`、`Clients::disconnect`、`streams::Bucket` | `iroh-relay/src/{protos,server}` | **`yttt-relay` 不需要 fork**：自建 HTTP/WS 服务，在流外包按账号的限速与计量，再注册进 `Clients` |
 | 同一 EndpointId 新连接注册时，旧连接被置为 inactive 并收到 `SameEndpointIdConnected` | `server/clients.rs` | 续签重连不会两条同时转发 |
@@ -107,7 +108,7 @@
 
 ### B1 共享 ticket 类型（新 crate `yttt-relay-ticket`）
 
-- `Ticket { account_id, endpoint_id, node_id, rate_bps, burst, exp_unix }`，CBOR + Ed25519 签名，base64url 编码为 bearer token。
+- `Ticket { account_id, endpoint_id, node_id, rate_bps, burst_bytes, issued_unix, expires_unix }`，CBOR + Ed25519 签名，base64url 编码为 bearer token。
 - `verify(token, keys: &[VerifyingKey], node_id, now) -> Result<Ticket>`；支持两把公钥并存。
 - 设备登记与 ticket 申领的签名载荷：`DeviceProof{endpoint_id, issued_unix, signature}`，签名覆盖用途（登记/申领）、account_id、endpoint_id 与时间戳；控制面只接受 ±300 秒内的时间戳。实施时用时间戳代替服务端 nonce，省掉一次往返：重放窗口内的重放只能重复同一次登记或拿到绑定在该设备 EndpointId 上的 ticket，而 relay 握手要求持有该私钥，所以不扩大攻击面。
 - 测试：篡改、过期、错误节点、错误公钥、轮换。
@@ -116,12 +117,12 @@
 
 - 自建 HTTP（hyper）与 WebSocket 升级，复用 iroh-relay 的握手与帧：`handshake::serverside` → 校验 ticket（`endpoint_id` 一致、节点、未过期、账号未封停）→ `authorize_if` → 包装流 → `Clients::register`。具体包装层次在任务开始时按 `http_server.rs` 的升级路径确认；若某个必需类型未公开，退回最小 fork，并在本文件记录原因。
 - `AccountMeter`：每账号一个 `Bucket`（同账号所有连接共享）与上行字节计数；降速时替换为低速桶。
-- 到期断开：按 `(endpoint_id, connection_id)` 记录 `exp`，定时器到期调用 `Clients::disconnect`。
+- ~~到期断开~~ → 实施记录：iroh 1.4.1 的 relay actor 整个生命周期内重连都沿用首个 token，到期断开会让长时间运行的 endpoint 永久掉线。改为：ticket 只在准入时检查，默认 30 天；用量回报携带各账号在线 EndpointId，回复携带 `Active{rate}`/`Throttled{rate}`/`Suspended` 与 `revoked_endpoints`；节点断开被移除的设备并拒绝其 `issued_unix` 早于移除时刻的 ticket。
 - `disconnect_account`。
 - 用量上报：每 15 秒 `POST /v1/nodes/{node}/usage`，响应中取额度状态；失联时按本地缓存执行。
 - QUIC 地址探测：用 `iroh_relay::server::Server` 仅启用 `quic`（需要 TLS；本地开发可关闭）。
 - 配置：TOML（监听地址、节点 ID、控制面 URL、节点令牌、控制面公钥列表、TLS）。
-- 测试：ticket 拒绝矩阵；两条连接共享账号桶；计数与实际转发字节一致；到期断开；封停断开（设计 §16 第 11、12 条）。
+- 测试：ticket 拒绝矩阵；两条连接共享账号桶；计数与实际转发字节一致；已建立连接越过 ticket 到期仍可用、过期 ticket 不能重连；移除设备断开且只接受更新的 ticket；封停断开（设计 §16 第 11、12 条）。
 
 ### B3 控制面（新 crate `yttt-control`，二进制）
 
@@ -144,7 +145,7 @@
 
 ### B5 Host 与 Client 接入控制面（后端 API，不含 GUI）
 
-- `yttt-client-core` 新增 `ControlClient`：登录、登记设备、申领与定时续签 ticket，续签后 `set_relay_token`。
+- `yttt-client-core` 新增 `ControlClient`：登录、登记设备、申领 ticket；剩余不足 1/3 有效期时续签并写入 relay map。
 - Host 在 `SetP2p` 中接受控制面会话（本地管理入口提供），用于自身的 ticket。
 
 ## 风险与回退

@@ -51,7 +51,7 @@ impl ControlConfig {
     }
 
     pub(crate) fn ticket_ttl(&self) -> Duration {
-        Duration::from_secs(self.ticket_ttl_secs.clamp(60, 3600))
+        Duration::from_secs(self.ticket_ttl_secs.clamp(3600, 365 * 24 * 3600))
     }
 
     pub(crate) fn session_ttl(&self) -> Duration {
@@ -86,8 +86,11 @@ impl std::fmt::Debug for NodeEntry {
     }
 }
 
+/// Tickets are long-lived: iroh reuses a relay connection's first token for
+/// every reconnect. Devices renew well before expiry, and live control goes
+/// through node usage reports instead.
 fn default_ticket_ttl_secs() -> u64 {
-    600
+    30 * 24 * 3600
 }
 
 fn default_session_ttl_secs() -> u64 {

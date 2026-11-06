@@ -3,17 +3,21 @@
 use serde::{Deserialize, Serialize};
 
 /// What a node reports every interval: bytes each account sent since the last
-/// accepted report. Accounts with live connections or a non-active standing
-/// appear even with zero bytes, so the node keeps learning their standing.
+/// accepted report, and which of its devices are connected. Accounts with live
+/// connections or a known standing appear even with zero bytes, so the node
+/// keeps learning their standing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageReport {
     pub accounts: Vec<AccountUsage>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsage {
     pub account_id: u64,
     pub upstream_bytes: u64,
+    /// Hex EndpointIds of the account's devices connected to the node.
+    #[serde(default)]
+    pub endpoints: Vec<String>,
 }
 
 /// The control plane's answer: the standing of every account in the report.
@@ -22,17 +26,21 @@ pub struct UsageReply {
     pub accounts: Vec<AccountStanding>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountStanding {
     pub account_id: u64,
     pub standing: Standing,
+    /// Reported endpoints that are no longer the account's devices. The node
+    /// drops them and refuses their tickets issued before now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revoked_endpoints: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Standing {
-    /// Relay at the rate the account's tickets carry.
-    Active,
+    /// Relay at the plan's current rate, which may differ from older tickets.
+    Active { rate_bps: u32, burst_bytes: u32 },
     /// Over quota: relay, but no faster than this.
     Throttled { rate_bps: u32, burst_bytes: u32 },
     /// Drop every connection and admit none.

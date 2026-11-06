@@ -32,9 +32,9 @@ relay 作为付费服务出售：按账号限制 relay 带宽和月流量，支�
 | D3 | Host 身份只来自扫码配对，Client 固定保存，永不接受控制面修改 | 控制面被攻破也不能把 Client 指向假 Host |
 | D4 | Host ACL 只能在本机修改；控制面登记设备仅为单向通知 | 控制面被攻破也不能往 Host 加设备 |
 | D5 | 应用层握手中 Host 和 Client **双方**都用自己的 EndpointId 私钥签名 transcript | 纵深防御，防 iroh 实现缺陷或配置错误（不防私钥泄露） |
-| D6 | 商业 relay 为自研二进制 `yttt-relay`，通过 `iroh-relay` 1.4 的公开嵌入接口实现，不 fork（见 §9.2） | 现成 relay 没有按账号限速、计量、到期断开 |
+| D6 | 商业 relay 为自研二进制 `yttt-relay`，通过 `iroh-relay` 1.4 的公开嵌入接口实现，不 fork（见 §9.2） | 现成 relay 没有按账号限速、计量与按账号断开 |
 | D7 | 每个账号固定分配一个节点；`RelayMap` 只含该节点 | 满足“只在同节点连接”，无需地址发现 |
-| D8 | relay 准入用控制面签发、节点离线验签的短期 ticket，节点在 ticket 到期时主动断开 | 鉴权不依赖每连接回调；过期和封停对已建立的连接同样生效 |
+| D8 | relay 准入用控制面签发、节点离线验签的长期 ticket（默认 30 天，只在准入时检查）；对已建立连接的实时控制走节点↔控制面的用量回报（当前速率、已移除设备、封停） | 鉴权不依赖每连接回调；iroh 1.4.1 的 relay 连接在整个生命周期内重连都沿用首个 token，短期 ticket 会把长时间运行的 endpoint 锁在门外（实施时核实，见 §9.3） |
 | D9 | 计费只针对 relay 流量，以节点计数为唯一口径；P2P 直连不经过服务器，不计量 | 技术事实，产品定价须据此设计 |
 | D10 | 现有 TLS 端口入口保留，作为独立入口和备用路径 | 不破坏已有用户；服务不可用时仍可用 |
 | D11 | 一台 Client 安装实例只属于一个账号；用户在 Client 和 Host 上登录同一账号，不支持跨账号配对使用付费 relay | 用户控制的是自己的电脑，账号就是“我的设备集合”；同时消除了“一个 EndpointId 属于多个账号”带来的计费和准入歧义 |
@@ -237,13 +237,13 @@ Client 用 `yttt/pair/1` 拨号 Host EndpointId 后，QUIC 握手已确认双方
 
 ### 9.2 嵌入方式（原“fork 范围”）
 
-实现前核对 iroh-relay 1.4.1 源码后确认不需要 fork：`protos::handshake::serverside`、`RelayedStream::new`、`server::Clients::register` / `Clients::disconnect` 与 `server::streams::Bucket` 均为公开接口，供在自建 HTTP 服务上挂载 relay 协议的嵌入方使用。`yttt-relay` 自建 HTTP/WebSocket 服务，在帧层用按账号的 `Bucket` 限速并计数，到期或封停时调用 `Clients::disconnect`。下面四项需求不变，只是实现方式从改源码变为包装：
+实现前核对 iroh-relay 1.4.1 源码后确认不需要 fork：`protos::handshake::serverside`、`RelayedStream::new`、`server::Clients::register` / `Clients::disconnect` 与 `server::streams::Bucket` 均为公开接口，供在自建 HTTP 服务上挂载 relay 协议的嵌入方使用。`yttt-relay` 自建 HTTP/WebSocket 服务，在帧层用按账号的 `Bucket` 限速并计数，设备被移除或账号封停时调用 `Clients::disconnect`。下面四项需求不变，只是实现方式从改源码变为包装：
 
 第一期补丁：
 
 1. **按账号限速**：Client 上行方向的限速包装由全局配置改为按 account_id 查表，同一账号在本节点上的所有连接共享一个令牌桶。
 2. **计量**：在同一位置累加上行字节到账号计数器。
-3. **到期断开**：在 `on_connect` 通过的连接上记录 ticket 的 `exp` 与 account_id，到期主动断开；客户端需在到期前用新 ticket 重连。
+3. **实时控制**：节点每 15 秒回报各账号的上行字节与在线 EndpointId；控制面回复每个账号的状态（`Active{rate}` / `Throttled{rate}` / `Suspended`）与已不属于该账号的 EndpointId。节点据此换桶、断开被移除的设备并拒绝其移除前签发的 ticket（按 `issued_unix` 比较），或断开整个账号。已建立的连接不因 ticket 到期而断开。
 4. **主动断开接口**：`disconnect_account(account_id)` 和按 EndpointId 断开，用于封停和额度用尽。
 
 推迟到 P4：转发前检查目标 endpoint 是否与发送方同属一个账号。理由：ticket 已经绑定账号，其他租户无法免费使用 relay；Host 在 `after_handshake` 就会拒绝不在 ACL 中的设备，骚扰的代价有限；而该检查需要改动转发路径，fork 面较大。
@@ -254,10 +254,10 @@ Client 用 `yttt/pair/1` 拨号 Host EndpointId 后，QUIC 握手已确认双方
 
 ### 9.3 ticket（D8）
 
-- 由控制面用 Ed25519 签名，内容为 `{account_id, endpoint_id, node_id, rate_bps, burst, exp}`，有效期约 1 小时。
+- 由控制面用 Ed25519 签名，内容为 `{account_id, endpoint_id, node_id, rate_bps, burst, issued_unix, expires_unix}`，默认有效期 30 天（可配 1 小时到 365 天），只在准入时检查。
 - Client 申领 ticket：使用账号登录会话，并附带设备私钥对 `(account_id, endpoint_id, nonce)` 的签名；控制面确认该 EndpointId 已登记在此账号下。
 - 出示：Client 通过 `RelayConfig` 的 auth token 出示 ticket。节点在 `on_connect` 本地验签，检查 `endpoint_id == request.endpoint_id()`（relay 握手已证明私钥持有，因此 ticket 无法转给其他设备）、`node_id` 为本节点、未过期、账号未被封停。
-- 续签：Client 在到期前申领新 ticket，用 `RelayMap::insert` 换入带新 token 的 `RelayConfig`（`insert`/`remove` 可运行时调用，已核实）。**待复核**：换入后 iroh 是否自动用新 token 重连；如果不会，客户端需要主动触发。
+- 续签：已核实 iroh 1.4.1 **不会**用新 token 重连。token 在 relay 连接 actor 启动时取一次，此后无限重试都沿用它；`insert_relay`、rebind、`network_change` 都不会替换，home relay 的 actor 也不会因空闲退出。因此 ticket 设计为长期凭据：设备在剩余不足 1/3 有效期时申领新 ticket 并写入 relay map（之后新建的 relay 连接使用它），旧 actor 若在旧 ticket 过期后断线重连会被拒，此时由 yttt 重建 endpoint。换节点（URL 不同）会新建 actor，不受此限。
 - 节点内置控制面公钥，并支持两把公钥并存，用于轮换。
 - 控制面短时故障不影响持有有效 ticket 的连接。
 
@@ -275,7 +275,7 @@ yttt 是开源项目，必须假设任何客户端都可能被修改。计费和
 - fork 只在服务端 `yttt-relay` 中；客户端使用标准 iroh，不包含任何计费逻辑。
 - 准入、限速、计量、到期断开全部在节点上执行；客户端上报的任何数字都不参与计费，界面上的用量只是从控制面读取后展示。
 - ticket 绑定 `endpoint_id`，而 relay 握手要求证明私钥持有（已核实），因此 ticket 不能转给其他设备使用。
-- 修改客户端、不续签而保持长连接：节点在 ticket 到期时断开（§9.2 第 3 条）。
+- 修改客户端、不续签而保持长连接：计费不受影响（用量按节点计数，速率按控制面最新回复）；被移除的设备与封停账号在下一次回报（≤15 秒）时被断开（§9.2 第 3 条）。
 - 设备数上限与 EndpointId 归属由控制面在登记时检查。
 - 修改客户端强制只走直连，不会造成计费损失（直连本来不计费）；把 relay 当通用隧道使用，同样计量封顶，由服务条款约束。
 - 用户自建 relay 不付费是允许的使用方式。
@@ -345,7 +345,7 @@ TCP/TLS 端口（高级）                  （现有界面，保持不变）
 
 | 情况 | 行为 |
 |---|---|
-| 控制面不可达 | 持有有效 ticket 的连接继续工作到 ticket 到期；之后无法使用 relay；直连仍然可用 |
+| 控制面不可达 | 节点按已验签的 ticket 和最后一次收到的状态继续服务，未上报的字节留到下次；新连接在 ticket 有效期内照常准入；直连不受影响 |
 | 节点不可达 | 已建立的直连不受影响；新连接凭保存的直连地址或本地发现尝试直连，失败时提示“节点不可达” |
 | 额度用尽 | 降速或断开，界面明确提示；直连不受影响 |
 | 账号被封停 | 节点断开该账号所有 relay 连接；直连不受影响 |
@@ -366,7 +366,7 @@ TCP/TLS 端口（高级）                  （现有界面，保持不变）
    - 配对协议（commit-reveal、SAS、`PairAccepted`、并发作废）与粘贴配对码。
    - relay 使用自建 URL，不接控制面。TLS 入口保持不变。
 3. **P2 扫码与设备管理**：二维码渲染与应用内扫码、设备列表与撤销、路径显示、审计日志与本机通知、全局关闭开关。
-4. **P3 商业 relay**：`yttt-relay`（ticket 验签、按账号限速与计量、到期断开、主动断开）、控制面（账号、带私钥证明的设备登记、ticket、用量）、Client 与 Host 账号登录。
+4. **P3 商业 relay**：`yttt-relay`（ticket 验签、按账号限速与计量、按控制面回复换速、断开移除设备与封停账号）、控制面（账号、带私钥证明的设备登记、ticket、用量）、Client 与 Host 账号登录。
 5. **P4**：多地区节点与迁移、跨账号转发检查、移动端、PAKE 短码、按键时序混淆。
 
 ## 16. 验收与测试
@@ -383,8 +383,8 @@ TCP/TLS 端口（高级）                  （现有界面，保持不变）
 8. 配对：邀请过期、重复使用、`mac` 错误、commit 与 reveal 不符、SAS 被拒绝、本机取消，都不能写入 ACL；同一邀请收到第二个有效请求时，邀请作废并产生告警；Client 在收到 `PairAccepted` 前断开，不保存任何 Host 身份。
 9. TLS 入口的未认证握手打满时，已配对设备仍能通过 P2P 连接；关闭 TLS 入口不影响 P2P 会话，反之亦然。
 10. `observe` 预设的设备无法请求接管，也无法执行任何 Mutate 类请求。
-11. relay：endpoint_id 与 ticket 不符、过期、节点不符的 ticket 被拒绝；ticket 到期后已建立的连接被断开；封停后 `disconnect_account` 断开该账号全部连接；Host 的认证路径不读取 ticket（I5）。
-12. 修改过的客户端：出示其他设备的 ticket、不出示 ticket、超速发送、不续签保持长连接，节点分别拒绝、拒绝、限速、到期断开；计量结果只来自节点计数。
+11. relay：endpoint_id 与 ticket 不符、过期、节点不符的 ticket 被拒绝；已建立的连接在 ticket 到期后继续，但不能用过期 ticket 重连；移除的设备被断开，且只有移除后签发的 ticket 能再准入；封停断开该账号全部连接；Host 的认证路径不读取 ticket（I5）。
+12. 修改过的客户端：出示其他设备的 ticket、不出示 ticket、超速发送、设备被移除后保持长连接，节点分别拒绝、拒绝、限速、在下次回报时断开；计量结果只来自节点计数。
 13. 控制面：没有私钥签名的设备登记被拒绝；同一 EndpointId 无法登记到第二个账号。
 
 功能与性能：

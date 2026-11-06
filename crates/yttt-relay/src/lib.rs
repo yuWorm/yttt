@@ -3,7 +3,8 @@
 //! The node forwards end-to-end encrypted QUIC datagrams between EndpointIds.
 //! It admits a connection only with a ticket the control plane signed, paces
 //! each account with one bucket shared by all its connections, reports what
-//! each account sent, and drops accounts the control plane suspends. It holds
+//! each account sent, and follows the control plane's answer: the account's
+//! current rate, devices removed from it, or suspension. It holds
 //! no key that could open, forge or redirect traffic between devices.
 
 mod config;
@@ -22,7 +23,7 @@ use yttt_relay_ticket::{TicketVerifier, api::AccountStanding};
 pub use config::{ControlConfig, NodeConfig, TlsFiles};
 pub use node::AccountSnapshot;
 
-const EXPIRY_TICK: Duration = Duration::from_secs(1);
+const PRUNE_TICK: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
@@ -111,11 +112,11 @@ impl RelayNode {
             let node = node.clone();
             let cancel = cancel.clone();
             async move {
-                let mut tick = tokio::time::interval(EXPIRY_TICK);
+                let mut tick = tokio::time::interval(PRUNE_TICK);
                 loop {
                     tokio::select! {
                         () = cancel.cancelled() => return,
-                        _ = tick.tick() => node.expire(node::now_unix()),
+                        _ = tick.tick() => node.prune(node::now_unix()),
                     }
                 }
             }

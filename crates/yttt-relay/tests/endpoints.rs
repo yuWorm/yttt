@@ -32,6 +32,7 @@ fn ticket(secret: &[u8; 32]) -> String {
         node_id: NODE.into(),
         rate_bps: 50_000_000,
         burst_bytes: 50_000_000,
+        issued_unix: now,
         expires_unix: now + 600,
     })
 }

@@ -3,6 +3,12 @@
 //! A ticket only buys transport. It names one account, one EndpointId and one
 //! node, and carries the bandwidth the account paid for. It never says anything
 //! about which Host a device may reach; that stays end-to-end between devices.
+//!
+//! A ticket is checked when a relay connection is admitted, and is long-lived:
+//! iroh keeps the token a relay connection started with for every reconnect,
+//! so a short-lived ticket would lock a long-running endpoint out. Live control
+//! (rate changes, suspension, removed devices) travels instead over the
+//! node's usage reports, see [`api`].
 
 pub mod api;
 
@@ -28,6 +34,8 @@ pub struct Ticket {
     pub rate_bps: u32,
     /// Bytes the account may send in a burst above the sustained rate.
     pub burst_bytes: u32,
+    /// Lets a node refuse tickets issued before the device was removed.
+    pub issued_unix: u64,
     pub expires_unix: u64,
 }
 
@@ -277,6 +285,7 @@ mod tests {
             node_id: "tokyo-1".into(),
             rate_bps: 1_000_000,
             burst_bytes: 250_000,
+            issued_unix: NOW,
             expires_unix: NOW + 600,
         }
     }
