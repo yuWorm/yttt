@@ -118,7 +118,7 @@ node = "local-1"
 
 - 迁移：`nodes` 追加 `name`、`state`（`pending`/`active`/`disabled`）、`created_unix`、`enrolled_unix`、`last_report_unix`、`last_connected_devices`、`version`；新表 `node_enrollments(token_hash PK, node_id, expires_unix, used_unix)`。
 - 管理接口：`GET /v1/admin/nodes`、`POST /v1/admin/nodes`、`POST /v1/admin/nodes/{id}/enrollment`（重新生成命令）、`PATCH /v1/admin/nodes/{id}`（名称、地址、停用）、`DELETE /v1/admin/nodes/{id}`（仅当没有账号在该节点）。全部记审计。
-- 停用节点：用量回复把该节点上的所有账号标为 `Suspended` 之外的新状态没有必要；改为拒收该节点的回报（401），节点继续按缓存运行。迁走账号用“改节点”。
+- 停用节点：拒收该节点的回报（401），不再给它签 ticket，也不再把新注册账号分到它；已在上面的账号需管理员用“改节点”迁走。被停用的节点按缓存继续服务已连上的设备，直到它们的 ticket 过期。
 - 注册默认节点：`signup.node` 若设置则用之，否则选在线节点中账号最少的一个。
 - 安全：登记令牌是能让一台机器成为计费节点的凭据，但节点仍拿不到任何能接触 Host 的东西（设计 I5）；节点令牌只能上报用量。最坏情况（令牌泄露被抢先登记）是假节点上报虚假用量或拒绝服务，管理员停用该节点并重新生成即可。
 
