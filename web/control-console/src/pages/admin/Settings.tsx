@@ -1,7 +1,129 @@
-import { useEffect, useState } from "react";
-import { Banner, Button, Card, Form, Spin, Toast, Typography } from "@douyinfe/semi-ui";
-import { type NodeView, type PlanView, type Settings, errorText, get, patch } from "../../api";
+import { useCallback, useEffect, useState } from "react";
+import { Banner, Button, Card, Form, Popconfirm, Spin, Tag, Toast, Typography } from "@douyinfe/semi-ui";
+import { type NodeView, type PlanView, type Settings, del, errorText, get, patch, put } from "../../api";
 import { PageHeader } from "../../components/ui";
+import { PROVIDER_NAMES, type Provider, ProviderIcon } from "../../components/Providers";
+
+interface ProviderSettings {
+  provider: Provider;
+  callback_url: string | null;
+  client_id: string;
+  has_secret: boolean;
+  enabled: boolean;
+  from_file: boolean;
+}
+
+interface OAuthSettings {
+  available: boolean;
+  public_url: string | null;
+  providers: ProviderSettings[];
+}
+
+/** GitHub and Google sign-in: client ID and a write-only secret. */
+function SignInProviders() {
+  const [settings, setSettings] = useState<OAuthSettings>();
+  const [busy, setBusy] = useState<Provider>();
+  const load = useCallback(() => {
+    get<OAuthSettings>("/v1/admin/oauth").then(setSettings, (failure) => Toast.error(errorText(failure)));
+  }, []);
+  useEffect(load, [load]);
+  const save = async (provider: Provider, values: { client_id: string; client_secret?: string; enabled: boolean }) => {
+    setBusy(provider);
+    try {
+      await put(`/v1/admin/oauth/${provider}`, values);
+      Toast.success("已保存");
+      load();
+    } catch (failure) {
+      Toast.error(errorText(failure));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const remove = async (provider: Provider) => {
+    try {
+      await del(`/v1/admin/oauth/${provider}`);
+      load();
+    } catch (failure) {
+      Toast.error(errorText(failure));
+    }
+  };
+  if (!settings) {
+    return null;
+  }
+  return (
+    <Card title="第三方登录" style={{ maxWidth: 640, marginTop: 16 }}>
+      {!settings.available && (
+        <Banner
+          type="warning"
+          closeIcon={null}
+          fullMode={false}
+          style={{ marginBottom: 16 }}
+          description="control.toml 里没有 secrets_key，控制台无法加密保存 client secret。用安装脚本重新配置，或手动加上 secrets_key（32 字节 hex）后重启控制面。"
+        />
+      )}
+      {!settings.public_url && (
+        <Banner
+          type="warning"
+          closeIcon={null}
+          fullMode={false}
+          style={{ marginBottom: 16 }}
+          description="未设置 public_url，第三方登录无法回调到控制台。"
+        />
+      )}
+      {settings.providers.map((row) => (
+        <div key={row.provider} style={{ paddingBottom: 20, marginBottom: 20, borderBottom: "1px solid var(--semi-color-border)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <ProviderIcon provider={row.provider} />
+            <Typography.Text strong>{PROVIDER_NAMES[row.provider]}</Typography.Text>
+            {row.enabled ? <Tag color="green">已启用</Tag> : <Tag>未启用</Tag>}
+            {row.from_file && <Tag color="grey">来自 control.toml</Tag>}
+          </div>
+          {row.callback_url && (
+            <Typography.Paragraph type="tertiary" size="small" style={{ marginBottom: 8 }}>
+              回调地址：
+              <Typography.Text copyable size="small" className="mono">
+                {row.callback_url}
+              </Typography.Text>
+            </Typography.Paragraph>
+          )}
+          <Form
+            labelPosition="left"
+            labelWidth={120}
+            initValues={{ client_id: row.client_id, enabled: row.enabled }}
+            onSubmit={(values) => void save(row.provider, values)}
+            disabled={!settings.available}
+          >
+            <Form.Input field="client_id" label="Client ID" style={{ width: 360 }} rules={[{ required: true, message: "请输入 Client ID" }]} />
+            <Form.Input
+              field="client_secret"
+              label="Client secret"
+              mode="password"
+              style={{ width: 360 }}
+              placeholder={row.has_secret ? "已保存，留空则不修改" : ""}
+              autoComplete="new-password"
+            />
+            <Form.Switch field="enabled" label="启用" />
+            <div style={{ marginLeft: 120, display: "flex", gap: 8 }}>
+              <Button htmlType="submit" theme="solid" loading={busy === row.provider}>
+                保存
+              </Button>
+              {row.has_secret && !row.from_file && (
+                <Popconfirm title={`移除 ${PROVIDER_NAMES[row.provider]} 登录？`} content="已关联的账号保留关联，重新设置后可继续使用。" onConfirm={() => void remove(row.provider)}>
+                  <Button type="danger" theme="borderless">
+                    移除
+                  </Button>
+                </Popconfirm>
+              )}
+            </div>
+          </Form>
+        </div>
+      ))}
+      <Typography.Text type="tertiary" size="small">
+        GitHub 用 OAuth App（不是 GitHub App）；Google 需要 https 的 public_url。secret 加密后保存，保存后不再显示。
+      </Typography.Text>
+    </Card>
+  );
+}
 
 export function AdminSettings() {
   const [settings, setSettings] = useState<Settings>();
@@ -68,6 +190,7 @@ export function AdminSettings() {
           </Button>
         </Form>
       </Card>
+      <SignInProviders />
     </>
   );
 }

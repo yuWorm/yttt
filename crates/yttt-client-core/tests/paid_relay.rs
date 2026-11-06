@@ -189,6 +189,7 @@ async fn paid_relay_nodes(ids: &[&str]) -> (Control, Vec<RelayNode>, String) {
         signup: None,
         database_url: format!("{prefix}/{name}"),
         ticket_secret: yttt_relay_ticket::hex(&ticket_secret),
+        secrets_key: None,
         ticket_ttl_secs: 30 * 24 * 3600,
         session_ttl_secs: 3600,
         dev_mode: true,

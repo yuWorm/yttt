@@ -29,6 +29,10 @@ pub struct ControlConfig {
     /// Hex Ed25519 secret that signs relay tickets. Its public key goes into
     /// every node's `ticket_keys`.
     pub ticket_secret: String,
+    /// Hex 32 bytes that seal secrets the console stores, such as OAuth
+    /// client secrets. Without it those are configured here instead.
+    #[serde(default)]
+    pub secrets_key: Option<String>,
     #[serde(default = "default_ticket_ttl_secs")]
     pub ticket_ttl_secs: u64,
     #[serde(default = "default_session_ttl_secs")]
@@ -149,6 +153,10 @@ impl std::fmt::Debug for ControlConfig {
             .field("signup", &self.signup)
             .field("database_url", &"[redacted]")
             .field("ticket_secret", &"[redacted]")
+            .field(
+                "secrets_key",
+                &self.secrets_key.as_ref().map(|_| "[redacted]"),
+            )
             .field("ticket_ttl_secs", &self.ticket_ttl_secs)
             .field("session_ttl_secs", &self.session_ttl_secs)
             .field("dev_mode", &self.dev_mode)

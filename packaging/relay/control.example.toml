@@ -12,8 +12,12 @@ database_url = "postgres://postgres:CHANGE-ME@postgres:5432/postgres"
 # 32 random bytes as hex, e.g. `openssl rand -hex 32`. Changing it invalidates
 # every relay ticket and needs every node redeployed.
 ticket_secret = "CHANGE-ME"
+# 32 random bytes as hex, sealing secrets the console stores (GitHub and
+# Google client secrets). Changing it means entering those again.
+secrets_key = "CHANGE-ME"
 
-# Optional: sign in to the console with GitHub or Google. Callbacks go to
+# GitHub and Google sign-in are set up in the console (Settings). Entries
+# here are moved into the console once at startup. Callbacks go to
 # {public_url}/v1/auth/github/callback and .../google/callback; Google needs
 # public_url on https://.
 # [oauth.github]

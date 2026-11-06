@@ -14,6 +14,7 @@ mod nodes;
 mod oauth;
 mod placement;
 mod plans;
+mod secrets;
 mod web;
 
 use std::{
@@ -58,6 +59,8 @@ pub(crate) struct AppState {
     signer: TicketSigner,
     config: ControlConfig,
     limits: auth::Limits,
+    /// Seals secrets the console stores; absent without `secrets_key`.
+    sealer: Option<secrets::Sealer>,
 }
 
 /// A running control plane.
@@ -75,12 +78,22 @@ impl Control {
         );
         let signer = TicketSigner::from_secret(*secret);
         identity::check_config(&config).map_err(StartError::Refused)?;
+        let sealer = match &config.secrets_key {
+            Some(key) => Some(
+                secrets::Sealer::new(key)
+                    .ok_or(StartError::Refused("secrets_key is not 32 bytes of hex"))?,
+            ),
+            None => None,
+        };
         let pool = PgPoolOptions::new()
             .max_connections(16)
             .connect(&config.database_url)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         seed(&pool, &config).await?;
+        if let Some(sealer) = &sealer {
+            identity::import_providers(&pool, &config, sealer).await?;
+        }
 
         let listener =
             TcpListener::bind(config.listen)
@@ -99,6 +112,7 @@ impl Control {
             signer,
             config,
             limits: auth::Limits::default(),
+            sealer,
         });
         let probe = tokio::spawn(nodes::probe_loop(state.clone()));
         let router = router(state);
@@ -148,6 +162,11 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/v1/oauth/device/confirm", post(oauth::confirm_device))
         .route("/v1/oauth/token", post(oauth::token))
         .route("/v1/auth/providers", get(identity::providers))
+        .route("/v1/admin/oauth", get(identity::oauth_settings))
+        .route(
+            "/v1/admin/oauth/{provider}",
+            axum::routing::put(identity::change_oauth).delete(identity::remove_oauth),
+        )
         .route("/v1/auth/{provider}/start", get(identity::start))
         .route("/v1/auth/{provider}/link", post(identity::link))
         .route("/v1/auth/{provider}/callback", get(identity::callback))

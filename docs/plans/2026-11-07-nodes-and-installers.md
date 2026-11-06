@@ -92,7 +92,7 @@
 ## 4. OAuth 设置进控制台
 
 - 新表 `oauth_providers (provider, client_id, client_secret_sealed, nonce, enabled, updated_unix)`。
-- 加密：控制面配置新增自动生成的 `secrets_key`（32 字节 hex，安装脚本生成）；用 HKDF-SHA256 派生加密密钥，XChaCha20-Poly1305，随机 nonce 与密文一起存，provider 名作为附加数据。与 `ticket_secret` 无关，轮换 ticket 密钥不影响第三方登录。备份数据库时不包含配置文件，备份泄露拿不到明文。
+- 加密：控制面配置新增自动生成的 `secrets_key`（32 字节 hex，安装脚本生成）；用 HKDF-SHA256 派生加密密钥，AES-256-GCM（依赖树里已有；秘密只有几条，随机 96 位 nonce 足够），随机 nonce 与密文一起存，provider 名作为附加数据。与 `ticket_secret` 无关，轮换 ticket 密钥不影响第三方登录。备份数据库时不包含配置文件，备份泄露拿不到明文。
 - 管理员“设置”页新增“第三方登录”：显示回调地址（可复制）、client id、secret（只写不回显）、启用开关；保存时校验 `public_url` 条件（GitHub 需要 `public_url`，Google 需要 https）。
 - `control.toml` 的 `[oauth.*]` 在启动时若数据库中还没有该提供方则导入一次；两边不一致时启动日志警告，以数据库为准。
 

@@ -23,7 +23,9 @@ use crate::{
     auth::{self, Attempt, ConsoleSession},
     clamp_i64,
     config::ProviderConfig,
-    now_unix, sha256, web,
+    now_unix,
+    secrets::{Sealed, Sealer},
+    sha256, web,
 };
 
 type Shared = State<Arc<AppState>>;
@@ -65,15 +67,57 @@ impl Provider {
             .ok_or_else(Failure::not_found)
     }
 
-    fn config(self, state: &AppState) -> Option<&ProviderConfig> {
+    /// The provider as `control.toml` has it, if at all.
+    fn in_file(self, config: &crate::ControlConfig) -> Option<&ProviderConfig> {
         match self {
-            Self::Github => state.config.oauth.github.as_ref(),
-            Self::Google => state.config.oauth.google.as_ref(),
+            Self::Github => config.oauth.github.as_ref(),
+            Self::Google => config.oauth.google.as_ref(),
         }
     }
 
-    fn configured(self, state: &AppState) -> Result<&ProviderConfig, Failure> {
-        self.config(state).ok_or_else(Failure::not_found)
+    /// The provider as sign-in uses it: set up in the console when the
+    /// control plane can seal secrets, otherwise from `control.toml`. Endpoint
+    /// overrides, for tests, always come from the file.
+    async fn config(self, state: &AppState) -> Result<Option<ProviderConfig>, Failure> {
+        let file = self.in_file(&state.config);
+        let Some(sealer) = &state.sealer else {
+            return Ok(file.cloned());
+        };
+        let row = sqlx::query(
+            "SELECT client_id, client_secret_sealed, nonce, enabled FROM oauth_providers
+             WHERE provider = $1",
+        )
+        .bind(self.name())
+        .fetch_optional(&state.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(file.cloned());
+        };
+        if !row.get::<bool, _>("enabled") {
+            return Ok(None);
+        }
+        let sealed = Sealed {
+            nonce: row.get("nonce"),
+            ciphertext: row.get("client_secret_sealed"),
+        };
+        let Some(secret) = sealer.open(self.name(), &sealed) else {
+            tracing::warn!(
+                provider = self.name(),
+                "the stored client secret does not open with this secrets_key; set it again in the console"
+            );
+            return Ok(None);
+        };
+        Ok(Some(ProviderConfig {
+            client_id: row.get("client_id"),
+            client_secret: secret.to_string(),
+            authorize_url: file.and_then(|file| file.authorize_url.clone()),
+            token_url: file.and_then(|file| file.token_url.clone()),
+            api_url: file.and_then(|file| file.api_url.clone()),
+        }))
+    }
+
+    async fn configured(self, state: &AppState) -> Result<ProviderConfig, Failure> {
+        self.config(state).await?.ok_or_else(Failure::not_found)
     }
 
     fn authorize_url(self, config: &ProviderConfig) -> &str {
@@ -108,16 +152,21 @@ impl Provider {
 /// Refuses a configuration whose providers could not call back: they need
 /// the console's public address, and Google takes only HTTPS callbacks.
 pub(crate) fn check_config(config: &crate::ControlConfig) -> Result<(), &'static str> {
-    if config.oauth.github.is_none() && config.oauth.google.is_none() {
-        return Ok(());
-    }
+    Provider::ALL
+        .into_iter()
+        .filter(|provider| provider.in_file(config).is_some())
+        .try_for_each(|provider| can_call_back(config, provider))
+}
+
+/// Whether `provider` can send a browser back to this control plane.
+fn can_call_back(config: &crate::ControlConfig, provider: Provider) -> Result<(), &'static str> {
     let Some(public_url) = config.public_url.as_deref() else {
         return Err("GitHub and Google sign-in need public_url for their callbacks");
     };
     let local = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
         .iter()
         .any(|prefix| public_url.starts_with(prefix));
-    if config.oauth.google.is_some() && !public_url.starts_with("https://") && !local {
+    if provider == Provider::Google && !public_url.starts_with("https://") && !local {
         return Err("Google sign-in needs an https:// public_url");
     }
     Ok(())
@@ -128,20 +177,66 @@ fn callback_url(state: &AppState, provider: Provider) -> String {
         .config
         .public_url
         .as_deref()
-        .expect("checked at start")
+        .unwrap_or_default()
         .trim_end_matches('/');
     format!("{base}/v1/auth/{}/callback", provider.name())
 }
 
+/// Moves providers from `control.toml` into the console's settings, once:
+/// a provider the console already has is left alone.
+pub(crate) async fn import_providers(
+    pool: &sqlx::PgPool,
+    config: &crate::ControlConfig,
+    sealer: &Sealer,
+) -> Result<(), sqlx::Error> {
+    for provider in Provider::ALL {
+        let Some(file) = provider.in_file(config) else {
+            continue;
+        };
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT client_id FROM oauth_providers WHERE provider = $1")
+                .bind(provider.name())
+                .fetch_optional(pool)
+                .await?;
+        match stored {
+            Some(client_id) if client_id != file.client_id => tracing::warn!(
+                provider = provider.name(),
+                "control.toml and the console disagree on the client; the console's is used"
+            ),
+            Some(_) => {}
+            None => {
+                let sealed = sealer.seal(provider.name(), &file.client_secret);
+                sqlx::query(
+                    "INSERT INTO oauth_providers
+                         (provider, client_id, client_secret_sealed, nonce, enabled, updated_unix)
+                     VALUES ($1, $2, $3, $4, TRUE, $5)",
+                )
+                .bind(provider.name())
+                .bind(&file.client_id)
+                .bind(&sealed.ciphertext)
+                .bind(&sealed.nonce)
+                .bind(clamp_i64(now_unix()))
+                .execute(pool)
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn enabled_providers(state: &AppState) -> Result<Vec<&'static str>, Failure> {
+    let mut names = Vec::new();
+    for provider in Provider::ALL {
+        if provider.config(state).await?.is_some() {
+            names.push(provider.name());
+        }
+    }
+    Ok(names)
+}
+
 /// `GET /v1/auth/providers`: which buttons the console shows.
-pub(crate) async fn providers(State(state): Shared) -> Json<Vec<&'static str>> {
-    Json(
-        Provider::ALL
-            .into_iter()
-            .filter(|provider| provider.config(&state).is_some())
-            .map(Provider::name)
-            .collect(),
-    )
+pub(crate) async fn providers(State(state): Shared) -> Result<Json<Vec<&'static str>>, Failure> {
+    Ok(Json(enabled_providers(&state).await?))
 }
 
 #[derive(Deserialize)]
@@ -197,7 +292,7 @@ async fn begin(
     next: &str,
     link_account: Option<i64>,
 ) -> Result<(String, String), Failure> {
-    let config = provider.configured(state)?;
+    let config = provider.configured(state).await?;
     let login_state = auth::random_token();
     let verifier = auth::random_token();
     let now = now_unix();
@@ -218,7 +313,7 @@ async fn begin(
     .execute(&state.pool)
     .await?;
     let challenge = data_encoding::BASE64URL_NOPAD.encode(&sha256(verifier.as_bytes()));
-    let mut url = url::Url::parse(provider.authorize_url(config))
+    let mut url = url::Url::parse(provider.authorize_url(&config))
         .map_err(|_| Failure::unavailable("the provider's address is invalid"))?;
     url.query_pairs_mut()
         .append_pair("client_id", &config.client_id)
@@ -252,7 +347,7 @@ pub(crate) async fn callback(
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, Failure> {
     let provider = Provider::parse(&provider)?;
-    let config = provider.configured(&state)?;
+    let config = provider.configured(&state).await?;
     // The state must be the one this browser left with.
     let carried = cookie(&headers);
     let login_state = query
@@ -283,7 +378,7 @@ pub(crate) async fn callback(
             match identify(
                 &state,
                 provider,
-                config,
+                &config,
                 &code,
                 &row.get::<String, _>("verifier"),
             )
@@ -590,7 +685,7 @@ pub(crate) async fn methods(
         has_password,
         may_set_password: web::may_set_password(&session),
         identities,
-        providers: providers(State(state)).await.0,
+        providers: enabled_providers(&state).await?,
     }))
 }
 
@@ -760,4 +855,186 @@ mod tests {
         }
         assert_eq!(safe_next("/login?x=<script>"), "/");
     }
+}
+
+#[derive(Serialize)]
+pub(crate) struct OAuthSettings {
+    /// Whether the console can store providers: `secrets_key` is set.
+    available: bool,
+    public_url: Option<String>,
+    providers: Vec<ProviderSettings>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ProviderSettings {
+    provider: &'static str,
+    callback_url: Option<String>,
+    client_id: String,
+    /// A secret is stored; it is never shown again.
+    has_secret: bool,
+    enabled: bool,
+    /// Set up in `control.toml` and not in the console.
+    from_file: bool,
+}
+
+/// `GET /v1/admin/oauth`: GitHub and Google sign-in as the console sets them up.
+pub(crate) async fn oauth_settings(
+    State(state): Shared,
+    _admin: crate::auth::AdminSession,
+) -> Result<Json<OAuthSettings>, Failure> {
+    let rows: Vec<(String, String, bool)> =
+        sqlx::query_as("SELECT provider, client_id, enabled FROM oauth_providers")
+            .fetch_all(&state.pool)
+            .await?;
+    let public = state.config.public_url.is_some();
+    Ok(Json(OAuthSettings {
+        available: state.sealer.is_some(),
+        public_url: state.config.public_url.clone(),
+        providers: Provider::ALL
+            .into_iter()
+            .map(|provider| {
+                let row = rows.iter().find(|(name, _, _)| name == provider.name());
+                let file = provider.in_file(&state.config);
+                ProviderSettings {
+                    provider: provider.name(),
+                    callback_url: public.then(|| callback_url(&state, provider)),
+                    client_id: row
+                        .map(|(_, id, _)| id.clone())
+                        .or_else(|| file.map(|file| file.client_id.clone()))
+                        .unwrap_or_default(),
+                    has_secret: row.is_some() || file.is_some(),
+                    enabled: row.map_or(file.is_some(), |(_, _, enabled)| *enabled),
+                    from_file: row.is_none() && file.is_some(),
+                }
+            })
+            .collect(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ProviderChange {
+    client_id: String,
+    /// Absent or empty keeps the stored secret.
+    #[serde(default)]
+    client_secret: Option<String>,
+    enabled: bool,
+}
+
+/// `PUT /v1/admin/oauth/{provider}`: sets up a provider. The secret is
+/// sealed before it is stored and never sent back.
+pub(crate) async fn change_oauth(
+    State(state): Shared,
+    admin: crate::auth::AdminSession,
+    Path(provider): Path<String>,
+    Json(change): Json<ProviderChange>,
+) -> Result<StatusCode, Failure> {
+    let provider = Provider::parse(&provider)?;
+    let sealer = state.sealer.as_ref().ok_or(Failure::conflict(
+        "add secrets_key to control.toml to set up sign-in here",
+    ))?;
+    let client_id = change.client_id.trim();
+    if client_id.is_empty() || client_id.len() > 256 {
+        return Err(Failure::bad_request("a client ID is 1 to 256 characters"));
+    }
+    if change.enabled {
+        can_call_back(&state.config, provider).map_err(Failure::bad_request)?;
+    }
+    let secret = change
+        .client_secret
+        .as_deref()
+        .map(str::trim)
+        .filter(|secret| !secret.is_empty());
+    if secret.is_some_and(|secret| secret.len() > 512) {
+        return Err(Failure::bad_request("the client secret is too long"));
+    }
+    let mut tx = state.pool.begin().await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM oauth_providers WHERE provider = $1)")
+            .bind(provider.name())
+            .fetch_one(&mut *tx)
+            .await?;
+    let now = clamp_i64(now_unix());
+    match (secret, exists) {
+        (Some(secret), _) => {
+            let sealed = sealer.seal(provider.name(), secret);
+            sqlx::query(
+                "INSERT INTO oauth_providers
+                     (provider, client_id, client_secret_sealed, nonce, enabled, updated_unix)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (provider) DO UPDATE SET
+                     client_id = EXCLUDED.client_id,
+                     client_secret_sealed = EXCLUDED.client_secret_sealed,
+                     nonce = EXCLUDED.nonce,
+                     enabled = EXCLUDED.enabled,
+                     updated_unix = EXCLUDED.updated_unix",
+            )
+            .bind(provider.name())
+            .bind(client_id)
+            .bind(&sealed.ciphertext)
+            .bind(&sealed.nonce)
+            .bind(change.enabled)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        (None, true) => {
+            sqlx::query(
+                "UPDATE oauth_providers SET client_id = $2, enabled = $3, updated_unix = $4
+                 WHERE provider = $1",
+            )
+            .bind(provider.name())
+            .bind(client_id)
+            .bind(change.enabled)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        (None, false) => return Err(Failure::bad_request("enter the client secret")),
+    }
+    audit(
+        &mut tx,
+        admin.account_id,
+        "set_oauth_provider",
+        None,
+        None,
+        &format!(
+            "{}: {}{}",
+            provider.name(),
+            if change.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            if secret.is_some() { ", new secret" } else { "" }
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /v1/admin/oauth/{provider}`: forgets a provider. Accounts keep
+/// their linked identities for when it is set up again.
+pub(crate) async fn remove_oauth(
+    State(state): Shared,
+    admin: crate::auth::AdminSession,
+    Path(provider): Path<String>,
+) -> Result<StatusCode, Failure> {
+    let provider = Provider::parse(&provider)?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM oauth_providers WHERE provider = $1")
+        .bind(provider.name())
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut tx,
+        admin.account_id,
+        "remove_oauth_provider",
+        None,
+        None,
+        provider.name(),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }

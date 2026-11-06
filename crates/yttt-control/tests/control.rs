@@ -84,6 +84,7 @@ impl Harness {
             }),
             database_url: format!("{prefix}/{name}"),
             ticket_secret: yttt_relay_ticket::hex(&[1; 32]),
+            secrets_key: None,
             ticket_ttl_secs: 30 * 24 * 3600,
             session_ttl_secs: 3600,
             dev_mode: true,
@@ -2540,4 +2541,122 @@ async fn a_full_node_takes_no_new_hosts_or_accounts_and_its_load_is_kept() {
     .await;
     assert_eq!(me["node_id"], "other-1");
     harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn sign_in_providers_are_set_up_in_the_console_with_their_secrets_sealed() {
+    let github = fake_github().await;
+    let harness = Harness::start_with(&[(NODE, NODE_TOKEN)], |config| {
+        config.secrets_key = Some(yttt_relay_ticket::hex(&[9; 32]));
+        config.oauth.github = Some(yttt_control::ProviderConfig {
+            client_id: "github-client".into(),
+            client_secret: "github-secret".into(),
+            authorize_url: Some(format!("{github}/authorize")),
+            token_url: Some(format!("{github}/token")),
+            api_url: Some(github.clone()),
+        });
+    })
+    .await;
+    let admin = admin_session(&harness, "admin@example.com").await;
+
+    // The file's provider moved into the console, sealed.
+    let (_, settings) = send(
+        &harness,
+        &admin,
+        reqwest::Method::GET,
+        "/v1/admin/oauth",
+        None,
+    )
+    .await;
+    assert_eq!(settings["available"], true);
+    let github_row = &settings["providers"][0];
+    assert_eq!(github_row["provider"], "github");
+    assert_eq!(github_row["client_id"], "github-client");
+    assert_eq!(github_row["has_secret"], true);
+    assert_eq!(github_row["from_file"], false);
+    assert_eq!(
+        github_row["callback_url"],
+        "http://127.0.0.1/v1/auth/github/callback"
+    );
+    assert!(settings.to_string().find("github-secret").is_none());
+    let pool = sqlx::PgPool::connect(&harness.config.database_url)
+        .await
+        .unwrap();
+    let sealed: Vec<u8> = sqlx::query_scalar(
+        "SELECT client_secret_sealed FROM oauth_providers WHERE provider = 'github'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!sealed.windows(13).any(|window| window == b"github-secret"));
+
+    // Signing in uses the sealed secret.
+    let (next, session) = OAuthBrowser::new(&harness)
+        .sign_in("51:erin@example.com:true")
+        .await;
+    assert_eq!(next, "/devices");
+    assert!(session.is_some());
+
+    // Turned off, the button goes; Google is set up in the console.
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PUT,
+        "/v1/admin/oauth/github",
+        Some(serde_json::json!({"client_id": "github-client", "enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PUT,
+        "/v1/admin/oauth/google",
+        Some(serde_json::json!({"client_id": "google-client", "enabled": true})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a new provider needs its secret"
+    );
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PUT,
+        "/v1/admin/oauth/google",
+        Some(serde_json::json!({
+            "client_id": "google-client",
+            "client_secret": "google-secret",
+            "enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let providers: serde_json::Value = harness
+        .http
+        .get(format!("{}/v1/auth/providers", harness.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(providers, serde_json::json!(["google"]));
+    harness.control.shutdown().await;
+
+    // Without secrets_key the console stores nothing.
+    let plain = Harness::start().await;
+    let admin = admin_session(&plain, "admin@example.com").await;
+    let (status, _) = send(
+        &plain,
+        &admin,
+        reqwest::Method::PUT,
+        "/v1/admin/oauth/github",
+        Some(serde_json::json!({"client_id": "x", "client_secret": "y", "enabled": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    plain.control.shutdown().await;
 }
