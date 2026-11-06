@@ -177,6 +177,7 @@ async fn paid_relay() -> (Control, RelayNode, String) {
         ticket_ttl_secs: 30 * 24 * 3600,
         session_ttl_secs: 3600,
         dev_mode: true,
+        oauth: Default::default(),
         plans: vec![PlanConfig {
             id: "basic".into(),
             rate_bps: 5_000_000,

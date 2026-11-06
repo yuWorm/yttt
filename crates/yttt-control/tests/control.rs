@@ -61,6 +61,10 @@ impl Harness {
     }
 
     async fn start_with_nodes(nodes: &[(&str, &str)]) -> Self {
+        Self::start_with(nodes, |_| {}).await
+    }
+
+    async fn start_with(nodes: &[(&str, &str)], edit: impl FnOnce(&mut ControlConfig)) -> Self {
         let server = std::env::var("YTTT_TEST_DATABASE_URL")
             .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
         let name = format!("yttt_control_test_{:016x}", rand_suffix());
@@ -83,6 +87,7 @@ impl Harness {
             ticket_ttl_secs: 30 * 24 * 3600,
             session_ttl_secs: 3600,
             dev_mode: true,
+            oauth: Default::default(),
             plans: vec![PlanConfig {
                 id: "basic".into(),
                 rate_bps: 1_000_000,
@@ -100,6 +105,8 @@ impl Harness {
                 })
                 .collect(),
         };
+        let mut config = config;
+        edit(&mut config);
         let control = Control::spawn(config.clone()).await.unwrap();
         let base = format!("http://{}", control.addr());
         Self {
@@ -1730,5 +1737,317 @@ async fn a_headless_device_signs_in_once_someone_confirms_its_short_code() {
     assert_eq!(body["error"], "access_denied");
     let (_, body) = poll(device_code).await;
     assert_eq!(body["error"], "invalid_grant");
+    harness.control.shutdown().await;
+}
+
+/// A stand-in for GitHub. The authorization code names the person it signs
+/// in as `id:email:verified`, and doubles as the access token.
+async fn fake_github() -> String {
+    use axum::{
+        Form, Json, Router,
+        http::HeaderMap,
+        routing::{get, post},
+    };
+    fn person(headers: &HeaderMap) -> (u64, String, bool) {
+        let token = headers["authorization"]
+            .to_str()
+            .unwrap()
+            .trim_start_matches("Bearer ");
+        let mut parts = token.split(':');
+        (
+            parts.next().unwrap().parse().unwrap(),
+            parts.next().unwrap().to_string(),
+            parts.next().unwrap() == "true",
+        )
+    }
+    let router = Router::new()
+        .route(
+            "/token",
+            post(|headers: HeaderMap, Form(form): Form<std::collections::HashMap<String, String>>| async move {
+                assert_eq!(headers["accept"], "application/json");
+                assert_eq!(form["client_secret"], "github-secret");
+                assert_eq!(form["redirect_uri"], "http://127.0.0.1/v1/auth/github/callback");
+                assert!(form["code_verifier"].len() >= 43);
+                Json(serde_json::json!({"access_token": form["code"]}))
+            }),
+        )
+        .route(
+            "/user",
+            get(|headers: HeaderMap| async move { Json(serde_json::json!({"id": person(&headers).0})) }),
+        )
+        .route(
+            "/user/emails",
+            get(|headers: HeaderMap| async move {
+                let (_, email, verified) = person(&headers);
+                Json(serde_json::json!([
+                    {"email": "old@example.com", "primary": false, "verified": true},
+                    {"email": email, "primary": true, "verified": verified},
+                ]))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    base
+}
+
+/// A browser that does not follow redirects, so the test plays GitHub.
+struct OAuthBrowser<'a> {
+    harness: &'a Harness,
+    http: reqwest::Client,
+}
+
+impl OAuthBrowser<'_> {
+    fn new(harness: &Harness) -> OAuthBrowser<'_> {
+        OAuthBrowser {
+            harness,
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        }
+    }
+
+    /// Leaves for GitHub and returns the state and the cookie it set.
+    async fn start(&self, next: &str) -> (String, String) {
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/auth/github/start?next={next}",
+                self.harness.base
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_redirection());
+        let location = response.headers()["location"].to_str().unwrap().to_string();
+        assert!(location.contains("scope=read%3Auser+user%3Aemail"));
+        assert!(location.contains("code_challenge_method=S256"));
+        (
+            query_value(&location, "state").unwrap(),
+            set_cookie(&response, "yttt_oauth"),
+        )
+    }
+
+    /// Comes back from GitHub as `person`; returns where the page goes next
+    /// and the session cookie, if one was set.
+    async fn back(
+        &self,
+        state: &str,
+        cookie: &str,
+        person: &str,
+    ) -> (StatusCode, String, Option<String>) {
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/auth/github/callback?code={person}&state={state}",
+                self.harness.base
+            ))
+            .header("cookie", cookie)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let session = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|value| {
+                value
+                    .to_str()
+                    .unwrap()
+                    .split(';')
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
+            .find(|pair| pair.starts_with("yttt_session=") && !pair.ends_with('='));
+        let body = response.text().await.unwrap();
+        let next = body
+            .split("url=")
+            .nth(1)
+            .map(|rest| rest.split('"').next().unwrap().replace("&amp;", "&"))
+            .unwrap_or_default();
+        (status, next, session)
+    }
+
+    async fn sign_in(&self, person: &str) -> (String, Option<String>) {
+        let (state, cookie) = self.start("/devices").await;
+        let (status, next, session) = self.back(&state, &cookie, person).await;
+        assert_eq!(status, StatusCode::OK);
+        (next, session)
+    }
+}
+
+fn set_cookie(response: &reqwest::Response, name: &str) -> String {
+    response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| {
+            value
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .find(|pair| pair.starts_with(&format!("{name}=")))
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn the_console_signs_in_with_github_and_links_it_only_to_its_owner() {
+    let github = fake_github().await;
+    let harness = Harness::start_with(&[(NODE, NODE_TOKEN)], |config| {
+        config.oauth.github = Some(yttt_control::ProviderConfig {
+            client_id: "github-client".into(),
+            client_secret: "github-secret".into(),
+            authorize_url: Some(format!("{github}/authorize")),
+            token_url: Some(format!("{github}/token")),
+            api_url: Some(github.clone()),
+        });
+    })
+    .await;
+    let browser = OAuthBrowser::new(&harness);
+    let providers: serde_json::Value = harness
+        .http
+        .get(format!("{}/v1/auth/providers", harness.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(providers, serde_json::json!(["github"]));
+
+    // A new person gets an account without a password.
+    let (next, session) = browser.sign_in("42:Carol@Example.com:true").await;
+    assert_eq!(next, "/devices");
+    let carol = session.unwrap();
+    let (_, methods) = send(
+        &harness,
+        &carol,
+        reqwest::Method::GET,
+        "/v1/accounts/me/sign-in",
+        None,
+    )
+    .await;
+    assert_eq!(methods["has_password"], false);
+    assert_eq!(methods["may_set_password"], true);
+    assert_eq!(methods["identities"][0]["provider"], "github");
+    assert_eq!(methods["identities"][0]["email"], "carol@example.com");
+    // Signing in again finds the same account.
+    let (_, again) = browser.sign_in("42:renamed@example.com:true").await;
+    let (_, me) = send(
+        &harness,
+        &again.unwrap(),
+        reqwest::Method::GET,
+        "/v1/accounts/me",
+        None,
+    )
+    .await;
+    assert_eq!(me["email"], "carol@example.com");
+    // Its only way in cannot be unlinked; right after signing in it may set
+    // a first password without knowing one.
+    let (status, _) = send(
+        &harness,
+        &carol,
+        reqwest::Method::DELETE,
+        "/v1/accounts/me/identities/github",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = send(
+        &harness,
+        &carol,
+        reqwest::Method::POST,
+        "/v1/accounts/me/password",
+        Some(serde_json::json!({"new": "carol's horse"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The state must come back with the browser that left, once.
+    let (state, cookie) = browser.start("/").await;
+    let (status, _, _) = browser
+        .back(&state, "yttt_oauth=forged", "43:x@example.com:true")
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = browser.back(&state, &cookie, "43:x@example.com:true").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = browser.back(&state, &cookie, "43:x@example.com:true").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // An email that already has an account is not taken over …
+    harness.account("alice@example.com").await;
+    let (next, session) = browser.sign_in("77:alice@example.com:true").await;
+    assert_eq!(next, "/login?oauth_error=email_taken&provider=github");
+    assert!(session.is_none());
+    let (next, _) = browser.sign_in("78:dave@example.com:false").await;
+    assert_eq!(next, "/login?oauth_error=unverified_email&provider=github");
+
+    // … its owner links it after signing in.
+    let alice = harness.console("alice@example.com").await;
+    let linking = browser
+        .http
+        .post(format!("{}/v1/auth/github/link", harness.base))
+        .console(&alice)
+        .json(&serde_json::json!({"next": "/account"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(linking.status(), StatusCode::OK);
+    let state_cookie = set_cookie(&linking, "yttt_oauth");
+    let redirect: serde_json::Value = linking.json().await.unwrap();
+    let state = query_value(redirect["redirect"].as_str().unwrap(), "state").unwrap();
+    let (_, next, session) = browser
+        .back(&state, &state_cookie, "77:alice@example.com:true")
+        .await;
+    assert_eq!(next, "/account");
+    assert!(session.is_none(), "linking keeps the current session");
+    let (_, session) = browser.sign_in("77:alice@example.com:true").await;
+    let (_, me) = send(
+        &harness,
+        &session.unwrap(),
+        reqwest::Method::GET,
+        "/v1/accounts/me",
+        None,
+    )
+    .await;
+    assert_eq!(me["email"], "alice@example.com");
+    // Nobody else can link the same GitHub account.
+    let bob_cookie = {
+        harness.account("bob@example.com").await;
+        harness.console("bob@example.com").await
+    };
+    let linking = browser
+        .http
+        .post(format!("{}/v1/auth/github/link", harness.base))
+        .console(&bob_cookie)
+        .json(&serde_json::json!({"next": "/account"}))
+        .send()
+        .await
+        .unwrap();
+    let state_cookie = set_cookie(&linking, "yttt_oauth");
+    let redirect: serde_json::Value = linking.json().await.unwrap();
+    let state = query_value(redirect["redirect"].as_str().unwrap(), "state").unwrap();
+    let (_, next, _) = browser
+        .back(&state, &state_cookie, "77:alice@example.com:true")
+        .await;
+    assert_eq!(next, "/account?oauth_error=already_linked&provider=github");
+    // With a password left, Alice may unlink it.
+    let (status, _) = send(
+        &harness,
+        &alice,
+        reqwest::Method::DELETE,
+        "/v1/accounts/me/identities/github",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
     harness.control.shutdown().await;
 }

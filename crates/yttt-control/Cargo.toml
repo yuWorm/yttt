@@ -9,7 +9,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 data-encoding = "2"
 parking_lot = "0.12"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 tower-http = { version = "0.6", features = ["fs"] }
@@ -24,6 +24,7 @@ yttt-relay-ticket = { path = "../yttt-relay-ticket" }
 zeroize = "1"
 
 [dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["form"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 serde = "1"
 serde_json = "1"

@@ -37,10 +37,52 @@ pub struct ControlConfig {
     #[serde(default)]
     pub dev_mode: bool,
     pub plans: Vec<PlanConfig>,
+    /// GitHub and Google sign-in on the console.
+    #[serde(default)]
+    pub oauth: OAuthConfig,
     /// Seeds for a fresh database only; nodes are managed in the console
     /// afterwards and never overwritten from here.
     #[serde(default)]
     pub nodes: Vec<NodeEntry>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OAuthConfig {
+    #[serde(default)]
+    pub github: Option<ProviderConfig>,
+    #[serde(default)]
+    pub google: Option<ProviderConfig>,
+}
+
+/// An OAuth application registered with GitHub or Google. Its callback is
+/// `{public_url}/v1/auth/{provider}/callback`.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    /// Replace the provider's endpoints; for tests against a stand-in.
+    #[serde(default)]
+    pub authorize_url: Option<String>,
+    #[serde(default)]
+    pub token_url: Option<String>,
+    /// GitHub's API base, or Google's userinfo endpoint.
+    #[serde(default)]
+    pub api_url: Option<String>,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[redacted]")
+            .field("authorize_url", &self.authorize_url)
+            .field("token_url", &self.token_url)
+            .field("api_url", &self.api_url)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -111,6 +153,7 @@ impl std::fmt::Debug for ControlConfig {
             .field("session_ttl_secs", &self.session_ttl_secs)
             .field("dev_mode", &self.dev_mode)
             .field("plans", &self.plans)
+            .field("oauth", &self.oauth)
             .field("nodes", &self.nodes)
             .finish()
     }

@@ -64,12 +64,28 @@ pub(crate) async fn sign_up(
     Json(request): Json<SignUp>,
 ) -> Result<Response, Failure> {
     require_web(&headers)?;
+    let email = normalize_email(&request.email)?;
+    check_password(&request.password)?;
+    let password = request.password;
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
+        .await
+        .expect("hashing never panics");
+    let account_id = create_account(&state, &email, Some(hash)).await?;
+    signed_in(&state, account_id, "user".into(), StatusCode::CREATED).await
+}
+
+/// Opens an account through sign-up, on the plan and node the console set
+/// for new accounts. `None` for an account that signs in only through GitHub
+/// or Google.
+pub(crate) async fn create_account(
+    state: &AppState,
+    email: &str,
+    password_hash: Option<String>,
+) -> Result<i64, Failure> {
     let settings = plans::settings(&state.pool).await?;
     if !settings.signup_enabled {
         return Err(Failure::not_found());
     }
-    let email = normalize_email(&request.email)?;
-    check_password(&request.password)?;
     let ready: Option<bool> = sqlx::query_scalar(
         "SELECT n.state = 'active' AND NOT p.archived FROM nodes n, plans p
          WHERE n.id = $1 AND p.id = $2",
@@ -83,30 +99,25 @@ pub(crate) async fn sign_up(
             "sign-up is closed: no relay node is ready",
         ));
     }
-    let password = request.password;
-    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
-        .await
-        .expect("hashing never panics");
     let created: Result<i64, sqlx::Error> = sqlx::query_scalar(
         "INSERT INTO accounts (email, password_hash, plan_id, node_id, created_unix)
          VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
-    .bind(&email)
-    .bind(hash)
+    .bind(email)
+    .bind(password_hash)
     .bind(&settings.signup_plan)
     .bind(&settings.signup_node)
     .bind(clamp_i64(now_unix()))
     .fetch_one(&state.pool)
     .await;
-    let account_id = match created {
-        Ok(id) => id,
+    match created {
+        Ok(id) => Ok(id),
         // Tells a caller the email is registered; accepted for a clear message.
         Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
-            return Err(Failure::conflict("the email is taken"));
+            Err(Failure::conflict("the email is taken"))
         }
-        Err(error) => return Err(error.into()),
-    };
-    signed_in(&state, account_id, "user".into(), StatusCode::CREATED).await
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(crate) async fn sign_in(
@@ -187,7 +198,7 @@ pub(crate) async fn change_password(
         )
         .await
         .map_err(|_| Failure::forbidden("the current password is wrong"))?;
-    } else if now_unix().saturating_sub(session.signed_in_unix) > SET_PASSWORD_WITHIN_SECS {
+    } else if !may_set_password(&session) {
         return Err(Failure::forbidden("sign in again to set a password"));
     }
     let new = request.new;
@@ -202,6 +213,12 @@ pub(crate) async fn change_password(
     // Whoever else knew the old password is signed out everywhere.
     auth::end_sessions(&state, session.account_id, Some(&session.token_hash)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether a session signed in recently enough to set the account's first
+/// password.
+pub(crate) fn may_set_password(session: &ConsoleSession) -> bool {
+    now_unix().saturating_sub(session.signed_in_unix) <= SET_PASSWORD_WITHIN_SECS
 }
 
 pub(crate) async fn usage_history(

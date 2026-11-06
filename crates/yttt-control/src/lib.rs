@@ -9,6 +9,7 @@ mod admin;
 mod api;
 mod auth;
 mod config;
+mod identity;
 mod nodes;
 mod oauth;
 mod plans;
@@ -32,7 +33,7 @@ use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use yttt_relay_ticket::TicketSigner;
 use zeroize::Zeroizing;
 
-pub use config::{ControlConfig, NodeEntry, PlanConfig, SignupConfig};
+pub use config::{ControlConfig, NodeEntry, OAuthConfig, PlanConfig, ProviderConfig, SignupConfig};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
@@ -72,6 +73,7 @@ impl Control {
             yttt_relay_ticket::parse_key(&config.ticket_secret).ok_or(StartError::TicketSecret)?,
         );
         let signer = TicketSigner::from_secret(*secret);
+        identity::check_config(&config).map_err(StartError::Refused)?;
         let pool = PgPoolOptions::new()
             .max_connections(16)
             .connect(&config.database_url)
@@ -144,6 +146,15 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/v1/oauth/device", post(oauth::start_device))
         .route("/v1/oauth/device/confirm", post(oauth::confirm_device))
         .route("/v1/oauth/token", post(oauth::token))
+        .route("/v1/auth/providers", get(identity::providers))
+        .route("/v1/auth/{provider}/start", get(identity::start))
+        .route("/v1/auth/{provider}/link", post(identity::link))
+        .route("/v1/auth/{provider}/callback", get(identity::callback))
+        .route("/v1/accounts/me/sign-in", get(identity::methods))
+        .route(
+            "/v1/accounts/me/identities/{provider}",
+            delete(identity::unlink),
+        )
         .route("/v1/accounts/me", get(api::me))
         .route(
             "/v1/devices",
@@ -431,6 +442,9 @@ impl Failure {
     }
     pub(crate) fn unavailable(reason: &'static str) -> Self {
         Self(StatusCode::SERVICE_UNAVAILABLE, reason)
+    }
+    pub(crate) fn status(&self) -> StatusCode {
+        self.0
     }
     pub(crate) fn too_many() -> Self {
         Self(

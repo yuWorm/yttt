@@ -23,7 +23,8 @@ CREATE TABLE identities (
     created_unix BIGINT NOT NULL,
     PRIMARY KEY (provider, subject)
 );
-CREATE INDEX identities_by_account ON identities (account_id);
+-- One identity per provider per account.
+CREATE UNIQUE INDEX identities_by_account ON identities (account_id, provider);
 
 -- One-time codes the console hands the app's loopback redirect.
 CREATE TABLE oauth_codes (
