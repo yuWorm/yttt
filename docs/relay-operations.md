@@ -27,11 +27,13 @@ docker build -f packaging/relay-dev/Dockerfile -t yttt-relay .
 | `[[nodes]]` | 可选，只在空库首次启动时写入；之后节点在控制台管理 |
 | `dev_mode` | 开发用：允许 http 的部署命令和 `/v1/dev/*` 接口，生产关闭 |
 
-启动后创建第一个管理员：先在控制台注册，再运行
+新部署还没有可用节点，注册是关闭的。第一个管理员用命令行创建（密码从标准输入读）：
 
 ```sh
-yttt-control promote-admin --config control.toml you@example.com
+yttt-control create-admin --config control.toml you@example.com
 ```
+
+账号落在 `[signup]` 的节点上；该节点不存在时会以“待部署”状态建出来，登录控制台后在节点页“重新生成部署命令”把它部署起来，注册随即开放。已有账号要升为管理员用 `yttt-control promote-admin --config control.toml <email>`。
 
 ## 2. 部署节点
 

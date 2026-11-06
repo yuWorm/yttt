@@ -1062,3 +1062,78 @@ fn sha2_hex_string(text: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_fresh_deployment_gets_its_first_administrator_before_any_node() {
+    let harness = Harness::start_with_nodes(&[]).await;
+    let sign_up = || {
+        harness
+            .http
+            .post(format!("{}/v1/accounts", harness.base))
+            .header("x-yttt-web", "1")
+            .json(&serde_json::json!({"email": "web@example.com", "password": "correct horse"}))
+            .send()
+    };
+    assert_eq!(
+        sign_up().await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no node is ready"
+    );
+
+    yttt_control::create_admin(&harness.config, "Admin@Example.com", "correct horse")
+        .await
+        .unwrap();
+    assert!(
+        yttt_control::create_admin(&harness.config, "admin@example.com", "correct horse")
+            .await
+            .is_err(),
+        "the email is taken"
+    );
+    let session: SessionGranted = harness
+        .call(
+            "/v1/sessions",
+            None,
+            &Login {
+                email: "admin@example.com".into(),
+                password: "correct horse".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let me: AccountView = harness
+        .get("/v1/accounts/me", &session.token)
+        .await
+        .unwrap();
+    assert_eq!(me.role, "admin");
+
+    // The sign-up node waits to be deployed from the console.
+    let nodes: serde_json::Value = harness
+        .get("/v1/admin/nodes", &session.token)
+        .await
+        .unwrap();
+    assert_eq!(nodes[0]["id"], NODE);
+    assert_eq!(nodes[0]["status"], "pending");
+    let deploy: serde_json::Value = harness
+        .http
+        .post(format!("{}/v1/admin/nodes/{NODE}/enrollment", harness.base))
+        .bearer_auth(&session.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let enrolled = harness
+        .http
+        .post(format!("{}/v1/nodes/enroll", harness.base))
+        .json(&serde_json::json!({
+            "token": enrollment_token(deploy["command"].as_str().unwrap()),
+            "port": 3341,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(enrolled.status().is_success());
+    assert_eq!(sign_up().await.unwrap().status(), StatusCode::CREATED);
+}

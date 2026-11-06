@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use yttt_control::{Control, ControlConfig};
 
-const USAGE: &str = "usage: yttt-control --config <path.toml>\n       yttt-control public-key <ticket_secret hex>\n       yttt-control promote-admin --config <path.toml> <email>";
+const USAGE: &str = "usage: yttt-control --config <path.toml>\n       yttt-control public-key <ticket_secret hex>\n       yttt-control promote-admin --config <path.toml> <email>\n       yttt-control create-admin --config <path.toml> <email>   (password on stdin)";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -39,6 +39,39 @@ async fn main() -> ExitCode {
                 Ok(false) => {
                     eprintln!("no account has the email {email}");
                     ExitCode::FAILURE
+                }
+                Err(error) => {
+                    eprintln!("yttt-control: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        // Creates the first administrator on a fresh deployment.
+        (Some("create-admin"), Some(flag)) if flag == "--config" => {
+            let (Some(path), Some(email)) = (args.next(), args.next()) else {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            };
+            let config = match std::fs::read_to_string(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|text| ControlConfig::from_toml(&text).map_err(|error| error.to_string()))
+            {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut password = String::new();
+            if std::io::stdin().read_line(&mut password).is_err() {
+                eprintln!("could not read the password from stdin");
+                return ExitCode::FAILURE;
+            }
+            let password = password.trim_end_matches(['\r', '\n']);
+            return match yttt_control::create_admin(&config, &email, password).await {
+                Ok(()) => {
+                    println!("created the administrator {email}");
+                    ExitCode::SUCCESS
                 }
                 Err(error) => {
                     eprintln!("yttt-control: {error}");

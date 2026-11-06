@@ -40,6 +40,8 @@ pub enum StartError {
     Database(#[from] sqlx::Error),
     #[error("migrations: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
+    #[error("{0}")]
+    Refused(&'static str),
     #[error("could not bind {addr}: {source}")]
     Bind {
         addr: SocketAddr,
@@ -244,6 +246,70 @@ pub async fn promote_admin(config: &ControlConfig, email: &str) -> Result<bool, 
         .await?
         .rows_affected();
     Ok(updated == 1)
+}
+
+/// Creates the first administrator, before any node exists to sign up on.
+/// The account joins the sign-up node, which is added as pending when the
+/// database has no such node yet; deploying it is the administrator's first
+/// job in the console.
+pub async fn create_admin(
+    config: &ControlConfig,
+    email: &str,
+    password: &str,
+) -> Result<(), StartError> {
+    let email = web::normalize_email(email)
+        .map_err(|_| StartError::Refused("the email address is invalid"))?;
+    web::check_password(password)
+        .map_err(|_| StartError::Refused("a password is 8 to 256 characters"))?;
+    let signup = config.signup.as_ref().ok_or(StartError::Refused(
+        "[signup] names the plan and node for the account",
+    ))?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&config.database_url)
+        .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
+    seed(&pool, config).await?;
+    let password = password.to_owned();
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
+        .await
+        .expect("hashing never panics");
+    let now = clamp_i64(now_unix());
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO nodes (id, url, token_hash, name, state, created_unix)
+         VALUES ($1, '', NULL, $1, 'pending', $2)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(&signup.node)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    let created = sqlx::query(
+        "INSERT INTO accounts (email, password_hash, plan_id, node_id, created_unix, role)
+         VALUES ($1, $2, $3, $4, $5, 'admin')",
+    )
+    .bind(&email)
+    .bind(hash)
+    .bind(&signup.plan)
+    .bind(&signup.node)
+    .bind(now)
+    .execute(&mut *tx)
+    .await;
+    match created {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+            return Err(StartError::Refused(
+                "the email is taken; make it an administrator with promote-admin",
+            ));
+        }
+        Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() => {
+            return Err(StartError::Refused("[signup] plan is not among [[plans]]"));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Makes the plan table match the configuration, and adds configured nodes
