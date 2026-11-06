@@ -102,6 +102,12 @@ YTTT_RELAY_PASSWORD='…' p2p_probe '<配对码>' --relay-only --seconds 30 \
 
 每把设备密钥各占套餐的一个设备名额：Host 一个，每台设备对每台 Host 各一个。忘记一台配对的 Host 时会从账号移除对应的密钥。
 
+### 直连不上时先排除环境
+
+- relay 节点没有域名（`http://` 地址）时，设备永远“经 relay”，见 `docs/relay-operations.md`。
+- 设备或 Host 开着全局代理 / TUN 模式（如 Clash 的 TUN、`198.18.x.x` 这类 fake-ip）时，UDP 走代理，QUIC 地址探测失败，也只能“经 relay”。给 relay 节点的 IP 设直连规则，或测试时关掉 TUN。
+- 无桌面 Host 用 `RUST_LOG=iroh=debug yttt-server ensure` 启动后，`server.log` 里能看到 iroh 的连接与打洞过程；`yttt-server p2p status` 的 `clients` 列出当前连着的设备。
+
 ## 6. 出问题时收集什么
 
 - Host：“远程访问此电脑”页的错误文字，或 `yttt-server p2p status` 的输出；服务器 Host 的日志在 `~/.local/state/yttt/remote/default/logs/server.log`（设置了 `XDG_STATE_HOME` 时以它代替 `~/.local/state`）。
