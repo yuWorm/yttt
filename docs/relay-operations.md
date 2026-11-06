@@ -22,8 +22,8 @@ docker build -f packaging/relay-dev/Dockerfile -t yttt-relay .
 | `ticket_secret` | 签发 relay ticket 的 Ed25519 私钥（32 字节十六进制）；`yttt-control public-key <secret>` 打印公钥 |
 | `web_root` | 控制台静态文件，镜像里是 `/usr/share/yttt-control/web` |
 | `relay_binaries_dir` | 发给节点的二进制，镜像里是 `/usr/share/yttt-control/bin` |
-| `[signup]` | `enabled`、新账号的 `plan` 与 `node` |
-| `[[plans]]` | 套餐：速率、突发、每月额度、超额后速率、设备上限 |
+| `[signup]` | 可选，只在空库首次启动时写入：是否开放注册、新账号的 `plan` 与 `node`；之后在控制台“设置”里改 |
+| `[[plans]]` | 可选，只在空库首次启动时写入；之后套餐在控制台“套餐”里新建、修改、归档 |
 | `[[nodes]]` | 可选，只在空库首次启动时写入；之后节点在控制台管理 |
 | `dev_mode` | 开发用：允许 http 的部署命令和 `/v1/dev/*` 接口，生产关闭 |
 
@@ -33,7 +33,7 @@ docker build -f packaging/relay-dev/Dockerfile -t yttt-relay .
 yttt-control create-admin --config control.toml you@example.com
 ```
 
-账号落在 `[signup]` 的节点上；该节点不存在时会以“待部署”状态建出来，登录控制台后在节点页“重新生成部署命令”把它部署起来，注册随即开放。已有账号要升为管理员用 `yttt-control promote-admin --config control.toml <email>`。
+账号落在注册设置（首次启动时取自 `[signup]`）的套餐和节点上；该节点不存在时会以“待部署”状态建出来，登录控制台后在节点页“重新生成部署命令”把它部署起来，注册随即开放。已有账号要升为管理员用 `yttt-control promote-admin --config control.toml <email>`。
 
 ## 2. 部署节点
 
@@ -68,7 +68,9 @@ packaging/relay-dev/rehearse-node.sh '<控制台给出的部署命令>' linux/ar
 
 ## 3. 日常管理
 
-- 账号：搜索、改套餐、迁移节点、封停或解封、设为或撤销管理员、移除设备。封停与撤销管理员会立即注销该账号的所有登录；节点在下一次上报（约 15 秒）时断开被封停账号的设备。
+- 账号：搜索与筛选、开户、重置密码（用户没有找回密码的途径，由管理员设置新密码后告知）、改套餐、迁移节点、封停或解封、设为或撤销管理员、移除设备。重置密码会注销该账号所有登录。
+- 套餐：新建、修改、归档。速率与额度在节点下一次上报（约 15 秒）时生效；调低设备上限只限制新登记。归档的套餐保留现有账号但不再分配；有账号的套餐不能删除；注册用的套餐要先在“设置”里换掉才能归档。
+- 设置：是否开放注册、新账号的套餐与节点。封停与撤销管理员会立即注销该账号的所有登录；节点在下一次上报（约 15 秒）时断开被封停账号的设备。
 - 节点：停用后，其上所有账号的设备在下次上报时断开；停用或删除前先“迁移账号到其他节点”。账号的设备在续签 ticket 后才改用新节点。
 - 节点地址尽量不变：设备要到 ticket 续签时才换到新地址，Host 也需要重新开启 P2P。推荐给节点配域名。
 - 所有管理操作记在“审计日志”。

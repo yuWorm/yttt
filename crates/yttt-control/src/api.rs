@@ -18,7 +18,7 @@ use yttt_relay_ticket::{
 use crate::{
     AppState, Failure,
     auth::{self, AnySession, Attempt, Session},
-    clamp_i64, month_of, now_unix, sha256,
+    clamp_i64, day_of, month_of, now_unix, sha256,
     web::{check_password, normalize_email},
 };
 
@@ -105,6 +105,8 @@ pub(crate) async fn login(
 pub(crate) async fn me(State(state): Shared, session: AnySession) -> AppResult<Json<AccountView>> {
     let row = sqlx::query(
         "SELECT a.email, a.plan_id, a.node_id, n.url, a.suspended, p.monthly_bytes, p.max_devices,
+                p.name AS plan_name, p.description AS plan_description, p.rate_bps,
+                p.throttled_rate_bps, n.name AS node_name,
                 COALESCE(u.upstream_bytes, 0) AS used,
                 (SELECT COUNT(*) FROM devices d WHERE d.account_id = a.id) AS devices
          FROM accounts a
@@ -129,6 +131,11 @@ pub(crate) async fn me(State(state): Shared, session: AnySession) -> AppResult<J
         devices: row.get::<i64, _>("devices") as u32,
         max_devices: row.get::<i32, _>("max_devices") as u32,
         role: session.role,
+        plan_name: row.get("plan_name"),
+        plan_description: row.get("plan_description"),
+        node_name: row.get("node_name"),
+        rate_bps: row.get::<i32, _>("rate_bps") as u32,
+        throttled_rate_bps: row.get::<i32, _>("throttled_rate_bps") as u32,
     }))
 }
 
@@ -352,6 +359,7 @@ pub(crate) async fn node_usage(
     }
 
     let month = month_of(now_unix());
+    let day = day_of(now_unix());
     let mut tx = state.pool.begin().await?;
     for usage in report
         .accounts
@@ -366,6 +374,18 @@ pub(crate) async fn node_usage(
         )
         .bind(clamp_i64(usage.account_id))
         .bind(month)
+        .bind(clamp_i64(usage.upstream_bytes))
+        .bind(&node_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO usage_days (account_id, day, node_id, upstream_bytes)
+             SELECT id, $2, $4, $3 FROM accounts WHERE id = $1 AND node_id = $4
+             ON CONFLICT (account_id, day, node_id)
+             DO UPDATE SET upstream_bytes = usage_days.upstream_bytes + EXCLUDED.upstream_bytes",
+        )
+        .bind(clamp_i64(usage.account_id))
+        .bind(day)
         .bind(clamp_i64(usage.upstream_bytes))
         .bind(&node_id)
         .execute(&mut *tx)

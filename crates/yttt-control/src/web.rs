@@ -16,7 +16,7 @@ use yttt_relay_ticket::api::Login;
 use crate::{
     AppState, Failure,
     auth::{self, AnySession, Attempt, Session},
-    clamp_i64, month_of, now_unix,
+    clamp_i64, day_of, month_of, now_unix, plans,
 };
 
 type Shared = State<Arc<AppState>>;
@@ -25,6 +25,7 @@ const MIN_PASSWORD_CHARS: usize = 8;
 const MAX_PASSWORD_BYTES: usize = 256;
 const MAX_EMAIL_BYTES: usize = 254;
 const HISTORY_MONTHS: usize = 12;
+const MAX_DAYS: u32 = 366;
 
 #[derive(Deserialize)]
 pub(crate) struct SignUp {
@@ -58,17 +59,21 @@ pub(crate) async fn sign_up(
     Json(request): Json<SignUp>,
 ) -> Result<Response, Failure> {
     require_web(&headers)?;
-    let Some(signup) = state.config.signup.clone().filter(|signup| signup.enabled) else {
+    let settings = plans::settings(&state.pool).await?;
+    if !settings.signup_enabled {
         return Err(Failure::not_found());
-    };
+    }
     let email = normalize_email(&request.email)?;
     check_password(&request.password)?;
-    let node_ready: Option<bool> =
-        sqlx::query_scalar("SELECT state = 'active' FROM nodes WHERE id = $1")
-            .bind(&signup.node)
-            .fetch_optional(&state.pool)
-            .await?;
-    if node_ready != Some(true) {
+    let ready: Option<bool> = sqlx::query_scalar(
+        "SELECT n.state = 'active' AND NOT p.archived FROM nodes n, plans p
+         WHERE n.id = $1 AND p.id = $2",
+    )
+    .bind(&settings.signup_node)
+    .bind(&settings.signup_plan)
+    .fetch_optional(&state.pool)
+    .await?;
+    if ready != Some(true) {
         return Err(Failure::unavailable(
             "sign-up is closed: no relay node is ready",
         ));
@@ -83,8 +88,8 @@ pub(crate) async fn sign_up(
     )
     .bind(&email)
     .bind(hash)
-    .bind(&signup.plan)
-    .bind(&signup.node)
+    .bind(&settings.signup_plan)
+    .bind(&settings.signup_node)
     .bind(clamp_i64(now_unix()))
     .fetch_one(&state.pool)
     .await;
@@ -188,6 +193,51 @@ pub(crate) async fn usage_history(
     session: AnySession,
 ) -> Result<Json<Vec<MonthUsage>>, Failure> {
     Ok(Json(history(&state, session.account_id).await?))
+}
+
+/// Bytes relayed on one UTC day, summed over nodes.
+#[derive(Serialize)]
+pub(crate) struct DayUsage {
+    /// Days since the Unix epoch.
+    day: i32,
+    upstream_bytes: u64,
+}
+
+pub(crate) async fn daily_usage(
+    State(state): Shared,
+    session: AnySession,
+) -> Result<Json<Vec<DayUsage>>, Failure> {
+    Ok(Json(daily(&state, Some(session.account_id), 30).await?))
+}
+
+/// The last `days` days, oldest first and with no gaps, for one account or
+/// for everyone.
+pub(crate) async fn daily(
+    state: &AppState,
+    account_id: Option<i64>,
+    days: u32,
+) -> Result<Vec<DayUsage>, Failure> {
+    let days = days.clamp(1, MAX_DAYS) as i32;
+    let today = day_of(now_unix());
+    let first = today - days + 1;
+    let rows: Vec<(i32, i64)> = sqlx::query_as(
+        "SELECT day, SUM(upstream_bytes)::BIGINT FROM usage_days
+         WHERE day >= $1 AND ($2::BIGINT IS NULL OR account_id = $2)
+         GROUP BY day",
+    )
+    .bind(first)
+    .bind(account_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok((first..=today)
+        .map(|day| DayUsage {
+            day,
+            upstream_bytes: rows
+                .iter()
+                .find(|(row_day, _)| *row_day == day)
+                .map_or(0, |(_, bytes)| *bytes as u64),
+        })
+        .collect())
 }
 
 pub(crate) async fn history(state: &AppState, account_id: i64) -> Result<Vec<MonthUsage>, Failure> {

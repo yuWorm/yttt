@@ -15,8 +15,8 @@ use sqlx::{Postgres, Row as _, Transaction};
 use crate::{
     AppState, Failure,
     auth::{self, AdminSession},
-    clamp_i64, month_of, now_unix,
-    web::{MonthUsage, history},
+    clamp_i64, day_of, month_of, month_start_day, now_unix,
+    web::{self, DayUsage, MonthUsage, daily, history},
 };
 
 type Shared = State<Arc<AppState>>;
@@ -30,7 +30,12 @@ pub(crate) struct Overview {
     accounts: i64,
     suspended: i64,
     admins: i64,
+    /// Accounts created since the start of today (UTC).
+    accounts_today: i64,
     month_upstream_bytes: u64,
+    today_upstream_bytes: u64,
+    /// Devices connected to online nodes at their last report.
+    connected_devices: i64,
     nodes: Vec<NodeView>,
 }
 
@@ -46,6 +51,8 @@ pub(crate) struct NodeView {
     pub version: Option<String>,
     pub reachable: Option<bool>,
     pub accounts: i64,
+    /// Bytes relayed through the node this month.
+    pub month_bytes: u64,
     /// For a pending node: when its newest enrollment token expires.
     pub enrollment_expires_unix: Option<u64>,
 }
@@ -54,6 +61,10 @@ pub(crate) struct NodeView {
 pub(crate) struct AccountQuery {
     #[serde(default)]
     q: String,
+    /// Only accounts on this plan.
+    plan: Option<String>,
+    /// `active`, `suspended` or `admin`.
+    status: Option<String>,
     #[serde(default)]
     offset: i64,
     #[serde(default = "default_limit")]
@@ -88,6 +99,7 @@ pub(crate) struct AccountDetail {
     account: AccountRow,
     devices: Vec<DeviceRow>,
     usage: Vec<MonthUsage>,
+    daily: Vec<DayUsage>,
 }
 
 #[derive(Serialize)]
@@ -105,15 +117,38 @@ pub(crate) struct AccountChange {
     role: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct NewAccount {
+    email: String,
+    password: String,
+    plan: String,
+    node: String,
+    #[serde(default = "user_role")]
+    role: String,
+}
+
+fn user_role() -> String {
+    "user".into()
+}
+
+#[derive(Deserialize)]
+pub(crate) struct NewPassword {
+    password: String,
+}
+
 #[derive(Serialize)]
-pub(crate) struct PlanView {
-    id: String,
-    rate_bps: u32,
-    burst_bytes: u32,
-    monthly_bytes: u64,
-    throttled_rate_bps: u32,
-    max_devices: u32,
-    accounts: i64,
+pub(crate) struct Created {
+    account_id: u64,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DaysQuery {
+    #[serde(default = "default_days")]
+    days: u32,
+}
+
+fn default_days() -> u32 {
+    30
 }
 
 #[derive(Deserialize)]
@@ -145,17 +180,36 @@ pub(crate) async fn overview(
     )
     .fetch_one(&state.pool)
     .await?;
+    let now = now_unix();
     let month: Option<i64> =
         sqlx::query_scalar("SELECT SUM(upstream_bytes)::BIGINT FROM usage_months WHERE month = $1")
-            .bind(month_of(now_unix()))
+            .bind(month_of(now))
             .fetch_one(&state.pool)
             .await?;
+    let today: Option<i64> =
+        sqlx::query_scalar("SELECT SUM(upstream_bytes)::BIGINT FROM usage_days WHERE day = $1")
+            .bind(day_of(now))
+            .fetch_one(&state.pool)
+            .await?;
+    let accounts_today: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM accounts WHERE created_unix >= $1")
+            .bind(i64::from(day_of(now)) * 86_400)
+            .fetch_one(&state.pool)
+            .await?;
+    let nodes = nodes(&state).await?;
     Ok(Json(Overview {
         accounts: counts.get("accounts"),
         suspended: counts.get("suspended"),
         admins: counts.get("admins"),
+        accounts_today,
         month_upstream_bytes: month.unwrap_or(0) as u64,
-        nodes: nodes(&state).await?,
+        today_upstream_bytes: today.unwrap_or(0) as u64,
+        connected_devices: nodes
+            .iter()
+            .filter(|node| node.status == "online")
+            .map(|node| i64::from(node.connected_devices.unwrap_or(0)))
+            .sum(),
+        nodes,
     }))
 }
 
@@ -164,10 +218,13 @@ pub(crate) async fn nodes(state: &AppState) -> Result<Vec<NodeView>, Failure> {
         "SELECT n.id, n.name, n.url, n.state, n.last_report_unix, n.last_connected_devices,
                 n.version, n.reachable,
                 (SELECT COUNT(*) FROM accounts a WHERE a.node_id = n.id) AS accounts,
+                (SELECT COALESCE(SUM(d.upstream_bytes), 0)::BIGINT FROM usage_days d
+                  WHERE d.node_id = n.id AND d.day >= $1) AS month_bytes,
                 (SELECT MAX(e.expires_unix) FROM node_enrollments e
                   WHERE e.node_id = n.id AND e.used_unix IS NULL) AS enrollment_expires
          FROM nodes n ORDER BY n.id",
     )
+    .bind(month_start_day(now_unix()))
     .fetch_all(&state.pool)
     .await?;
     let now = now_unix();
@@ -198,6 +255,7 @@ pub(crate) async fn nodes(state: &AppState) -> Result<Vec<NodeView>, Failure> {
                 version: row.get("version"),
                 reachable: row.get("reachable"),
                 accounts: row.get("accounts"),
+                month_bytes: row.get::<i64, _>("month_bytes") as u64,
                 enrollment_expires_unix: row
                     .get::<Option<i64>, _>("enrollment_expires")
                     .map(|at| at as u64),
@@ -241,16 +299,27 @@ pub(crate) async fn accounts(
     );
     let limit = query.limit.clamp(1, MAX_PAGE);
     let offset = query.offset.max(0);
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts WHERE email LIKE $1")
+    let status = match query.status.as_deref() {
+        None | Some("") => "",
+        Some("active") => "AND NOT a.suspended",
+        Some("suspended") => "AND a.suspended",
+        Some("admin") => "AND a.role = 'admin'",
+        Some(_) => return Err(Failure::bad_request("unknown status filter")),
+    };
+    let filter = format!("a.email LIKE $1 AND ($2::TEXT IS NULL OR a.plan_id = $2) {status}");
+    let plan = query.plan.filter(|plan| !plan.is_empty());
+    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM accounts a WHERE {filter}"))
         .bind(&pattern)
+        .bind(&plan)
         .fetch_one(&state.pool)
         .await?;
     let rows = sqlx::query(&format!(
         "SELECT {ACCOUNT_COLUMNS} FROM accounts a
-         LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $4
-         WHERE a.email LIKE $1 ORDER BY a.id LIMIT $2 OFFSET $3"
+         LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $5
+         WHERE {filter} ORDER BY a.id LIMIT $3 OFFSET $4"
     ))
     .bind(&pattern)
+    .bind(&plan)
     .bind(limit)
     .bind(offset)
     .bind(month_of(now_unix()))
@@ -295,6 +364,7 @@ pub(crate) async fn account(
         account: account_row(&row),
         devices,
         usage: history(&state, account_id).await?,
+        daily: daily(&state, Some(account_id), 30).await?,
     }))
 }
 
@@ -329,6 +399,13 @@ pub(crate) async fn change_account(
         return Err(Failure::not_found());
     }
     if let Some(plan) = &change.plan {
+        let archived: Option<bool> = sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
+            .bind(plan)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if archived == Some(true) {
+            return Err(Failure::bad_request("the plan is archived"));
+        }
         set(&mut tx, account_id, "plan_id", plan).await?;
         audit(
             &mut tx,
@@ -440,29 +517,125 @@ pub(crate) async fn remove_device(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(crate) async fn plans(
+pub(crate) async fn create_account(
+    State(state): Shared,
+    admin: AdminSession,
+    Json(request): Json<NewAccount>,
+) -> Result<(StatusCode, Json<Created>), Failure> {
+    let email = web::normalize_email(&request.email)?;
+    web::check_password(&request.password)?;
+    if request.role != "user" && request.role != "admin" {
+        return Err(Failure::bad_request("a role is user or admin"));
+    }
+    let mut tx = state.pool.begin().await?;
+    let archived: Option<bool> = sqlx::query_scalar("SELECT archived FROM plans WHERE id = $1")
+        .bind(&request.plan)
+        .fetch_optional(&mut *tx)
+        .await?;
+    match archived {
+        None => return Err(Failure::bad_request("unknown plan")),
+        Some(true) => return Err(Failure::bad_request("the plan is archived")),
+        Some(false) => {}
+    }
+    let node_state: Option<String> = sqlx::query_scalar("SELECT state FROM nodes WHERE id = $1")
+        .bind(&request.node)
+        .fetch_optional(&mut *tx)
+        .await?;
+    match node_state.as_deref() {
+        None => return Err(Failure::bad_request("unknown node")),
+        Some("disabled") => return Err(Failure::bad_request("the node is disabled")),
+        Some(_) => {}
+    }
+    let password = request.password;
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
+        .await
+        .expect("hashing never panics");
+    let created: Result<i64, sqlx::Error> = sqlx::query_scalar(
+        "INSERT INTO accounts (email, password_hash, plan_id, node_id, role, created_unix)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+    )
+    .bind(&email)
+    .bind(hash)
+    .bind(&request.plan)
+    .bind(&request.node)
+    .bind(&request.role)
+    .bind(clamp_i64(now_unix()))
+    .fetch_one(&mut *tx)
+    .await;
+    let account_id = match created {
+        Ok(id) => id,
+        Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+            return Err(Failure::conflict("the email is taken"));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    audit(
+        &mut tx,
+        admin.account_id,
+        "create_account",
+        Some(account_id),
+        Some(&request.node),
+        &format!("{email}, plan {}, {}", request.plan, request.role),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(Created {
+            account_id: account_id as u64,
+        }),
+    ))
+}
+
+/// Sets a new password for someone who lost theirs, and signs them out
+/// everywhere. Administrators change their own in the account page.
+pub(crate) async fn reset_password(
+    State(state): Shared,
+    admin: AdminSession,
+    Path(account_id): Path<i64>,
+    Json(request): Json<NewPassword>,
+) -> Result<StatusCode, Failure> {
+    if account_id == admin.account_id {
+        return Err(Failure::forbidden(
+            "change your own password on the account page",
+        ));
+    }
+    web::check_password(&request.password)?;
+    let password = request.password;
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
+        .await
+        .expect("hashing never panics");
+    let mut tx = state.pool.begin().await?;
+    let updated = sqlx::query("UPDATE accounts SET password_hash = $2 WHERE id = $1")
+        .bind(account_id)
+        .bind(hash)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if updated == 0 {
+        return Err(Failure::not_found());
+    }
+    audit(
+        &mut tx,
+        admin.account_id,
+        "reset_password",
+        Some(account_id),
+        None,
+        "",
+    )
+    .await?;
+    tx.commit().await?;
+    auth::end_sessions(&state, account_id, None).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Bytes relayed for everyone, per day.
+pub(crate) async fn daily_usage(
     State(state): Shared,
     _admin: AdminSession,
-) -> Result<Json<Vec<PlanView>>, Failure> {
-    let rows = sqlx::query(
-        "SELECT p.*, (SELECT COUNT(*) FROM accounts a WHERE a.plan_id = p.id) AS accounts
-         FROM plans p ORDER BY p.id",
-    )
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(
-        rows.iter()
-            .map(|row| PlanView {
-                id: row.get("id"),
-                rate_bps: row.get::<i32, _>("rate_bps") as u32,
-                burst_bytes: row.get::<i32, _>("burst_bytes") as u32,
-                monthly_bytes: row.get::<i64, _>("monthly_bytes") as u64,
-                throttled_rate_bps: row.get::<i32, _>("throttled_rate_bps") as u32,
-                max_devices: row.get::<i32, _>("max_devices") as u32,
-                accounts: row.get("accounts"),
-            })
-            .collect(),
-    ))
+    Query(query): Query<DaysQuery>,
+) -> Result<Json<Vec<DayUsage>>, Failure> {
+    Ok(Json(daily(&state, None, query.days).await?))
 }
 
 pub(crate) async fn audit_log(

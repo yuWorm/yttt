@@ -203,7 +203,9 @@ pub enum RemoteAccessRequest {
     },
     /// Uses a paid-relay account for the Host's relay ticket, replacing the
     /// plain relay URL while set; `None` forgets the account.
-    SetRelayAccount { account: Option<RelayAccount> },
+    SetRelayAccount {
+        account: Option<RelayAccount>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1137,3 +1137,328 @@ async fn a_fresh_deployment_gets_its_first_administrator_before_any_node() {
     assert!(enrolled.status().is_success());
     assert_eq!(sign_up().await.unwrap().status(), StatusCode::CREATED);
 }
+
+/// An administrator session and a request builder for it.
+async fn admin_session(harness: &Harness, email: &str) -> String {
+    let (_, token) = harness.account(email).await;
+    assert!(
+        yttt_control::promote_admin(&harness.config, email)
+            .await
+            .unwrap()
+    );
+    token
+}
+
+async fn send(
+    harness: &Harness,
+    token: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value) {
+    let mut request = harness
+        .http
+        .request(method, format!("{}{path}", harness.base))
+        .bearer_auth(token);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status();
+    let body = response.json().await.unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn plans_are_run_from_the_console_and_reach_nodes_on_their_next_report() {
+    let harness = Harness::start().await;
+    let admin = admin_session(&harness, "admin@example.com").await;
+    let (alice, _) = harness.account("alice@example.com").await;
+    let patch = reqwest::Method::PATCH;
+
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::POST,
+        "/v1/admin/plans",
+        Some(serde_json::json!({
+            "id": "pro", "name": "Pro", "description": "For teams",
+            "rate_bps": 8_000_000, "burst_bytes": 1_000_000,
+            "monthly_bytes": 500_000_000_000u64, "throttled_rate_bps": 256_000,
+            "max_devices": 20,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::POST,
+        "/v1/admin/plans",
+        Some(serde_json::json!({
+            "id": "Bad ID", "name": "x", "rate_bps": 1, "burst_bytes": 1,
+            "monthly_bytes": 1, "throttled_rate_bps": 1, "max_devices": 1,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A faster plan reaches the node with its next report.
+    let (status, _) = send(
+        &harness,
+        &admin,
+        patch.clone(),
+        "/v1/admin/plans/basic",
+        Some(serde_json::json!({"rate_bps": 3_000_000, "name": "Basic"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let reply = harness.report(NODE_TOKEN, &[(alice, 1)]).await.unwrap();
+    assert_eq!(
+        reply.accounts[0].standing,
+        Standing::Active {
+            rate_bps: 3_000_000,
+            burst_bytes: 250_000
+        }
+    );
+
+    // The sign-up plan cannot be archived or deleted; a plan in use cannot be deleted.
+    let (status, _) = send(
+        &harness,
+        &admin,
+        patch.clone(),
+        "/v1/admin/plans/basic",
+        Some(serde_json::json!({"archived": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = send(
+        &harness,
+        &admin,
+        patch.clone(),
+        "/v1/admin/settings",
+        Some(serde_json::json!({"signup_plan": "pro"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(
+        &harness,
+        &admin,
+        patch.clone(),
+        "/v1/admin/plans/basic",
+        Some(serde_json::json!({"archived": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::DELETE,
+        "/v1/admin/plans/basic",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "accounts still use it");
+    let (status, _) = send(
+        &harness,
+        &admin,
+        patch.clone(),
+        &format!("/v1/admin/accounts/{alice}"),
+        Some(serde_json::json!({"plan": "basic"})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "an archived plan takes no one new"
+    );
+
+    // New sign-ups land on the new plan, and the account sees its names.
+    let signup = harness
+        .http
+        .post(format!("{}/v1/accounts", harness.base))
+        .header("x-yttt-web", "1")
+        .json(&serde_json::json!({"email": "new@example.com", "password": "correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signup.status(), StatusCode::CREATED);
+    let session: SessionGranted = harness
+        .call(
+            "/v1/sessions",
+            None,
+            &Login {
+                email: "new@example.com".into(),
+                password: "correct horse".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let me: AccountView = harness
+        .get("/v1/accounts/me", &session.token)
+        .await
+        .unwrap();
+    assert_eq!((me.plan.as_str(), me.plan_name.as_str()), ("pro", "Pro"));
+    assert_eq!(me.plan_description, "For teams");
+    assert_eq!(me.rate_bps, 8_000_000);
+
+    let (status, _) = send(
+        &harness,
+        &admin,
+        patch.clone(),
+        "/v1/admin/settings",
+        Some(serde_json::json!({"signup_enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let closed = harness
+        .http
+        .post(format!("{}/v1/accounts", harness.base))
+        .header("x-yttt-web", "1")
+        .json(&serde_json::json!({"email": "late@example.com", "password": "correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(closed.status(), StatusCode::NOT_FOUND);
+
+    // A restart with the original configuration keeps the console's plans.
+    let config = harness.config.clone();
+    harness.control.shutdown().await;
+    let control = Control::spawn(config).await.unwrap();
+    let base = format!("http://{}", control.addr());
+    let plans: serde_json::Value = harness
+        .http
+        .get(format!("{base}/v1/admin/plans"))
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let basic = plans
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plan| plan["id"] == "basic")
+        .unwrap();
+    assert_eq!(basic["rate_bps"], 3_000_000);
+    assert_eq!(basic["archived"], true);
+    let audit: serde_json::Value = harness
+        .http
+        .get(format!("{base}/v1/admin/audit"))
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(audit.as_array().unwrap().iter().any(|entry| {
+        entry["action"] == "change_plan"
+            && entry["detail"]
+                .as_str()
+                .unwrap()
+                .contains("rate_bps: 1000000 -> 3000000")
+    }));
+    control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn administrators_open_accounts_reset_passwords_and_see_daily_traffic() {
+    let harness = Harness::start().await;
+    let admin = admin_session(&harness, "admin@example.com").await;
+    let (status, created) = send(
+        &harness,
+        &admin,
+        reqwest::Method::POST,
+        "/v1/admin/accounts",
+        Some(serde_json::json!({
+            "email": "Carol@Example.com", "password": "first password",
+            "plan": "basic", "node": NODE,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let carol = created["account_id"].as_u64().unwrap();
+    let login = |password: &str| Login {
+        email: "carol@example.com".into(),
+        password: password.into(),
+    };
+    let session: SessionGranted = harness
+        .call("/v1/sessions", None, &login("first password"))
+        .await
+        .unwrap();
+
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::POST,
+        &format!("/v1/admin/accounts/{carol}/password"),
+        Some(serde_json::json!({"password": "second password"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        harness
+            .get::<AccountView>("/v1/accounts/me", &session.token)
+            .await
+            .unwrap_err(),
+        StatusCode::UNAUTHORIZED,
+        "a reset signs the account out"
+    );
+    assert!(
+        harness
+            .call::<_, SessionGranted>("/v1/sessions", None, &login("first password"))
+            .await
+            .is_err()
+    );
+    let session: SessionGranted = harness
+        .call("/v1/sessions", None, &login("second password"))
+        .await
+        .unwrap();
+
+    harness.report(NODE_TOKEN, &[(carol, 700)]).await.unwrap();
+    harness.report(NODE_TOKEN, &[(carol, 300)]).await.unwrap();
+    let daily: serde_json::Value = harness
+        .get("/v1/accounts/me/usage/daily", &session.token)
+        .await
+        .unwrap();
+    let days = daily.as_array().unwrap();
+    assert_eq!(days.len(), 30);
+    assert_eq!(days.last().unwrap()["upstream_bytes"], 1000);
+    assert_eq!(days[0]["upstream_bytes"], 0);
+    let (_, site) = send(
+        &harness,
+        &admin,
+        reqwest::Method::GET,
+        "/v1/admin/usage/daily?days=7",
+        None,
+    )
+    .await;
+    assert_eq!(site.as_array().unwrap().len(), 7);
+    assert_eq!(site[6]["upstream_bytes"], 1000);
+    let (_, overview) = send(
+        &harness,
+        &admin,
+        reqwest::Method::GET,
+        "/v1/admin/overview",
+        None,
+    )
+    .await;
+    assert_eq!(overview["today_upstream_bytes"], 1000);
+    assert_eq!(overview["accounts_today"], 2);
+    assert_eq!(overview["nodes"][0]["month_bytes"], 1000);
+    let (_, page) = send(
+        &harness,
+        &admin,
+        reqwest::Method::GET,
+        "/v1/admin/accounts?status=admin",
+        None,
+    )
+    .await;
+    assert_eq!(page["total"], 1);
+    harness.control.shutdown().await;
+}

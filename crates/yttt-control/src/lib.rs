@@ -10,6 +10,7 @@ mod api;
 mod auth;
 mod config;
 mod nodes;
+mod plans;
 mod web;
 
 use std::{
@@ -149,9 +150,22 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/v1/accounts", post(web::sign_up))
         .route("/v1/web/session", post(web::sign_in).delete(web::sign_out))
         .route("/v1/accounts/me/usage", get(web::usage_history))
+        .route("/v1/accounts/me/usage/daily", get(web::daily_usage))
         .route("/v1/accounts/me/password", post(web::change_password))
         .route("/v1/admin/overview", get(admin::overview))
-        .route("/v1/admin/accounts", get(admin::accounts))
+        .route(
+            "/v1/admin/accounts",
+            get(admin::accounts).post(admin::create_account),
+        )
+        .route(
+            "/v1/admin/accounts/{account_id}/password",
+            post(admin::reset_password),
+        )
+        .route("/v1/admin/usage/daily", get(admin::daily_usage))
+        .route(
+            "/v1/admin/settings",
+            get(plans::get_settings).patch(plans::change_settings),
+        )
         .route(
             "/v1/admin/accounts/{account_id}",
             get(admin::account).patch(admin::change_account),
@@ -160,7 +174,11 @@ fn router(state: Arc<AppState>) -> Router {
             "/v1/admin/accounts/{account_id}/devices/{endpoint_id}",
             delete(admin::remove_device),
         )
-        .route("/v1/admin/plans", get(admin::plans))
+        .route("/v1/admin/plans", get(plans::list).post(plans::create))
+        .route(
+            "/v1/admin/plans/{plan_id}",
+            patch(plans::change).delete(plans::remove),
+        )
         .route("/v1/admin/nodes", get(nodes::list).post(nodes::create))
         .route(
             "/v1/admin/nodes/{node_id}",
@@ -261,15 +279,30 @@ pub async fn create_admin(
         .map_err(|_| StartError::Refused("the email address is invalid"))?;
     web::check_password(password)
         .map_err(|_| StartError::Refused("a password is 8 to 256 characters"))?;
-    let signup = config.signup.as_ref().ok_or(StartError::Refused(
-        "[signup] names the plan and node for the account",
-    ))?;
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&config.database_url)
         .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
     seed(&pool, config).await?;
+    let settings = plans::settings(&pool).await?;
+    let plan = match settings.signup_plan {
+        Some(plan) => plan,
+        None => {
+            sqlx::query_scalar("SELECT id FROM plans WHERE NOT archived ORDER BY sort, id LIMIT 1")
+                .fetch_optional(&pool)
+                .await?
+                .ok_or(StartError::Refused(
+                    "there is no plan; add one under [[plans]]",
+                ))?
+        }
+    };
+    let node = settings
+        .signup_node
+        .or_else(|| config.signup.as_ref().map(|signup| signup.node.clone()))
+        .ok_or(StartError::Refused(
+            "[signup] names the node for new accounts",
+        ))?;
     let password = password.to_owned();
     let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
         .await
@@ -281,8 +314,16 @@ pub async fn create_admin(
          VALUES ($1, '', NULL, $1, 'pending', $2)
          ON CONFLICT (id) DO NOTHING",
     )
-    .bind(&signup.node)
+    .bind(&node)
     .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE settings SET signup_plan = COALESCE(signup_plan, $1),
+                             signup_node = COALESCE(signup_node, $2)",
+    )
+    .bind(&plan)
+    .bind(&node)
     .execute(&mut *tx)
     .await?;
     let created = sqlx::query(
@@ -291,8 +332,8 @@ pub async fn create_admin(
     )
     .bind(&email)
     .bind(hash)
-    .bind(&signup.plan)
-    .bind(&signup.node)
+    .bind(&plan)
+    .bind(&node)
     .bind(now)
     .execute(&mut *tx)
     .await;
@@ -303,35 +344,39 @@ pub async fn create_admin(
                 "the email is taken; make it an administrator with promote-admin",
             ));
         }
-        Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() => {
-            return Err(StartError::Refused("[signup] plan is not among [[plans]]"));
-        }
         Err(error) => return Err(error.into()),
     }
     tx.commit().await?;
     Ok(())
 }
 
-/// Makes the plan table match the configuration, and adds configured nodes
-/// the database does not have yet. Nodes it has are managed in the console
-/// and left alone: their tokens rotate and their addresses change there.
+/// Seeds an empty database from the configuration: plans, nodes and the
+/// sign-up settings. What the database already has is managed in the console
+/// and left alone.
 async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    for plan in &config.plans {
-        sqlx::query(
-            "INSERT INTO plans (id, rate_bps, burst_bytes, monthly_bytes, throttled_rate_bps, max_devices)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (id) DO UPDATE SET rate_bps = $2, burst_bytes = $3, monthly_bytes = $4,
-                 throttled_rate_bps = $5, max_devices = $6",
-        )
-        .bind(&plan.id)
-        .bind(clamp_i32(plan.rate_bps))
-        .bind(clamp_i32(plan.burst_bytes))
-        .bind(clamp_i64(plan.monthly_bytes))
-        .bind(clamp_i32(plan.throttled_rate_bps))
-        .bind(clamp_i32(plan.max_devices))
-        .execute(&mut *tx)
+    let has_plans: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM plans)")
+        .fetch_one(&mut *tx)
         .await?;
+    let now = clamp_i64(now_unix());
+    if !has_plans {
+        for (sort, plan) in config.plans.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO plans (id, name, rate_bps, burst_bytes, monthly_bytes,
+                                    throttled_rate_bps, max_devices, sort, created_unix)
+                 VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(&plan.id)
+            .bind(clamp_i32(plan.rate_bps))
+            .bind(clamp_i32(plan.burst_bytes))
+            .bind(clamp_i64(plan.monthly_bytes))
+            .bind(clamp_i32(plan.throttled_rate_bps))
+            .bind(clamp_i32(plan.max_devices))
+            .bind(i32::try_from(sort).unwrap_or(i32::MAX))
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
     for node in &config.nodes {
         sqlx::query(
@@ -342,10 +387,22 @@ async fn seed(pool: &PgPool, config: &ControlConfig) -> Result<(), sqlx::Error> 
         .bind(&node.id)
         .bind(&node.url)
         .bind(sha256(node.token.as_bytes()))
-        .bind(clamp_i64(now_unix()))
+        .bind(now)
         .execute(&mut *tx)
         .await?;
     }
+    // Names that do not exist yet stay empty until the console sets them.
+    let signup = config.signup.as_ref();
+    sqlx::query(
+        "INSERT INTO settings (signup_enabled, signup_plan, signup_node)
+         VALUES ($1, (SELECT id FROM plans WHERE id = $2), (SELECT id FROM nodes WHERE id = $3))
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(signup.is_some_and(|signup| signup.enabled))
+    .bind(signup.map(|signup| signup.plan.as_str()))
+    .bind(signup.map(|signup| signup.node.as_str()))
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await
 }
 
@@ -405,21 +462,40 @@ pub(crate) fn now_unix() -> u64 {
 
 /// Year * 100 + month of a Unix time, in UTC.
 pub(crate) fn month_of(unix: u64) -> i32 {
-    // Howard Hinnant's civil_from_days.
-    let days = (unix / 86_400) as i64 + 719_468;
+    let (year, month, _) = civil_from_days((unix / 86_400) as i64);
+    (year * 100 + month) as i32
+}
+
+/// Days since the Unix epoch of a Unix time, in UTC.
+pub(crate) fn day_of(unix: u64) -> i32 {
+    (unix / 86_400) as i32
+}
+
+/// The day (since the epoch) the month of `unix` began on.
+pub(crate) fn month_start_day(unix: u64) -> i32 {
+    let days = (unix / 86_400) as i64;
+    let (_, _, day) = civil_from_days(days);
+    (days - (day - 1)) as i32
+}
+
+/// Year, month and day of a day since the Unix epoch: Howard Hinnant's
+/// civil_from_days.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let days = days + 719_468;
     let era = days.div_euclid(146_097);
     let day_of_era = days.rem_euclid(146_097);
     let year_of_era =
         (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
     let month = if shifted_month < 10 {
         shifted_month + 3
     } else {
         shifted_month - 9
     };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year * 100 + month) as i32
+    (year, month, day)
 }
 
 pub(crate) fn sha256(bytes: &[u8]) -> Vec<u8> {
@@ -436,7 +512,7 @@ pub(crate) fn clamp_i64(value: u64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::month_of;
+    use super::{month_of, month_start_day};
 
     #[test]
     fn months_follow_the_utc_calendar() {
@@ -449,5 +525,13 @@ mod tests {
         // 2025-12-31T23:59:59Z, then 2026-01-01T00:00:00Z
         assert_eq!(month_of(1_767_225_599), 202_512);
         assert_eq!(month_of(1_767_225_600), 202_601);
+    }
+
+    #[test]
+    fn a_month_starts_on_its_first_utc_day() {
+        // 2026-11-06T12:00:00Z; 2026-11-01 is day 20758.
+        assert_eq!(month_start_day(1_793_966_400), 20_758);
+        assert_eq!(month_start_day(20_758 * 86_400), 20_758);
+        assert_eq!(month_start_day(20_758 * 86_400 - 1), 20_727);
     }
 }

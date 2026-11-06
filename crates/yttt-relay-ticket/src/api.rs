@@ -159,7 +159,7 @@ impl std::fmt::Debug for TicketGranted {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountView {
     pub account_id: u64,
     pub email: String,
@@ -174,6 +174,17 @@ pub struct AccountView {
     /// `user` or `admin`.
     #[serde(default)]
     pub role: String,
+    #[serde(default)]
+    pub plan_name: String,
+    #[serde(default)]
+    pub plan_description: String,
+    #[serde(default)]
+    pub node_name: String,
+    /// The plan's sustained rate, and its rate once the month's quota is used.
+    #[serde(default)]
+    pub rate_bps: u32,
+    #[serde(default)]
+    pub throttled_rate_bps: u32,
 }
 
 /// Development-only suspension switch.

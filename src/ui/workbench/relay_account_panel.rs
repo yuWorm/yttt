@@ -119,7 +119,14 @@ impl WorkbenchView {
                             .child(
                                 div().text_xs().text_color(theme.text_muted).child(
                                     text.get(UiTextKey::RelayAccountPlan)
-                                        .replace("{plan}", &view.plan)
+                                        .replace(
+                                            "{plan}",
+                                            if view.plan_name.is_empty() {
+                                                &view.plan
+                                            } else {
+                                                &view.plan_name
+                                            },
+                                        )
                                         .replace("{relay}", &view.relay_url),
                                 ),
                             )
