@@ -76,6 +76,14 @@ export interface AccountView {
   throttled_rate_bps: number;
 }
 
+export interface SignInMethods {
+  has_password: boolean;
+  /** Whether this session signed in recently enough to set a first password. */
+  may_set_password: boolean;
+  identities: { provider: "github" | "google"; email: string; created_unix: number }[];
+  providers: ("github" | "google")[];
+}
+
 export interface DeviceEntry {
   endpoint_id: string;
   label: string;

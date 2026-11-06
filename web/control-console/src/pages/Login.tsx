@@ -5,10 +5,11 @@ import { IconBolt, IconHistogram, IconLock } from "@douyinfe/semi-icons";
 import { ApiError, type WebSession, errorText, post } from "../api";
 import { useSession } from "../session";
 import { BrandMark } from "../components/Brand";
+import { ProviderButtons, providerError } from "../components/Providers";
 
 export function Login() {
   const { refresh } = useSession();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<string | undefined>(providerError);
   const [busy, setBusy] = useState(false);
   const submit = async (values: { email: string; password: string }) => {
     setBusy(true);
@@ -31,6 +32,7 @@ export function Login() {
   return (
     <AuthLayout title="欢迎回来" subtitle="登录你的 yttt relay 账号">
       {error && <Banner type="danger" description={error} closeIcon={null} style={{ marginBottom: 16 }} />}
+      <ProviderButtons action="登录" />
       <Form onSubmit={submit} labelPosition="top">
         <Form.Input
           field="email"

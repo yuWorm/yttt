@@ -1,10 +1,12 @@
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Spin } from "@douyinfe/semi-ui";
 import { Shell } from "./components/Shell";
 import { useSession } from "./session";
 import { Login } from "./pages/Login";
 import { Signup } from "./pages/Signup";
+import { Authorize } from "./pages/Authorize";
+import { DeviceConfirm } from "./pages/DeviceConfirm";
 
 // Pages load on first visit; account holders never download the admin ones.
 const page = <T extends Record<string, React.ComponentType>>(load: () => Promise<T>, name: keyof T) =>
@@ -31,12 +33,21 @@ function Loading() {
 
 export function App() {
   const { me } = useSession();
+  const { pathname } = useLocation();
   if (me === undefined) {
     return (
       <div style={{ display: "grid", placeItems: "center", height: "100vh" }}>
         <Spin size="large" />
       </div>
     );
+  }
+  // Signed out, these show the sign-in page at the same address and come
+  // back once signed in.
+  if (me && pathname === "/authorize") {
+    return <Authorize />;
+  }
+  if (me && pathname === "/device") {
+    return <DeviceConfirm />;
   }
   if (me === null) {
     return (

@@ -1625,7 +1625,16 @@ async fn the_app_signs_in_through_the_browser_and_gets_only_a_device_session() {
             .await,
         StatusCode::CREATED
     );
-    // … and nothing a console session does, not even carried in a cookie.
+    // … and nothing a console session does; in a cookie it is no session.
+    let in_cookie = harness
+        .http
+        .get(format!("{}/v1/accounts/me", harness.base))
+        .header("cookie", format!("yttt_session={}", granted.token))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(in_cookie, StatusCode::UNAUTHORIZED);
     let as_cookie = format!("yttt_session={}", granted.token);
     for (method, path) in [
         (reqwest::Method::GET, "/v1/admin/overview"),
@@ -1645,7 +1654,10 @@ async fn the_app_signs_in_through_the_browser_and_gets_only_a_device_session() {
                 .console(&as_cookie),
         ] {
             let status = request.json(&body).send().await.unwrap().status();
-            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
+            assert!(
+                [StatusCode::FORBIDDEN, StatusCode::UNAUTHORIZED].contains(&status),
+                "{method} {path}: {status}"
+            );
         }
     }
     harness.control.shutdown().await;

@@ -4,10 +4,11 @@ import { Banner, Button, Form, Typography } from "@douyinfe/semi-ui";
 import { ApiError, type WebSession, errorText, post } from "../api";
 import { useSession } from "../session";
 import { AuthLayout } from "./Login";
+import { ProviderButtons, providerError } from "../components/Providers";
 
 export function Signup() {
   const { refresh } = useSession();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<string | undefined>(providerError);
   const [busy, setBusy] = useState(false);
   const submit = async (values: { email: string; password: string; confirm: string }) => {
     if (values.password !== values.confirm) {
@@ -37,6 +38,7 @@ export function Signup() {
   return (
     <AuthLayout title="创建账号" subtitle="注册后在 yttt 应用里登录同一账号即可使用">
       {error && <Banner type="danger" description={error} closeIcon={null} style={{ marginBottom: 16 }} />}
+      <ProviderButtons action="注册" />
       <Form onSubmit={submit} labelPosition="top">
         <Form.Input
           field="email"

@@ -120,12 +120,18 @@ impl FromRequestParts<Arc<AppState>> for AnySession {
         .fetch_optional(&state.pool)
         .await?
         .ok_or(Failure::UNAUTHORIZED)?;
+        let web = row.get::<String, _>("scope") == Scope::Web.as_str();
+        // A cookie holds only console sessions: a device token put there is
+        // no session at all, and the console asks to sign in.
+        if from_cookie && !web {
+            return Err(Failure::UNAUTHORIZED);
+        }
         Ok(Self {
             account_id: row.get("id"),
             token_hash,
             suspended: row.get("suspended"),
             role: row.get("role"),
-            console: from_cookie && row.get::<String, _>("scope") == Scope::Web.as_str(),
+            console: from_cookie,
             signed_in_unix: row.get::<i64, _>("signed_in_unix").max(0) as u64,
         })
     }
