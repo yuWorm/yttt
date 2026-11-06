@@ -855,6 +855,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAddSsh => "SSH 连接",
         UiTextKey::RemoteAddHost => "网络 Host",
         UiTextKey::RemoteAddPaired => "配对 Host（P2P）",
+        UiTextKey::P2pPathConnecting => "连接中",
+        UiTextKey::P2pPathDirect => "直连",
+        UiTextKey::P2pPathRelay => "经 relay",
         UiTextKey::PairedHostTitle => "配对 Host",
         UiTextKey::PairedHostEditTitle => "编辑配对的 Host",
         UiTextKey::PairedHostDescription => {

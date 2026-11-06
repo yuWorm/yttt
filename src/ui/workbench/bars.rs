@@ -458,6 +458,34 @@ impl WorkbenchView {
             }
             ProjectLocation::Local { .. } => None,
         });
+        // A window onto a Host paired over P2P shows how its session runs.
+        let ssh = ssh.or_else(|| {
+            let path = crate::remote_host::p2p_path()?;
+            let (key, tone) = match path {
+                crate::remote_host::P2pPath::Connecting => (
+                    crate::ui::i18n::UiTextKey::P2pPathConnecting,
+                    BarTone::Warning,
+                ),
+                crate::remote_host::P2pPath::Direct => {
+                    (crate::ui::i18n::UiTextKey::P2pPathDirect, BarTone::Success)
+                }
+                crate::remote_host::P2pPath::Relay => {
+                    (crate::ui::i18n::UiTextKey::P2pPathRelay, BarTone::Muted)
+                }
+            };
+            let label = self
+                .terminal
+                .host_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.remote_label())
+                .unwrap_or("P2P")
+                .to_string();
+            Some(SshBarInfo {
+                text: format!("P2P · {}", self.ui_text.get(key)),
+                tooltip: label,
+                tone,
+            })
+        });
 
         let active_document = self.active_editor_document();
         let editor = active_document.as_ref().map(|document| {
@@ -623,6 +651,26 @@ impl WorkbenchView {
                 if view.agent_state_duration_requested() && view.active_agent_snapshot().is_some() {
                     cx.notify();
                 }
+            });
+        }));
+    }
+
+    /// Redraws the bar when this window's P2P session switches between a
+    /// direct path and the relay, which hole punching does after connecting.
+    pub(super) fn sync_bar_p2p_path_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(shown) = crate::remote_host::p2p_path() else {
+            return;
+        };
+        if self.bar_p2p_path_task.is_some() {
+            return;
+        }
+        self.bar_p2p_path_task = Some(cx.spawn(async move |this, cx| {
+            while crate::remote_host::p2p_path() == Some(shown) {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+            }
+            let _ = this.update(cx, |view, cx| {
+                view.bar_p2p_path_task = None;
+                cx.notify();
             });
         }));
     }

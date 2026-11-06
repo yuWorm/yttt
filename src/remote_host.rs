@@ -422,6 +422,36 @@ pub fn connect(
     }
 }
 
+/// The path of this process's P2P session, for the status bar: each remote
+/// Client process serves exactly one remote environment.
+static P2P_PATH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum P2pPath {
+    Connecting,
+    Direct,
+    Relay,
+}
+
+/// How this process's P2P session currently runs, if it has one.
+pub fn p2p_path() -> Option<P2pPath> {
+    match P2P_PATH.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Some(P2pPath::Connecting),
+        2 => Some(P2pPath::Direct),
+        3 => Some(P2pPath::Relay),
+        _ => None,
+    }
+}
+
+fn set_p2p_path(path: P2pPath) {
+    let value = match path {
+        P2pPath::Connecting => 1,
+        P2pPath::Direct => 2,
+        P2pPath::Relay => 3,
+    };
+    P2P_PATH.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// How often the remote Client checks whether a P2P session runs direct or
 /// through the relay; hole punching usually upgrades a session after it starts.
 const PATH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
@@ -461,6 +491,7 @@ fn connect_paired(
         }))
         .map_err(|error| format!("cannot open the P2P endpoint: {error}"))?;
     let connector = Arc::new(host.connector(endpoint));
+    set_p2p_path(P2pPath::Connecting);
     watch_path(
         &runtime,
         connector.clone(),
@@ -516,9 +547,18 @@ fn watch_path(
             if path != reported {
                 reported = path;
                 let line = match path {
-                    yttt_transport_iroh::PathKind::Direct => "P2P path: direct",
-                    yttt_transport_iroh::PathKind::Relay => "P2P path: relay",
-                    yttt_transport_iroh::PathKind::Unknown => continue,
+                    yttt_transport_iroh::PathKind::Direct => {
+                        set_p2p_path(P2pPath::Direct);
+                        "P2P path: direct"
+                    }
+                    yttt_transport_iroh::PathKind::Relay => {
+                        set_p2p_path(P2pPath::Relay);
+                        "P2P path: relay"
+                    }
+                    yttt_transport_iroh::PathKind::Unknown => {
+                        set_p2p_path(P2pPath::Connecting);
+                        continue;
+                    }
                 };
                 crate::connection_log::note(&logs, &label, line).await;
             }

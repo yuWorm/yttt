@@ -1049,6 +1049,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAddSsh => "SSH connection",
         UiTextKey::RemoteAddHost => "Network Host",
         UiTextKey::RemoteAddPaired => "Pair with a Host (P2P)",
+        UiTextKey::P2pPathConnecting => "connecting",
+        UiTextKey::P2pPathDirect => "direct",
+        UiTextKey::P2pPathRelay => "via relay",
         UiTextKey::PairedHostTitle => "Pair with a Host",
         UiTextKey::PairedHostEditTitle => "Edit paired Host",
         UiTextKey::PairedHostDescription => {
