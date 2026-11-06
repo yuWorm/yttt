@@ -13468,6 +13468,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing-subscriber",
+ "url",
  "yttt-agent-core",
  "yttt-control",
  "yttt-control-client",
@@ -13511,11 +13512,15 @@ dependencies = [
 name = "yttt-control-client"
 version = "0.4.0"
 dependencies = [
+ "data-encoding",
+ "rand 0.8.6",
  "reqwest 0.12.28",
  "serde",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "url",
  "yttt-relay-ticket",
  "yttt-transport-iroh",
 ]

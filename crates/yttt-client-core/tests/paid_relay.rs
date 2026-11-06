@@ -135,7 +135,13 @@ async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>) ->
 async fn paid_relay() -> (Control, RelayNode, String) {
     let server = std::env::var("YTTT_TEST_DATABASE_URL")
         .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
-    let name = format!("yttt_paid_relay_test_{}", std::process::id());
+    // Tests in this file run side by side, each on its own database.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let name = format!(
+        "yttt_paid_relay_test_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     let admin = sqlx::PgPool::connect(&server).await.unwrap();
     let _ = sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {name}"))
         .execute(&admin)
@@ -348,5 +354,110 @@ async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
     assert!(session.ticket(&PHONE).await.is_err());
 
     node.shutdown().await;
+    control.shutdown().await;
+}
+
+/// Signs in on the console and returns its cookie.
+async fn console(control_url: &str) -> String {
+    let response = reqwest::Client::new()
+        .post(format!("{control_url}/v1/web/session"))
+        .header("x-yttt-web", "1")
+        .json(&serde_json::json!({"email": "owner@example.com", "password": "correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    response.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn the_app_and_a_headless_device_sign_in_without_a_password() {
+    let (control, _node, control_url) = paid_relay().await;
+    let session = account(&control_url).await;
+    let cookie = console(&control_url).await;
+    let browser = reqwest::Client::new();
+    let client = ControlClient::new(&control_url).unwrap();
+
+    // The app opens the console; the person allows it there, and the browser
+    // goes back to the app's loopback port.
+    let login = client.begin_browser_login("laptop").await.unwrap();
+    let page = url::Url::parse(login.authorize_url()).unwrap();
+    let mut answer: serde_json::Value = page
+        .query_pairs()
+        .map(|(key, value)| {
+            (
+                key.into_owned(),
+                serde_json::Value::String(value.into_owned()),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    answer["allow"] = true.into();
+    let finished = tokio::spawn(login.finish());
+    let allowed: serde_json::Value = browser
+        .post(format!("{control_url}/v1/oauth/authorize"))
+        .header("cookie", &cookie)
+        .header("x-yttt-web", "1")
+        .json(&answer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let shown = browser
+        .get(allowed["redirect"].as_str().unwrap())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(shown.contains("Signed in"));
+    let app = finished.await.unwrap().unwrap();
+    assert_eq!(app.account_id, session.account_id);
+    assert_eq!(app.account().await.unwrap().email, "owner@example.com");
+
+    // A headless device shows a code that the person confirms.
+    let login = client.begin_device_login("nas").await.unwrap();
+    assert_eq!(login.verification_uri, format!("{control_url}/device"));
+    assert!(login.verification_uri_complete.ends_with(&login.user_code));
+    let user_code = login.user_code.clone();
+    let finished = tokio::spawn(login.finish());
+    let confirmed = browser
+        .post(format!("{control_url}/v1/oauth/device/confirm"))
+        .header("cookie", &cookie)
+        .header("x-yttt-web", "1")
+        .json(&serde_json::json!({"user_code": user_code, "allow": true}))
+        .send()
+        .await
+        .unwrap();
+    assert!(confirmed.status().is_success());
+    let device = finished.await.unwrap().unwrap();
+    assert_eq!(device.account_id, session.account_id);
+
+    // Denied is denied.
+    let login = client.begin_device_login("nas").await.unwrap();
+    let user_code = login.user_code.clone();
+    let finished = tokio::spawn(login.finish());
+    browser
+        .post(format!("{control_url}/v1/oauth/device/confirm"))
+        .header("cookie", &cookie)
+        .header("x-yttt-web", "1")
+        .json(&serde_json::json!({"user_code": user_code, "allow": false}))
+        .send()
+        .await
+        .unwrap();
+    assert!(matches!(
+        finished.await.unwrap(),
+        Err(yttt_client_core::control::ControlError::Denied)
+    ));
     control.shutdown().await;
 }

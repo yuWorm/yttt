@@ -4,6 +4,8 @@
 //! The control plane only sells transport. Nothing here touches which Host a
 //! device trusts or which devices a Host admits; those stay end-to-end.
 
+mod sign_in;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -16,6 +18,7 @@ use yttt_relay_ticket::{
 };
 use yttt_transport_iroh::{IrohEndpoint, RelayTarget};
 
+pub use sign_in::{BrowserLogin, DeviceLogin};
 pub use yttt_relay_ticket::api::AccountView;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -30,6 +33,10 @@ pub enum ControlError {
     Refused { status: u16, message: String },
     #[error("the control plane sent an unexpected reply: {0}")]
     Protocol(String),
+    #[error("the sign-in was denied")]
+    Denied,
+    #[error("the sign-in expired; start again")]
+    Expired,
 }
 
 impl ControlError {
