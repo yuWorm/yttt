@@ -401,13 +401,14 @@ pub(crate) async fn node_usage(
     {
         sqlx::query(
             "INSERT INTO usage_months (account_id, month, upstream_bytes)
-             SELECT id, $2, $3 FROM accounts WHERE id = $1
+             SELECT id, $2, $3 FROM accounts WHERE id = $1 AND node_id = $4
              ON CONFLICT (account_id, month)
              DO UPDATE SET upstream_bytes = usage_months.upstream_bytes + EXCLUDED.upstream_bytes",
         )
         .bind(clamp_i64(usage.account_id))
         .bind(month)
         .bind(clamp_i64(usage.upstream_bytes))
+        .bind(&node_id)
         .execute(&mut *tx)
         .await?;
     }
@@ -422,10 +423,11 @@ pub(crate) async fn node_usage(
          FROM accounts a
          JOIN plans p ON p.id = a.plan_id
          LEFT JOIN usage_months u ON u.account_id = a.id AND u.month = $2
-         WHERE a.id = ANY($1)",
+         WHERE a.id = ANY($1) AND a.node_id = $3",
     )
     .bind(&ids)
     .bind(month)
+    .bind(&node_id)
     .fetch_all(&mut *tx)
     .await?;
     let reported: Vec<Vec<u8>> = report
@@ -465,20 +467,25 @@ pub(crate) async fn node_usage(
                     burst_bytes: row.get::<i32, _>("burst_bytes") as u32,
                 },
             };
-            // A device stays only while it is registered to this account.
-            let revoked_endpoints = usage
-                .endpoints
-                .iter()
-                .filter(|key| {
-                    let Some(key) = yttt_relay_ticket::parse_key(key) else {
-                        return false;
-                    };
-                    !registered.iter().any(|(endpoint, account)| {
-                        endpoint[..] == key[..] && *account as u64 == usage.account_id
+            // A device stays only while it is registered to this account. An
+            // account on another node learns nothing from this node's report.
+            let revoked_endpoints = if row.is_none() {
+                Vec::new()
+            } else {
+                usage
+                    .endpoints
+                    .iter()
+                    .filter(|key| {
+                        let Some(key) = yttt_relay_ticket::parse_key(key) else {
+                            return false;
+                        };
+                        !registered.iter().any(|(endpoint, account)| {
+                            endpoint[..] == key[..] && *account as u64 == usage.account_id
+                        })
                     })
-                })
-                .cloned()
-                .collect();
+                    .cloned()
+                    .collect()
+            };
             AccountStanding {
                 account_id: usage.account_id,
                 standing,

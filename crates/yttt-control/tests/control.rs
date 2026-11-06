@@ -45,6 +45,10 @@ struct Harness {
 
 impl Harness {
     async fn start() -> Self {
+        Self::start_with_nodes(&[(NODE, NODE_TOKEN)]).await
+    }
+
+    async fn start_with_nodes(nodes: &[(&str, &str)]) -> Self {
         let server = std::env::var("YTTT_TEST_DATABASE_URL")
             .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
         let name = format!("yttt_control_test_{:016x}", rand_suffix());
@@ -66,11 +70,14 @@ impl Harness {
                 throttled_rate_bps: THROTTLED,
                 max_devices: 2,
             }],
-            nodes: vec![NodeEntry {
-                id: NODE.into(),
-                url: "http://127.0.0.1:3340".into(),
-                token: NODE_TOKEN.into(),
-            }],
+            nodes: nodes
+                .iter()
+                .map(|(id, token)| NodeEntry {
+                    id: (*id).into(),
+                    url: "http://127.0.0.1:3340".into(),
+                    token: (*token).into(),
+                })
+                .collect(),
         })
         .await
         .unwrap();
@@ -532,5 +539,44 @@ async fn a_node_learns_which_connected_devices_left_their_account() {
         .unwrap();
     assert!(ticket.issued_unix.abs_diff(now()) < 60);
     assert!(ticket.expires_unix >= now() + 29 * 24 * 3600);
+    harness.control.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
+async fn a_node_cannot_bill_or_probe_accounts_of_another_node() {
+    let harness =
+        Harness::start_with_nodes(&[(NODE, NODE_TOKEN), ("other-1", "other-token")]).await;
+    let (alice, alice_session) = harness.account("alice@example.com").await;
+    harness.register(&alice_session, alice, &LAPTOP).await;
+
+    // Alice lives on NODE; "other-1" reports her as if she were its own.
+    let reply: UsageReply = harness
+        .call(
+            "/v1/nodes/other-1/usage",
+            Some("other-token"),
+            &UsageReport {
+                accounts: vec![AccountUsage {
+                    account_id: alice,
+                    upstream_bytes: MONTHLY_BYTES * 10,
+                    endpoints: vec![
+                        yttt_relay_ticket::hex(&public_key(&LAPTOP)),
+                        yttt_relay_ticket::hex(&public_key(&PHONE)),
+                    ],
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.accounts[0].standing, Standing::Suspended);
+    assert!(reply.accounts[0].revoked_endpoints.is_empty());
+    let me: AccountView = harness
+        .get("/v1/accounts/me", &alice_session)
+        .await
+        .unwrap();
+    assert_eq!(
+        me.month_upstream_bytes, 0,
+        "another node's report billed nothing"
+    );
     harness.control.shutdown().await;
 }
