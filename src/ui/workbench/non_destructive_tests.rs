@@ -282,6 +282,7 @@ fn the_relay_account_section_signs_in_then_shows_the_plan(cx: &mut TestAppContex
             suspended: false,
             devices: 2,
             max_devices: 5,
+            role: "user".into(),
         });
         cx.notify();
     });
