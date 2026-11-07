@@ -434,7 +434,10 @@ impl WorkbenchView {
             let result = task.await;
             let _ = this.update(cx, |root, cx| {
                 match result {
-                    Ok(()) => root.close_ssh_project_picker(cx),
+                    Ok(()) => {
+                        root.close_ssh_project_picker(cx);
+                        root.close_ssh_connection_manager();
+                    }
                     Err(error) => {
                         root.ssh.project_picker.error = Some(format!(
                             "{}: {error}",

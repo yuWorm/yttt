@@ -114,6 +114,9 @@ impl WorkbenchView {
             let hosts = crate::ui::app::existing_host::create(profile, self.ui_text, window, cx);
             self.auxiliary_windows.existing_host_subscription =
                 Some(cx.observe(&hosts, |_, _, cx| cx.notify()));
+            self.auxiliary_windows
+                .remote_launch_subscriptions
+                .push(cx.subscribe(&hosts, Self::on_remote_client_launched));
             self.auxiliary_windows.existing_host = Some(hosts);
         }
         if self.auxiliary_windows.paired_host.is_none()
@@ -122,6 +125,9 @@ impl WorkbenchView {
             let paired = crate::ui::app::paired_host::create(profile, self.ui_text, window, cx);
             self.auxiliary_windows.paired_host_subscription =
                 Some(cx.observe(&paired, |_, _, cx| cx.notify()));
+            self.auxiliary_windows
+                .remote_launch_subscriptions
+                .push(cx.subscribe(&paired, Self::on_remote_client_launched));
             self.auxiliary_windows.paired_host = Some(paired);
         }
         if self.auxiliary_windows.pending_new_host_editor
@@ -134,6 +140,18 @@ impl WorkbenchView {
             self.auxiliary_windows.pending_new_host_editor = false;
             self.new_remote_host(window, cx);
         }
+    }
+
+    /// The remote Client's own window takes over, so the user need not close
+    /// the connections window.
+    fn on_remote_client_launched<T>(
+        &mut self,
+        _: Entity<T>,
+        _: &crate::ui::app::existing_host::RemoteClientLaunched,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_ssh_connection_manager();
+        cx.notify();
     }
 
     fn new_remote_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {

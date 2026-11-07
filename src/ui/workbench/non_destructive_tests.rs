@@ -411,6 +411,40 @@ fn a_paired_host_is_listed_and_pairing_opens_its_editor(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("paired-host-editor").is_none());
 }
 
+/// Starting a remote Client hands over to its own window, so the
+/// connections window closes by itself.
+#[gpui::test]
+fn the_connections_window_closes_once_a_remote_client_starts(cx: &mut TestAppContext) {
+    cx.update(yttt_ui::init);
+    let temp = tempdir().unwrap();
+    let profile = p2p_test_profile(temp.path(), "p2p-client-launch");
+    let paths = AppConfigPaths::from_profile(&profile);
+    let slot = Rc::new(RefCell::new(None));
+    let window_slot = slot.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        let root = cx.new(|_| {
+            let mut root = WorkbenchView::with_config_paths(paths);
+            root.open_ssh_connection_manager();
+            root
+        });
+        *window_slot.borrow_mut() = Some(root.clone());
+        let surface = cx.new(|_| RemoteManagerTestSurface(root));
+        yttt_ui::window::yttt_root(surface, window, cx)
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    let root = slot.borrow_mut().take().unwrap();
+    assert!(cx.read(|cx| root.read(cx).ssh.manager_open));
+
+    let paired = cx.read(|cx| root.read(cx).auxiliary_windows.paired_host.clone().unwrap());
+    paired.update(cx, |_, cx| {
+        cx.emit(crate::ui::app::existing_host::RemoteClientLaunched)
+    });
+    cx.run_until_parked();
+    assert!(!cx.read(|cx| root.read(cx).ssh.manager_open));
+}
+
 #[derive(Clone)]
 struct RuntimeSnapshot {
     layout: ProjectLayout,

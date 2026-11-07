@@ -58,6 +58,8 @@ enum PairEvent {
     Done(Result<PairedHostRecord, String>),
 }
 
+impl gpui::EventEmitter<super::existing_host::RemoteClientLaunched> for PairedHostForm {}
+
 pub(crate) struct PairedHostForm {
     profile: AppProfile,
     text: UiText,
@@ -367,7 +369,11 @@ impl PairedHostForm {
             let result = task.await;
             let _ = this.update(cx, |view, cx| {
                 view.busy = false;
+                let launched = result.is_ok();
                 view.error = result.err();
+                if launched {
+                    cx.emit(super::existing_host::RemoteClientLaunched);
+                }
                 cx.notify();
             });
         })

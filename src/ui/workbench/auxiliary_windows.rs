@@ -33,6 +33,8 @@ pub(super) struct AuxiliaryWindows {
     pub(super) existing_host_subscription: Option<Subscription>,
     pub(super) paired_host: Option<Entity<crate::ui::app::paired_host::PairedHostForm>>,
     pub(super) paired_host_subscription: Option<Subscription>,
+    /// Closes this window once a form starts a remote Client.
+    pub(super) remote_launch_subscriptions: Vec<Subscription>,
     pub(super) remote_list_scroll: ScrollHandle,
     pub(super) remote_editor_focus: Option<FocusHandle>,
     pub(super) remote_manager_focus: Option<FocusHandle>,

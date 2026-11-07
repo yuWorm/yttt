@@ -243,6 +243,12 @@ pub(crate) fn create(
     view
 }
 
+/// A form started a remote Client process, which now shows its own
+/// connection progress; the window that holds the form can close.
+pub(crate) struct RemoteClientLaunched;
+
+impl gpui::EventEmitter<RemoteClientLaunched> for ExistingHostForm {}
+
 pub(crate) struct ExistingHostForm {
     profile: AppProfile,
     text: UiText,
@@ -920,16 +926,19 @@ impl ExistingHostForm {
                     return;
                 }
                 match result {
-                    Ok(()) => match &source {
-                        LaunchSource::Saved { .. } => {
-                            view.busy = false;
-                            view.error = None;
-                            cx.notify();
+                    Ok(()) => {
+                        match &source {
+                            LaunchSource::Saved { .. } => {
+                                view.busy = false;
+                                view.error = None;
+                                cx.notify();
+                            }
+                            LaunchSource::Full { .. } | LaunchSource::Credentials { .. } => {
+                                view.finish_editor_success(window, cx);
+                            }
                         }
-                        LaunchSource::Full { .. } | LaunchSource::Credentials { .. } => {
-                            view.finish_editor_success(window, cx);
-                        }
-                    },
+                        cx.emit(RemoteClientLaunched);
+                    }
                     Err(error) => {
                         view.busy = false;
                         view.error = Some(view.operation_error(error));
