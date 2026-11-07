@@ -136,11 +136,12 @@ packaging/relay-dev/rehearse-node.sh '<控制台给出的部署命令>' linux/ar
 
 ### 已有反向代理的机器（nginx、SafeLine 等）
 
-80/443 已被别的反向代理或 WAF 占用、证书由它管理时，控制面与节点都放在它后面：
+80/443 已被别的反向代理或 WAF 占用、证书由它管理时，控制面与节点都放在它后面，只监听本机地址。nginx 可以转发到 `127.0.0.1`；SafeLine 等 WAF 拒绝 `127.0.0.1` 这类特殊地址作上游（报 `special-use address "127.0.0.1" is not allowed`），这时改用 Docker 网桥地址 `172.17.0.1`（`ip -4 addr show docker0` 查看）。它只在本机可达，外部访问不到。
 
-- **控制面**：安装时选“只启动服务”，绑定本机端口，并回答“前面有设置 X-Forwarded-For 的反向代理”，例如 `sudo sh install-control.sh --expose service --listen 127.0.0.1:8080 --public-url https://control.example.com --behind-proxy yes`。在代理里把 `control.example.com` 转发到 `http://127.0.0.1:8080`。代理必须设置 `X-Forwarded-For`，否则限流会把所有人算作同一来源。
-- **节点**：在节点的部署命令末尾加 `--behind-proxy`（部署命令没带域名时同时加 `--domain relay.example.com`）。节点改为明文监听 `127.0.0.1:3340`，在代理里把 `relay.example.com` 转发过去，并开启 WebSocket（relay 协议经 WebSocket 升级连接，请求不能被缓冲或改写）。节点的服务器需放行代理的 TCP 443 与 UDP 7842。
-- **QUIC 证书**：UDP 7842 不经过代理，由节点直接用 `relay.example.com` 的证书应答。把代理的证书（完整链）与私钥以 PEM 格式放到 `/etc/yttt-relay/quic/cert.pem` 与 `key.pem`，私钥 `0640`、属组 `yttt-relay`（Docker 安装为 `root`）。先写私钥，再写证书，替换时用写临时文件再 `mv` 的方式。节点每分钟检查一次，证书变化时自动换上，无需重启。证书续期后要再复制一次，可以写成定时任务。没有这两个文件时节点照常中转，只是设备之间不会升级为直连。
+- **控制面**：安装时选“只启动服务”，监听地址选 `127.0.0.1`，或者选 Docker 网桥（检测到 `docker0` 时脚本会列出这一项）；问到“前面是否有设置 X-Forwarded-For 的反向代理”时答是。也可以直接用参数，例如 `sudo sh install-control.sh --expose service --listen 172.17.0.1:8080 --public-url https://control.example.com --behind-proxy yes`；已安装的用 `--reconfigure --listen 172.17.0.1:8080` 修改，数据与秘密不变。在代理里把 `control.example.com` 转发到该地址，代理必须设置 `X-Forwarded-For`，否则限流会把所有人算作同一来源。
+- **节点**：在节点的部署命令末尾加 `--behind-proxy`（部署命令没带域名时同时加 `--domain relay.example.com`）。节点在代理之后明文监听，默认 `127.0.0.1:3340`，SafeLine 下再加 `--listen 172.17.0.1:3340`。在代理里把 `relay.example.com` 转发到该地址，并允许 WebSocket（relay 协议经 WebSocket 升级连接，请求不能被缓冲或改写）。节点的服务器需放行代理的 TCP 443 与 UDP 7842。
+  - 0.5.0 的控制面发出的部署脚本还没有 `--listen`。这时先按默认部署，再把 `/etc/yttt-relay/relay.toml` 里的 `listen` 改成 `"172.17.0.1:3340"`，然后执行 `systemctl restart yttt-relay`（Docker 安装执行 `docker restart yttt-relay`）。
+- **QUIC 证书**：UDP 7842 不经过代理，由节点直接用 `relay.example.com` 的证书应答。把代理的证书（完整链）与私钥以 PEM 格式放到 `/etc/yttt-relay/quic/cert.pem` 与 `key.pem`，私钥 `0640`、属组 `yttt-relay`（Docker 安装为 `root`）。先写私钥，再写证书，替换时写临时文件再 `mv`。节点每分钟检查一次，证书变化时自动换上，无需重启。证书续期后要再复制一次，可以写成定时任务。没有这两个文件时节点照常中转，只是设备之间不会升级为直连。
 
 ## 3. 日常管理
 

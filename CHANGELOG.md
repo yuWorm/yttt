@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 节点部署命令新增 `--listen`：在反向代理后面（`--behind-proxy`）时可监听 `127.0.0.1` 以外的本机地址，适配 SafeLine 等拒绝 `127.0.0.1` 作上游的代理；控制面安装脚本在检测到 Docker 网桥时可选择监听它。
+- The node deploy command takes `--listen`: behind a reverse proxy (`--behind-proxy`) the node can listen on a local address other than `127.0.0.1`, for proxies such as SafeLine that refuse `127.0.0.1` as an upstream. The control plane installer offers Docker's bridge address when it finds one.
+
 ## 0.5.0 - 2026-11-07
 
 - 每台 Host 可以自己选择 relay 节点（应用里的“节点”、`yttt-server p2p nodes|node`、控制台“设备”页），显示各节点的延迟与负载；连接它的设备自动跟随 Host 所在的节点，无需任何设置。套餐可限定可用节点和同时使用的节点数。

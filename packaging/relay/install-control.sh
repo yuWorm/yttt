@@ -386,13 +386,24 @@ ask_everything() {
             fi
         fi
     else
-        choose BIND "Listen on" loopback \
-            "loopback|127.0.0.1 only: a proxy on this machine forwards to it" \
-            "any|Every interface"
         if [ -z "$LISTEN" ]; then
+            # Docker's bridge: private to this machine, for proxies that
+            # refuse 127.0.0.1 as an upstream, such as SafeLine.
+            bridge=$(ip -4 -o addr show docker0 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')
+            if [ -n "$bridge" ]; then
+                choose BIND "Listen on" loopback \
+                    "loopback|127.0.0.1 only: a proxy on this machine forwards to it" \
+                    "bridge|$bridge only (Docker's bridge): for a proxy that refuses 127.0.0.1, such as SafeLine" \
+                    "any|Every interface"
+            else
+                choose BIND "Listen on" loopback \
+                    "loopback|127.0.0.1 only: a proxy on this machine forwards to it" \
+                    "any|Every interface"
+            fi
             ask PORT "Port" 8080
             case "$BIND" in
                 any) LISTEN="0.0.0.0:$PORT" ;;
+                bridge) LISTEN="$bridge:$PORT" ;;
                 *) LISTEN="127.0.0.1:$PORT" ;;
             esac
         fi
@@ -541,6 +552,8 @@ native_install() {
     chmod 640 "$NATIVE_CONFIG"
     after=network-online.target
     [ "$DATABASE" = postgres ] && after="$after postgresql.service"
+    # An address such as Docker's bridge exists only once Docker is up.
+    case "${LISTEN%:*}" in 127.0.0.1 | 0.0.0.0 | '[::]' | '[::1]' | '') ;; *) after="$after docker.service" ;; esac
     cat >"$NATIVE_UNIT" <<EOF
 [Unit]
 Description=yttt relay control plane
@@ -818,8 +831,9 @@ local_target() {
     if [ "$EXPOSE" = caddy ]; then
         echo 127.0.0.1:8080
     else
-        port=${LISTEN##*:}
-        echo "127.0.0.1:$port"
+        host=${LISTEN%:*}
+        case "$host" in 0.0.0.0 | '[::]' | '') host=127.0.0.1 ;; esac
+        echo "$host:${LISTEN##*:}"
     fi
 }
 
