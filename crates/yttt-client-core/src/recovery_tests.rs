@@ -66,7 +66,7 @@ fn context() -> TestContext {
             diagnostics: Arc::default(),
             visibility: watch::channel(None).1,
             shutdown,
-            liveness_timeout: LinkProfile::LOCAL.liveness_timeout,
+            link: LinkProfile::LOCAL,
         },
         shutdown_tx,
     }

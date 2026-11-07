@@ -41,6 +41,18 @@ impl ClientLatencyDiagnostics {
 
 /// How many recent disconnects diagnostics keep.
 const RECENT_DISCONNECTS: usize = 16;
+/// How many recent heartbeat round trips the shown latency is the median of.
+const RECENT_ROUND_TRIPS: usize = 5;
+
+/// How the session's link behaves now, for the window to show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkHealth {
+    /// Median of the recent heartbeat round trips.
+    pub round_trip: Option<Duration>,
+    /// A heartbeat has waited for its reply longer than the link's
+    /// `unstable_after`; the session is still up.
+    pub unstable: bool,
+}
 
 /// One time the Client lost its Host session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +85,14 @@ pub(crate) struct ClientPipelineDiagnostics {
     reconnects: AtomicU64,
     heartbeat_round_trip: ClientLatencyDiagnostics,
     disconnects: Mutex<VecDeque<(DisconnectRecord, std::time::Instant)>>,
+    round_trips: Mutex<RoundTrips>,
+}
+
+#[derive(Default)]
+struct RoundTrips {
+    recent: VecDeque<Duration>,
+    /// When the heartbeat awaiting its reply was sent.
+    awaiting_since: Option<std::time::Instant>,
 }
 
 impl ClientPipelineDiagnostics {
@@ -127,6 +147,37 @@ impl ClientPipelineDiagnostics {
 
     pub(crate) fn record_heartbeat(&self, duration: Duration) {
         self.heartbeat_round_trip.record(duration);
+        let mut round_trips = self.round_trips.lock();
+        round_trips.awaiting_since = None;
+        if round_trips.recent.len() == RECENT_ROUND_TRIPS {
+            round_trips.recent.pop_front();
+        }
+        round_trips.recent.push_back(duration);
+    }
+
+    pub(crate) fn record_heartbeat_sent(&self, at: std::time::Instant) {
+        self.round_trips.lock().awaiting_since = Some(at);
+    }
+
+    /// Forgets the link of a session that ended.
+    pub(crate) fn clear_link_health(&self) {
+        *self.round_trips.lock() = RoundTrips::default();
+    }
+
+    pub(crate) fn link_health(
+        &self,
+        now: std::time::Instant,
+        unstable_after: Duration,
+    ) -> LinkHealth {
+        let round_trips = self.round_trips.lock();
+        let mut recent = round_trips.recent.iter().copied().collect::<Vec<_>>();
+        recent.sort_unstable();
+        LinkHealth {
+            round_trip: recent.get(recent.len() / 2).copied(),
+            unstable: round_trips
+                .awaiting_since
+                .is_some_and(|sent| now.saturating_duration_since(sent) >= unstable_after),
+        }
     }
 
     pub(crate) fn snapshot(&self) -> ClientPipelineDiagnosticsSnapshot {
@@ -169,5 +220,37 @@ mod tests {
             format!("drop {}", RECENT_DISCONNECTS + 1)
         );
         assert!(recent.last().unwrap().recovered_after.is_some());
+    }
+
+    #[test]
+    fn link_health_reports_the_median_round_trip_and_a_late_reply() {
+        let diagnostics = ClientPipelineDiagnostics::default();
+        let start = std::time::Instant::now();
+        let unstable_after = Duration::from_secs(6);
+        assert_eq!(
+            diagnostics.link_health(start, unstable_after),
+            LinkHealth::default()
+        );
+        for millis in [40, 900, 30, 50, 45, 35] {
+            diagnostics.record_heartbeat_sent(start);
+            diagnostics.record_heartbeat(Duration::from_millis(millis));
+        }
+        // The last five, so one slow reply does not set the figure.
+        let health = diagnostics.link_health(start, unstable_after);
+        assert_eq!(health.round_trip, Some(Duration::from_millis(45)));
+        assert!(!health.unstable);
+
+        diagnostics.record_heartbeat_sent(start);
+        let waiting = diagnostics.link_health(start + Duration::from_secs(3), unstable_after);
+        assert!(!waiting.unstable);
+        let late = diagnostics.link_health(start + Duration::from_secs(7), unstable_after);
+        assert!(late.unstable);
+        assert_eq!(late.round_trip, Some(Duration::from_millis(45)));
+
+        diagnostics.clear_link_health();
+        assert_eq!(
+            diagnostics.link_health(start + Duration::from_secs(7), unstable_after),
+            LinkHealth::default()
+        );
     }
 }

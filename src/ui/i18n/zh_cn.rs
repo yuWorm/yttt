@@ -895,6 +895,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pPathConnecting => "连接中",
         UiTextKey::P2pPathDirect => "直连",
         UiTextKey::P2pPathRelay => "经 relay",
+        UiTextKey::LinkUnstable => "连接不稳定",
         UiTextKey::PairedHostTitle => "配对 Host",
         UiTextKey::PairedHostEditTitle => "编辑配对的 Host",
         UiTextKey::PairedHostDescription => {
@@ -1587,6 +1588,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::HostOutageReason => "原因：{reason}",
         UiTextKey::HostOutageRetry => "立即重连",
         UiTextKey::HostOutageCloseWindow => "关闭窗口",
+        UiTextKey::HostReconnectedTitle => "已重新连接 {host}",
+        UiTextKey::HostReconnectedDetail => "断开了 {elapsed}",
         UiTextKey::WorkspaceRestoreFailedBody => "无法恢复已保存的工作区状态。",
         UiTextKey::WorkspaceRestoreFailedTitle => "工作区恢复失败",
         UiTextKey::WorkspaceUnsavedTitle => "更改尚未保存",

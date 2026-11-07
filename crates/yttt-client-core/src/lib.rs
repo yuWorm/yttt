@@ -19,6 +19,7 @@ use std::{
 use diagnostics::ClientPipelineDiagnostics;
 pub use diagnostics::{
     ClientLatencyDiagnosticsSnapshot, ClientPipelineDiagnosticsSnapshot, DisconnectRecord,
+    LinkHealth,
 };
 pub use mirror::{MirrorApply, TerminalMirror, TerminalMirrorMetadata};
 use parking_lot::{Mutex, RwLock};
@@ -45,7 +46,6 @@ const EVENT_CAPACITY: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const INITIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// How many liveness timeouts a Pong may lag while other messages arrive.
 const HEARTBEAT_UNANSWERED_FACTOR: u32 = 4;
 
@@ -223,8 +223,8 @@ struct ClientSessionContext {
     diagnostics: Arc<ClientPipelineDiagnostics>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
     shutdown: watch::Receiver<bool>,
-    /// How long the session may stay silent with a heartbeat unanswered.
-    liveness_timeout: Duration,
+    /// The connector's heartbeat and liveness timing.
+    link: LinkProfile,
 }
 
 impl ClientCore {
@@ -300,6 +300,13 @@ impl ClientCore {
             .map_err(|_| ClientCoreError::SupervisorStopped)?;
         initial.map_err(ClientCoreError::Connection)?;
         Ok(Self { inner })
+    }
+
+    /// Latency and steadiness of the session's link, from its heartbeats.
+    pub fn link_health(&self) -> LinkHealth {
+        self.inner
+            .diagnostics
+            .link_health(std::time::Instant::now(), self.inner.link.unstable_after)
     }
 
     /// Reconnects at once when the session is down: skips the backoff, and
@@ -658,7 +665,7 @@ async fn run_supervisor(
             diagnostics: diagnostics.clone(),
             visibility: visibility.clone(),
             shutdown: shutdown.clone(),
-            liveness_timeout: connector.link_profile().liveness_timeout,
+            link: connector.link_profile(),
         };
         let disconnected = connected_session(
             connection,
@@ -987,8 +994,8 @@ async fn connected_session(
     let mut heartbeat = None::<(u64, tokio::time::Instant)>;
     let mut last_inbound = tokio::time::Instant::now();
     let mut heartbeat_tick = tokio::time::interval_at(
-        tokio::time::Instant::now() + HEARTBEAT_INTERVAL,
-        HEARTBEAT_INTERVAL,
+        tokio::time::Instant::now() + context.link.heartbeat_interval,
+        context.link.heartbeat_interval,
     );
     heartbeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut cleanup = tokio::time::interval(Duration::from_secs(1));
@@ -1201,11 +1208,11 @@ async fn connected_session(
             _ = heartbeat_tick.tick() => {
                 if let Some((_, sent_at)) = heartbeat {
                     let now = tokio::time::Instant::now();
-                    let silent = now.saturating_duration_since(last_inbound.max(sent_at)) >= context.liveness_timeout;
+                    let silent = now.saturating_duration_since(last_inbound.max(sent_at)) >= context.link.liveness_timeout;
                     // A Host that streams but never answers is not serving
                     // requests either.
                     let unanswered = now.saturating_duration_since(sent_at)
-                        >= context.liveness_timeout * HEARTBEAT_UNANSWERED_FACTOR;
+                        >= context.link.liveness_timeout * HEARTBEAT_UNANSWERED_FACTOR;
                     if silent || unanswered {
                         break Some("Host heartbeat timed out".into());
                     }
@@ -1220,6 +1227,7 @@ async fn connected_session(
                     break Some(error.to_string());
                 }
                 heartbeat = Some((request_id, tokio::time::Instant::now()));
+                context.diagnostics.record_heartbeat_sent(std::time::Instant::now());
             }
             _ = cleanup.tick() => {
                 pending.retain(|_, request| !matches!(request, PendingRequest::User { reply, .. } if reply.is_closed()));
@@ -1241,6 +1249,7 @@ async fn connected_session(
     for (_, reply) in interactive_pending {
         let _ = reply.send(Err(ClientCoreError::NotConnected));
     }
+    context.diagnostics.clear_link_health();
     disconnected
 }
 

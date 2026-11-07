@@ -695,9 +695,14 @@ Disconnected -> Connecting -> Ready
   提供“立即重连”（`retry_now`，停止重试后不显示）与“关闭窗口”；恢复后遮罩消失。
 - 底层连接建立的期限由 connector 的 `LinkProfile` 决定：本机 30 s，远程（SSH 隧道、TLS）90 s；TLS connector 内部另以
   TCP 建连（含解析，多个地址错开 250 ms 并行尝试）15 s、TLS 握手 10 s 分别计时；应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
-- 心跳 Ping 每 5 s 以交互优先级发送。有心跳未回复时，连接自最近一次入站消息（或 Ping 发出）起静默超过
-  `LinkProfile::liveness_timeout`（本机 15 s，远程 45 s）即触发重连：慢链路上 Pong 排在已发出的数据之后，
-  持续到达的其他消息同样证明链路存活。Pong 迟到超过 4 倍期限时仍断开，即使有其他消息到达。
+- 心跳 Ping 以交互优先级每 `LinkProfile::heartbeat_interval`（本机 5 s，远程 2 s）发送一次。有心跳未回复时，
+  连接自最近一次入站消息（或 Ping 发出）起静默超过 `LinkProfile::liveness_timeout`（本机 15 s，远程 20 s）
+  即触发重连：慢链路上 Pong 排在已发出的数据之后，持续到达的其他消息同样证明链路存活。Pong 迟到超过 4 倍
+  期限时仍断开，即使有其他消息到达。远程期限原为 45 s，Agent snapshot 合并（§5.3）后 Pong 不再排在无界积压之后，
+  收紧到 20 s。
+- `ClientCore::link_health` 给出最近 5 次心跳往返的中位数，以及心跳是否已等待超过 `unstable_after`（6 s）。
+  远程窗口的状态栏在 Host 名或 P2P 路径后显示延迟（≥ 300 ms 为警告色）或“连接不稳定”，会话仍保持；
+  断开后的遮罩消失时提示已重新连接与断开时长。
 - SSH 隧道重连按失败类型走最少步骤：开通道超时或会话断开即重建 SSH，不在僵死会话上重试；会话正常但远端
   socket 拒绝通道时才运行 `yttt-server ensure` 并重试一次。streamlocal 开通道期限 8 s。
 - 只有一个重连状态机：任何读写错误、心跳超时、队列溢出或终端 sequence gap 都断开整条 session 连接后重连。

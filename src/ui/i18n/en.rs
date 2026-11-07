@@ -1091,6 +1091,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pPathConnecting => "connecting",
         UiTextKey::P2pPathDirect => "direct",
         UiTextKey::P2pPathRelay => "via relay",
+        UiTextKey::LinkUnstable => "unstable connection",
         UiTextKey::PairedHostTitle => "Pair with a Host",
         UiTextKey::PairedHostEditTitle => "Edit paired Host",
         UiTextKey::PairedHostDescription => {
@@ -1955,6 +1956,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::HostOutageReason => "Reason: {reason}",
         UiTextKey::HostOutageRetry => "Reconnect now",
         UiTextKey::HostOutageCloseWindow => "Close window",
+        UiTextKey::HostReconnectedTitle => "Reconnected to {host}",
+        UiTextKey::HostReconnectedDetail => "Down for {elapsed}",
         UiTextKey::WorkspaceRestoreFailedBody => "The saved workspace state could not be restored.",
         UiTextKey::WorkspaceRestoreFailedTitle => "Workspace restore failed",
         UiTextKey::WorkspaceUnsavedTitle => "Changes have not been saved",

@@ -483,6 +483,20 @@ impl DesktopHostRuntime {
             .map(|record| (record.at_unix_millis, record.reason))
     }
 
+    /// How long the session was down before its latest recovery.
+    pub fn last_recovery(&self) -> Option<std::time::Duration> {
+        self.client
+            .diagnostics()
+            .recent_disconnects
+            .pop()?
+            .recovered_after
+    }
+
+    /// Latency and steadiness of a remote session's link while it is up.
+    pub fn link_health(&self) -> Option<yttt_client_core::LinkHealth> {
+        (self.is_remote() && self.is_connected()).then(|| self.client.link_health())
+    }
+
     /// Reconnects now instead of waiting for the next attempt.
     pub fn retry_now(&self) {
         self.client.retry_now();

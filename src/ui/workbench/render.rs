@@ -1012,7 +1012,7 @@ fn bars_toml_editor_window_content(
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     root.sync_bar_state_duration_refresh(cx);
-    root.sync_bar_p2p_path_refresh(cx);
+    root.sync_bar_link_refresh(cx);
     let appearance = root.theme_runtime();
     let theme = appearance.ui;
     let style = appearance.style;

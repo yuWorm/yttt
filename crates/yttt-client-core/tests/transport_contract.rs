@@ -890,3 +890,96 @@ async fn retrying_now_abandons_a_stuck_reconnect() {
     .expect("retrying did not abandon the stuck connect");
     client.shutdown().await;
 }
+
+/// Heartbeats measure the link's latency, and a reply that is late marks it
+/// unstable while the session stays up.
+#[tokio::test(flavor = "multi_thread")]
+async fn heartbeats_measure_latency_and_flag_a_stalled_link() {
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    #[derive(Clone)]
+    struct Stallable {
+        inner: yttt_transport::MemoryConnector,
+        /// While true, nothing the Host sends reaches the Client.
+        stalled: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl TransportConnector for Stallable {
+        fn connect(
+            &self,
+        ) -> yttt_transport::BoxFuture<
+            '_,
+            Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+        > {
+            Box::pin(async move {
+                let stream = self.inner.connect().await?;
+                let (client, peer) = tokio::io::duplex(64 * 1024);
+                let (mut host_read, mut host_write) = tokio::io::split(stream);
+                let (mut peer_read, mut peer_write) = tokio::io::split(peer);
+                tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut peer_read, &mut host_write).await;
+                });
+                let mut stalled = self.stalled.subscribe();
+                tokio::spawn(async move {
+                    let mut buffer = vec![0; 16 * 1024];
+                    while let Ok(read) = host_read.read(&mut buffer).await {
+                        if read == 0
+                            || stalled.wait_for(|stalled| !*stalled).await.is_err()
+                            || peer_write.write_all(&buffer[..read]).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+                Ok(Box::new(client) as yttt_transport::TransportStream)
+            })
+        }
+
+        fn link_profile(&self) -> yttt_transport::LinkProfile {
+            yttt_transport::LinkProfile {
+                heartbeat_interval: Duration::from_millis(100),
+                unstable_after: Duration::from_millis(300),
+                ..yttt_transport::LinkProfile::LOCAL
+            }
+        }
+    }
+
+    let (listener, connector) = memory_pair();
+    let (stalled, _) = tokio::sync::watch::channel(false);
+    let host = start_host(
+        listener,
+        Stallable {
+            inner: connector,
+            stalled: stalled.clone(),
+        },
+    )
+    .await;
+    let client = Arc::new(connect_client(&host, "link-health-client").await);
+    let wait_for = |what: &'static str, done: fn(&yttt_client_core::LinkHealth) -> bool| {
+        let client = client.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !done(&client.link_health()) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{what}: {:?}", client.link_health()));
+        }
+    };
+
+    wait_for("no latency was measured", |health| {
+        health.round_trip.is_some() && !health.unstable
+    })
+    .await;
+    stalled.send_replace(true);
+    wait_for("a stalled link was not flagged", |health| health.unstable).await;
+    assert!(matches!(client.state(), ConnectionState::Ready { .. }));
+    stalled.send_replace(false);
+    wait_for("the recovered link stayed flagged", |health| {
+        !health.unstable
+    })
+    .await;
+    client.shutdown().await;
+}

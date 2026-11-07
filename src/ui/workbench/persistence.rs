@@ -212,7 +212,38 @@ impl WorkbenchView {
         if shown || self.workspace_persistence.outage_shown {
             cx.notify();
         }
+        if self.workspace_persistence.outage_shown && !shown {
+            self.announce_host_recovery();
+        }
         self.workspace_persistence.outage_shown = shown;
+    }
+
+    /// Says the session is back and how long it was down, once the outage
+    /// notice goes away.
+    fn announce_host_recovery(&mut self) {
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return;
+        };
+        let Some(down_for) = runtime.last_recovery().filter(|_| runtime.is_connected()) else {
+            return;
+        };
+        let host = runtime
+            .remote_label()
+            .and_then(|label| label.rsplit(" · ").next())
+            .unwrap_or(self.ui_text.get(UiTextKey::TrayHost))
+            .to_string();
+        let elapsed = super::bars::format_state_duration(
+            u64::try_from(down_for.as_millis()).unwrap_or(u64::MAX),
+            &self.ui_text,
+        );
+        self.queue_status_notification(
+            self.ui_text
+                .get(UiTextKey::HostReconnectedTitle)
+                .replace("{host}", &host),
+            self.ui_text
+                .get(UiTextKey::HostReconnectedDetail)
+                .replace("{elapsed}", &elapsed),
+        );
     }
 
     pub(super) fn workspace_persistence_error(&self) -> Option<&str> {
@@ -419,6 +450,7 @@ impl WorkbenchView {
                     .update_in(cx, |root, window, cx| {
                         root.tick_workspace_persistence(window, cx);
                         root.refresh_host_outage(cx);
+                        root.flush_pending_status_notifications(window, cx);
                         root.finish_workspace_switch(window, cx);
                     })
                     .is_err()

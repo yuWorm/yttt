@@ -21,6 +21,11 @@ pub struct LinkProfile {
     pub connect_timeout: Duration,
     /// How long a connection may stay silent while a heartbeat is unanswered.
     pub liveness_timeout: Duration,
+    /// How often the Client sends a heartbeat, which also measures latency.
+    pub heartbeat_interval: Duration,
+    /// How long a heartbeat may wait for its reply before the link is shown
+    /// as unstable; the session stays up until `liveness_timeout`.
+    pub unstable_after: Duration,
 }
 
 impl LinkProfile {
@@ -28,12 +33,18 @@ impl LinkProfile {
     pub const LOCAL: Self = Self {
         connect_timeout: Duration::from_secs(30),
         liveness_timeout: Duration::from_secs(15),
+        heartbeat_interval: Duration::from_secs(5),
+        unstable_after: Duration::from_secs(6),
     };
-    /// A network link (SSH, TLS), whose latency and buffering vary and whose
-    /// reconnect may rebuild a session.
+    /// A network link (SSH, TLS, P2P), whose latency and buffering vary and
+    /// whose reconnect may rebuild a session. Any inbound message resets the
+    /// silence, so a slow link that keeps delivering stays up; 20 s of nothing
+    /// at all means the link is gone.
     pub const REMOTE: Self = Self {
         connect_timeout: Duration::from_secs(90),
-        liveness_timeout: Duration::from_secs(45),
+        liveness_timeout: Duration::from_secs(20),
+        heartbeat_interval: Duration::from_secs(2),
+        unstable_after: Duration::from_secs(6),
     };
 }
 

@@ -28,6 +28,9 @@ use crate::{
     },
 };
 
+/// A heartbeat round trip at least this long shows the latency as a warning.
+const SLOW_LINK_ROUND_TRIP: Duration = Duration::from_millis(300);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum BarTone {
     #[default]
@@ -458,34 +461,7 @@ impl WorkbenchView {
             }
             ProjectLocation::Local { .. } => None,
         });
-        // A window onto a Host paired over P2P shows how its session runs.
-        let ssh = ssh.or_else(|| {
-            let path = crate::remote_host::p2p_path()?;
-            let (key, tone) = match path {
-                crate::remote_host::P2pPath::Connecting => (
-                    crate::ui::i18n::UiTextKey::P2pPathConnecting,
-                    BarTone::Warning,
-                ),
-                crate::remote_host::P2pPath::Direct => {
-                    (crate::ui::i18n::UiTextKey::P2pPathDirect, BarTone::Success)
-                }
-                crate::remote_host::P2pPath::Relay => {
-                    (crate::ui::i18n::UiTextKey::P2pPathRelay, BarTone::Muted)
-                }
-            };
-            let label = self
-                .terminal
-                .host_runtime
-                .as_ref()
-                .and_then(|runtime| runtime.remote_label())
-                .unwrap_or("P2P")
-                .to_string();
-            Some(SshBarInfo {
-                text: format!("P2P · {}", self.ui_text.get(key)),
-                tooltip: label,
-                tone,
-            })
-        });
+        let ssh = ssh.or_else(|| self.remote_link_bar_info());
 
         let active_document = self.active_editor_document();
         let editor = active_document.as_ref().map(|document| {
@@ -655,21 +631,76 @@ impl WorkbenchView {
         }));
     }
 
-    /// Redraws the bar when this window's P2P session switches between a
-    /// direct path and the relay, which hole punching does after connecting.
-    pub(super) fn sync_bar_p2p_path_refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(shown) = crate::remote_host::p2p_path() else {
+    /// How a remote window's session runs: the P2P path, if any, and the
+    /// latency its heartbeats measure, or that replies are late.
+    fn remote_link_bar_info(&self) -> Option<SshBarInfo> {
+        let runtime = self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .filter(|runtime| runtime.is_remote())?;
+        let label = runtime.remote_label().unwrap_or("Host").to_string();
+        let (mut text, mut tone) = match crate::remote_host::p2p_path() {
+            Some(path) => {
+                let (key, tone) = match path {
+                    crate::remote_host::P2pPath::Connecting => {
+                        (UiTextKey::P2pPathConnecting, BarTone::Warning)
+                    }
+                    crate::remote_host::P2pPath::Direct => {
+                        (UiTextKey::P2pPathDirect, BarTone::Success)
+                    }
+                    crate::remote_host::P2pPath::Relay => (UiTextKey::P2pPathRelay, BarTone::Muted),
+                };
+                (format!("P2P · {}", self.ui_text.get(key)), tone)
+            }
+            None => (
+                label.rsplit(" · ").next().unwrap_or(&label).to_string(),
+                BarTone::Muted,
+            ),
+        };
+        if let Some(health) = runtime.link_health() {
+            if health.unstable {
+                text = format!("{text} · {}", self.ui_text.get(UiTextKey::LinkUnstable));
+                tone = BarTone::Warning;
+            } else if let Some(round_trip) = health.round_trip {
+                text = format!("{text} · {} ms", round_trip.as_millis());
+                if round_trip >= SLOW_LINK_ROUND_TRIP {
+                    tone = BarTone::Warning;
+                }
+            }
+        }
+        Some(SshBarInfo {
+            text,
+            tooltip: label,
+            tone,
+        })
+    }
+
+    /// Redraws the bar when the remote link it shows changes: the P2P path,
+    /// which hole punching upgrades after connecting, or the latency.
+    pub(super) fn sync_bar_link_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(shown) = self.remote_link_bar_info() else {
             return;
         };
-        if self.bar_p2p_path_task.is_some() {
+        if self.bar_link_task.is_some() {
             return;
         }
-        self.bar_p2p_path_task = Some(cx.spawn(async move |this, cx| {
-            while crate::remote_host::p2p_path() == Some(shown) {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
+        let shown = (shown.text, shown.tone);
+        self.bar_link_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let unchanged = this
+                    .update(cx, |view, _| {
+                        view.remote_link_bar_info()
+                            .is_some_and(|info| (info.text, info.tone) == shown)
+                    })
+                    .unwrap_or(false);
+                if !unchanged {
+                    break;
+                }
             }
             let _ = this.update(cx, |view, cx| {
-                view.bar_p2p_path_task = None;
+                view.bar_link_task = None;
                 cx.notify();
             });
         }));
