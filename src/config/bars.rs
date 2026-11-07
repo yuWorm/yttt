@@ -223,6 +223,8 @@ impl Default for StatusBarSettings {
                     ShellBarModule::Space(2),
                     ShellBarModule::EditorDiagnostics,
                     ShellBarModule::TerminalExit,
+                    // A remote window's link: SSH, P2P path, latency.
+                    ShellBarModule::Ssh,
                 ],
                 modules: BTreeMap::new(),
                 legacy_left: false,
