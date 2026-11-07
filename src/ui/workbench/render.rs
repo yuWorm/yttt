@@ -480,6 +480,24 @@ impl Render for WorkbenchView {
         if !self.ssh.pending_host_keys.is_empty() && !self.ssh.manager_open {
             root = root.children(ssh_host_key_overlay(self, cx));
         }
+        // Last, so it covers everything the lost session made stale.
+        if let Some(outage) = self.visible_host_outage() {
+            let host = self
+                .terminal
+                .host_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.remote_label())
+                .and_then(|label| label.rsplit(" · ").next())
+                .unwrap_or(self.ui_text.get(UiTextKey::TrayHost))
+                .to_string();
+            root = root.child(host_outage_dialog(
+                cx,
+                &self.ui_text,
+                appearance.ui,
+                &host,
+                &outage,
+            ));
+        }
 
         if self.onboarding.is_none()
             && self.should_auto_focus_workspace()

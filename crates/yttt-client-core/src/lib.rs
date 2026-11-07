@@ -24,7 +24,7 @@ pub use mirror::{MirrorApply, TerminalMirror, TerminalMirrorMetadata};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
     io::{ReadHalf, split},
-    sync::{broadcast, mpsc, oneshot, watch},
+    sync::{Notify, broadcast, mpsc, oneshot, watch},
 };
 use yttt_core::model::{host_workspace::HostWorkspaceState, ids::TerminalSessionId};
 use yttt_protocol::{
@@ -147,6 +147,8 @@ struct ClientCoreInner {
     workspace_layouts: WorkspaceLayouts,
     next_request_id: Arc<AtomicU64>,
     shutdown: watch::Sender<bool>,
+    /// Wakes a reconnect that is backing off or stuck connecting.
+    retry: Arc<Notify>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     client_id: yttt_core::model::ids::ClientInstanceId,
     visibility_scopes: Mutex<VisibilityScopes>,
@@ -241,6 +243,7 @@ impl ClientCore {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Connecting);
         let terminal_state = Arc::new(RwLock::new(TerminalState::default()));
         let (shutdown, _) = watch::channel(false);
+        let retry = Arc::new(Notify::new());
         let host_epoch = Arc::new(RwLock::new(None));
         let catalog = Arc::new(RwLock::new(None));
         let agent_snapshots = Arc::new(RwLock::new(HashMap::new()));
@@ -268,6 +271,7 @@ impl ClientCore {
             next_request_id.clone(),
             diagnostics.clone(),
             shutdown.clone(),
+            retry.clone(),
             initial_tx,
         ));
         let inner = Arc::new(ClientCoreInner {
@@ -282,6 +286,7 @@ impl ClientCore {
             project_token_usage,
             workspace_layouts,
             shutdown,
+            retry,
             diagnostics,
             client_id: identity.client_instance_id.clone(),
             visibility_scopes: Mutex::default(),
@@ -295,6 +300,13 @@ impl ClientCore {
             .map_err(|_| ClientCoreError::SupervisorStopped)?;
         initial.map_err(ClientCoreError::Connection)?;
         Ok(Self { inner })
+    }
+
+    /// Reconnects at once when the session is down: skips the backoff, and
+    /// abandons a connect attempt still in progress, which a dead path can
+    /// otherwise hold until the connect deadline. Does nothing while ready.
+    pub fn retry_now(&self) {
+        self.inner.retry.notify_waiters();
     }
 
     pub fn state(&self) -> ConnectionState {
@@ -565,6 +577,7 @@ async fn run_supervisor(
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     shutdown_tx: watch::Sender<bool>,
+    retry: Arc<Notify>,
     initial: oneshot::Sender<Result<(), String>>,
 ) {
     let _shutdown_guard = ShutdownOnDrop(shutdown_tx.clone());
@@ -683,6 +696,7 @@ async fn run_supervisor(
         let delay = retry_delay(attempt, &identity);
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
+            () = retry.notified() => {}
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
                     set_state(&state, &events, ConnectionState::Disconnected);
@@ -695,6 +709,8 @@ async fn run_supervisor(
             diagnostics.record_connection_attempt();
             let result = tokio::select! {
                 result = establish_session(&connector, &identity, &token) => result,
+                // A user retry abandons this attempt for a fresh one.
+                () = retry.notified() => continue,
                 _ = shutdown.wait_for(|stopped| *stopped) => {
                     set_state(&state, &events, ConnectionState::Disconnected);
                     return;
@@ -727,6 +743,7 @@ async fn run_supervisor(
                     let delay = retry_delay(attempt, &identity);
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {}
+                        () = retry.notified() => {}
                         changed = shutdown.changed() => {
                             if changed.is_err() || *shutdown.borrow() {
                                 set_state(&state, &events, ConnectionState::Disconnected);

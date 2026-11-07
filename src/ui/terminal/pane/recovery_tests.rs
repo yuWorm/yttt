@@ -84,6 +84,13 @@ impl RecoveryHost {
         }
     }
 
+    /// Stops the Host, as if its machine went away; returns the root so
+    /// Clients can keep their files.
+    pub(crate) fn stop(self) -> tempfile::TempDir {
+        drop(self._runtime);
+        self.root
+    }
+
     pub(crate) fn client(&self, id: &str) -> Arc<DesktopHostRuntime> {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let connector =

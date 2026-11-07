@@ -1948,6 +1948,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::WorkspaceRestoreLoading => "Restoring workspace…",
         UiTextKey::WorkspaceRestoreRetrying => "Retrying automatically.",
+        UiTextKey::HostOutageTitle => "Connection to {host} lost",
+        UiTextKey::HostOutageReconnecting => {
+            "Reconnecting (attempt {attempt}) · down for {elapsed}"
+        }
+        UiTextKey::HostOutageGaveUp => "Cannot reconnect automatically · down for {elapsed}",
+        UiTextKey::HostOutageReason => "Reason: {reason}",
+        UiTextKey::HostOutageRetry => "Reconnect now",
+        UiTextKey::HostOutageCloseWindow => "Close window",
         UiTextKey::WorkspaceRestoreFailedBody => "The saved workspace state could not be restored.",
         UiTextKey::WorkspaceRestoreFailedTitle => "Workspace restore failed",
         UiTextKey::WorkspaceUnsavedTitle => "Changes have not been saved",

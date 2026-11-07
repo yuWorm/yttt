@@ -1363,3 +1363,79 @@ pub(super) fn project_empty_terminal_state(
             })),
         )
 }
+
+/// Covers a remote window whose Host session is down: what happened, and the
+/// two things the user can do about it.
+pub(super) fn host_outage_dialog(
+    cx: &mut Context<WorkbenchView>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+    host: &str,
+    outage: &crate::host_runtime::HostOutage,
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
+    let elapsed = super::bars::format_state_duration(
+        super::bars::current_unix_millis().saturating_sub(outage.since_unix_millis),
+        ui_text,
+    );
+    let progress = match outage.attempt {
+        Some(attempt) => ui_text
+            .get(UiTextKey::HostOutageReconnecting)
+            .replace("{attempt}", &attempt.to_string()),
+        None => ui_text.get(UiTextKey::HostOutageGaveUp).to_string(),
+    }
+    .replace("{elapsed}", &elapsed);
+    let retry = outage.attempt.is_some().then(|| {
+        yttt_dialog_button(
+            cx,
+            "host-outage-retry",
+            ui_text.get(UiTextKey::HostOutageRetry),
+            YtttButtonVariant::Primary,
+            theme,
+            cx.listener(|this, _, _window, _cx| {
+                if let Some(runtime) = &this.terminal.host_runtime {
+                    runtime.retry_now();
+                }
+            }),
+        )
+    });
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .debug_selector(|| "host-outage-dialog".into())
+            .gap(ui_style.spacing.md)
+            .child(
+                div().text_lg().child(
+                    ui_text
+                        .get(UiTextKey::HostOutageTitle)
+                        .replace("{host}", host),
+                ),
+            )
+            .child(div().text_sm().child(progress))
+            .child(
+                div().text_xs().text_color(dialog.hint).child(
+                    ui_text
+                        .get(UiTextKey::HostOutageReason)
+                        .replace("{reason}", &outage.reason),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(ui_style.spacing.md)
+                    .children(retry)
+                    .child(yttt_dialog_button(
+                        cx,
+                        "host-outage-close-window",
+                        ui_text.get(UiTextKey::HostOutageCloseWindow),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        cx.listener(|_this, _, window, _cx| window.remove_window()),
+                    )),
+            ),
+        YtttDialogPlacement::Center,
+        theme,
+        ui_style,
+    )
+}

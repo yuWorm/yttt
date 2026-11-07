@@ -1653,7 +1653,7 @@ fn terminal_exit_reason_tone(reason: &yttt_terminal::ExitReason) -> BarTone {
     }
 }
 
-fn current_unix_millis() -> u64 {
+pub(super) fn current_unix_millis() -> u64 {
     u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1663,7 +1663,7 @@ fn current_unix_millis() -> u64 {
     .unwrap_or(u64::MAX)
 }
 
-fn format_state_duration(elapsed_millis: u64, text: &UiText) -> String {
+pub(super) fn format_state_duration(elapsed_millis: u64, text: &UiText) -> String {
     let seconds = elapsed_millis / 1_000;
     if seconds < 60 {
         return text

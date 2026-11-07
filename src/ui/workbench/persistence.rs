@@ -46,6 +46,9 @@ use crate::{
 use super::*;
 
 const WORKSPACE_PERSISTENCE_INTERVAL: Duration = Duration::from_millis(500);
+/// How long a remote session is down before the window says so, so a quick
+/// reconnect does not flash the notice.
+const HOST_OUTAGE_NOTICE_DELAY_MILLIS: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum WorkspacePersistenceMode {
@@ -82,6 +85,8 @@ pub(super) struct WorkspacePersistenceState {
     close_prompt_open: bool,
     closing: bool,
     last_error: Option<String>,
+    /// The window shows that its remote Host session is down.
+    outage_shown: bool,
 }
 
 /// A workspace as the Host returned it, with the Agent states of its panes.
@@ -130,6 +135,23 @@ impl WorkbenchView {
 
     pub(super) fn workspace_restore_failed(&self) -> bool {
         self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed
+    }
+
+    /// Why the remote Host session is down, once it has been long enough to say.
+    pub(super) fn visible_host_outage(&self) -> Option<crate::host_runtime::HostOutage> {
+        let outage = self.terminal.host_runtime.as_ref()?.outage()?;
+        let down_for = super::bars::current_unix_millis().saturating_sub(outage.since_unix_millis);
+        (outage.attempt.is_none() || down_for >= HOST_OUTAGE_NOTICE_DELAY_MILLIS).then_some(outage)
+    }
+
+    /// Redraws while the outage notice shows, to count its time, and once
+    /// more when it goes away.
+    fn refresh_host_outage(&mut self, cx: &mut Context<Self>) {
+        let shown = self.visible_host_outage().is_some();
+        if shown || self.workspace_persistence.outage_shown {
+            cx.notify();
+        }
+        self.workspace_persistence.outage_shown = shown;
     }
 
     pub(super) fn workspace_persistence_error(&self) -> Option<&str> {
@@ -335,6 +357,7 @@ impl WorkbenchView {
                 if this
                     .update_in(cx, |root, window, cx| {
                         root.tick_workspace_persistence(window, cx);
+                        root.refresh_host_outage(cx);
                     })
                     .is_err()
                 {

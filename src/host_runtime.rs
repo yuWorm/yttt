@@ -3,7 +3,7 @@ use parking_lot::Mutex;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -110,7 +110,21 @@ enum DesktopHostLifecycle {
         token: yttt_transport::Credential,
         environment: yttt_protocol::workspace::WorkspaceEnvironment,
         label: String,
+        /// The reconnect attempt in progress; 0 while connected.
+        reconnect_attempt: Arc<AtomicU32>,
     },
+}
+
+/// Why a remote Host session is down, for the window to say so.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostOutage {
+    /// What ended the session.
+    pub reason: String,
+    /// When the session ended, in Unix milliseconds.
+    pub since_unix_millis: u64,
+    /// The reconnect attempt in progress; `None` once the Client gave up,
+    /// as for a revoked device or a different Host.
+    pub attempt: Option<u32>,
 }
 
 async fn forward_client_events(
@@ -329,6 +343,23 @@ impl DesktopHostRuntime {
             }
         };
         let coordinator = crate::session_coordinator::SessionCoordinator::new(index);
+        // `Connecting` does not carry the attempt, so remember the last one.
+        let reconnect_attempt = Arc::new(AtomicU32::new(0));
+        let mut state = client.subscribe_state();
+        let attempt = reconnect_attempt.clone();
+        runtime.spawn(async move {
+            while state.changed().await.is_ok() {
+                match &*state.borrow() {
+                    ConnectionState::Reconnecting {
+                        attempt: current, ..
+                    } => {
+                        attempt.store(*current, Ordering::Relaxed);
+                    }
+                    ConnectionState::Ready { .. } => attempt.store(0, Ordering::Relaxed),
+                    _ => {}
+                }
+            }
+        });
         Ok(Arc::new(Self {
             client,
             runtime,
@@ -338,6 +369,7 @@ impl DesktopHostRuntime {
                 token,
                 environment,
                 label,
+                reconnect_attempt,
             },
             next_terminal_request_id: AtomicU64::new(1),
             storage,
@@ -411,6 +443,49 @@ impl DesktopHostRuntime {
     /// Whether the Client is connected to the Host, so Host state can change.
     pub fn is_connected(&self) -> bool {
         matches!(self.state(), ConnectionState::Ready { .. })
+    }
+
+    /// Why this remote Host session is down, while it is.
+    pub fn outage(&self) -> Option<HostOutage> {
+        let DesktopHostLifecycle::Remote {
+            reconnect_attempt, ..
+        } = &self.lifecycle
+        else {
+            return None;
+        };
+        let attempt = match self.state() {
+            ConnectionState::Ready { .. } | ConnectionState::Disconnected => return None,
+            ConnectionState::HostLost { message } => {
+                return Some(HostOutage {
+                    reason: message,
+                    since_unix_millis: self.last_disconnect().map_or_else(now_millis, |at| at.0),
+                    attempt: None,
+                });
+            }
+            ConnectionState::Reconnecting { attempt, .. } => attempt,
+            ConnectionState::Connecting => reconnect_attempt.load(Ordering::Relaxed),
+        };
+        let (since_unix_millis, reason) = self.last_disconnect()?;
+        Some(HostOutage {
+            reason,
+            since_unix_millis,
+            attempt: Some(attempt.max(1)),
+        })
+    }
+
+    /// When and why the session last ended, if it has not recovered since.
+    fn last_disconnect(&self) -> Option<(u64, String)> {
+        self.client
+            .diagnostics()
+            .recent_disconnects
+            .pop()
+            .filter(|record| record.recovered_after.is_none())
+            .map(|record| (record.at_unix_millis, record.reason))
+    }
+
+    /// Reconnects now instead of waiting for the next attempt.
+    pub fn retry_now(&self) {
+        self.client.retry_now();
     }
 
     pub fn claim_workspace_view(
@@ -908,6 +983,12 @@ pub enum DesktopHostRuntimeError {
     Client(#[from] ClientCoreError),
 }
 
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,6 +996,39 @@ mod tests {
         EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
     };
     use yttt_core::model::ids::ProfileId;
+
+    /// A remote window learns that its session is down, why, and that the
+    /// Client keeps trying; a session that is up reports nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_lost_remote_session_reports_its_outage() {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+
+        let host = RecoveryHost::start();
+        let remote = host.client("outage");
+        assert_eq!(remote.outage(), None);
+
+        let _root = host.stop();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let outage = loop {
+            if let Some(outage) = remote.outage() {
+                break outage;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lost session reported no outage: {:?}",
+                remote.state()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(
+            outage.attempt.is_some_and(|attempt| attempt >= 1),
+            "{outage:?}"
+        );
+        assert!(!outage.reason.is_empty());
+        assert!(outage.since_unix_millis <= now_millis());
+        remote.retry_now();
+    }
 
     #[tokio::test]
     async fn lag_recovers_a_quiet_agents_final_snapshot() {

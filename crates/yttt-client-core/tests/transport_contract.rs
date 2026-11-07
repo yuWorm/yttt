@@ -818,3 +818,75 @@ async fn permanent_reconnect_failure_stops_the_supervisor_without_retrying() {
     );
     client.shutdown().await;
 }
+
+/// A reconnect stuck on a dead path is abandoned when the user asks to retry,
+/// instead of waiting out the connect deadline.
+#[tokio::test(flavor = "multi_thread")]
+async fn retrying_now_abandons_a_stuck_reconnect() {
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct Cuttable {
+        inner: yttt_transport::MemoryConnector,
+        /// While true, live streams close and new connects never finish.
+        cut: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl TransportConnector for Cuttable {
+        fn connect(
+            &self,
+        ) -> yttt_transport::BoxFuture<
+            '_,
+            Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+        > {
+            Box::pin(async move {
+                if *self.cut.borrow() {
+                    std::future::pending::<()>().await;
+                }
+                let mut stream = self.inner.connect().await?;
+                let (client, mut peer) = tokio::io::duplex(64 * 1024);
+                let mut cut = self.cut.subscribe();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        _ = tokio::io::copy_bidirectional(&mut stream, &mut peer) => {}
+                        _ = cut.wait_for(|cut| *cut) => {}
+                    }
+                });
+                Ok(Box::new(client) as yttt_transport::TransportStream)
+            })
+        }
+    }
+
+    let (listener, connector) = memory_pair();
+    let (cut, _) = tokio::sync::watch::channel(false);
+    let host = start_host(
+        listener,
+        Cuttable {
+            inner: connector,
+            cut: cut.clone(),
+        },
+    )
+    .await;
+    let client = Arc::new(connect_client(&host, "retry-now-client").await);
+    let mut states = client.subscribe_state();
+
+    cut.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !matches!(&*states.borrow_and_update(), ConnectionState::Connecting) {
+            states.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the cut session never started reconnecting");
+    cut.send_replace(false);
+
+    client.retry_now();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !matches!(&*states.borrow_and_update(), ConnectionState::Ready { .. }) {
+            states.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("retrying did not abandon the stuck connect");
+    client.shutdown().await;
+}

@@ -679,6 +679,9 @@ Disconnected -> Connecting -> Ready
 恢复规则：
 
 - 临时 I/O、握手超时、AlreadyConnected、StaleHostEpoch 或 HostShuttingDown：保留 mirrors，使用带抖动的指数退避，初次重试 100–200 ms，上限 5 s。永久错误停止重试。
+- `ClientCore::retry_now` 跳过当前退避，并放弃仍在进行的连接尝试另起一次：失效路径上的尝试否则要等满连接期限。
+- 远程窗口在会话断开超过 1 s（或已停止重试）时以居中遮罩显示 Host 名、第几次重连与已断开时长、断开原因，
+  提供“立即重连”（`retry_now`，停止重试后不显示）与“关闭窗口”；恢复后遮罩消失。
 - 底层连接建立的期限由 connector 的 `LinkProfile` 决定：本机 30 s，远程（SSH 隧道、TLS）90 s；TLS connector 内部另以
   TCP 建连（含解析，多个地址错开 250 ms 并行尝试）15 s、TLS 握手 10 s 分别计时；应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
 - 心跳 Ping 每 5 s 以交互优先级发送。有心跳未回复时，连接自最近一次入站消息（或 Ping 发出）起静默超过
