@@ -200,7 +200,11 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
 
 1. 交互：输入、resize、scroll、心跳 Ping 及其 response；队列 1,024 项。
 2. 可靠：其余请求/响应、lease、exit、SSH、project、Agent snapshot、profile control 与 catalog
-   invalidation；全局 FIFO，上限 1,024 项 / 32 MiB。
+   invalidation；全局 FIFO，上限 1,024 项 / 32 MiB。只表达“当前状态”的事件按键合并：尚未开始写的
+   同键消息被新消息原位替换。键为工作区布局（每个工作区）、文档状态（每个文档）、Agent snapshot
+   （每个 agent 地址加 generation）与项目 token 用量（每个项目）。omp agent 的 snapshot 带完整
+   board，单个可达约 1 MB；不合并时，比 agent 更新慢的链路上可靠队列永远排不空，工作区响应排在其后。
+   generation 进入键，使同一 pane 的新一代 agent 不越过排在旧一代之后的 `AgentStateCleared`。
 3. 渲染：每个已附加终端一个渲染 lane，Host 只在 lane 空闲时放入一帧，其余在渲染槽中合并；
    lane 之间轮转。
 

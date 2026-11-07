@@ -132,6 +132,10 @@ impl WorkbenchView {
         self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed
     }
 
+    pub(super) fn workspace_persistence_error(&self) -> Option<&str> {
+        self.workspace_persistence.last_error.as_deref()
+    }
+
     pub(super) fn workspace_restore_failure_message(&self) -> Option<&str> {
         self.workspace_restore_failed()
             .then_some(self.workspace_persistence.last_error.as_deref())

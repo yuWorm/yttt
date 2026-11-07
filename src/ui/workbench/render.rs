@@ -102,12 +102,26 @@ impl Render for WorkbenchView {
         let command_center_active = self.command_center_is_active();
         self.terminal.rendered_terminals.clear();
         let body = if self.workspace_is_loading() {
+            // A failed attempt keeps loading and retries; say why it is slow.
+            let failure = self.workspace_persistence_error().map(|error| {
+                div()
+                    .text_sm()
+                    .text_color(appearance.ui.text_muted)
+                    .child(format!(
+                        "{error} {}",
+                        self.ui_text.get(UiTextKey::WorkspaceRestoreRetrying)
+                    ))
+            });
             div()
                 .flex()
                 .flex_1()
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .gap(appearance.style.spacing.md)
+                .px(appearance.style.spacing.xl)
                 .child(self.ui_text.get(UiTextKey::WorkspaceRestoreLoading))
+                .children(failure)
         } else if self.workspace_restore_failed() {
             let error = self
                 .workspace_restore_failure_message()

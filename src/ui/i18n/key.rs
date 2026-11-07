@@ -1408,6 +1408,7 @@ pub enum UiTextKey {
     DesktopStopFailed,
     DesktopStopFailedBody,
     WorkspaceRestoreLoading,
+    WorkspaceRestoreRetrying,
     WorkspaceRestoreFailedBody,
     WorkspaceRestoreFailedTitle,
     WorkspaceUnsavedTitle,

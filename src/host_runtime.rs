@@ -86,6 +86,8 @@ fn terminal_client_event_matches(event: &ClientEvent, session_id: &TerminalSessi
     }
 }
 const TERMINAL_UPDATE_QUEUE_CAPACITY: usize = 64;
+/// How much longer a blocking request waits than the Client's own deadline.
+const BLOCKING_REQUEST_MARGIN: Duration = Duration::from_secs(5);
 const TERMINAL_PANE_EVENT_QUEUE_CAPACITY: usize = 16;
 
 pub struct DesktopHostRuntime {
@@ -588,12 +590,9 @@ impl DesktopHostRuntime {
     }
 
     pub fn request_blocking_typed(&self, request: Request) -> Result<Response, ClientCoreError> {
-        let timeout = match &request {
-            Request::RemoteFile(_) | Request::RemoteCommand(_) | Request::Project(_) => {
-                Duration::from_secs(125)
-            }
-            _ => Duration::from_secs(15),
-        };
+        // The Client fails the request at its own deadline, which depends on
+        // the link; this wait only outlives that deadline.
+        let timeout = self.client.request_timeout(&request) + BLOCKING_REQUEST_MARGIN;
         self.request(request)
             .recv_timeout(timeout)
             .map_err(|error| match error {

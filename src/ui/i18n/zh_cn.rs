@@ -1581,6 +1581,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::DesktopStopFailed => "停止 Host 失败",
         UiTextKey::DesktopStopFailedBody => "桌面端仍保持连接。请检查 Host 状态后重试。",
         UiTextKey::WorkspaceRestoreLoading => "正在恢复工作区…",
+        UiTextKey::WorkspaceRestoreRetrying => "将自动重试。",
         UiTextKey::WorkspaceRestoreFailedBody => "无法恢复已保存的工作区状态。",
         UiTextKey::WorkspaceRestoreFailedTitle => "工作区恢复失败",
         UiTextKey::WorkspaceUnsavedTitle => "更改尚未保存",

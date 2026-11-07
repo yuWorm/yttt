@@ -1947,6 +1947,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "The desktop remains connected. Retry after checking Host status."
         }
         UiTextKey::WorkspaceRestoreLoading => "Restoring workspace…",
+        UiTextKey::WorkspaceRestoreRetrying => "Retrying automatically.",
         UiTextKey::WorkspaceRestoreFailedBody => "The saved workspace state could not be restored.",
         UiTextKey::WorkspaceRestoreFailedTitle => "Workspace restore failed",
         UiTextKey::WorkspaceUnsavedTitle => "Changes have not been saved",

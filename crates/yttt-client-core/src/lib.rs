@@ -526,7 +526,9 @@ impl ClientCore {
         }
     }
 
-    fn request_timeout(&self, request: &Request) -> Duration {
+    /// How long this Client waits for `request`'s response before failing it
+    /// with [`ClientCoreError::RequestTimeout`].
+    pub fn request_timeout(&self, request: &Request) -> Duration {
         request_timeout(request, self.inner.link)
     }
 }

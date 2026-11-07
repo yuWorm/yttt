@@ -65,6 +65,7 @@ use yttt_protocol::{
     LifecycleResponse, LifecycleResponseEnvelope, ProtocolFailure, ProtocolRange,
     RESOURCE_PROTOCOL_VERSION, Request, ResourceCatalog, Response, ServerEvent,
     TerminalTerminationResult,
+    agent::{AgentSnapshotUpdate, ProjectTokenUsage},
     terminal::{
         AttachTerminal, TerminalLeaseMode, TerminalSpawnSpec, TerminalViewportAnchor,
         TerminalViewportRead, TerminatedTerminal, TerminationMode,
@@ -1826,6 +1827,60 @@ fn send_host_state_event(
         .map_err(|_| ())
 }
 
+/// Queues an Agent snapshot in place of an unsent one of the same Agent, so a
+/// Client on a slow link holds at most the newest state of each Agent. The
+/// generation is part of the key: a later Agent in the same pane must not
+/// overtake the `AgentStateCleared` queued after its predecessor.
+fn send_agent_snapshot(
+    writer: &SessionWriter,
+    host_sequence: &AtomicU64,
+    update: AgentSnapshotUpdate,
+) -> Result<(), ()> {
+    let scope = &update.scope;
+    let key = format!(
+        "agent-snapshot:{}:{}:{}:{}",
+        scope.project_id, scope.tab_id, scope.pane_id, scope.generation
+    );
+    send_latest_state_event(
+        writer,
+        host_sequence,
+        &key,
+        ServerEvent::AgentSnapshot(Box::new(update)),
+    )
+}
+
+/// Queues a project's token usage in place of an unsent one of the same project.
+fn send_token_usage(
+    writer: &SessionWriter,
+    host_sequence: &AtomicU64,
+    summary: ProjectTokenUsage,
+) -> Result<(), ()> {
+    let key = format!("project-token-usage:{}", summary.project_id);
+    send_latest_state_event(
+        writer,
+        host_sequence,
+        &key,
+        ServerEvent::ProjectTokenUsage(summary),
+    )
+}
+
+fn send_latest_state_event(
+    writer: &SessionWriter,
+    host_sequence: &AtomicU64,
+    key: &str,
+    body: ServerEvent,
+) -> Result<(), ()> {
+    writer
+        .send_reliable_latest(
+            key,
+            &ControlMessage::Event(HostEvent {
+                host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
+                body,
+            }),
+        )
+        .map_err(|_| ())
+}
+
 /// Forwards Host state changes to one Session connection as reliable events.
 /// Terminal exits travel with their terminal's stream instead.
 async fn forward_state_events(
@@ -1844,14 +1899,10 @@ async fn forward_state_events(
     let mut config_changes = context.workspaces.subscribe_config_changes();
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
     for update in context.agent_hooks.snapshots_after(&[]) {
-        send_host_state_event(
-            &writer,
-            context,
-            ServerEvent::AgentSnapshot(Box::new(update)),
-        )?;
+        send_agent_snapshot(&writer, &context.host_sequence, update)?;
     }
     for summary in context.agent_hooks.project_token_usage() {
-        send_host_state_event(&writer, context, ServerEvent::ProjectTokenUsage(summary))?;
+        send_token_usage(&writer, &context.host_sequence, summary)?;
     }
     for change in context.projects.resync_changes() {
         send_host_state_event(&writer, context, ServerEvent::ProjectChanged(change))?;
@@ -1951,11 +2002,7 @@ async fn forward_state_events(
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
                 for update in updates {
-                    send_host_state_event(
-                        &writer,
-                        context,
-                        ServerEvent::AgentSnapshot(Box::new(update)),
-                    )?;
+                    send_agent_snapshot(&writer, &context.host_sequence, update)?;
                 }
             }
             event = token_usage_events.recv() => {
@@ -1967,11 +2014,7 @@ async fn forward_state_events(
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
                 for summary in summaries {
-                    send_host_state_event(
-                        &writer,
-                        context,
-                        ServerEvent::ProjectTokenUsage(summary),
-                    )?;
+                    send_token_usage(&writer, &context.host_sequence, summary)?;
                 }
             }
             changed = config_changes.changed() => {
@@ -3691,5 +3734,110 @@ mod session_idle_tests {
         let mut pipe = spawn_reader(None);
         tokio::time::sleep(Duration::from_secs(600)).await;
         assert!(pipe.failed.try_recv().is_err());
+    }
+}
+
+#[cfg(test)]
+mod state_event_coalescing_tests {
+    use super::*;
+    use yttt_agent_core::{
+        AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState, ProviderId,
+    };
+    use yttt_protocol::agent::AgentHookScope;
+
+    fn agent_update(pane: &str, sequence: u64) -> AgentSnapshotUpdate {
+        AgentSnapshotUpdate {
+            scope: AgentHookScope {
+                project_id: "project".into(),
+                tab_id: "tab".into(),
+                pane_id: pane.into(),
+                generation: 1,
+            },
+            terminal_session_id: TerminalSessionId::new(format!("project:{pane}:agent")),
+            host_epoch: 1,
+            sequence,
+            snapshot: AgentSnapshot {
+                instance_id: AgentInstanceId::new("agent").unwrap(),
+                provider_id: ProviderId::from_static("omp"),
+                generation: 1,
+                process_state: AgentProcessState::Running,
+                turn_state: AgentTurnState::Idle,
+                turn_seq: 0,
+                waiting_reason: None,
+                waiting_message: None,
+                task: None,
+                current_action: None,
+                last_action_failed: false,
+                children: Vec::new(),
+                session: None,
+                process_exit: None,
+                state_started_at: 0,
+                updated_at: sequence,
+                board: Default::default(),
+            },
+        }
+    }
+
+    fn token_usage(updated_at: u64) -> ProjectTokenUsage {
+        ProjectTokenUsage {
+            project_id: "project".into(),
+            tokens: Some(updated_at),
+            partial: false,
+            reported_sources: 1,
+            observed_sources: 1,
+            updated_at,
+        }
+    }
+
+    /// A Client on a link slower than agent activity must not accumulate
+    /// every intermediate state: only the newest of each one stays queued.
+    #[tokio::test]
+    async fn a_reader_that_falls_behind_receives_only_the_latest_agent_states() {
+        let (host, client) = tokio::io::duplex(1024);
+        let (_host_read, host_write) = tokio::io::split(host);
+        let (writer, _writer_task) = SessionWriter::spawn(host_write);
+        let host_sequence = AtomicU64::new(1);
+        for sequence in 1..=100 {
+            for pane in ["a", "b"] {
+                send_agent_snapshot(&writer, &host_sequence, agent_update(pane, sequence)).unwrap();
+            }
+            send_token_usage(&writer, &host_sequence, token_usage(sequence)).unwrap();
+        }
+
+        let mut reader = SessionReader::new(client);
+        let mut snapshots = Vec::new();
+        let mut usages = Vec::new();
+        let received = tokio::time::timeout(Duration::from_secs(5), async {
+            while snapshots
+                .iter()
+                .filter(|(_, sequence)| *sequence == 100)
+                .count()
+                < 2
+                || usages.last() != Some(&100)
+            {
+                let ControlMessage::Event(event) = reader.receive().await.unwrap() else {
+                    continue;
+                };
+                match event.body {
+                    ServerEvent::AgentSnapshot(update) => {
+                        snapshots.push((update.scope.pane_id.clone(), update.sequence));
+                    }
+                    ServerEvent::ProjectTokenUsage(summary) => usages.push(summary.updated_at),
+                    _ => {}
+                }
+            }
+        })
+        .await;
+        assert!(
+            received.is_ok(),
+            "latest states never arrived: {snapshots:?} {usages:?}"
+        );
+        // What the pipe buffered before the writer blocked, plus one latest each.
+        assert!(
+            snapshots.len() <= 8,
+            "{} agent snapshots queued",
+            snapshots.len()
+        );
+        assert!(usages.len() <= 4, "{} token usages queued", usages.len());
     }
 }
