@@ -52,7 +52,7 @@ docker exec "$name" sh -c 'curl -fsS http://127.0.0.1:3341/healthz >/dev/null 2>
     || fail "the relay does not answer"
 
 step "upgrading"
-docker exec "$name" yttt-relay-install --upgrade || fail "upgrade failed"
+docker exec "$name" yttt-relay-install --upgrade --allow-http || fail "upgrade failed"
 docker exec "$name" systemctl is-active --quiet yttt-relay || fail "the service is not active after upgrading"
 
 step "uninstalling"

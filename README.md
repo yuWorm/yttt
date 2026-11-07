@@ -108,8 +108,9 @@ Get the desktop package for your platform from [GitHub Releases](https://github.
 
 Headless Hosts on Linux and macOS (servers reached over SSH) use the `yttt-server-<version>-<platform>`
 binary from the same release; the desktop also installs it automatically for SSH projects. To run a
-relay service, download `install-control.sh` from the release and see
-[Relay operations](docs/relay-operations.md).
+relay service, download `install-control.sh` from the release and run it as root: it asks in English
+or Chinese, and leaves `/usr/local/bin/yttt-control-install` for later upgrades, reconfiguring and
+removal. See [Relay operations](docs/relay-operations.md).
 
 Check the supplied SHA-256 sums. macOS packages are ad-hoc signed, not notarized.
 Keep desktop, Host, and remote Server on matching versions.

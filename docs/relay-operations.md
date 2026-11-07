@@ -13,17 +13,37 @@ curl -fsSL https://github.com/yuWorm/yttt/releases/latest/download/install-contr
 sudo sh install-control.sh
 ```
 
-它依次询问：
+第一个问题是界面语言（English / 中文，默认跟随系统语言；`--lang zh` 或 `YTTT_LANG=zh` 跳过）。在终端里用 ↑↓ 选择、回车确认，数字键直接选，`q` 或 Ctrl-C 退出（终端会恢复原样）；终端不支持时改为输入编号。之后依次询问：
 
 | 问题 | 选项 |
 |---|---|
 | 安装方式 | Docker（compose，位于 `/opt/yttt-control`）/ 直接安装（systemd，静态二进制） |
 | 数据库 | SQLite（一个文件，适合个人与小机器）/ PostgreSQL（Docker 下为容器；直接安装时用发行版的包，经本机 socket 以服务用户身份连接，没有数据库密码） |
-| 对外方式 | Caddy 占用 80/443，自动申请与续期证书（需要域名）/ 只启动服务，自己用 nginx 等反向代理（可只绑定 127.0.0.1） |
+| 对外方式 | Caddy 占用 80/443，自动申请与续期证书（需要域名）/ 只启动服务，自己用 nginx、SafeLine 等反向代理。80/443 已被别的程序占用时不提供 Caddy |
+| 监听地址 | 只启动服务时选网卡：仅本机 `127.0.0.1`、Docker 网桥（只有本机与容器可达，SafeLine 这类拒绝 127.0.0.1 的代理用它；检测到 SafeLine 时默认选它）、各块网卡（标出内网或公网）、所有网卡或手填地址；再选端口，被占用时会说明是哪个程序并要求换一个 |
 | 注册 | 是否允许自助注册（之后在控制台改） |
 | 管理员 | 邮箱与密码（输入两次） |
 
-`ticket_secret`、`secrets_key` 与 PostgreSQL 容器密码随机生成，写进只有 root（和服务用户）能读的配置文件；脚本不打印它们。再次运行时脚本识别已有安装，提供“升级 / 重新配置 / 卸载”，**重新配置不会更换任何秘密**（换了会让所有 ticket 与节点失效）。也可以直接 `--upgrade`、`--reconfigure`、`--uninstall [--purge]`；所有问题都有对应参数，配合 `--yes` 可无人值守（管理员密码取 `YTTT_ADMIN_PASSWORD`），见 `sh install-control.sh --help`。
+`ticket_secret`、`secrets_key` 与 PostgreSQL 容器密码随机生成，写进只有 root（和服务用户）能读的配置文件；脚本不打印它们。所有问题都有对应参数，配合 `--yes` 可无人值守（管理员密码取 `YTTT_ADMIN_PASSWORD`），见 `sh install-control.sh --help`。没有终端又没有 `--yes` 时脚本报错退出，不会替你选。
+
+### 管理命令：升级、重新配置、卸载
+
+安装后服务器上有管理命令 `/usr/local/bin/yttt-control-install`。不带参数运行时显示状态（版本、安装方式、数据库、访问地址、监听地址、健康检查），再选“升级 / 重新配置 / 卸载”；没有终端时只显示状态。
+
+```sh
+sudo /usr/local/bin/yttt-control-install                 # 状态与菜单
+sudo /usr/local/bin/yttt-control-install --upgrade       # 升级到最新版本
+sudo /usr/local/bin/yttt-control-install --version 0.5.2 # 指定版本
+sudo /usr/local/bin/yttt-control-install --reconfigure   # 重新回答访问方式相关的问题
+sudo /usr/local/bin/yttt-control-install --uninstall [--purge]
+```
+
+- 升级：查询 GitHub 上的最新版本，下载那个版本的 `install-control.sh`，按同一版本的 `SHA256SUMS` 校验后交给它完成升级（新版本对安装方式的改动随之生效），它再把自己装成新的管理命令。`SHA256SUMS` 与脚本同源，只防下载不完整；信任来自到 GitHub 的 HTTPS。已是最新版本时会说明，可以选择重新安装。
+- 不会降级：旧版本的程序读不了新版本迁移过的数据库，指定更旧的版本时拒绝，`--force` 才执行。
+- 重新配置**不会更换任何秘密**（换了会让所有 ticket 与节点失效）。
+- 卸载先列出保留与删除的内容再确认；默认保留配置、秘密与数据，`--purge` 另外确认一次后全部删除。
+- 部分发行版的 `sudo` 不在 `/usr/local/bin` 里找命令，所以提示里都写完整路径。
+- 0.5.0 的安装还没有管理命令：下载新版本的 `install-control.sh` 运行一次，选“升级”即可装上。
 
 空闲时的内存：控制面 6–8 MB，PostgreSQL 约 40 MB，Caddy 约 15 MB。一台 512 MB 的小机器用 SQLite + Caddy 绰绰有余。
 
@@ -32,7 +52,7 @@ sudo sh install-control.sh
 - Caddy 同时为 relay 域名签证书并转发到本机 `127.0.0.1:3340`；relay 在 Caddy 之后明文监听（`yttt-relay enroll --behind-proxy`）。
 - QUIC 地址探测（UDP 7842）需要 relay 域名的证书：`yttt-relay-cert.timer` 每 10 分钟把 Caddy 的证书复制到 `/etc/yttt-relay/quic/`，relay 每分钟检查一次并自动换上（配置里的 `[quic_tls]`）。
 - 节点用安装时的管理员身份登记为 `node-1`（新账号的默认节点），与控制面同一种安装方式；需要放行 TCP 80、443 与 UDP 7842。
-- 卸载控制面不会删除这个节点，用 `sudo yttt-relay-install --uninstall` 另行删除。
+- 卸载控制面不会删除这个节点，用 `sudo /usr/local/bin/yttt-relay-install --uninstall` 另行删除。
 
 ### 手动部署
 
@@ -104,7 +124,7 @@ client_secret = "…"
 ## 2. 部署节点
 
 1. 控制台 → 节点 → 新建节点：填 ID（如 `tokyo-1`）、显示名，可选域名。
-2. 复制对话框里的命令，在目标 Linux 服务器（x86_64 或 aarch64）上执行。命令只显示一次，1 小时内有效、单次可用。脚本询问直接安装（systemd）还是用 Docker（host 网络，镜像与控制面同版本），以及节点域名（部署命令已带域名时不再询问）；`--method native|docker`、`--yes` 可跳过询问。本机的 443 或 80 已被别的程序（nginx、SafeLine 等）占用时，脚本会说明，并让你选择放在它后面（见下文“已有反向代理的机器”）或不用域名；`--yes` 时直接报错并给出参数。
+2. 复制对话框里的命令，在目标 Linux 服务器（x86_64 或 aarch64）上执行。命令只显示一次，1 小时内有效、单次可用。脚本先问界面语言，再问直接安装（systemd）还是用 Docker（host 网络，镜像与控制面同版本），以及节点域名（部署命令已带域名时不再询问）；没有域名时问端口（默认 3341，`--port`）。`--method native|docker`、`--yes` 可跳过询问。本机的 443 或 80 已被别的程序（nginx、SafeLine 等）占用时，脚本会说明，并让你选择放在它后面（见下文“已有反向代理的机器”）或不用域名；`--yes` 时直接报错并给出参数。
 3. 放行端口：
    - 无域名：TCP 3341。节点地址为 `http://<服务器公网 IP>:3341`。**无域名的节点只能中转，设备之间不会升级为直连**：直连靠设备经 relay 的 QUIC 地址探测（UDP 7842，需要 TLS）得知自己的公网地址，无域名节点不提供这项服务。正式节点请配域名；没有域名时可以用 `<IP 以连字符分隔>.sslip.io`（如 `103-68-192-229.sslip.io`），它解析到对应 IP，Let's Encrypt 能为它签证书。
    - 有域名：域名先解析到该服务器；放行 TCP 443、80 与 UDP 7842。证书由 Let's Encrypt 自动签发，缓存在 `/var/lib/yttt-relay`。443 必须直达服务器，前面不能有 CDN 或 TLS 终结。
@@ -112,13 +132,19 @@ client_secret = "…"
 
 服务器在 NAT 后面、出口与入口地址不同时，在命令末尾加 `--public-url http://<可访问的地址>:3341`。
 
-节点上的常用操作：
+节点上的管理命令是 `/usr/local/bin/yttt-relay-install`，不带参数运行时显示状态（节点 ID、地址、运行方式、监听地址、版本、健康检查、QUIC 证书是否就位），再选“升级 / 更改监听地址 / 卸载”：
 
 ```sh
-journalctl -u yttt-relay -f                         # 日志
-sudo yttt-relay-install --upgrade                   # 换成控制面当前提供的二进制，不重新登记
-sudo yttt-relay-install --uninstall                 # 删除节点程序、配置与服务用户
+journalctl -u yttt-relay -f                                   # 日志（Docker：docker logs -f yttt-relay）
+sudo /usr/local/bin/yttt-relay-install                        # 状态与菜单
+sudo /usr/local/bin/yttt-relay-install --upgrade              # 控制面当前的脚本与 relay，不重新登记
+sudo /usr/local/bin/yttt-relay-install --listen 172.17.0.1:3340   # 代理之后的节点换监听地址
+sudo /usr/local/bin/yttt-relay-install --uninstall            # 删除节点程序、配置与服务用户
 ```
+
+- 升级时先从控制面取当前的安装脚本：比本节点的旧就拒绝（先升级控制面，或 `--force`），较新就交给它完成升级。只经 HTTPS 取脚本，控制面是 `http://` 时拒绝（中间人能给这台机器一个以 root 运行的脚本），确有需要加 `--allow-http`。
+- 0.5.0 部署的节点，管理命令还是旧脚本，升级一次新脚本即可：`curl -fsSL https://<控制面>/install/relay.sh -o /tmp/relay.sh && sudo sh /tmp/relay.sh --upgrade`。
+- 更改监听地址只用于代理之后的节点，与控制面同机、由它的 Caddy 转发的节点固定为 `127.0.0.1:3340`。
 
 安装脚本会创建系统用户 `yttt-relay` 运行服务；节点令牌在 `/etc/yttt-relay/node-token`（`root:yttt-relay`，0640）。
 
@@ -139,7 +165,7 @@ packaging/relay-dev/rehearse-node.sh '<控制台给出的部署命令>' linux/ar
 80/443 已被别的反向代理或 WAF 占用、证书由它管理时，控制面与节点都放在它后面，只监听本机地址。nginx 可以转发到 `127.0.0.1`；SafeLine 等 WAF 拒绝 `127.0.0.1` 这类特殊地址作上游（报 `special-use address "127.0.0.1" is not allowed`），这时改用 Docker 网桥地址 `172.17.0.1`（`ip -4 addr show docker0` 查看）。它只在本机可达，外部访问不到。
 
 - **控制面**：80/443 被占用时脚本不再提供 Caddy，直接改为“只启动服务”。监听地址选 `127.0.0.1`，或者选 Docker 网桥（检测到 `docker0` 时脚本会列出这一项，检测到 SafeLine 时默认选它）；端口被占用时会要求换一个；问到“前面是否有设置 X-Forwarded-For 的反向代理”时答是。也可以直接用参数，例如 `sudo sh install-control.sh --expose service --listen 172.17.0.1:8080 --public-url https://control.example.com --behind-proxy yes`；已安装的用 `--reconfigure --listen 172.17.0.1:8080` 修改，数据与秘密不变。在代理里把 `control.example.com` 转发到该地址，代理必须设置 `X-Forwarded-For`，否则限流会把所有人算作同一来源。
-- **节点**：直接执行带域名的部署命令，脚本发现 443 被占用后选“放在它后面”，再确认监听地址（默认 `127.0.0.1:3340`，检测到 SafeLine 时默认 Docker 网桥 `172.17.0.1:3340`）。不想回答问题时，在命令末尾加 `--behind-proxy [--listen 172.17.0.1:3340]`（部署命令没带域名时同时加 `--domain relay.example.com`）。在代理里把 `relay.example.com` 转发到该地址，并允许 WebSocket（relay 协议经 WebSocket 升级连接，请求不能被缓冲或改写）。节点的服务器需放行代理的 TCP 443 与 UDP 7842。
+- **节点**：直接执行带域名的部署命令，脚本发现 443 被占用后选“放在它后面”，再从网卡列表选监听地址（默认 `127.0.0.1:3340`，检测到 SafeLine 时默认 Docker 网桥 `172.17.0.1:3340`）。不想回答问题时，在命令末尾加 `--behind-proxy [--listen 172.17.0.1:3340]`（部署命令没带域名时同时加 `--domain relay.example.com`）。在代理里把 `relay.example.com` 转发到该地址，并允许 WebSocket（relay 协议经 WebSocket 升级连接，请求不能被缓冲或改写）。节点的服务器需放行代理的 TCP 443 与 UDP 7842。
   - 0.5.0 的控制面发出的部署脚本还不会检测端口，也没有 `--listen`，要手动加 `--behind-proxy`。这时先按默认部署，再把 `/etc/yttt-relay/relay.toml` 里的 `listen` 改成 `"172.17.0.1:3340"`，然后执行 `systemctl restart yttt-relay`（Docker 安装执行 `docker restart yttt-relay`）。
 - **QUIC 证书**：UDP 7842 不经过代理，由节点直接用 `relay.example.com` 的证书应答。把代理的证书（完整链）与私钥以 PEM 格式放到 `/etc/yttt-relay/quic/cert.pem` 与 `key.pem`，私钥 `0640`、属组 `yttt-relay`（Docker 安装为 `root`）。先写私钥，再写证书，替换时写临时文件再 `mv`。节点每分钟检查一次，证书变化时自动换上，无需重启。证书续期后要再复制一次，可以写成定时任务。没有这两个文件时节点照常中转，只是设备之间不会升级为直连。
 

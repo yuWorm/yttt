@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 安装脚本界面升级：首先选择中文或英文，之后用 ↑↓ 与回车选择，显示标识、进度与汇总；终端不支持时改为输入编号。监听地址从本机网卡中选择（仅本机、Docker 网桥、各块网卡、所有网卡或手填），检测到 SafeLine 时默认 Docker 网桥，端口被占用时说明占用的程序。
+- The installers have a new interface: they first ask for English or Chinese, then take choices with the arrow keys and Enter, and show a logo, progress and a summary; terminals that cannot do this get numbered questions. The listen address is chosen from this machine's interfaces (this machine only, Docker's bridge, each network card, all of them, or one typed in), with Docker's bridge the default when SafeLine runs, and a port in use names the program holding it.
+- 安装后留下管理命令：控制面的 `/usr/local/bin/yttt-control-install` 与节点的 `/usr/local/bin/yttt-relay-install` 不带参数运行时显示状态，并提供升级、重新配置（节点为更改监听地址）与卸载。控制面升级会查询最新版本、校验其安装脚本后交给它完成，不会降级到读不了当前数据库的旧版本；节点升级从控制面经 HTTPS 取得当前脚本，比自己旧时拒绝。0.5.0 部署的节点需要运行一次新脚本的 `--upgrade`，见运营文档。
+- Installing leaves a management command: `/usr/local/bin/yttt-control-install` for the control plane and `/usr/local/bin/yttt-relay-install` for a node show the status when run without options and offer to upgrade, reconfigure (for a node, change its listen address) and uninstall. The control plane upgrades by finding the latest release, checking its installer and handing over to it, and never goes back to a release that cannot read the current database; a node upgrades with the control plane's current script, fetched over HTTPS, and refuses an older one. Nodes deployed with 0.5.0 need the new script's `--upgrade` once; see the operations guide.
 - 节点部署命令新增 `--listen`：在反向代理后面（`--behind-proxy`）时可监听 `127.0.0.1` 以外的本机地址，适配 SafeLine 等拒绝 `127.0.0.1` 作上游的代理；控制面安装脚本在检测到 Docker 网桥时可选择监听它。
 - The node deploy command takes `--listen`: behind a reverse proxy (`--behind-proxy`) the node can listen on a local address other than `127.0.0.1`, for proxies such as SafeLine that refuse `127.0.0.1` as an upstream. The control plane installer offers Docker's bridge address when it finds one.
 - 安装脚本会检查端口：节点部署时 443 或 80 已被 nginx、SafeLine 等占用，会提示并让你选择放在它后面或不用域名，不再装好后反复启动失败；控制面安装时 80/443 被占用则不提供 Caddy，监听端口被占用时要求换一个。节点的健康检查只认 relay 自己的回应，不会被占用端口的其他程序骗过。

@@ -14,6 +14,7 @@ from prepare_release import (
     repair_existing_release,
     replace_workspace_version,
 )
+import sync_installer_ui
 from release_metadata import (
     build_update_manifest,
     changelog_section,
@@ -265,6 +266,19 @@ Release introduction.
         self.assertEqual(
             validate_release_changelog(repaired, "1.1.0"),
             "- New Host changes.\n\n- Existing SSH changes.\n",
+        )
+
+
+
+class InstallerUiTests(unittest.TestCase):
+    def test_both_installers_carry_the_current_ui_library(self) -> None:
+        self.assertEqual(sync_installer_ui.stale(), [])
+
+    def test_a_copy_is_replaced_between_its_markers(self) -> None:
+        text = sync_installer_ui.library()
+        target = "#!/bin/sh\nbefore\n# >>> ui.sh\nold\n# <<< ui.sh\nafter\n"
+        self.assertEqual(
+            sync_installer_ui.synced(target, text), "#!/bin/sh\nbefore\n" + text + "after\n"
         )
 
 

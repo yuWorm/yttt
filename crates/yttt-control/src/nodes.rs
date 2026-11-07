@@ -601,6 +601,7 @@ pub(crate) fn script(base: &str) -> String {
     INSTALL_SCRIPT
         .replace("__CONTROL_URL__", base)
         .replace("__IMAGE__", RELAY_IMAGE)
+        .replace("__VERSION__", env!("CARGO_PKG_VERSION"))
 }
 
 /// The command an administrator pastes on the new machine. It checks the

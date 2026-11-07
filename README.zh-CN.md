@@ -101,7 +101,8 @@
   脚本不会调用 `sudo`；直接运行发布包中的 `bin/yttt` 仍是便携方式，不会修改 PATH 或 shell 文件。
 
 Linux 与 macOS 上的无桌面 Host（经 SSH 登录的服务器）使用同一版本里的 `yttt-server-<版本>-<平台>`；
-打开 SSH 项目时桌面端也会自动安装它。要自建 relay 服务，从发布页下载 `install-control.sh`，
+打开 SSH 项目时桌面端也会自动安装它。要自建 relay 服务，从发布页下载 `install-control.sh` 以 root 运行：
+可选中文或英文界面，装好后留下 `/usr/local/bin/yttt-control-install`，用于之后的升级、重新配置与卸载。
 见[运营 relay](docs/relay-operations.md)。
 
 请核对随安装包提供的 SHA-256 校验和。macOS 安装包采用 ad-hoc 签名，未经过 Developer ID 公证。
