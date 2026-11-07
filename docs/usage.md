@@ -66,9 +66,12 @@ Normal application launches remain local. The project status bar identifies the 
 environment; Dispatch center uses its connection banner instead. Connecting a remote service
 never replaces the current local window.
 Use **Remote services** on the homepage to open one management window with two tabs:
-**Remote connections** and **Remote access to this computer**. The first tab lists saved SSH
-and network Host connections together. Click a row to connect; use its **⋯** menu to edit or
-delete it. **Add connection** opens a type-specific SSH or network Host modal in the same window.
+**Remote connections** and **Remote access to this computer**. The first tab lists saved SSH,
+network Host and paired P2P Host connections together. Click a row to connect; use its **⋯** menu
+to edit or delete it. **Add connection** opens a type-specific SSH, network Host or P2P pairing
+modal in the same window. The second tab holds this computer's TLS listener, P2P pairing and
+relay account; see [Connect to an existing desktop Host](#connect-to-an-existing-desktop-host),
+[Pair with a Host over P2P](#pair-with-a-host-over-p2p) and [Relay account](#relay-account).
 Forms scroll independently of their fixed bottom actions; **Escape** or **Cancel** discards
 unsaved input and returns to the list. **Save** only updates the record; **Save and connect**
 explicitly does both. Missing credentials open a small credential-only prompt instead of the
@@ -421,6 +424,89 @@ Quitting A's desktop-owned Host stops remote access and running tasks after conf
 Closing B's remote windows only detaches B. See [Desktop and Host Lifecycle](#desktop-and-host-lifecycle)
 for independent background Hosts. TCP forwarding was exercised with a generic local byte forwarder;
 this is not certification of any particular third-party tunnel product.
+
+### Pair with a Host over P2P
+
+P2P reaches A from B without a public IP, port forwarding or tunnel. Devices identify each other
+by device keys and connect over QUIC, directly when the networks allow it and through a relay
+otherwise. Traffic is end-to-end encrypted between A and B; a relay only forwards it.
+
+1. On A, open **Remote services → Remote access to this computer → P2P pairing** and click
+   **Enable**. **Relay (optional)** stays empty for direct connections only, which is enough on
+   one LAN; across networks, enter a relay URL or use a [relay account](#relay-account).
+   Changing the relay restarts P2P and ends P2P sessions.
+2. Click **Pair a new device**. A shows a QR code; **Show code** and **Copy code** give the same
+   invitation as text (`YTTT-PAIR:1:…`). An invitation pairs one device and expires after five
+   minutes. Anyone who sees it can ask to pair, and if a second device uses it, A withdraws it.
+3. On B, open **Remote services → Remote connections → Add connection → Pair with a Host (P2P)**,
+   paste the code and click **Pair**. B shows six digits.
+4. A asks whether the device may pair and shows its digits. Accept only if they match, with
+   **Allow viewing only** or **Allow full control**; otherwise **Decline**.
+5. B lists the Host with a **P2P** tag; clicking it connects. The remote window's status bar
+   shows `P2P · connecting`, `direct` or `via relay`.
+
+B keeps a separate device key for each Host in the OS credential store. To help B find A, a
+paired Host's **⋯ → Edit** takes a **Relay address (hint)** and **Direct addresses (hint)**
+(`IP:port`, comma-separated); hints never change which Host is trusted. **Forget** removes the
+pairing and B's key; A lists the device until it is revoked there.
+
+A lists its **Paired devices** with their permission, pairing time and last connection.
+**Revoke** disconnects a device at once, and it cannot connect again without pairing anew;
+**Revoke and reset TLS** also resets the credentials of the TLS listener above.
+
+A headless Host (a server reached over SSH, with `yttt-server` running) does the same from the
+command line. The P2P setting persists across Host restarts:
+
+```sh
+yttt-server ensure                                   # start the Host if it is not running
+yttt-server p2p enable [--relay https://relay.example.com]
+yttt-server p2p pair       # prints the QR code and invitation, then waits for a device
+yttt-server p2p status     # P2P state, relay and connected devices
+yttt-server p2p devices
+yttt-server p2p revoke <device key> [--reset-tls]
+yttt-server p2p disable
+```
+
+`p2p pair` prints the device's digits; type `v` to allow viewing only, `f` for full control, or
+anything else to decline. To run a relay of your own, see [P2P testing](p2p-testing.md).
+
+### Relay account
+
+A relay account comes from a relay service (a yttt control plane and its relay nodes; see
+[Relay operations](relay-operations.md)). It gives the Host and its devices a relay with the
+plan's rate and monthly quota when no direct path works. The account only carries traffic: it
+never decides who may reach a computer, and devices still pair as above.
+
+1. On A and on each device, open **Remote access to this computer → Relay account**, enter the
+   **Service address** and click **Sign in with browser**. Click **Allow** on the page that opens;
+   the browser hands the sign-in back to the app on this computer. **Sign in with email and
+   password instead** remains available.
+2. On A, with P2P enabled, click **Use for this computer as a Host**. A registers its key with the
+   account, and P2P pairing shows the account's relay in use.
+3. A then lists the nodes its plan allows, with each one's latency from A, its load, and **Full**
+   for nodes that take no new Hosts. Choose one close to A and to the devices you use; change it
+   later with **Choose node**. Devices that connect to A always follow A's node, with nothing to set
+   up on them. Switching drops remote sessions, which reconnect on their own; the app allows one
+   switch per Host every ten minutes.
+4. Devices signed in to the same account reach A through the account's relay, even when the
+   pairing code carries another relay address. Devices that have not signed in can only connect
+   directly.
+
+Each device key takes one of the plan's device slots: one for the Host, and one per device for
+each Host it paired with. Forgetting a Host removes that key from the account. App sign-ins can
+use the relay and view the account, but cannot change it or administer the service; manage the
+account itself on the console.
+
+A headless Host signs in with a short code that any device confirms on the console, and then uses
+the account at once:
+
+```sh
+yttt-server p2p login https://control.example.com    # shows a code and QR for /device
+YTTT_RELAY_PASSWORD='…' yttt-server p2p login https://control.example.com --password me@example.com
+yttt-server p2p nodes                                # nodes with latency and load
+yttt-server p2p node tokyo-1                         # move this Host and its devices
+yttt-server p2p logout
+```
 
 ### SSH projects
 
@@ -1678,7 +1764,9 @@ Run these before marking a product phase complete:
 - The project tree and text editor are not a general-purpose file manager or full IDE.
 - File editing is limited to regular UTF-8 files up to 6 MiB. Continuous filesystem watching is
   limited to the active project; inactive projects refresh when selected.
-- Remote Clients currently require SSH and a Linux/macOS Host; raw public-network Host listeners are not exposed.
+- SSH projects require a Linux or macOS remote machine. Remote Clients are the desktop app; there is
+  no mobile or browser Client yet.
+- The TLS listener binds loopback by default and is meant for a tunnel; use P2P to reach a Host across networks.
 - A desktop restart reattaches to a surviving Host, but a Host or machine restart cannot resurrect an existing PTY child process.
 - Provider-level task and tool progress requires the managed hook or extension installed for the
   selected agent; commands without one retain process-level fallback status.

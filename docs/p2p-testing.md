@@ -4,7 +4,7 @@
 
 ## 0. 准备
 
-- 两台机器都用 `feat/p2p-host` 分支构建。桌面端：`cargo build --release`；无桌面的 Linux 服务器只需要 `yttt-server`：`cargo build --release -p yttt-server`。
+- 两台机器用同一版本（0.5.0 起）：从 [GitHub Releases](https://github.com/yuWorm/yttt/releases) 下载，或从源码构建。桌面端：`cargo build --release`；无桌面的 Linux 服务器只需要 `yttt-server`（发布页的 `yttt-server-<版本>-<平台>`，或 `cargo build --release -p yttt-server`）。
 - 每台 Client 对应每台 Host 有一把独立的设备密钥，存在系统凭据库（macOS 钥匙串、Windows 凭据管理器）。
 - 路径类型（直连或 relay）显示在两处：
   - 远程窗口底部状态栏：`P2P · 连接中 / 直连 / 经 relay`；
@@ -58,6 +58,7 @@ cargo run --release -p yttt-client-core --example p2p_probe -- '<配对码>' --s
 | 只走 relay | 用 `p2p_probe --relay-only` | 始终“经 relay”，Host 与设备都不暴露直连地址 |
 | 断网恢复 | 连接后切换 Wi-Fi 或断网再恢复 | 窗口提示重连，网络恢复后自动回到可用状态，`client.log` 记录断开与恢复耗时 |
 | 撤销 | 在 Host 上撤销设备 | 设备会话立即断开，之后无法再连；重新配对后恢复 |
+| 切换节点 | 付费 relay，Host 换到另一个节点（见 §5） | 只走 relay 的会话断开后自动重连到新节点；旧节点约 15 秒内断开留在上面的设备，并拒绝它们的旧 ticket |
 
 ## 4. 自建 relay（跨网络测试需要）
 
@@ -80,10 +81,11 @@ Host 开启 P2P 时填这个地址；设备不用单独设置，配对码里带�
 需要控制面和计费 relay 节点，本地可以用 docker 起一整套（见 `packaging/relay-dev/docker-compose.full.yml`，控制面在 `http://127.0.0.1:18080`，节点在 `http://127.0.0.1:3341`）。真机测试时把两者部署到双方都能访问的机器上，并把控制面配置里节点的 `url` 改成那台机器的地址。
 
 1. 建账号（开发模式）：`curl -X POST http://<控制面>/v1/dev/accounts -H 'content-type: application/json' -d '{"email":"me@example.com","password":"至少八位密码","plan":"basic","node":"local-1"}'`。
-2. Host 与设备都在“远程访问此电脑”页的“relay 账号”一节用同一账号登录。
-3. Host 上点“本机作为 Host 时使用此账号”。Host 会登记自己的密钥并取得 ticket，P2P 一节显示正在使用的 relay。
-4. 照常配对：设备已登录时，配对与之后的连接都经账号的 relay 节点，即使配对码里的 relay 地址不同。
+2. Host 与设备都在“远程访问此电脑”页的“relay 账号”一节填服务地址，用同一账号登录：点“在浏览器中登录”，在打开的控制台页面点“允许”；也可以改用邮箱密码。
+3. Host 上点“本机作为 Host 时使用此账号”。Host 会登记自己的密钥并取得 ticket，P2P 一节显示正在使用的 relay，随后列出套餐可用的节点（延迟、负载、是否满载），选一个即可，之后用“选择节点”更换。
+4. 照常配对：设备已登录时，配对与之后的连接都经 Host 所在的 relay 节点，即使配对码里的 relay 地址不同；设备不用选节点。
 5. 在 Host 页面的账号信息里应能看到本月用量增长；在控制面封停账号（`POST /v1/dev/accounts/<id>/suspension {"suspended":true}`）后，只走 relay 的会话约 30 秒内断开。
+6. 测切换节点需要第二个节点：在控制台“节点”页新建并部署，把它加入套餐的“可用节点”。应用里切换后有 10 分钟冷却，控制台“设备”页不受限制。
 
 没有桌面时用命令行走同样的流程：
 
@@ -92,6 +94,8 @@ Host 开启 P2P 时填这个地址；设备不用单独设置，配对码里带�
 yttt-server p2p enable
 yttt-server p2p login https://<控制面>    # 显示短码与二维码，在控制台 /device 确认
 # 或：YTTT_RELAY_PASSWORD='…' yttt-server p2p login https://<控制面> --password me@example.com
+yttt-server p2p nodes                     # 可用节点、延迟与负载
+yttt-server p2p node <节点 ID>            # 切换本 Host 的节点，设备跟随
 yttt-server p2p pair
 
 # 设备：--account 让 probe 也登录同一账号，带 ticket 加入 relay；结束时从账号移除它的密钥

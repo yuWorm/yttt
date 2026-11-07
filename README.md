@@ -41,7 +41,7 @@
 </td>
 <td width="50%" valign="top">
 <h3>Local &amp; Remote Workspaces</h3>
-<p>Connect to an existing desktop Host or open projects through SSH, with resources owned by their Host.</p>
+<p>Connect to an existing desktop Host over P2P or TLS, or open projects through SSH, with resources owned by their Host.</p>
 <a href="docs/usage.md#connect-to-an-existing-desktop-host">Desktop Host →</a> · <a href="docs/usage.md#ssh-projects">SSH →</a>
 </td>
 </tr>
@@ -55,6 +55,18 @@
 <h3>Desktop CLI</h3>
 <p>Use <code>yttt ctl</code> to inspect projects and Agent status, and manage tabs, panes, and terminal input.</p>
 <a href="docs/cli-control.md">CLI guide →</a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<h3>P2P Remote Access</h3>
+<p>Pair a device by QR code and reach this computer without a public IP or port forwarding: directly when possible, through an end-to-end encrypted relay otherwise.</p>
+<a href="docs/usage.md#pair-with-a-host-over-p2p">Pairing →</a> · <a href="docs/usage.md#relay-account">Relay account →</a>
+</td>
+<td width="50%" valign="top">
+<h3>Relay Service</h3>
+<p>Run your own relay service: accounts, plans and nodes in a web console, GitHub/Google sign-in, and one interactive command to install the control plane or a node.</p>
+<a href="docs/relay-operations.md">Operations guide →</a>
 </td>
 </tr>
 </table>
@@ -94,6 +106,11 @@ Get the desktop package for your platform from [GitHub Releases](https://github.
   It does not call `sudo`; running the archive's `bin/yttt` directly remains portable and does not
   alter PATH or shell files.
 
+Headless Hosts on Linux and macOS (servers reached over SSH) use the `yttt-server-<version>-<platform>`
+binary from the same release; the desktop also installs it automatically for SSH projects. To run a
+relay service, download `install-control.sh` from the release and see
+[Relay operations](docs/relay-operations.md).
+
 Check the supplied SHA-256 sums. macOS packages are ad-hoc signed, not notarized.
 Keep desktop, Host, and remote Server on matching versions.
 
@@ -119,9 +136,12 @@ instruct and wait for other Agents in tabs you can watch and take over at any ti
 
 ## Documentation
 
-- [Usage guide](docs/usage.md) — UI, remote access, session restoration, and settings.
+- [Usage guide](docs/usage.md) — UI, remote access and P2P pairing, session restoration, and settings.
 - [CLI control](docs/cli-control.md) — desktop commands and examples.
 - [Host/Client architecture](docs/host-client-architecture.md) — process and resource ownership.
+- [P2P testing](docs/p2p-testing.md) — try pairing, direct and relayed connections on real machines (Chinese).
+- [Relay operations](docs/relay-operations.md) — install and run the control plane, console and relay nodes (Chinese).
+- [P2P and relay architecture](docs/p2p-relay-architecture.md) — remote access design and its status (Chinese).
 - [Changelog](CHANGELOG.md) — releases and upgrade notes (English and Chinese).
 
 ## Develop

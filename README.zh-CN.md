@@ -41,7 +41,7 @@
 </td>
 <td width="50%" valign="top">
 <h3>本地与远端工作区</h3>
-<p>连接现有桌面 Host，或通过 SSH 打开远端项目；工作区资源由所属 Host 管理。</p>
+<p>经 P2P 或 TLS 连接现有桌面 Host，或通过 SSH 打开远端项目；工作区资源由所属 Host 管理。</p>
 <a href="docs/usage.md#connect-to-an-existing-desktop-host">桌面 Host →</a> · <a href="docs/usage.md#ssh-projects">SSH →</a>
 </td>
 </tr>
@@ -55,6 +55,18 @@
 <h3>桌面命令行</h3>
 <p>使用 <code>yttt ctl</code> 查看项目与 Agent 状态，管理标签、窗格和终端输入。</p>
 <a href="docs/cli-control.md">CLI 文档 →</a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<h3>P2P 远程访问</h3>
+<p>扫码配对设备，无需公网 IP 或端口转发即可连接这台电脑：能直连时直连，否则经端到端加密的 relay 中转。</p>
+<a href="docs/usage.md#pair-with-a-host-over-p2p">配对 →</a> · <a href="docs/usage.md#relay-account">relay 账号 →</a>
+</td>
+<td width="50%" valign="top">
+<h3>Relay 服务</h3>
+<p>自建 relay 服务：网页控制台管理账号、套餐与节点，支持 GitHub / Google 登录，控制面与节点都是一条交互式命令安装。</p>
+<a href="docs/relay-operations.md">运营文档 →</a>
 </td>
 </tr>
 </table>
@@ -88,6 +100,10 @@
   安装脚本依赖 `flock` 串行化并发安装，保留用户配置和无关命令，失败后可以重试；HOME 不能包含 `:`。
   脚本不会调用 `sudo`；直接运行发布包中的 `bin/yttt` 仍是便携方式，不会修改 PATH 或 shell 文件。
 
+Linux 与 macOS 上的无桌面 Host（经 SSH 登录的服务器）使用同一版本里的 `yttt-server-<版本>-<平台>`；
+打开 SSH 项目时桌面端也会自动安装它。要自建 relay 服务，从发布页下载 `install-control.sh`，
+见[运营 relay](docs/relay-operations.md)。
+
 请核对随安装包提供的 SHA-256 校验和。macOS 安装包采用 ad-hoc 签名，未经过 Developer ID 公证。
 桌面端、Host 与远端 Server 需要使用匹配的版本。
 
@@ -111,9 +127,12 @@
 
 ## 文档
 
-- [使用指南](docs/usage.md) — 界面、远端连接、会话恢复和配置。
+- [使用指南](docs/usage.md) — 界面、远端连接与 P2P 配对、会话恢复和配置（英文）。
 - [CLI 控制](docs/cli-control.md) — 桌面命令与示例。
 - [Host/Client 架构](docs/host-client-architecture.md) — 进程与资源归属。
+- [P2P 实测指南](docs/p2p-testing.md) — 在真机上验证配对、直连与经 relay 的连接。
+- [运营 relay](docs/relay-operations.md) — 安装与运营控制面、控制台和 relay 节点。
+- [P2P 与 Relay 架构](docs/p2p-relay-architecture.md) — 远程访问的设计与实现状态。
 - [双语更新日志](CHANGELOG.md) — 版本变更与升级说明。
 
 ## 开发

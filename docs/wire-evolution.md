@@ -78,6 +78,9 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `RemoteClientSummary.device` 带缺省。配对使用独立 ALPN 与新帧类型 `FrameKind::Pairing = 7`(5、6 保留不复用),
   消息 `p2p::PairMessage` 不进入握手枚举。之后追加 `RemoteAccessRequest::SetRelayAccount`(付费 relay 账号,
   只买传输)与 `P2pStatus.relay_account`(带缺省)。
+  v22 内追加(未升版本,0.5.0):仅本机管理入口可用的 `RemoteAccessRequest::ListRelayNodes`、
+  `SetRelayNode { node_id }` 与 `RemoteAccessResponse::RelayNodes(Vec<RelayNode>)`(`RelayNode` 各字段带缺省),
+  `RelayAccountStatus.node_id`(带缺省)。旧 Host 对两个新请求回复 `Unsupported`,旧 Client 不发送它们。
   v22 内追加(未升版本):`AgentSnapshot.turn_seq`(`#[serde(default)]`,旧端读作 0),Agent 每开始一轮加一;
   `PaneConfig` 追加 `role`(省略即 worker)与 `spawned_by`(省略即无),`NewTab::Agent` 追加同名字段,
   `WorkspaceIntent::SetPaneOwner` 新意图(旧 Host 拒绝该意图);`PaneConfig` 追加 `controller`(省略即 auto)与

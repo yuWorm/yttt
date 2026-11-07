@@ -41,7 +41,7 @@ sudo sh install-control.sh
 ```sh
 cd packaging/relay
 cp control.example.toml control.toml        # 填写 public_url、数据库密码、ticket_secret
-POSTGRES_PASSWORD=… docker compose up -d     # YTTT_VERSION=0.4.0 可固定版本
+POSTGRES_PASSWORD=… docker compose up -d     # YTTT_VERSION=0.5.0 可固定版本
 ```
 
 控制面只监听本机 8080，前面放 HTTPS 反向代理（并设 `trusted_proxy = true`）。升级：改 `YTTT_VERSION` 后 `docker compose up -d`，数据库迁移自动执行；已部署的节点用 `sudo yttt-relay-install --upgrade` 换成新镜像里的 relay。
@@ -133,6 +133,14 @@ packaging/relay-dev/rehearse-node.sh '<控制台给出的部署命令>' linux/ar
 给已部署的节点加域名：控制台“重新生成部署命令”时填域名，在同一台机器上执行即可（脚本会重启服务）；之后在 Host 上重新登录 relay 账号或重开 P2P，让它换到新地址。
 
 重新部署同一节点（换机器或令牌泄露）：控制台“重新生成部署命令”，在新机器上执行；登记成功的那一刻旧节点令牌失效。
+
+### 已有反向代理的机器（nginx、SafeLine 等）
+
+80/443 已被别的反向代理或 WAF 占用、证书由它管理时，控制面与节点都放在它后面：
+
+- **控制面**：安装时选“只启动服务”，绑定本机端口，并回答“前面有设置 X-Forwarded-For 的反向代理”，例如 `sudo sh install-control.sh --expose service --listen 127.0.0.1:8080 --public-url https://control.example.com --behind-proxy yes`。在代理里把 `control.example.com` 转发到 `http://127.0.0.1:8080`。代理必须设置 `X-Forwarded-For`，否则限流会把所有人算作同一来源。
+- **节点**：在节点的部署命令末尾加 `--behind-proxy`（部署命令没带域名时同时加 `--domain relay.example.com`）。节点改为明文监听 `127.0.0.1:3340`，在代理里把 `relay.example.com` 转发过去，并开启 WebSocket（relay 协议经 WebSocket 升级连接，请求不能被缓冲或改写）。节点的服务器需放行代理的 TCP 443 与 UDP 7842。
+- **QUIC 证书**：UDP 7842 不经过代理，由节点直接用 `relay.example.com` 的证书应答。把代理的证书（完整链）与私钥以 PEM 格式放到 `/etc/yttt-relay/quic/cert.pem` 与 `key.pem`，私钥 `0640`、属组 `yttt-relay`（Docker 安装为 `root`）。先写私钥，再写证书，替换时用写临时文件再 `mv` 的方式。节点每分钟检查一次，证书变化时自动换上，无需重启。证书续期后要再复制一次，可以写成定时任务。没有这两个文件时节点照常中转，只是设备之间不会升级为直连。
 
 ## 3. 日常管理
 
