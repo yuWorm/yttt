@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-11-08
+
+- 修复远程连接在慢链路（P2P 经 relay、穿透工具）上卡死、一直“正在恢复工作区…”：Agent 状态与 token 用量按 Agent 合并，Client 读得慢时只收到最新一份，不再无限排队挤住其他数据；远程恢复工作区等待 120 秒，失败时显示原因并自动重试。
+- Fix remote connections over slow links (P2P through a relay, or a tunnel) freezing and staying on "Restoring workspace…": Agent state and token usage are merged per Agent, so a Client that reads slowly receives only the latest copy instead of a queue that grows without limit and holds back everything else. A remote window waits 120 seconds to restore a workspace and, if that fails, shows why and retries.
+- 修复 P2P 设备断开后 Host 残留会话：连接结束或关闭 P2P 时，Host 会正常收尾，释放客户端计数、终端附加与控制权。
+- Fix the Host keeping sessions of P2P devices that have gone: when a connection ends or P2P is turned off, the Host finishes those sessions and releases their client count, terminal attachments and control.
+- 远程窗口断开超过 1 秒时显示居中遮罩：Host、第几次重连、已断开时长与原因，可“立即重连”或关闭窗口；重新连上后提示断开了多久。
+- A remote window that loses its Host for more than a second shows a centred notice with the Host, the reconnect attempt, how long it has been down and why, with Reconnect Now and Close Window; once reconnected it says how long the link was down.
+- 远程窗口状态栏显示链路延迟，6 秒收不到心跳回复时显示“连接不稳定”；远程链路 20 秒没有任何数据才判定断开（原为 45 秒）。默认状态栏加入该链路模块。
+- A remote window's status bar shows the link's latency, and "Unstable connection" when a heartbeat goes unanswered for 6 seconds; a remote link is treated as lost after 20 seconds with no data at all, down from 45. The default status bar now includes this link module.
+- 每个 Client 只开一个工作窗口：Host 记录本机当前的工作区，远程连入后直接打开它而不是工作区列表；从历史打开工作区会在原窗口位置替换，托盘去掉“新建窗口”。
+- Each Client opens a single work window. The Host remembers the workspace in use on it, and a remote Client opens that workspace on entry instead of the workspace list; opening a workspace from history replaces the window's workspace in place, and the tray no longer has New Window.
+- 从远程服务窗口连接成功后，该窗口自动关闭。
+- The remote connections window closes once a remote Client has started from it.
 - 安装脚本界面升级：首先选择中文或英文，之后用 ↑↓ 与回车选择，显示标识、进度与汇总；终端不支持时改为输入编号。监听地址从本机网卡中选择（仅本机、Docker 网桥、各块网卡、所有网卡或手填），检测到 SafeLine 时默认 Docker 网桥，端口被占用时说明占用的程序。
 - The installers have a new interface: they first ask for English or Chinese, then take choices with the arrow keys and Enter, and show a logo, progress and a summary; terminals that cannot do this get numbered questions. The listen address is chosen from this machine's interfaces (this machine only, Docker's bridge, each network card, all of them, or one typed in), with Docker's bridge the default when SafeLine runs, and a port in use names the program holding it.
 - 安装后留下管理命令：控制面的 `/usr/local/bin/yttt-control-install` 与节点的 `/usr/local/bin/yttt-relay-install` 不带参数运行时显示状态，并提供升级、重新配置（节点为更改监听地址）与卸载。控制面升级会查询最新版本、校验其安装脚本后交给它完成，不会降级到读不了当前数据库的旧版本；节点升级从控制面经 HTTPS 取得当前脚本，比自己旧时拒绝。0.5.0 部署的节点需要运行一次新脚本的 `--upgrade`，见运营文档。
