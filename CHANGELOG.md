@@ -4,6 +4,8 @@
 
 - 节点部署命令新增 `--listen`：在反向代理后面（`--behind-proxy`）时可监听 `127.0.0.1` 以外的本机地址，适配 SafeLine 等拒绝 `127.0.0.1` 作上游的代理；控制面安装脚本在检测到 Docker 网桥时可选择监听它。
 - The node deploy command takes `--listen`: behind a reverse proxy (`--behind-proxy`) the node can listen on a local address other than `127.0.0.1`, for proxies such as SafeLine that refuse `127.0.0.1` as an upstream. The control plane installer offers Docker's bridge address when it finds one.
+- 安装脚本会检查端口：节点部署时 443 或 80 已被 nginx、SafeLine 等占用，会提示并让你选择放在它后面或不用域名，不再装好后反复启动失败；控制面安装时 80/443 被占用则不提供 Caddy，监听端口被占用时要求换一个。节点的健康检查只认 relay 自己的回应，不会被占用端口的其他程序骗过。
+- The installers check their ports. When nginx, SafeLine or another program holds 443 or 80, the node deploy command says so and offers to run behind it or without a domain, instead of installing a node that keeps failing to start; the control plane installer leaves out Caddy when 80 and 443 are taken and asks for another port when its own is in use. The node's health check only accepts the relay's own answer, not another program on the port.
 
 ## 0.5.0 - 2026-11-07
 

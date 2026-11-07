@@ -209,6 +209,16 @@ has() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# The program listening on TCP port $1: empty when the port is free, or
+# when there is no ss to tell.
+port_owner() {
+    has ss || return 0
+    line=$(ss -ltnpH "sport = :$1" 2>/dev/null | head -n 1)
+    [ -n "$line" ] || return 0
+    name=$(echo "$line" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p')
+    echo "${name:-another program}"
+}
+
 # --- Install state ---------------------------------------------------------
 
 # What an earlier run chose, so later runs do the same.
@@ -365,9 +375,22 @@ ask_everything() {
     choose DATABASE "Which database?" sqlite \
         "sqlite|SQLite: a file, nothing else to run (personal use, small servers)" \
         "postgres|PostgreSQL: for many accounts and nodes"
-    choose EXPOSE "How do browsers reach the console?" caddy \
-        "caddy|Caddy on ports 80 and 443 with automatic HTTPS (needs a domain)" \
-        "service|Only start the service; I run nginx or another proxy myself"
+    # Caddy needs 80 and 443; when another proxy has them, the console goes
+    # behind it. Ports this installation holds itself are not checked.
+    web_owner=''
+    if [ "$CHECK_PORTS" = 1 ]; then
+        web_owner=$(port_owner 443)
+        [ -n "$web_owner" ] || web_owner=$(port_owner 80)
+    fi
+    if [ -n "$web_owner" ]; then
+        [ "$EXPOSE" != caddy ] || die "ports 80 and 443 are in use by $web_owner, which Caddy needs; use --expose service and put the console behind $web_owner"
+        say "ports 80 and 443 are in use by $web_owner, so the console goes behind it"
+        EXPOSE=service
+    else
+        choose EXPOSE "How do browsers reach the console?" caddy \
+            "caddy|Caddy on ports 80 and 443 with automatic HTTPS (needs a domain)" \
+            "service|Only start the service; I run nginx or another proxy myself"
+    fi
     if [ "$EXPOSE" = caddy ]; then
         while [ -z "$DOMAIN" ]; do
             ask DOMAIN "Domain for the console (its DNS points at this server)" ""
@@ -390,8 +413,12 @@ ask_everything() {
             # Docker's bridge: private to this machine, for proxies that
             # refuse 127.0.0.1 as an upstream, such as SafeLine.
             bridge=$(ip -4 -o addr show docker0 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')
+            bind_default=loopback
+            if [ -n "$bridge" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^safeline-'; then
+                bind_default=bridge
+            fi
             if [ -n "$bridge" ]; then
-                choose BIND "Listen on" loopback \
+                choose BIND "Listen on" "$bind_default" \
                     "loopback|127.0.0.1 only: a proxy on this machine forwards to it" \
                     "bridge|$bridge only (Docker's bridge): for a proxy that refuses 127.0.0.1, such as SafeLine" \
                     "any|Every interface"
@@ -400,12 +427,23 @@ ask_everything() {
                     "loopback|127.0.0.1 only: a proxy on this machine forwards to it" \
                     "any|Every interface"
             fi
-            ask PORT "Port" 8080
+            while :; do
+                ask PORT "Port" 8080
+                [ "$CHECK_PORTS" = 1 ] || break
+                owner=$(port_owner "$PORT")
+                [ -n "$owner" ] || break
+                [ "$YES" = 0 ] || die "port $PORT is in use by $owner; choose another with --listen"
+                echo "Port $PORT is in use by $owner." >/dev/tty
+                PORT=''
+            done
             case "$BIND" in
                 any) LISTEN="0.0.0.0:$PORT" ;;
                 bridge) LISTEN="$bridge:$PORT" ;;
                 *) LISTEN="127.0.0.1:$PORT" ;;
             esac
+        elif [ "$CHECK_PORTS" = 1 ]; then
+            owner=$(port_owner "${LISTEN##*:}")
+            [ -z "$owner" ] || die "port ${LISTEN##*:} is in use by $owner; choose another with --listen"
         fi
         ask PUBLIC_URL "Address browsers and nodes use, e.g. https://control.example.com" "http://$(hostname -f 2>/dev/null || hostname):${LISTEN##*:}"
         choose BEHIND_PROXY "Is it behind a reverse proxy that sets X-Forwarded-For?" yes \
@@ -934,8 +972,11 @@ main() {
     # What the options said, before the saved choices fill the gaps.
     given="EXPOSE=$EXPOSE DOMAIN=$DOMAIN EMAIL=$EMAIL LISTEN=$LISTEN PUBLIC_URL=$PUBLIC_URL BEHIND_PROXY=$BEHIND_PROXY"
     existing=$(find_install)
+    CHECK_PORTS=1
     if [ -n "$existing" ]; then
         load_state "$existing"
+        # Its own Caddy and port are in use by itself.
+        CHECK_PORTS=0
         if [ -z "$ACTION" ]; then
             tty_ready
             choose ACTION "yttt-control is already installed here ($METHOD). What now?" upgrade \

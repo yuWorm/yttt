@@ -104,7 +104,7 @@ client_secret = "…"
 ## 2. 部署节点
 
 1. 控制台 → 节点 → 新建节点：填 ID（如 `tokyo-1`）、显示名，可选域名。
-2. 复制对话框里的命令，在目标 Linux 服务器（x86_64 或 aarch64）上执行。命令只显示一次，1 小时内有效、单次可用。脚本询问直接安装（systemd）还是用 Docker（host 网络，镜像与控制面同版本），以及节点域名（部署命令已带域名时不再询问）；`--method native|docker`、`--yes` 可跳过询问。
+2. 复制对话框里的命令，在目标 Linux 服务器（x86_64 或 aarch64）上执行。命令只显示一次，1 小时内有效、单次可用。脚本询问直接安装（systemd）还是用 Docker（host 网络，镜像与控制面同版本），以及节点域名（部署命令已带域名时不再询问）；`--method native|docker`、`--yes` 可跳过询问。本机的 443 或 80 已被别的程序（nginx、SafeLine 等）占用时，脚本会说明，并让你选择放在它后面（见下文“已有反向代理的机器”）或不用域名；`--yes` 时直接报错并给出参数。
 3. 放行端口：
    - 无域名：TCP 3341。节点地址为 `http://<服务器公网 IP>:3341`。**无域名的节点只能中转，设备之间不会升级为直连**：直连靠设备经 relay 的 QUIC 地址探测（UDP 7842，需要 TLS）得知自己的公网地址，无域名节点不提供这项服务。正式节点请配域名；没有域名时可以用 `<IP 以连字符分隔>.sslip.io`（如 `103-68-192-229.sslip.io`），它解析到对应 IP，Let's Encrypt 能为它签证书。
    - 有域名：域名先解析到该服务器；放行 TCP 443、80 与 UDP 7842。证书由 Let's Encrypt 自动签发，缓存在 `/var/lib/yttt-relay`。443 必须直达服务器，前面不能有 CDN 或 TLS 终结。
@@ -138,9 +138,9 @@ packaging/relay-dev/rehearse-node.sh '<控制台给出的部署命令>' linux/ar
 
 80/443 已被别的反向代理或 WAF 占用、证书由它管理时，控制面与节点都放在它后面，只监听本机地址。nginx 可以转发到 `127.0.0.1`；SafeLine 等 WAF 拒绝 `127.0.0.1` 这类特殊地址作上游（报 `special-use address "127.0.0.1" is not allowed`），这时改用 Docker 网桥地址 `172.17.0.1`（`ip -4 addr show docker0` 查看）。它只在本机可达，外部访问不到。
 
-- **控制面**：安装时选“只启动服务”，监听地址选 `127.0.0.1`，或者选 Docker 网桥（检测到 `docker0` 时脚本会列出这一项）；问到“前面是否有设置 X-Forwarded-For 的反向代理”时答是。也可以直接用参数，例如 `sudo sh install-control.sh --expose service --listen 172.17.0.1:8080 --public-url https://control.example.com --behind-proxy yes`；已安装的用 `--reconfigure --listen 172.17.0.1:8080` 修改，数据与秘密不变。在代理里把 `control.example.com` 转发到该地址，代理必须设置 `X-Forwarded-For`，否则限流会把所有人算作同一来源。
-- **节点**：在节点的部署命令末尾加 `--behind-proxy`（部署命令没带域名时同时加 `--domain relay.example.com`）。节点在代理之后明文监听，默认 `127.0.0.1:3340`，SafeLine 下再加 `--listen 172.17.0.1:3340`。在代理里把 `relay.example.com` 转发到该地址，并允许 WebSocket（relay 协议经 WebSocket 升级连接，请求不能被缓冲或改写）。节点的服务器需放行代理的 TCP 443 与 UDP 7842。
-  - 0.5.0 的控制面发出的部署脚本还没有 `--listen`。这时先按默认部署，再把 `/etc/yttt-relay/relay.toml` 里的 `listen` 改成 `"172.17.0.1:3340"`，然后执行 `systemctl restart yttt-relay`（Docker 安装执行 `docker restart yttt-relay`）。
+- **控制面**：80/443 被占用时脚本不再提供 Caddy，直接改为“只启动服务”。监听地址选 `127.0.0.1`，或者选 Docker 网桥（检测到 `docker0` 时脚本会列出这一项，检测到 SafeLine 时默认选它）；端口被占用时会要求换一个；问到“前面是否有设置 X-Forwarded-For 的反向代理”时答是。也可以直接用参数，例如 `sudo sh install-control.sh --expose service --listen 172.17.0.1:8080 --public-url https://control.example.com --behind-proxy yes`；已安装的用 `--reconfigure --listen 172.17.0.1:8080` 修改，数据与秘密不变。在代理里把 `control.example.com` 转发到该地址，代理必须设置 `X-Forwarded-For`，否则限流会把所有人算作同一来源。
+- **节点**：直接执行带域名的部署命令，脚本发现 443 被占用后选“放在它后面”，再确认监听地址（默认 `127.0.0.1:3340`，检测到 SafeLine 时默认 Docker 网桥 `172.17.0.1:3340`）。不想回答问题时，在命令末尾加 `--behind-proxy [--listen 172.17.0.1:3340]`（部署命令没带域名时同时加 `--domain relay.example.com`）。在代理里把 `relay.example.com` 转发到该地址，并允许 WebSocket（relay 协议经 WebSocket 升级连接，请求不能被缓冲或改写）。节点的服务器需放行代理的 TCP 443 与 UDP 7842。
+  - 0.5.0 的控制面发出的部署脚本还不会检测端口，也没有 `--listen`，要手动加 `--behind-proxy`。这时先按默认部署，再把 `/etc/yttt-relay/relay.toml` 里的 `listen` 改成 `"172.17.0.1:3340"`，然后执行 `systemctl restart yttt-relay`（Docker 安装执行 `docker restart yttt-relay`）。
 - **QUIC 证书**：UDP 7842 不经过代理，由节点直接用 `relay.example.com` 的证书应答。把代理的证书（完整链）与私钥以 PEM 格式放到 `/etc/yttt-relay/quic/cert.pem` 与 `key.pem`，私钥 `0640`、属组 `yttt-relay`（Docker 安装为 `root`）。先写私钥，再写证书，替换时写临时文件再 `mv`。节点每分钟检查一次，证书变化时自动换上，无需重启。证书续期后要再复制一次，可以写成定时任务。没有这两个文件时节点照常中转，只是设备之间不会升级为直连。
 
 ## 3. 日常管理

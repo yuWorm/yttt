@@ -85,6 +85,75 @@ ask_domain() {
     read -r domain </dev/tty || domain=''
 }
 
+# The program listening on TCP port $1: empty when the port is free, or
+# when there is no ss to tell.
+port_owner() {
+    command -v ss >/dev/null || return 0
+    line=$(ss -ltnpH "sport = :$1" 2>/dev/null | head -n 1)
+    [ -n "$line" ] || return 0
+    name=$(echo "$line" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p')
+    echo "${name:-another program}"
+}
+
+# Docker's bridge address, which only this machine reaches.
+bridge_address() {
+    ip -4 -o addr show docker0 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }'
+}
+
+# A node with a domain serves HTTPS on 443 and answers certificate
+# challenges on 80. When another program holds them, the node goes behind
+# it or does without the domain; its own port must be free either way.
+check_ports() {
+    proxy='the proxy'
+    if [ -n "$domain" ] && [ "$behind_proxy" = 0 ]; then
+        owner=$(port_owner 443)
+        [ -n "$owner" ] || owner=$(port_owner 80)
+        case "$owner" in
+            '' | yttt-relay) ;;
+            *)
+                interactive || die "ports 443 and 80 are in use by $owner; rerun with --behind-proxy [--listen ADDRESS:PORT] to run behind it, or without --domain"
+                proxy=$owner
+                echo "Ports 443 and 80 are in use by $owner, so the node cannot serve $domain itself." >/dev/tty
+                echo "  * 1) Behind $owner: it serves $domain over HTTPS and forwards to the node" >/dev/tty
+                echo "    2) Without a domain, on port 3341: the node only relays and devices find no direct paths" >/dev/tty
+                printf 'Choose [1]: ' >/dev/tty
+                read -r answer </dev/tty || answer=''
+                case "$answer" in
+                    2) domain='' ;;
+                    *) behind_proxy=1 ;;
+                esac
+                ;;
+        esac
+    fi
+    if [ "$behind_proxy" = 1 ] && [ -z "$listen" ]; then
+        # SafeLine refuses 127.0.0.1 as an upstream; Docker's bridge is as private.
+        bridge=$(bridge_address)
+        listen=127.0.0.1:3340
+        if [ -n "$bridge" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^safeline-'; then
+            listen=$bridge:3340
+        fi
+        if interactive; then
+            echo "The node listens where $proxy forwards to. SafeLine and some other proxies" >/dev/tty
+            [ -z "$bridge" ] || echo "refuse 127.0.0.1; for them use Docker's bridge, $bridge:3340." >/dev/tty
+            printf 'Listen on [%s]: ' "$listen" >/dev/tty
+            read -r answer </dev/tty || answer=''
+            [ -z "$answer" ] || listen=$answer
+        fi
+    fi
+    if [ "$behind_proxy" = 1 ]; then
+        port=${listen##*:}
+    elif [ -n "$domain" ]; then
+        return 0
+    else
+        port=3341
+    fi
+    owner=$(port_owner "$port")
+    case "$owner" in
+        '' | yttt-relay) ;;
+        *) die "port $port is in use by $owner" ;;
+    esac
+}
+
 main() {
     domain=''
     public_url=''
@@ -139,6 +208,7 @@ main() {
     ask_domain
     [ "$behind_proxy" = 0 ] || [ -n "$domain" ] || die "--behind-proxy needs the --domain the proxy serves"
     [ -z "$listen" ] || [ "$behind_proxy" = 1 ] || die "--listen is for --behind-proxy"
+    check_ports
     if [ -n "$domain" ]; then
         if command -v getent >/dev/null && ! getent hosts "$domain" >/dev/null; then
             die "$domain does not resolve; point its DNS at this machine first"
@@ -315,8 +385,9 @@ wait_healthy() {
     say "waiting for the relay to answer on port $port"
     i=0
     while [ $i -lt 30 ]; do
-        if curl -fsS -k "http://$host:$port/healthz" >/dev/null 2>&1 \
-            || curl -fsS -k "https://$host:$port/healthz" >/dev/null 2>&1; then
+        # Another program may answer on the port; the relay says "ok".
+        if [ "$(curl -fsS -k "http://$host:$port/healthz" 2>/dev/null)" = ok ] \
+            || [ "$(curl -fsS -k "https://$host:$port/healthz" 2>/dev/null)" = ok ]; then
             break
         fi
         i=$((i + 1))
