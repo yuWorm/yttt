@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-07
+
 - 每台 Host 可以自己选择 relay 节点（应用里的“节点”、`yttt-server p2p nodes|node`、控制台“设备”页），显示各节点的延迟与负载；连接它的设备自动跟随 Host 所在的节点，无需任何设置。套餐可限定可用节点和同时使用的节点数。
 - Each Host can choose its relay node (Node in the app, `yttt-server p2p nodes|node`, or the console's Devices page), with each node's latency and load shown; devices that connect to it follow its node on their own. Plans can limit which nodes and how many at once are used.
 - 控制台新增节点负载：在线设备上限、地区、近 24 小时与 30 天的在线设备与流量；满载的节点不再接收新的 Host 和账号。设备页显示每台设备是否在线、所在节点。
@@ -10,7 +12,6 @@
 - Add the `install-control.sh` installer for the control plane: it asks for Docker or a direct install, SQLite or PostgreSQL, and Caddy with automatic certificates or only the service, sets up the first administrator and generates and keeps the secrets; it also upgrades, reconfigures and uninstalls. The control plane runs on SQLite.
 - 节点部署命令改为交互式，可选择直接安装或 Docker。GitHub / Google 登录改在控制台“设置”里配置，client secret 加密保存。
 - The node deploy command now asks how to install, directly or with Docker. GitHub and Google sign-in are set up in the console's settings, with client secrets stored encrypted.
-
 - 应用里的 relay 账号改为“在浏览器中登录”：在控制台点“允许”即可，不再输入密码；无桌面 Host 用 `yttt-server p2p login <控制面>` 显示短码，在任意设备上确认。原邮箱密码登录保留为备选（命令行用 `--password <邮箱>`）。
 - The relay account in the app now signs in through the browser: click Allow on the console instead of typing a password. Headless Hosts run `yttt-server p2p login <control plane>` and confirm the short code it shows from any device. Email and password remain available (`--password <email>` on the command line).
 - relay 控制台支持用 GitHub、Google 登录与注册，可在账号页关联或解除关联；同邮箱的已有账号不会被自动合并。应用与命令行的登录只能使用 relay，不能修改账号或进入管理页；升级后控制台需要重新登录一次。
