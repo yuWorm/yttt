@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** A1、A2 已实现。A3 的端到端限速测试未做，见该节。
+**状态：** A1、A2、B0、B1 已完成。A3 的端到端限速测试未做，见该节。
 
 **依据：** 2026-11-07 的现场诊断。Windows Client 经穿透工具（TLS）与 P2P（始终走 relay，从未直连）连接 macOS Host（34 个终端，多数为 omp agent）：
 
@@ -53,15 +53,20 @@
 
 # B：双向探测与残留客户端
 
+## B0：P2P 断开的会话不再残留
+
+- [x] 复现：Host 上 4 个 `paired-host-client` 会话一小时未结束、`clients` 计数为 5，而 Windows 只剩 2 个 yttt 进程。原因在 Host：QUIC 连接在对端消失约 30 s 后结束（早于会话的 60 s 空闲期限），`serve_work_connection` 随即 `sessions.shutdown()` 中止会话任务；会话收尾写在 `.await` 之后（计数、`suspend_client` 解除附加、lease 宽限与释放、`dropped` 日志），全部被跳过。停用或重启 P2P 时 `accept_loop` 的 `connections.shutdown()` 同理。
+- [x] 测试：设备的 endpoint 突然关闭后，Host 诊断的 `clients` 回到只剩管理员；P2P 被关闭后同样（`p2p_pairing.rs`，两项在修复前都失败）。
+- [x] 连接结束与 P2P 停止时等待会话自行结束，不再中止。
+
 ## B1：Host 识别不再读取的 Client
 
-- [ ] 测试：网络入口会话的可靠队列在期限内没有任何进展（对端仍在发心跳但不读取）时，Host 关闭该连接并记录原因；本机连接不受影响。
-- [ ] 写端记录最后一次写出进展的时间；网络入口超过期限没有进展即关闭（`SessionCloseReason` 新增原因）。
+- [x] 已有机制，未改动：写端每次写入在 30 s 内没有进展即以 `write failed or timed out` 关闭（`send_frame`）。对端不读时，TCP 缓冲与 QUIC 流控都会让写入停滞，因此不读的 Client 在约 30 s 内被关闭；仍在读但读得慢的 Client 由 A1 限制积压。
 
-## B2：远程 Client 进程不残留
+## B2：远程 Client 不残留、失联可操作
 
-- [ ] 复现：查明失败启动的远程 Client 进程为何不退出（连接窗口、恢复中窗口、后台无窗口）。
-- [ ] 测试：远程 Client 在期限内未进入可用状态、或最后一个窗口关闭后，进程退出并释放会话。
+- [x] 复现结论：Windows 上的残留是 Host 一侧的幽灵会话（B0），不是远程 Client 进程。
+- [ ] 断开时远程窗口显示“已断开”及原因、重连进度，并提供“立即重连”“关闭窗口”；恢复工作区长时间失败时同样提供关闭。（由 E 提前到此处。）
 
 ---
 

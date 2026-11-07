@@ -457,8 +457,10 @@ pub(crate) async fn accept_loop(shared: P2pShared, mut context: ConnectionContex
             }
         }
     }
+    // Closing the endpoint ends every connection; each then releases its
+    // sessions' Clients, which aborting it would skip.
     shared.endpoint.close().await;
-    connections.shutdown().await;
+    while connections.join_next().await.is_some() {}
 }
 
 async fn serve_work_connection(
@@ -508,7 +510,9 @@ async fn serve_work_connection(
         });
     }
     connection.close();
-    sessions.shutdown().await;
+    // Each session sees its stream end and releases its Client; aborting it
+    // would skip that and leave the Client counted, attached and leased.
+    while sessions.join_next().await.is_some() {}
 }
 
 async fn serve_pairing_connection(

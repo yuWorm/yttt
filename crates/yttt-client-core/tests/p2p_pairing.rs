@@ -449,3 +449,67 @@ async fn a_device_pairs_and_works_with_only_the_relay_as_a_hint() {
     let client = connect_device(endpoint, &paired, secret).await;
     client.request(Request::ListResources).await.unwrap();
 }
+
+/// Connected Clients the Host last reported in its diagnostics.
+fn reported_clients(runtime_root: &Path) -> Option<usize> {
+    let log = fs::read_to_string(runtime_root.join("host-diagnostics.jsonl")).ok()?;
+    let last: serde_json::Value = serde_json::from_str(log.lines().last()?).ok()?;
+    last["clients"].as_u64().map(|clients| clients as usize)
+}
+
+async fn wait_for_reported_clients(runtime_root: &Path, clients: usize) {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while reported_clients(runtime_root) != Some(clients) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the Host reported {:?} Clients, expected {clients}",
+            reported_clients(runtime_root)
+        )
+    });
+}
+
+/// A device that vanishes without hanging up, like a Client process that was
+/// killed, is released: the Host stops counting it as connected.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_whose_connection_drops_is_released() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime_root = temp.path().join("runtime");
+    let admin = start_host(temp.path()).await;
+    let secret = [23; 32];
+    let (endpoint, paired) = pair_device(&admin, secret, DevicePreset::Full).await;
+    let device = connect_device(endpoint.clone(), &paired, secret).await;
+    device.request(Request::ListResources).await.unwrap();
+    wait_for_reported_clients(&runtime_root, 2).await;
+
+    endpoint.close().await;
+    wait_for_reported_clients(&runtime_root, 1).await;
+    drop(device);
+}
+
+/// Turning P2P off ends the device's session and releases it.
+#[tokio::test(flavor = "multi_thread")]
+async fn turning_p2p_off_releases_connected_devices() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime_root = temp.path().join("runtime");
+    let admin = start_host(temp.path()).await;
+    let secret = [24; 32];
+    let (endpoint, paired) = pair_device(&admin, secret, DevicePreset::Full).await;
+    let device = connect_device(endpoint, &paired, secret).await;
+    device.request(Request::ListResources).await.unwrap();
+    wait_for_reported_clients(&runtime_root, 2).await;
+
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetP2p {
+            enabled: false,
+            relay_url: None,
+        },
+    )
+    .await;
+    wait_for_reported_clients(&runtime_root, 1).await;
+    drop(device);
+}

@@ -642,6 +642,10 @@ channel 管理：Desktop 正常退出、崩溃或被强制结束时，channel �
 `ForceStopping` 并终止 PTY/Agent 子进程。显式 `Independent` 后台 Host 不接受该 owner，
 Desktop 重启时仍可 attach。
 
+Client 进程消失时，Host 靠连接结束或 60 s 空闲期限结束其会话。会话任务的收尾（客户端计数、解除附加、
+lease 宽限与释放、`host.log` 的 `dropped`）写在会话 future 之后，因此入口不得中止会话任务：
+P2P 入口在 QUIC 连接结束或停用时等待各会话读到流结束后自行退出。
+
 ### 9.3 显式生命周期操作
 
 - **Quit Desktop** 关闭 GPUI/tray 和 Client 连接；默认 `DesktopOwned` Host 随 owner
