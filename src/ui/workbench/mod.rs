@@ -3707,6 +3707,7 @@ impl WorkbenchView {
         if is_active {
             self.auxiliary_windows.active = None;
             self.sync_input_owner_state();
+            self.report_active_workspace();
         }
         if is_active
             && self.settings.settings_page.is_open

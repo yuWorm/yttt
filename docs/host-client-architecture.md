@@ -288,6 +288,17 @@ Hook generation 直接使用实际 terminal `session_epoch`；退出事件必须
 `restore_on_startup`；非空记录保留为历史，空记录自动回收。应用退出保留尚未关闭窗口的成员资格。
 历史窗口必须通过 `OpenExisting` 读取，删除后不能因旧列表或重试隐式注册成空窗口。
 
+每个 Desktop Client（本机与远程）只有一个工作窗口。启动只为一个工作区开窗，其余“启动时恢复”的工作区
+留在历史；再次“打开窗口”（Dock、托盘、`yttt` 命令行）激活已有窗口，请求的项目在其中打开。
+从历史打开工作区时，新窗口在原窗口的位置打开，原窗口按正常关闭流程结束：文档先送达 Host，
+其工作区退出启动集合回到历史。
+
+Host 记录本机桌面正在显示的工作区（`WorkspaceRequest::SetActive`，存于状态根的 `active-workspace`，
+随工作区删除而清除），`List` 以 `WorkspaceSummary::active` 标出。本机窗口在显示工作区和窗口被激活时
+上报；远程窗口不上报。`SessionCoordinator` 先认领活动工作区，所以远程 Client 进入后直接打开 Host
+用户正在用的工作区，之后各自切换，不互相跟随。旧 Host 对 `SetActive` 回复 `Unsupported`，旧 Client
+忽略 `active`。
+
 任何已认证 Client 都直接写入，没有控制请求、交接或只读观察者状态；断线重连不冻结编辑，
 也不重放排队 mutation。Session 连接握手后，Client 以一次 `Ping` 往返确认 Host 已把连接绑定到
 本 Client 会话，之后才报告 Ready：以他人会话身份连接会在绑定时被 Host 关闭。

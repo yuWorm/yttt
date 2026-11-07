@@ -1957,6 +1957,9 @@
       "relative_from",
       "relative_to"
     ],
+    "SetActive": [
+      "workspace_id"
+    ],
     "SetRestoreOnStartup": [
       "expected_revision",
       "restore",
@@ -1975,6 +1978,9 @@
     ]
   },
   "WorkspaceResponse": {
+    "ActiveSet": [
+      "workspace_id"
+    ],
     "AgentHooksInstalled": [],
     "AgentSessionMutated": [],
     "AgentSessions": [
@@ -2025,6 +2031,7 @@
   },
   "WorkspaceSummary": {
     "": [
+      "active",
       "name",
       "restore_on_startup",
       "revision",

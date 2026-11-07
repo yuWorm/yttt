@@ -37,6 +37,8 @@ const WORKSPACE_SCHEMA_VERSION: u16 = 4;
 /// Suffix of a pre-schema-4 record kept beside the record migrated from it.
 const LEGACY_RECORD_SUFFIX: &str = ".schema3.json";
 const MAX_WORKSPACES: usize = 128;
+/// Under the state root; holds the identifier of the active workspace.
+const ACTIVE_WORKSPACE_FILE: &str = "active-workspace";
 const MAX_WORKSPACE_STATE_BYTES: usize = 24 * 1024 * 1024;
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BROWSE_ENTRIES: usize = 4096;
@@ -74,6 +76,8 @@ struct ServiceState {
     /// Epoch of the next lease grant. Starts at the Host's start time, so a
     /// grant never repeats an epoch a Client holds from an earlier Host run.
     next_lease_epoch: u64,
+    /// The workspace the Host's own desktop shows; see `SetActive`.
+    active: Option<WorkspaceId>,
 }
 
 /// A change sent to the Clients that opened a workspace.
@@ -358,6 +362,14 @@ impl WorkspaceService {
             }
         }
 
+        let active = match fs::read_to_string(state_root.join(ACTIVE_WORKSPACE_FILE)) {
+            Ok(identifier) => WorkspaceId::new(identifier.trim())
+                .ok()
+                .filter(|id| workspaces.contains_key(id)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+
         Ok(Self {
             state_root,
             config_root,
@@ -377,6 +389,7 @@ impl WorkspaceService {
                 restored_projects: HashSet::new(),
                 leases: HashMap::new(),
                 next_lease_epoch: crate::now_millis(),
+                active,
             }),
         })
     }
@@ -486,6 +499,21 @@ impl WorkspaceService {
             | WorkspaceRequest::MutateAgentSession { .. }
             | WorkspaceRequest::OmpSessionExists { .. } => {
                 unreachable!("handled before the state lock")
+            }
+            WorkspaceRequest::SetActive { workspace_id } => {
+                if !state.workspaces.contains_key(&workspace_id) {
+                    return Err(failure(FailureCode::NotFound, "workspace not found", false));
+                }
+                if state.active.as_ref() != Some(&workspace_id) {
+                    atomic_write(
+                        &self.state_root.join(ACTIVE_WORKSPACE_FILE),
+                        workspace_id.as_str().as_bytes(),
+                        random_temporary_file(),
+                    )
+                    .map_err(|error| filesystem_failure("store the active workspace", error))?;
+                    state.active = Some(workspace_id.clone());
+                }
+                Ok(WorkspaceResponse::ActiveSet { workspace_id })
             }
             WorkspaceRequest::InstallAgentHooks => {
                 let home = environment(
@@ -679,7 +707,10 @@ impl WorkspaceService {
                 let mut entries = state
                     .workspaces
                     .iter()
-                    .map(|(id, record)| workspace_summary(id, record))
+                    .map(|(id, record)| WorkspaceSummary {
+                        active: state.active.as_ref() == Some(id),
+                        ..workspace_summary(id, record)
+                    })
                     .collect::<Vec<_>>();
                 entries.sort_by(|a, b| a.workspace_id.as_str().cmp(b.workspace_id.as_str()));
                 Ok(WorkspaceResponse::Workspaces(entries))
@@ -1206,6 +1237,14 @@ impl WorkspaceService {
                 filesystem_failure("preserve workspace history initialization", error)
             })?;
             state.history_initialized = true;
+        }
+        if state.active.as_ref() == Some(workspace_id) {
+            match fs::remove_file(self.state_root.join(ACTIVE_WORKSPACE_FILE)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(filesystem_failure("clear the active workspace", error)),
+            }
+            state.active = None;
         }
         fs::remove_file(self.workspace_path(workspace_id))
             .map_err(|error| filesystem_failure("delete workspace", error))?;
@@ -1779,6 +1818,7 @@ fn workspace_summary(id: &WorkspaceId, record: &WorkspaceRecord) -> WorkspaceSum
         revision: record.revision(),
         saved_millis: record.saved_millis,
         restore_on_startup: record.restore_on_startup,
+        active: false,
     }
 }
 
@@ -2545,6 +2585,73 @@ mod tests {
             agent_states.is_empty(),
             "Client restored a snapshot the Host already cleared: {agent_states:?}"
         );
+    }
+
+    fn active_workspaces(host: &WorkspaceService) -> Vec<WorkspaceId> {
+        let WorkspaceResponse::Workspaces(index) = host
+            .handle(&client("reader"), WorkspaceRequest::List)
+            .unwrap()
+        else {
+            panic!("index")
+        };
+        index
+            .into_iter()
+            .filter(|entry| entry.active)
+            .map(|entry| entry.workspace_id)
+            .collect()
+    }
+
+    #[test]
+    fn the_active_workspace_survives_a_restart_and_leaves_with_its_workspace() {
+        let root = tempdir().unwrap();
+        let host = service(root.path());
+        let owner = client("owner");
+        open_project(&host, root.path());
+        assert!(active_workspaces(&host).is_empty());
+        assert_eq!(
+            host.handle(
+                &owner,
+                WorkspaceRequest::SetActive {
+                    workspace_id: WorkspaceId::new("missing").unwrap(),
+                },
+            )
+            .unwrap_err()
+            .code,
+            FailureCode::NotFound
+        );
+        host.handle(
+            &owner,
+            WorkspaceRequest::SetActive {
+                workspace_id: workspace(),
+            },
+        )
+        .unwrap();
+        assert_eq!(active_workspaces(&host), vec![workspace()]);
+
+        drop(host);
+        let host = service(root.path());
+        assert_eq!(active_workspaces(&host), vec![workspace()]);
+
+        host.handle(
+            &owner,
+            WorkspaceRequest::SetRestoreOnStartup {
+                workspace_id: workspace(),
+                expected_revision: 1,
+                restore: false,
+            },
+        )
+        .unwrap();
+        host.handle(
+            &owner,
+            WorkspaceRequest::Forget {
+                workspace_id: workspace(),
+                expected_revision: 1,
+            },
+        )
+        .unwrap();
+        assert!(active_workspaces(&host).is_empty());
+        drop(host);
+        assert!(active_workspaces(&service(root.path())).is_empty());
     }
 
     #[test]

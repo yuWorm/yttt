@@ -5,8 +5,6 @@ const ACTION_QUEUE_CAPACITY: usize = 32;
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const OPEN_ID: &str = "yttt.tray.open";
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
-const NEW_WINDOW_ID: &str = "yttt.tray.new-window";
-#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const OPEN_LOGS_ID: &str = "yttt.tray.open-logs";
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const START_HOST_ID: &str = "yttt.tray.start-host";
@@ -22,7 +20,6 @@ const QUIT_ALL_ID: &str = "yttt.tray.quit-all";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DesktopTrayAction {
     Open,
-    NewWindow,
     OpenLogs,
     StartHost,
     StopHost,
@@ -120,7 +117,6 @@ pub fn create_desktop_tray() -> Result<Box<dyn DesktopTrayAdapter>, DesktopTrayE
 fn action_for_id(id: &str) -> Option<DesktopTrayAction> {
     match id {
         OPEN_ID => Some(DesktopTrayAction::Open),
-        NEW_WINDOW_ID => Some(DesktopTrayAction::NewWindow),
         OPEN_LOGS_ID => Some(DesktopTrayAction::OpenLogs),
         START_HOST_ID => Some(DesktopTrayAction::StartHost),
         STOP_HOST_ID => Some(DesktopTrayAction::StopHost),
@@ -156,7 +152,7 @@ mod platform {
         stop_host: MenuItem,
         restart_host: MenuItem,
         actions: flume::Receiver<DesktopTrayAction>,
-        labels: [(MenuItem, UiTextKey); 8],
+        labels: [(MenuItem, UiTextKey); 7],
         locale: std::cell::Cell<Option<crate::ui::i18n::Locale>>,
     }
 
@@ -165,12 +161,6 @@ mod platform {
             let text = UiText::english();
             let status = MenuItem::with_id("yttt.tray.status", "", false, None);
             let open = MenuItem::with_id(OPEN_ID, text.get(UiTextKey::TrayOpen), true, None);
-            let new_window = MenuItem::with_id(
-                NEW_WINDOW_ID,
-                text.get(UiTextKey::TrayNewWindow),
-                true,
-                None,
-            );
             let open_logs =
                 MenuItem::with_id(OPEN_LOGS_ID, text.get(UiTextKey::TrayOpenLogs), true, None);
             let start_host = MenuItem::with_id(
@@ -202,7 +192,6 @@ mod platform {
                 &status,
                 &separator_one,
                 &open,
-                &new_window,
                 &open_logs,
                 &separator_two,
                 &start_host,
@@ -233,7 +222,6 @@ mod platform {
                 status,
                 labels: [
                     (open, UiTextKey::TrayOpen),
-                    (new_window, UiTextKey::TrayNewWindow),
                     (open_logs, UiTextKey::TrayOpenLogs),
                     (start_host.clone(), UiTextKey::TrayStartHost),
                     (stop_host.clone(), UiTextKey::TrayStopHost),

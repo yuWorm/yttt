@@ -251,16 +251,9 @@ impl WorkbenchView {
         else {
             return;
         };
-        match crate::ui::app::open_history_workspace(entry.summary.workspace_id.clone(), cx) {
-            Ok(()) => self.close_palette(),
-            Err(error) => {
-                self.palette.workspace_history.error = Some(format!(
-                    "{}: {error}",
-                    self.ui_text
-                        .get(UiTextKey::WorkbenchI18nWorkspaceHistoryOpenError)
-                ))
-            }
-        }
+        // One window per Client: the chosen workspace takes this window's place.
+        self.request_workspace_switch(entry.summary.workspace_id.clone());
+        self.close_palette();
         cx.notify();
     }
 

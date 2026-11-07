@@ -15,7 +15,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::FilePreviewSource => "Source",
         UiTextKey::FilePreviewReload => "Reload",
         UiTextKey::TrayOpen => "Open yttt",
-        UiTextKey::TrayNewWindow => "New Window",
         UiTextKey::TrayOpenLogs => "Open Logs",
         UiTextKey::TrayStartHost => "Start Host",
         UiTextKey::TrayStopHost => "Stop Host If Idle",

@@ -87,6 +87,8 @@ pub(super) struct WorkspacePersistenceState {
     last_error: Option<String>,
     /// The window shows that its remote Host session is down.
     outage_shown: bool,
+    /// A workspace from history that replaces this window's.
+    pending_switch: Option<WorkspaceId>,
 }
 
 /// A workspace as the Host returned it, with the Agent states of its panes.
@@ -135,6 +137,65 @@ impl WorkbenchView {
 
     pub(super) fn workspace_restore_failed(&self) -> bool {
         self.workspace_persistence.mode == WorkspacePersistenceMode::RestoreFailed
+    }
+
+    /// Opens projects the desktop shell asked for in this window; before the
+    /// Host workspace shows, they wait for it like the startup projects.
+    pub(crate) fn open_requested_projects(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.workspace_persistence.startup_projects.extend(paths);
+        if self.workspace_persistence.mode == WorkspacePersistenceMode::Active {
+            self.open_startup_projects();
+        }
+        cx.notify();
+    }
+
+    /// Replaces this window's workspace with one from history once the next
+    /// tick has the window: the chosen workspace opens where this window is,
+    /// and this window closes as the user would close it, so its documents
+    /// reach the Host and its workspace returns to history.
+    pub(crate) fn request_workspace_switch(&mut self, workspace_id: WorkspaceId) {
+        self.workspace_persistence.pending_switch = Some(workspace_id);
+    }
+
+    fn finish_workspace_switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace_id) = self.workspace_persistence.pending_switch.take() else {
+            return;
+        };
+        if let Err(error) =
+            crate::ui::app::open_history_workspace(workspace_id, window.window_bounds(), cx)
+        {
+            self.palette.workspace_history.error = Some(format!(
+                "{}: {error}",
+                self.ui_text
+                    .get(UiTextKey::WorkbenchI18nWorkspaceHistoryOpenError)
+            ));
+            cx.notify();
+            return;
+        }
+        if self.flush_workspace_persistence_on_close(window, cx) {
+            window.remove_window();
+        }
+    }
+
+    /// Tells the Host that its own desktop shows this window's workspace, so a
+    /// remote Client opens it on arrival. Remote windows never report.
+    pub(super) fn report_active_workspace(&self) {
+        let Some(runtime) = self.terminal.host_runtime.as_ref() else {
+            return;
+        };
+        if runtime.is_remote()
+            || self.workspace_persistence.mode != WorkspacePersistenceMode::Active
+        {
+            return;
+        }
+        let Some(view) = self.workspace_persistence.view.as_ref() else {
+            return;
+        };
+        let _ = runtime.request_detached(yttt_protocol::Request::Workspace(
+            WorkspaceRequest::SetActive {
+                workspace_id: view.id().clone(),
+            },
+        ));
     }
 
     /// Why the remote Host session is down, once it has been long enough to say.
@@ -358,6 +419,7 @@ impl WorkbenchView {
                     .update_in(cx, |root, window, cx| {
                         root.tick_workspace_persistence(window, cx);
                         root.refresh_host_outage(cx);
+                        root.finish_workspace_switch(window, cx);
                     })
                     .is_err()
                 {
@@ -536,6 +598,7 @@ impl WorkbenchView {
         self.workspace_persistence.connection_sequence = Some(opened.connection_sequence);
         self.workspace_persistence.mode = WorkspacePersistenceMode::Active;
         self.clear_workspace_persistence_error();
+        self.report_active_workspace();
         self.record_all_document_states(opened.documents);
         self.adopt_host_workspace_layout(window, cx);
         self.open_startup_projects();

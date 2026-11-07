@@ -15,7 +15,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::FilePreviewSource => "源码",
         UiTextKey::FilePreviewReload => "重新加载",
         UiTextKey::TrayOpen => "打开 yttt",
-        UiTextKey::TrayNewWindow => "新建窗口",
         UiTextKey::TrayOpenLogs => "打开日志",
         UiTextKey::TrayStartHost => "启动 Host",
         UiTextKey::TrayStopHost => "空闲时停止 Host",

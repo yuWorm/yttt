@@ -13,7 +13,6 @@ pub enum UiTextKey {
     FilePreviewSource,
     FilePreviewReload,
     TrayOpen,
-    TrayNewWindow,
     TrayOpenLogs,
     TrayStartHost,
     TrayStopHost,

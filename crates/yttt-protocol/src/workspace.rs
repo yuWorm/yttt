@@ -142,6 +142,10 @@ pub struct WorkspaceSummary {
     /// Closed workspaces remain history, not startup windows.
     #[serde(default = "default_restore_on_startup")]
     pub restore_on_startup: bool,
+    /// The workspace the Host's own desktop shows, which a remote Client opens
+    /// on arrival. Only `List` reports it.
+    #[serde(default)]
+    pub active: bool,
 }
 
 fn default_restore_on_startup() -> bool {
@@ -433,6 +437,11 @@ pub enum WorkspaceRequest {
         workspace_id: WorkspaceId,
         reference: AgentStateRef,
     },
+    /// Marks the workspace the Host's own desktop shows. A Host that predates
+    /// it answers `Unsupported`.
+    SetActive {
+        workspace_id: WorkspaceId,
+    },
 }
 
 impl WorkspaceRequest {
@@ -513,6 +522,9 @@ pub enum WorkspaceResponse {
         reference: AgentStateRef,
         #[serde(with = "serde_bytes")]
         content: Vec<u8>,
+    },
+    ActiveSet {
+        workspace_id: WorkspaceId,
     },
 }
 

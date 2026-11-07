@@ -6,7 +6,7 @@ pub mod platform;
 mod remote_connect;
 pub mod startup;
 
-use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
     App, AppContext, Bounds, Entity, Global, Pixels, QuitMode, Styled, WeakEntity, Window,
@@ -173,22 +173,10 @@ pub fn run(
         };
         cx.set_global(window_context.clone());
         install_desktop_tray(window_context.clone(), cx);
+        // The one work window restores the Host's active workspace first;
+        // other startup workspaces stay in history.
         if let Err(error) = handle_desktop_shell_command(initial_command, &window_context, cx) {
             eprintln!("failed to open initial yttt window: {error}");
-        }
-        if restore_windows {
-            while cx
-                .global::<HostRuntimeGlobal>()
-                .runtime()
-                .is_some_and(|runtime| runtime.pending_workspace_count() > 0)
-            {
-                if let Err(error) =
-                    open_workbench_window(&window_context, WindowIntent::Restore, cx)
-                {
-                    eprintln!("failed to restore work window: {error}");
-                    break;
-                }
-            }
         }
         start_desktop_shell_listener(desktop_shell, window_context, cx);
     });
@@ -248,7 +236,6 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
                     {
                         eprintln!("cannot remember open remote Client: {error}");
                     }
-                    let workspace_count = remote.runtime.pending_workspace_count().max(1);
                     cx.set_global(HostRuntimeGlobal::ready(remote.runtime));
                     let (app_settings, theme_runtime) = load_app_runtime(&remote.config_paths);
                     let appearance = AppearanceState::new(theme_runtime);
@@ -274,13 +261,9 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
                         restore_remote_clients: Rc::new(std::cell::Cell::new(false)),
                     };
                     cx.set_global(context.clone());
-                    for _ in 0..workspace_count {
-                        if let Err(error) =
-                            open_workbench_window(&context, WindowIntent::Restore, cx)
-                        {
-                            eprintln!("failed to open remote workspace: {error}");
-                            break;
-                        }
+                    // One window, on the Host's active workspace when it has one.
+                    if let Err(error) = open_workbench_window(&context, WindowIntent::Restore, cx) {
+                        eprintln!("failed to open remote workspace: {error}");
                     }
                     for window in cx.windows() {
                         let _ = window.update(cx, |_, window, _| {
@@ -310,12 +293,15 @@ struct DesktopWindowContext {
 }
 impl gpui::Global for DesktopWindowContext {}
 
+/// Opens a workspace from history in a window placed at `bounds`, so it can
+/// take the place of the window that asked for it.
 pub(crate) fn open_history_workspace(
     id: yttt_protocol::workspace::WorkspaceId,
+    bounds: WindowBounds,
     cx: &mut App,
 ) -> anyhow::Result<()> {
     let context = cx.global::<DesktopWindowContext>().clone();
-    open_workbench_window(&context, WindowIntent::History(id), cx)
+    open_workbench_window_at(&context, WindowIntent::History(id), Some(bounds), cx)
 }
 fn desktop_quit_mode(terminal_performance_mode: bool) -> QuitMode {
     if terminal_performance_mode {
@@ -355,16 +341,33 @@ fn handle_desktop_shell_command(
                 open_workbench_window(window_context, WindowIntent::Restore, cx)?;
             }
         }
+        // One window per Client: requested projects open in the existing one.
         DesktopShellCommand::OpenWindow { project_paths } => {
-            let intent = if project_paths.is_empty() {
-                WindowIntent::Empty
-            } else {
-                WindowIntent::OpenProjects(project_paths)
-            };
-            open_workbench_window(window_context, intent, cx)?;
+            if let Some(view) = open_workbench(window_context) {
+                view.update(cx, |root, cx| {
+                    root.open_requested_projects(project_paths, cx)
+                });
+                activate_workbench_window(cx);
+                return Ok(());
+            }
+            open_workbench_window(window_context, WindowIntent::Restore, cx)?;
+            if let Some(view) = open_workbench(window_context) {
+                view.update(cx, |root, cx| {
+                    root.open_requested_projects(project_paths, cx)
+                });
+            }
         }
     }
     Ok(())
+}
+
+/// The work window of this Client, if one is open.
+fn open_workbench(window_context: &DesktopWindowContext) -> Option<Entity<WorkbenchView>> {
+    window_context
+        .workbenches
+        .borrow()
+        .iter()
+        .find_map(WeakEntity::upgrade)
 }
 
 fn activate_workbench_window(cx: &mut App) -> bool {
@@ -476,14 +479,21 @@ fn start_remote_client_restore(profile: AppProfile, cx: &mut App) {
 
 enum WindowIntent {
     Restore,
-    Empty,
     History(yttt_protocol::workspace::WorkspaceId),
-    OpenProjects(Vec<PathBuf>),
 }
 
 fn open_workbench_window(
     window_context: &DesktopWindowContext,
     intent: WindowIntent,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    open_workbench_window_at(window_context, intent, None, cx)
+}
+
+fn open_workbench_window_at(
+    window_context: &DesktopWindowContext,
+    intent: WindowIntent,
+    placement: Option<WindowBounds>,
     cx: &mut App,
 ) -> anyhow::Result<()> {
     let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
@@ -523,6 +533,9 @@ fn open_workbench_window(
     if startup_mode == StartupMode::ReadmeFixture {
         options.window_bounds = Some(WindowBounds::Maximized(bounds));
     }
+    if placement.is_some() {
+        options.window_bounds = placement;
+    }
     cx.open_window(options, move |window, cx| {
         let view = cx.new(|_| {
             let force_onboarding =
@@ -532,18 +545,11 @@ fn open_workbench_window(
                 StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
                 StartupMode::ReadmeFixture => WorkbenchView::readme_fixture(config_paths.clone()),
                 StartupMode::Normal => match intent {
-                    WindowIntent::OpenProjects(paths) => WorkbenchView::from_project_paths(
+                    WindowIntent::History(_) => WorkbenchView::from_project_paths(
                         config_paths.clone(),
                         force_onboarding,
-                        paths,
+                        Vec::new(),
                     ),
-                    WindowIntent::Empty | WindowIntent::History(_) => {
-                        WorkbenchView::from_project_paths(
-                            config_paths.clone(),
-                            force_onboarding,
-                            Vec::new(),
-                        )
-                    }
                     WindowIntent::Restore if !restore_existing => {
                         WorkbenchView::from_project_paths(
                             config_paths.clone(),
@@ -668,15 +674,6 @@ fn handle_desktop_tray_action(
     match action {
         DesktopTrayAction::Open => {
             handle_desktop_shell_command(DesktopShellCommand::Activate, window_context, cx)?;
-        }
-        DesktopTrayAction::NewWindow => {
-            handle_desktop_shell_command(
-                DesktopShellCommand::OpenWindow {
-                    project_paths: Vec::new(),
-                },
-                window_context,
-                cx,
-            )?;
         }
         DesktopTrayAction::OpenLogs => {
             std::fs::create_dir_all(&window_context.profile.paths().logs)?;
@@ -1217,30 +1214,27 @@ pub fn window_background_appearance(effect: WindowBackgroundEffect) -> WindowBac
 mod tests {
     use super::*;
 
+    /// Puts a workspace with one project on the Host and returns the project.
     #[cfg(unix)]
-    #[gpui::test]
-    fn remote_window_opens_host_project_when_startup_restore_is_disabled(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        use crate::config::profile::{
-            EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
-        };
+    fn workspace_with_project(
+        source: &crate::host_runtime::DesktopHostRuntime,
+        project_root: &std::path::Path,
+        workspace: &str,
+        project: &str,
+    ) -> crate::model::ids::ProjectId {
         use crate::model::{
             ids::ProjectId,
             project::{ProjectDescriptor, ProjectLocation},
         };
-        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
         use yttt_core::model::host_workspace::{ProjectPanel, WorkspaceIntent};
         use yttt_protocol::workspace::{WorkspaceId, WorkspaceRequest};
 
-        let host = RecoveryHost::start();
-        let source = host.client("source");
-        let project_id = ProjectId::new("already-open");
-        let workspace_id = WorkspaceId::new("existing-window").unwrap();
+        let project_id = ProjectId::new(project);
+        let workspace_id = WorkspaceId::new(workspace).unwrap();
         source
             .workspace_request(WorkspaceRequest::Register {
                 workspace_id: workspace_id.clone(),
-                name: "Existing window".into(),
+                name: workspace.into(),
             })
             .unwrap();
         source
@@ -1249,10 +1243,10 @@ mod tests {
                 intent: WorkspaceIntent::OpenProject {
                     descriptor: ProjectDescriptor::new(
                         project_id.clone(),
-                        ProjectLocation::local(host.root.path().to_path_buf()),
+                        ProjectLocation::local(project_root.to_path_buf()),
                     ),
                     layout: crate::config::default_layout::DefaultLayoutTemplate::builtin()
-                        .materialize("Already open"),
+                        .materialize(project),
                     panel: ProjectPanel {
                         visible: true,
                         width: 240.0,
@@ -1261,12 +1255,25 @@ mod tests {
                 expected_revision: None,
             })
             .unwrap();
-        let remote = host.client("remote");
+        project_id
+    }
+
+    /// Starts the app on `remote` and opens its one work window.
+    #[cfg(unix)]
+    fn open_remote_window(
+        cx: &mut gpui::TestAppContext,
+        remote: Arc<crate::host_runtime::DesktopHostRuntime>,
+        root: &std::path::Path,
+    ) -> DesktopWindowContext {
+        use crate::config::profile::{
+            EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        };
+
         let profile = AppProfile::scoped(
             yttt_core::model::ids::ProfileId::new("remote-window-test"),
             EnvironmentKind::Test,
             ProfilePersistence::Ephemeral,
-            host.root.path().join("client"),
+            root.join("client"),
             ProjectConfigPolicy::Overlay,
             HostConnectPolicy::ProfileDiscovery,
         );
@@ -1293,24 +1300,146 @@ mod tests {
             yttt_terminal::init(cx);
             cx.set_global(appearance);
             cx.set_global(HostRuntimeGlobal::ready(remote));
+            cx.set_global(context.clone());
             open_workbench_window(&context, WindowIntent::Restore, cx).unwrap();
         });
-        let view = context.workbenches.borrow()[0].upgrade().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        context
+    }
+
+    /// Waits until the one work window shows `project`.
+    #[cfg(unix)]
+    fn wait_for_project(
+        cx: &mut gpui::TestAppContext,
+        context: &DesktopWindowContext,
+        project: &crate::model::ids::ProjectId,
+    ) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
+            // The work window's periodic tick runs on the test clock.
+            cx.executor().advance_clock(Duration::from_millis(500));
             cx.run_until_parked();
-            if cx.read(|cx| view.read(cx).workspace().selected_project_id() == Some(&project_id)) {
-                break;
+            let shown = open_workbench(context).and_then(|view| {
+                cx.read(|cx| view.read(cx).workspace().selected_project_id().cloned())
+            });
+            if shown.as_ref() == Some(project) {
+                return;
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "remote connection stayed on the empty dashboard: {:?}",
-                cx.read(|cx| view.read(cx).visible_error_message().map(str::to_owned))
+                "the work window showed {shown:?}, not {project:?}: {:?}",
+                open_workbench(context)
+                    .and_then(|view| cx
+                        .read(|cx| view.read(cx).visible_error_message().map(str::to_owned)))
             );
             std::thread::sleep(Duration::from_millis(10));
         }
     }
 
+    #[cfg(unix)]
+    fn work_windows(cx: &mut gpui::TestAppContext, context: &DesktopWindowContext) -> usize {
+        cx.run_until_parked();
+        context
+            .workbenches
+            .borrow()
+            .iter()
+            .filter(|view| view.upgrade().is_some())
+            .count()
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn remote_window_opens_host_project_when_startup_restore_is_disabled(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+
+        let host = RecoveryHost::start();
+        let project_id = workspace_with_project(
+            &host.client("source"),
+            host.root.path(),
+            "existing-window",
+            "already-open",
+        );
+        let context = open_remote_window(cx, host.client("remote"), host.root.path());
+        wait_for_project(cx, &context, &project_id);
+    }
+
+    /// The desktop has one work window: asking for another brings it back.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn opening_a_window_again_reuses_the_work_window(cx: &mut gpui::TestAppContext) {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+
+        let host = RecoveryHost::start();
+        let project_id =
+            workspace_with_project(&host.client("source"), host.root.path(), "only", "only");
+        let context = open_remote_window(cx, host.client("remote"), host.root.path());
+        wait_for_project(cx, &context, &project_id);
+
+        cx.update(|cx| {
+            handle_desktop_shell_command(
+                DesktopShellCommand::OpenWindow {
+                    project_paths: Vec::new(),
+                },
+                &context,
+                cx,
+            )
+            .unwrap();
+        });
+        assert_eq!(work_windows(cx, &context), 1);
+        wait_for_project(cx, &context, &project_id);
+    }
+
+    /// A workspace from history takes the place of the window's workspace,
+    /// which returns to history, instead of opening a second window.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_workspace_from_history_replaces_the_windows_workspace(cx: &mut gpui::TestAppContext) {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        use yttt_protocol::workspace::{WorkspaceId, WorkspaceRequest, WorkspaceResponse};
+
+        let host = RecoveryHost::start();
+        let source = host.client("source");
+        let first = workspace_with_project(&source, host.root.path(), "first", "first");
+        let second = workspace_with_project(&source, host.root.path(), "second", "second");
+        let history = WorkspaceId::new("second").unwrap();
+        let WorkspaceResponse::Workspaces(index) =
+            source.workspace_request(WorkspaceRequest::List).unwrap()
+        else {
+            panic!("index")
+        };
+        let revision = index
+            .iter()
+            .find(|entry| entry.workspace_id == history)
+            .unwrap()
+            .revision;
+        source
+            .workspace_request(WorkspaceRequest::SetRestoreOnStartup {
+                workspace_id: history.clone(),
+                expected_revision: revision,
+                restore: false,
+            })
+            .unwrap();
+        let context = open_remote_window(cx, host.client("remote"), host.root.path());
+        wait_for_project(cx, &context, &first);
+
+        let view = open_workbench(&context).unwrap();
+        view.update(cx, |root, _| root.request_workspace_switch(history));
+        drop(view);
+        wait_for_project(cx, &context, &second);
+        assert_eq!(work_windows(cx, &context), 1);
+        let WorkspaceResponse::Workspaces(index) =
+            source.workspace_request(WorkspaceRequest::List).unwrap()
+        else {
+            panic!("index")
+        };
+        let startup = index
+            .iter()
+            .filter(|entry| entry.restore_on_startup)
+            .map(|entry| entry.workspace_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(startup, vec!["second"]);
+    }
     #[test]
     fn production_desktop_remains_running_after_the_last_window_closes() {
         assert_eq!(desktop_quit_mode(false), QuitMode::Explicit);

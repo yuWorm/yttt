@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** A1、A2、B0、B1、B2 的断开遮罩已完成。A3 的端到端限速测试未做，见该节。
+**状态：** A1、A2、B0、B1、B2 的断开遮罩、C、D 已完成；E 的延迟显示与两级判定、F 未开始。A3 的端到端限速测试未做，见该节。
 
 **依据：** 2026-11-07 的现场诊断。Windows Client 经穿透工具（TLS）与 P2P（始终走 relay，从未直连）连接 macOS Host（34 个终端，多数为 omp agent）：
 
@@ -77,19 +77,23 @@
 
 ## C1：Host 记录活动工作区
 
-- [ ] 测试：本机窗口显示的工作区成为活动工作区并持久化；工作区列表标记它；旧 Client 忽略该字段。
-- [ ] 远程 Client 启动时优先认领活动工作区，无活动工作区时退回现有顺序。之后由远程自行切换，不跟随 Host。
+- [x] 测试：活动工作区持久化、重启后仍在，未知工作区 `NotFound`，工作区删除后清除（`the_active_workspace_survives_a_restart_and_leaves_with_its_workspace`）；`SessionCoordinator` 先认领活动工作区（`a_restoring_window_claims_the_hosts_active_workspace_first`）。
+- [x] 协议追加 `WorkspaceRequest::SetActive`、`WorkspaceResponse::ActiveSet` 与 `WorkspaceSummary::active`（`#[serde(default)]`），已重写 `wire-shapes-v22.json`，只有新增。
+- [x] 本机窗口在显示工作区与被激活时上报；远程窗口不上报，进入后不跟随 Host 切换。**偏离：** 上报的接线没有单独测试，需要本机 Host 的 GPUI 夹具。
 
 ## C2：单窗口
 
-- [ ] 测试：本机与远程 Client 打开历史工作区时在当前窗口切换，不新开窗口；被替换的工作区不再标为启动时恢复。
-- [ ] Dock、托盘与桌面控制的“打开窗口”激活已有窗口。
+- [x] 测试：已有窗口时再次“打开窗口”不新开（`opening_a_window_again_reuses_the_work_window`）；从历史打开在原位置替换并只剩一个窗口，被替换的工作区退出启动集合（`a_workspace_from_history_replaces_the_windows_workspace`）。
+- [x] 本机启动与远程启动都只开一个窗口；`OpenWindow` 在已有窗口中打开请求的项目；托盘去掉“新建窗口”。
+- [ ] 手工验证：Mac 上从历史切换工作区，窗口位置不变、旧工作区出现在历史；Windows 远程进入直接显示 Mac 当前工作区。
 
 ---
 
 # D：进入远程后关闭连接列表
 
-- [ ] 远程 Client 进程启动成功后关闭连接列表／设置窗口；连接进度与错误由远程进程的连接窗口负责。
+- [x] 测试：表单发出 `RemoteClientLaunched` 后远程服务窗口关闭（`the_connections_window_closes_once_a_remote_client_starts`，去掉订阅即失败）。
+- [x] TLS 连接码与 P2P 配对表单在远程 Client 进程启动成功后发出该事件；SSH 项目选择器启动成功后同样关闭（SSH 服务器原本已关闭）。
+- [ ] 手工验证：从远程服务窗口连接后，该窗口自动关闭，只剩远程 Client 的连接窗口与工作窗口。
 
 ---
 

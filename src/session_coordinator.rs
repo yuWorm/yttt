@@ -54,12 +54,19 @@ impl Drop for WorkspaceViewLease {
 
 impl SessionCoordinator {
     pub fn new(workspaces: Vec<WorkspaceSummary>) -> Arc<Self> {
+        let history_initialized = !workspaces.is_empty();
+        let mut available = workspaces
+            .into_iter()
+            .filter(|entry| entry.restore_on_startup || entry.active)
+            .collect::<Vec<_>>();
+        // A window that restores takes the workspace the Host's desktop shows
+        // first; a remote Client arrives where the Host user left off.
+        available.sort_by_key(|entry| !entry.active);
         Arc::new(Self {
             state: Mutex::new(State {
-                history_initialized: !workspaces.is_empty(),
-                available: workspaces
+                history_initialized,
+                available: available
                     .into_iter()
-                    .filter(|entry| entry.restore_on_startup)
                     .map(|entry| entry.workspace_id)
                     .collect(),
                 views: HashMap::new(),
@@ -143,5 +150,29 @@ mod tests {
         assert_eq!(restored.id(), &saved);
         assert_ne!(restored.id(), other.id());
         assert!(coordinator.claim(Some(saved), false).is_err());
+    }
+
+    fn summary(id: &str, restore_on_startup: bool, active: bool) -> WorkspaceSummary {
+        WorkspaceSummary {
+            workspace_id: WorkspaceId::new(id).unwrap(),
+            name: id.into(),
+            revision: 1,
+            saved_millis: 1,
+            restore_on_startup,
+            active,
+        }
+    }
+
+    #[test]
+    fn a_restoring_window_claims_the_hosts_active_workspace_first() {
+        let coordinator = SessionCoordinator::new(vec![
+            summary("a-startup", true, false),
+            summary("b-active", true, true),
+            summary("c-closed", false, false),
+        ]);
+        let first = coordinator.claim(None, true).unwrap();
+        assert_eq!(first.id().as_str(), "b-active");
+        let second = coordinator.claim(None, true).unwrap();
+        assert_eq!(second.id().as_str(), "a-startup");
     }
 }
