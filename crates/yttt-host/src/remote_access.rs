@@ -949,7 +949,7 @@ impl Manager {
 /// How long an accepted connection has for TLS and authentication together.
 const NETWORK_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The longest pause after accept fails, e.g. while file descriptors run out.
-const MAX_ACCEPT_BACKOFF: Duration = Duration::from_secs(1);
+pub(crate) const MAX_ACCEPT_BACKOFF: Duration = Duration::from_secs(1);
 
 async fn network_loop(
     listener: TlsListener,

@@ -819,6 +819,51 @@ async fn permanent_reconnect_failure_stops_the_supervisor_without_retrying() {
     client.shutdown().await;
 }
 
+/// A failed accept, such as a Client that gave up connecting before the Host
+/// took its connection, leaves the Host listening for the next one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_accept_leaves_the_host_listening() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct FailingOnce {
+        inner: yttt_transport::MemoryListener,
+        failed: AtomicBool,
+    }
+
+    impl TransportListener for FailingOnce {
+        fn accept(
+            &self,
+        ) -> yttt_transport::BoxFuture<
+            '_,
+            Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+        > {
+            Box::pin(async {
+                if !self.failed.swap(true, Ordering::AcqRel) {
+                    return Err(yttt_transport::TransportError::Closed);
+                }
+                self.inner.accept().await
+            })
+        }
+    }
+
+    let (listener, connector) = memory_pair();
+    let host = start_host(
+        FailingOnce {
+            inner: listener,
+            failed: AtomicBool::new(false),
+        },
+        connector,
+    )
+    .await;
+    let client = tokio::time::timeout(
+        Duration::from_secs(10),
+        connect_client(&host, "after-failed-accept"),
+    )
+    .await
+    .expect("the Host stopped listening after a failed accept");
+    client.shutdown().await;
+}
+
 /// A reconnect stuck on a dead path is abandoned when the user asks to retry,
 /// instead of waiting out the connect deadline.
 #[tokio::test(flavor = "multi_thread")]
@@ -830,6 +875,8 @@ async fn retrying_now_abandons_a_stuck_reconnect() {
         inner: yttt_transport::MemoryConnector,
         /// While true, live streams close and new connects never finish.
         cut: tokio::sync::watch::Sender<bool>,
+        /// Counts the connects held by the cut.
+        stuck: tokio::sync::watch::Sender<usize>,
     }
 
     impl TransportConnector for Cuttable {
@@ -841,6 +888,7 @@ async fn retrying_now_abandons_a_stuck_reconnect() {
         > {
             Box::pin(async move {
                 if *self.cut.borrow() {
+                    self.stuck.send_modify(|stuck| *stuck += 1);
                     std::future::pending::<()>().await;
                 }
                 let mut stream = self.inner.connect().await?;
@@ -859,11 +907,13 @@ async fn retrying_now_abandons_a_stuck_reconnect() {
 
     let (listener, connector) = memory_pair();
     let (cut, _) = tokio::sync::watch::channel(false);
+    let (stuck, mut stuck_connects) = tokio::sync::watch::channel(0);
     let host = start_host(
         listener,
         Cuttable {
             inner: connector,
             cut: cut.clone(),
+            stuck,
         },
     )
     .await;
@@ -871,13 +921,15 @@ async fn retrying_now_abandons_a_stuck_reconnect() {
     let mut states = client.subscribe_state();
 
     cut.send_replace(true);
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !matches!(&*states.borrow_and_update(), ConnectionState::Connecting) {
-            states.changed().await.unwrap();
-        }
-    })
+    // The Client reports Connecting before its connect starts, so wait for a
+    // connect the cut actually holds.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        stuck_connects.wait_for(|stuck| *stuck > 0),
+    )
     .await
-    .expect("the cut session never started reconnecting");
+    .expect("the cut session never started reconnecting")
+    .unwrap();
     cut.send_replace(false);
 
     client.retry_now();

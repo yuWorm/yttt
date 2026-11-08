@@ -409,6 +409,8 @@ where
 
     let mut exit_reaper = tokio::time::interval(Duration::from_secs(60));
     exit_reaper.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut next_accept = tokio::time::Instant::now();
+    let mut accept_backoff = Duration::ZERO;
     loop {
         tokio::select! {
             changed = stop_rx.changed() => {
@@ -425,8 +427,26 @@ where
                 agent_hooks.decay_stale_activity();
                 prune_inactive_sessions(&connection_context);
             }
-            accepted = listener.accept() => {
-                let stream = accepted?;
+            accepted = async {
+                tokio::time::sleep_until(next_accept).await;
+                listener.accept().await
+            } => {
+                // A Client that gave up connecting, a peer that is not this
+                // user, or running out of descriptors fails one accept, not
+                // the Host: back off and keep listening.
+                let stream = match accepted {
+                    Ok(stream) => {
+                        accept_backoff = Duration::ZERO;
+                        stream
+                    }
+                    Err(error) => {
+                        eprintln!("local accept failed: {error}");
+                        accept_backoff = (accept_backoff * 2)
+                            .clamp(Duration::from_millis(10), remote_access::MAX_ACCEPT_BACKOFF);
+                        next_accept = tokio::time::Instant::now() + accept_backoff;
+                        continue;
+                    }
+                };
                 let mut context = connection_context.clone();
                 context.identity.connection_sequence = next_connection.fetch_add(1, Ordering::Relaxed);
                 let credential = Arc::new(yttt_transport::Credential::SharedSecret((*token).clone()));
