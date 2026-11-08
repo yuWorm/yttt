@@ -30,8 +30,8 @@ use yttt_protocol::{
     HostPath,
     project::{ContentRevision, ProjectFileFingerprint},
     workspace::{
-        AgentStateRef, DocumentState, DraftBase, DraftContentRevision, DraftRef,
-        MAX_DRAFT_CONTENT_BYTES, WorkspaceId, WorkspaceRequest, WorkspaceResponse,
+        DocumentState, DraftBase, DraftContentRevision, DraftRef, MAX_DRAFT_CONTENT_BYTES,
+        WorkspaceId, WorkspaceRequest, WorkspaceResponse,
     },
 };
 
@@ -95,7 +95,7 @@ pub(super) struct WorkspacePersistenceState {
 struct OpenedWorkspace {
     layout: HostWorkspaceState,
     documents: Vec<DocumentState>,
-    agent_states: Vec<(AgentStateRef, Arc<Vec<u8>>)>,
+    agent_states: agent_state::AgentStateBodies,
     host_epoch: u64,
     connection_sequence: u64,
 }
@@ -949,26 +949,15 @@ fn open_workspace(
                 .map_err(failed)?;
         }
     }
-    let mut agent_states = Vec::with_capacity(references.len());
-    for reference in references {
-        match runtime
-            .workspace_request(WorkspaceRequest::GetAgentState {
+    let agent_states = agent_state::read_published(references, |reference| {
+        runtime.request_blocking_typed(yttt_protocol::Request::Workspace(
+            WorkspaceRequest::GetAgentState {
                 workspace_id: workspace_id.clone(),
                 reference: reference.clone(),
-            })
-            .map_err(failed)?
-        {
-            WorkspaceResponse::AgentState {
-                reference: received,
-                content,
-            } if received == reference => agent_states.push((reference, Arc::new(content))),
-            _ => {
-                return Err(failed(
-                    "Host returned an unexpected Agent state body".into(),
-                ));
-            }
-        }
-    }
+            },
+        ))
+    })
+    .map_err(failed)?;
     let HostConnectionState::Ready {
         host_epoch,
         connection_sequence,
