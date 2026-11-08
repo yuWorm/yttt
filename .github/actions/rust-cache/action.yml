@@ -7,6 +7,9 @@ outputs:
   hit:
     description: Whether the exact snapshot already exists
     value: ${{ steps.restore.outputs.cache-hit }}
+  enabled:
+    description: Whether compiles go through sccache
+    value: ${{ steps.wrapper.outputs.enabled }}
 runs:
   using: composite
   steps:
@@ -18,7 +21,6 @@ runs:
         echo 'CARGO_INCREMENTAL=0' >> "$GITHUB_ENV"
         echo 'CARGO_PROFILE_DEV_DEBUG=0' >> "$GITHUB_ENV"
         echo 'CARGO_PROFILE_TEST_DEBUG=0' >> "$GITHUB_ENV"
-        echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
     - name: Restore compiler cache
       id: restore
       uses: actions/cache/restore@v5
@@ -27,7 +29,22 @@ runs:
         key: yttt-sccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
         restore-keys: |
           yttt-sccache-v1-${{ runner.os }}-${{ runner.arch }}-
+    # Downloading sccache can fail (GitHub has answered 504 for a while);
+    # the job then compiles without the cache instead of failing.
     - name: Install compiler cache
+      id: install
+      continue-on-error: true
       uses: mozilla-actions/sccache-action@v0.0.11
       with:
         version: v0.16.0
+    - name: Route compiles through the cache
+      id: wrapper
+      shell: bash
+      run: |
+        if [[ "${{ steps.install.outcome }}" == success ]] && command -v sccache > /dev/null; then
+          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+          echo 'enabled=true' >> "$GITHUB_OUTPUT"
+        else
+          echo '::warning::sccache is unavailable; compiling without the compiler cache.'
+          echo 'enabled=false' >> "$GITHUB_OUTPUT"
+        fi
