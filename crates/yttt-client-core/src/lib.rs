@@ -313,7 +313,12 @@ impl ClientCore {
     /// abandons a connect attempt still in progress, which a dead path can
     /// otherwise hold until the connect deadline. Does nothing while ready.
     pub fn retry_now(&self) {
-        self.inner.retry.notify_waiters();
+        if matches!(&*self.inner.state.borrow(), ConnectionState::Ready { .. }) {
+            return;
+        }
+        // Kept until the supervisor next waits: it reports a reconnect state
+        // before it starts waiting, and a retry in between must not be lost.
+        self.inner.retry.notify_one();
     }
 
     pub fn state(&self) -> ConnectionState {
