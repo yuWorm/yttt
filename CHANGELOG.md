@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-11-08
+
+- 修复本机连接一次失败（如客户端在连上前放弃）会使 Host 退出、所有终端随之结束；现在 Host 稍候继续接受连接。断开遮罩的“立即重连”在重连刚开始时点击不再无效。
+- Fix one failed local connection, such as a Client that gave up before the Host took it, stopping the Host and every terminal with it; the Host now pauses briefly and keeps accepting. Reconnect Now on the disconnect notice no longer does nothing when pressed just as a reconnect begins.
+- 修复远程窗口在慢链路上一直“正在恢复工作区…”并报 “Agent state is not published by this workspace”：Agent 在恢复期间更新时，已被替换的旧状态直接跳过，窗口连上后显示 Agent 的最新状态。
+- Fix a remote window on a slow link staying on "Restoring workspace" with "Agent state is not published by this workspace": an Agent state replaced while the window restores is skipped, and the window shows the Agent's latest state once connected.
+
 ## 0.5.1 - 2026-11-08
 
 - 修复远程连接在慢链路（P2P 经 relay、穿透工具）上卡死、一直“正在恢复工作区…”：Agent 状态与 token 用量按 Agent 合并，Client 读得慢时只收到最新一份，不再无限排队挤住其他数据；远程恢复工作区等待 120 秒，失败时显示原因并自动重试。
