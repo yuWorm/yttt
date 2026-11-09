@@ -285,6 +285,31 @@ async fn a_keyed_message_is_waiting_until_its_writing_starts() {
     assert!(!writer.is_waiting("a"));
 }
 
+#[tokio::test(start_paused = true)]
+async fn queue_stats_show_what_waits_and_for_how_long() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    occupy_writer(&writer, &event(0)).await;
+    writer.send_reliable(&event(1)).unwrap();
+    writer.send_reliable(&event(2)).unwrap();
+    writer.send_interactive(&ping(3)).unwrap();
+    tokio::time::advance(Duration::from_secs(3)).await;
+
+    let stats = writer.queue_stats();
+    assert_eq!(stats.interactive_items, 1);
+    assert_eq!(stats.reliable_items, 2);
+    assert!(stats.reliable_bytes > 0);
+    assert_eq!(stats.reliable_items_high_water, 2);
+    assert!(stats.oldest_reliable_wait.unwrap() >= Duration::from_secs(3));
+
+    for _ in 0..4 {
+        next(&mut reader).await;
+    }
+    let stats = writer.queue_stats();
+    assert_eq!((stats.reliable_items, stats.reliable_bytes), (0, 0));
+    assert_eq!(stats.oldest_reliable_wait, None);
+    assert_eq!(stats.reliable_items_high_water, 2);
+}
+
 async fn write_chunk(peer: &mut WriteHalf<DuplexStream>, stream: u64, last: bool, bytes: &[u8]) {
     let frame = encode_message(
         FrameKind::Control,

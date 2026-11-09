@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 6;
+pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 7;
 pub const DEFAULT_DIAGNOSTICS_LOG_BYTES: u64 = 4 * 1024 * 1024;
 const LATENCY_BUCKETS: usize = 64;
 
@@ -225,6 +225,18 @@ pub struct AttachmentResyncDiagnosticsSnapshot {
     pub last_resync_reason: Option<String>,
 }
 
+/// One Client's Session connection writer: what waits to be sent to it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionQueueDiagnosticsSnapshot {
+    pub client_id: String,
+    pub interactive_items: usize,
+    pub reliable_items: usize,
+    pub reliable_bytes: usize,
+    pub reliable_items_high_water: usize,
+    pub reliable_bytes_high_water: usize,
+    pub oldest_reliable_wait_millis: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct HostDiagnosticsSnapshot {
     pub schema_version: u32,
@@ -240,6 +252,8 @@ pub struct HostDiagnosticsSnapshot {
     pub terminals: Vec<TerminalPipelineDiagnosticsSnapshot>,
     #[serde(default)]
     pub attachment_resyncs: Vec<AttachmentResyncDiagnosticsSnapshot>,
+    #[serde(default)]
+    pub session_queues: Vec<SessionQueueDiagnosticsSnapshot>,
 }
 
 pub trait DiagnosticsSink: Send + Sync {

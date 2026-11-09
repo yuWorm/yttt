@@ -100,6 +100,20 @@ impl std::fmt::Display for SessionCloseReason {
     }
 }
 
+/// How much a Session writer holds, for diagnostics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SessionQueueStats {
+    pub interactive_items: usize,
+    /// Reliable messages waiting to start.
+    pub reliable_items: usize,
+    /// Bytes of reliable messages waiting or being written.
+    pub reliable_bytes: usize,
+    pub reliable_items_high_water: usize,
+    pub reliable_bytes_high_water: usize,
+    /// How long the oldest waiting reliable message has waited.
+    pub oldest_reliable_wait: Option<Duration>,
+}
+
 /// A render lane refused a frame: it exceeds the lane budget or the connection closed.
 #[derive(Debug)]
 pub struct RenderRejected;
@@ -121,6 +135,7 @@ struct Item {
     /// A reliable item's place in reliable order; for a render item, the last
     /// reliable item queued before it, which must be written first.
     sequence: u64,
+    queued_at: tokio::time::Instant,
 }
 
 struct RenderQueue {
@@ -159,6 +174,8 @@ struct State {
     reliable_written: u64,
     /// Reliable bytes started in a row while render items waited.
     reliable_streak: usize,
+    reliable_items_high_water: usize,
+    reliable_bytes_high_water: usize,
 }
 
 impl State {
@@ -347,6 +364,7 @@ impl Shared {
                 after_lane: None,
                 latest: None,
                 sequence: 0,
+                queued_at: tokio::time::Instant::now(),
             });
         }
         let stream = self.next_chunk_stream.fetch_add(1, Ordering::Relaxed);
@@ -372,6 +390,7 @@ impl Shared {
             after_lane: None,
             latest: None,
             sequence: 0,
+            queued_at: tokio::time::Instant::now(),
         })
     }
 
@@ -490,9 +509,23 @@ impl SessionWriter {
             return Err(self.shared.overflow(QueueOverflow::ReliableBytes));
         }
         state.reliable_bytes = others + item.bytes;
+        state.reliable_bytes_high_water = state.reliable_bytes_high_water.max(state.reliable_bytes);
         item.sequence = state.reliable[position].sequence;
+        item.queued_at = state.reliable[position].queued_at;
         state.reliable[position] = item;
         Ok(())
+    }
+
+    pub fn queue_stats(&self) -> SessionQueueStats {
+        let state = self.shared.state.lock();
+        SessionQueueStats {
+            interactive_items: state.interactive.len(),
+            reliable_items: state.reliable.len(),
+            reliable_bytes: state.reliable_bytes,
+            reliable_items_high_water: state.reliable_items_high_water,
+            reliable_bytes_high_water: state.reliable_bytes_high_water,
+            oldest_reliable_wait: state.reliable.front().map(|item| item.queued_at.elapsed()),
+        }
     }
 
     /// Whether a reliable message queued with `key` is still waiting, so a
@@ -584,6 +617,10 @@ impl SessionWriter {
                 item.sequence = state.reliable_queued;
                 state.reliable_bytes += item.bytes;
                 state.reliable.push_back(item);
+                state.reliable_items_high_water =
+                    state.reliable_items_high_water.max(state.reliable.len());
+                state.reliable_bytes_high_water =
+                    state.reliable_bytes_high_water.max(state.reliable_bytes);
             }
         }
         drop(state);

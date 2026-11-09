@@ -518,6 +518,7 @@ fn collect_host_diagnostics(
         terminals: runtime.terminal_diagnostics(),
         queues: runtime.attachment_queue_diagnostics(),
         attachment_resyncs: runtime.attachment_resync_diagnostics(),
+        session_queues: runtime.session_queue_diagnostics(),
     }
 }
 
@@ -1201,6 +1202,9 @@ async fn serve_session_connection(
     let (reader, writer) = tokio::io::split(stream);
     let reader = SessionReader::new(reader);
     let (writer, _writer_task) = SessionWriter::spawn(writer);
+    let _diagnostics = context
+        .runtime
+        .register_session_writer(&client_id, writer.clone());
     let mut streams = TerminalStreams {
         context: TerminalStreamContext {
             writer: writer.clone(),

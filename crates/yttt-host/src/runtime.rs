@@ -122,6 +122,29 @@ pub struct HostRuntime {
     /// a burst of output cannot push them out.
     control_events: broadcast::Sender<HostTerminalEvent>,
     attachment_queues: Mutex<VecDeque<Arc<QueueDiagnostics>>>,
+    /// Each connected Client's Session writer, for diagnostics, with the
+    /// registration that owns it.
+    session_writers: Mutex<HashMap<ClientInstanceId, (u64, yttt_transport::SessionWriter)>>,
+    next_session_writer: AtomicU64,
+}
+
+/// Keeps a Session writer in the diagnostics until dropped.
+pub(crate) struct SessionWriterRegistration {
+    runtime: Arc<HostRuntime>,
+    client_id: ClientInstanceId,
+    id: u64,
+}
+
+impl Drop for SessionWriterRegistration {
+    fn drop(&mut self) {
+        let mut writers = self.runtime.session_writers.lock();
+        if writers
+            .get(&self.client_id)
+            .is_some_and(|(id, _)| *id == self.id)
+        {
+            writers.remove(&self.client_id);
+        }
+    }
 }
 
 impl HostRuntime {
@@ -145,7 +168,53 @@ impl HostRuntime {
             events,
             control_events,
             attachment_queues: Mutex::new(VecDeque::new()),
+            session_writers: Mutex::new(HashMap::new()),
+            next_session_writer: AtomicU64::new(1),
         })
+    }
+
+    /// Reports `writer` as `client_id`'s Session connection until the
+    /// registration drops; a newer connection of the Client replaces it.
+    pub(crate) fn register_session_writer(
+        self: &Arc<Self>,
+        client_id: &ClientInstanceId,
+        writer: yttt_transport::SessionWriter,
+    ) -> SessionWriterRegistration {
+        let id = self.next_session_writer.fetch_add(1, Ordering::Relaxed);
+        self.session_writers
+            .lock()
+            .insert(client_id.clone(), (id, writer));
+        SessionWriterRegistration {
+            runtime: self.clone(),
+            client_id: client_id.clone(),
+            id,
+        }
+    }
+
+    pub fn session_queue_diagnostics(
+        &self,
+    ) -> Vec<crate::diagnostics::SessionQueueDiagnosticsSnapshot> {
+        let mut snapshots = self
+            .session_writers
+            .lock()
+            .iter()
+            .map(|(client_id, (_, writer))| {
+                let stats = writer.queue_stats();
+                crate::diagnostics::SessionQueueDiagnosticsSnapshot {
+                    client_id: client_id.as_str().to_string(),
+                    interactive_items: stats.interactive_items,
+                    reliable_items: stats.reliable_items,
+                    reliable_bytes: stats.reliable_bytes,
+                    reliable_items_high_water: stats.reliable_items_high_water,
+                    reliable_bytes_high_water: stats.reliable_bytes_high_water,
+                    oldest_reliable_wait_millis: stats
+                        .oldest_reliable_wait
+                        .map(|wait| u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+                }
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.client_id.cmp(&right.client_id));
+        snapshots
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<HostTerminalEvent> {
@@ -1199,5 +1268,26 @@ mod attachment_state_tests {
             .expect("attachment was re-registered")
             .borrow();
         assert_eq!(state, AttachmentStreamState::attached());
+    }
+
+    #[tokio::test]
+    async fn a_session_writer_reports_until_its_connection_or_a_newer_one_ends() {
+        let runtime = HostRuntime::new();
+        let client = ClientInstanceId::new("client");
+        let writer = || {
+            let (local, _peer) = tokio::io::duplex(64);
+            yttt_transport::SessionWriter::spawn(local)
+        };
+        let (first, _first_task) = writer();
+        let (second, _second_task) = writer();
+        let first = runtime.register_session_writer(&client, first);
+        assert_eq!(runtime.session_queue_diagnostics().len(), 1);
+        let second = runtime.register_session_writer(&client, second);
+        drop(first);
+        let reported = runtime.session_queue_diagnostics();
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].client_id, "client");
+        drop(second);
+        assert!(runtime.session_queue_diagnostics().is_empty());
     }
 }
