@@ -49,6 +49,9 @@ const MAX_STATE_FILE_BYTES: usize = 256 * 1024;
 const PAIR_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long an accepted P2P stream has for the session handshake.
 const P2P_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a device may stay on the relay before `host.log` explains why:
+/// hole punching usually succeeds within a few seconds.
+const RELAY_EXPLAIN_AFTER: Duration = Duration::from_secs(20);
 
 #[derive(Serialize, Deserialize)]
 struct DevicesFile {
@@ -472,10 +475,21 @@ async fn serve_work_connection(
     let device = connection.peer();
     let mut sessions = JoinSet::new();
     let mut stop = context.stop.clone();
+    let explain = tokio::time::sleep(RELAY_EXPLAIN_AFTER);
+    tokio::pin!(explain);
+    let mut explained = false;
     loop {
         let stream = tokio::select! {
             changed = stop.changed() => { if changed.is_err() || *stop.borrow() { break; } continue; }
             _ = sessions.join_next(), if !sessions.is_empty() => continue,
+            () = &mut explain, if !explained => {
+                explained = true;
+                if connection.path_kind() == yttt_transport_iroh::PathKind::Relay {
+                    let report = shared.endpoint.path_report(&connection);
+                    eprintln!("{} P2P device {device} still on the relay: {report}", super::log_timestamp());
+                }
+                continue;
+            }
             // The transport re-checks the gate, so a revoked device gets no stream.
             stream = connection.accept_stream() => match stream { Some(stream) => stream, None => break },
         };

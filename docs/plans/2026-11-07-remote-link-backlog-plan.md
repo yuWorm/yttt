@@ -117,4 +117,4 @@
 - [x] 远程链路压缩大消息：`ClientHello.accepts_compression` + `ControlMessage::Compressed`（DEFLATE），仅 Host→Client、仅网络入口。
 - [x] 诊断：`host-diagnostics.jsonl` schema 7 的 `session_queues`。
 - [ ] `ProjectChanged` 只发给打开了该项目的会话（合并后收益小，未做）。
-- [ ] P2P 始终 relay 的原因排查（两端网络、UDP 打洞）。
+- [ ] P2P 始终 relay 的原因排查（两端网络、UDP 打洞）。已加诊断：经 relay 超过 20 s 时两端日志写出通告地址、路径与原因（`PathReport`）；仍需在实际网络上看日志定位。

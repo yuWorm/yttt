@@ -6,6 +6,8 @@
 //! it runs once after the handshake and again before every accepted stream, so a
 //! revoked peer cannot open new streams on a connection that is still alive.
 
+mod path_report;
+
 use std::{collections::HashMap, fmt, net::SocketAddr, sync::Arc, time::Duration};
 
 use iroh::{
@@ -19,6 +21,8 @@ use iroh::{
 use parking_lot::Mutex;
 use yttt_protocol::EndpointKey;
 use yttt_transport::{BoxFuture, LinkProfile, TransportConnector, TransportError, TransportStream};
+
+pub use path_report::{AddressKind, PathReport, PathSummary, address_kind};
 
 /// QUIC close code for a peer the gate refused.
 const CLOSE_REFUSED: u32 = 1;
@@ -241,6 +245,28 @@ impl IrohEndpoint {
         addresses
     }
 
+    /// What this endpoint advertises and which paths `connection` holds.
+    pub fn path_report(&self, connection: &PeerConnection) -> PathReport {
+        PathReport {
+            advertised: self.direct_addrs(),
+            paths: connection
+                .connection
+                .paths()
+                .iter()
+                .map(|path| PathSummary {
+                    remote: match path.remote_addr() {
+                        TransportAddr::Relay(url) => url.to_string(),
+                        TransportAddr::Ip(address) => address.to_string(),
+                        _ => "custom transport".to_string(),
+                    },
+                    relay: path.is_relay(),
+                    selected: path.is_selected(),
+                    rtt: path.rtt(),
+                })
+                .collect(),
+        }
+    }
+
     /// Waits until the endpoint can be reached through its relay, if it has one.
     pub async fn online(&self) {
         self.endpoint.online().await;
@@ -401,6 +427,12 @@ impl IrohConnector {
             .await
             .as_ref()
             .map_or(PathKind::Unknown, |connection| connection.path_kind())
+    }
+
+    /// Why the current connection runs where it does; `None` before the first connect.
+    pub async fn path_report(&self) -> Option<PathReport> {
+        let connection = self.connection.lock().await.clone()?;
+        Some(self.endpoint.path_report(&connection))
     }
 
     async fn connection(&self) -> Result<Arc<PeerConnection>, TransportError> {

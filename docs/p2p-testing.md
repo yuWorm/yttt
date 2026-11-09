@@ -109,6 +109,16 @@ YTTT_RELAY_PASSWORD='…' p2p_probe '<配对码>' --relay-only --seconds 30 \
 
 ### 直连不上时先排除环境
 
+连接经 relay 超过 20 秒时，两端日志各写一行原因：设备的 `logs/client.log` 为 `P2P still on the relay: …`，
+Host 的 `host.log`（服务器 Host 为 `server.log`）为 `P2P device <密钥> still on the relay: …`。内容依次是本端
+对外通告的地址及类别（public、private、proxy TUN、local）、连接上的每条路径（relay 或 direct、往返时间、
+是否正在使用），最后是最可能的原因：
+
+- `a proxy's TUN mode (198.18.x.x fake-ip) carries UDP`：本端开着代理的 TUN 模式，见下文。
+- `no public address was discovered`：relay 的 QUIC 地址探测没有回应，UDP 被拦或 relay 没有域名。
+- `no direct path was tried`：本端有公网地址，但对端没给出可达地址；看对端那一行。
+- `direct paths were tried but none carries data`：两端都有候选地址但打洞失败，多为对称 NAT 或防火墙。
+
 - relay 节点没有域名（`http://` 地址）时，设备永远“经 relay”，见 `docs/relay-operations.md`。
 - 设备或 Host 开着全局代理 / TUN 模式（如 Clash 的 TUN、`198.18.x.x` 这类 fake-ip）时，UDP 走代理，QUIC 地址探测失败，也只能“经 relay”。给 relay 节点的 IP 设直连规则，或测试时关掉 TUN。
 - 无桌面 Host 用 `RUST_LOG=iroh=debug yttt-server ensure` 启动后，`server.log` 里能看到 iroh 的连接与打洞过程；`yttt-server p2p status` 的 `clients` 列出当前连着的设备。

@@ -586,7 +586,12 @@ fn connect_paired(
     )
 }
 
-/// Logs each change between a direct and a relayed path for the session.
+/// How long a session may stay on the relay before the log explains why:
+/// hole punching usually succeeds within a few seconds.
+const RELAY_EXPLAIN_AFTER: Duration = Duration::from_secs(20);
+
+/// Logs each change between a direct and a relayed path for the session, and
+/// why a session stays on the relay.
 fn watch_path(
     runtime: &tokio::runtime::Runtime,
     connector: Arc<yttt_transport_iroh::IrohConnector>,
@@ -595,11 +600,22 @@ fn watch_path(
 ) {
     runtime.spawn(async move {
         let mut reported = yttt_transport_iroh::PathKind::Unknown;
+        let mut relay_since = None::<tokio::time::Instant>;
         loop {
             tokio::time::sleep(PATH_CHECK_INTERVAL).await;
             let path = connector.path_kind().await;
+            if path == yttt_transport_iroh::PathKind::Relay
+                && relay_since.is_some_and(|since| since.elapsed() >= RELAY_EXPLAIN_AFTER)
+                && let Some(report) = connector.path_report().await
+            {
+                relay_since = None;
+                let line = format!("P2P still on the relay: {report}");
+                crate::connection_log::note(&logs, &label, &line).await;
+            }
             if path != reported {
                 reported = path;
+                relay_since =
+                    (path == yttt_transport_iroh::PathKind::Relay).then(tokio::time::Instant::now);
                 let line = match path {
                     yttt_transport_iroh::PathKind::Direct => {
                         set_p2p_path(P2pPath::Direct);

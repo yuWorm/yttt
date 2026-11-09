@@ -113,6 +113,12 @@ async fn an_admitted_peer_reaches_the_host_directly_on_several_streams() {
     assert_eq!(echo(&mut first, b"one").await.unwrap(), b"one");
     assert_eq!(echo(&mut second, b"two").await.unwrap(), b"two");
     assert_eq!(connector.path_kind().await, PathKind::Direct);
+    let report = connector.path_report().await.unwrap();
+    assert!(
+        report.paths.iter().any(|path| path.selected && !path.relay),
+        "{report}"
+    );
+    assert_eq!(report.hint(), None);
 
     host.close().await;
     server.await.unwrap();

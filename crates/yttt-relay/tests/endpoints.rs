@@ -209,6 +209,11 @@ async fn endpoints_without_direct_paths_send_everything_through_the_node() {
         connector.path_kind().await,
         yttt_transport_iroh::PathKind::Relay
     );
+    let report = connector.path_report().await.unwrap();
+    assert!(
+        report.paths.iter().all(|path| path.relay) && report.hint().is_some(),
+        "{report}"
+    );
     assert!(node.account(ACCOUNT).unwrap().relayed_bytes > 100_000);
 
     phone.close().await;
