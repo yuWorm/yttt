@@ -1410,6 +1410,7 @@ pub enum UiTextKey {
     WorkspaceRestoreLoading,
     WorkspaceRestoreRetrying,
     HostOutageTitle,
+    HostOutageBriefTitle,
     HostOutageReconnecting,
     HostOutageGaveUp,
     HostOutageReason,

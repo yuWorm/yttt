@@ -49,6 +49,31 @@ const WORKSPACE_PERSISTENCE_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a remote session is down before the window says so, so a quick
 /// reconnect does not flash the notice.
 const HOST_OUTAGE_NOTICE_DELAY_MILLIS: u64 = 1_000;
+/// How long a reconnecting session is down before the notice covers the
+/// window and offers to close it. Until then the window stays readable under
+/// a dimmed layer, since most drops (a wake, a network switch) recover sooner.
+const HOST_OUTAGE_DIALOG_DELAY_MILLIS: u64 = 15_000;
+
+/// How the window shows a remote session that is down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HostOutageNotice {
+    /// Dimmed content and a small notice; input waits for the session.
+    Brief,
+    /// A dialog with the reason, a reconnect and closing the window.
+    Dialog,
+}
+
+/// The notice for an outage `down_for` milliseconds old, if it is time for one.
+fn host_outage_notice(
+    outage: &crate::host_runtime::HostOutage,
+    down_for: u64,
+) -> Option<HostOutageNotice> {
+    if outage.attempt.is_none() || down_for >= HOST_OUTAGE_DIALOG_DELAY_MILLIS {
+        Some(HostOutageNotice::Dialog)
+    } else {
+        (down_for >= HOST_OUTAGE_NOTICE_DELAY_MILLIS).then_some(HostOutageNotice::Brief)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum WorkspacePersistenceMode {
@@ -201,11 +226,15 @@ impl WorkbenchView {
         ));
     }
 
-    /// Why the remote Host session is down, once it has been long enough to say.
-    pub(super) fn visible_host_outage(&self) -> Option<crate::host_runtime::HostOutage> {
+    /// Why the remote Host session is down and how to show it, once it has
+    /// been long enough to say.
+    pub(super) fn visible_host_outage(
+        &self,
+    ) -> Option<(crate::host_runtime::HostOutage, HostOutageNotice)> {
         let outage = self.terminal.host_runtime.as_ref()?.outage()?;
         let down_for = super::bars::current_unix_millis().saturating_sub(outage.since_unix_millis);
-        (outage.attempt.is_none() || down_for >= HOST_OUTAGE_NOTICE_DELAY_MILLIS).then_some(outage)
+        let notice = host_outage_notice(&outage, down_for)?;
+        Some((outage, notice))
     }
 
     /// Redraws while the outage notice shows, to count its time, and once
@@ -1110,5 +1139,41 @@ fn remote_host_epoch(runtime: &crate::host_runtime::DesktopHostRuntime) -> Optio
     match runtime.state() {
         HostConnectionState::Ready { host_epoch, .. } => Some(host_epoch),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod outage_notice_tests {
+    use super::*;
+
+    fn outage(attempt: Option<u32>) -> crate::host_runtime::HostOutage {
+        crate::host_runtime::HostOutage {
+            reason: "lost".into(),
+            since_unix_millis: 0,
+            attempt,
+        }
+    }
+
+    #[test]
+    fn a_short_outage_dims_the_window_before_a_dialog_covers_it() {
+        let reconnecting = outage(Some(2));
+        assert_eq!(host_outage_notice(&reconnecting, 500), None);
+        assert_eq!(
+            host_outage_notice(&reconnecting, HOST_OUTAGE_NOTICE_DELAY_MILLIS),
+            Some(HostOutageNotice::Brief)
+        );
+        assert_eq!(
+            host_outage_notice(&reconnecting, HOST_OUTAGE_DIALOG_DELAY_MILLIS - 1),
+            Some(HostOutageNotice::Brief)
+        );
+        assert_eq!(
+            host_outage_notice(&reconnecting, HOST_OUTAGE_DIALOG_DELAY_MILLIS),
+            Some(HostOutageNotice::Dialog)
+        );
+        // A Client that gave up says so at once.
+        assert_eq!(
+            host_outage_notice(&outage(None), 0),
+            Some(HostOutageNotice::Dialog)
+        );
     }
 }

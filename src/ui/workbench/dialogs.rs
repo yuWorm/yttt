@@ -1366,6 +1366,64 @@ pub(super) fn project_empty_terminal_state(
 
 /// Covers a remote window whose Host session is down: what happened, and the
 /// two things the user can do about it.
+/// A short outage: the window stays readable under the dimmed layer, which
+/// holds input until the session is back.
+pub(super) fn host_outage_notice(
+    cx: &mut Context<WorkbenchView>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+    host: &str,
+    outage: &crate::host_runtime::HostOutage,
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
+    let elapsed = super::bars::format_state_duration(
+        super::bars::current_unix_millis().saturating_sub(outage.since_unix_millis),
+        ui_text,
+    );
+    let progress = ui_text
+        .get(UiTextKey::HostOutageReconnecting)
+        .replace("{attempt}", &outage.attempt.unwrap_or_default().to_string())
+        .replace("{elapsed}", &elapsed);
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .debug_selector(|| "host-outage-notice".into())
+            .flex()
+            .items_center()
+            .gap(ui_style.spacing.md)
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(ui_style.spacing.xs)
+                    .child(
+                        div().text_sm().child(
+                            ui_text
+                                .get(UiTextKey::HostOutageBriefTitle)
+                                .replace("{host}", host),
+                        ),
+                    )
+                    .child(div().text_xs().text_color(dialog.hint).child(progress)),
+            )
+            .child(yttt_dialog_button(
+                cx,
+                "host-outage-notice-retry",
+                ui_text.get(UiTextKey::HostOutageRetry),
+                YtttButtonVariant::Secondary,
+                theme,
+                cx.listener(|this, _, _window, _cx| {
+                    if let Some(runtime) = &this.terminal.host_runtime {
+                        runtime.retry_now();
+                    }
+                }),
+            )),
+        YtttDialogPlacement::Top,
+        theme,
+        ui_style,
+    )
+}
+
 pub(super) fn host_outage_dialog(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,

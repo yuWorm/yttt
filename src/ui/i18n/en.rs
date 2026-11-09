@@ -1949,6 +1949,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceRestoreLoading => "Restoring workspace…",
         UiTextKey::WorkspaceRestoreRetrying => "Retrying automatically.",
         UiTextKey::HostOutageTitle => "Connection to {host} lost",
+        UiTextKey::HostOutageBriefTitle => "Connection to {host} interrupted, restoring it",
         UiTextKey::HostOutageReconnecting => {
             "Reconnecting (attempt {attempt}) · down for {elapsed}"
         }

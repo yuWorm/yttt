@@ -1583,6 +1583,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceRestoreLoading => "正在恢复工作区…",
         UiTextKey::WorkspaceRestoreRetrying => "将自动重试。",
         UiTextKey::HostOutageTitle => "与 {host} 的连接已断开",
+        UiTextKey::HostOutageBriefTitle => "与 {host} 的连接中断，正在恢复",
         UiTextKey::HostOutageReconnecting => "正在重连（第 {attempt} 次）· 已断开 {elapsed}",
         UiTextKey::HostOutageGaveUp => "无法自动重连 · 已断开 {elapsed}",
         UiTextKey::HostOutageReason => "原因：{reason}",
