@@ -27,6 +27,12 @@ const CONNECT_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 /// The Session heartbeat normally keeps the link busy; this is a backstop.
 const KEEPALIVE_TIME: Duration = Duration::from_secs(30);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+/// Unsent bytes the kernel holds before it stops taking more. The Session
+/// orders heartbeats and keystrokes ahead of bulk messages only among bytes
+/// it still holds, so a deep socket buffer would put them seconds behind on a
+/// slow link. Linux only: macOS and Windows offer no safe way to set it.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const NOTSENT_LOWAT: u32 = 64 * 1024;
 
 #[derive(Clone)]
 pub struct TlsConnector {
@@ -178,7 +184,10 @@ fn configure(stream: &TcpStream) -> io::Result<()> {
         .with_interval(KEEPALIVE_INTERVAL);
     #[cfg(not(windows))]
     let keepalive = keepalive.with_retries(3);
-    SockRef::from(stream).set_tcp_keepalive(&keepalive)
+    SockRef::from(stream).set_tcp_keepalive(&keepalive)?;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    SockRef::from(stream).set_tcp_notsent_lowat(NOTSENT_LOWAT)?;
+    Ok(())
 }
 
 fn timed_out(message: &'static str) -> TransportError {
@@ -245,5 +254,12 @@ mod tests {
         assert!(SockRef::from(&accepted).keepalive().unwrap());
         configure(&client).unwrap();
         assert!(SockRef::from(&client).keepalive().unwrap());
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        for stream in [&accepted, &client] {
+            assert_eq!(
+                SockRef::from(stream).tcp_notsent_lowat().unwrap(),
+                NOTSENT_LOWAT
+            );
+        }
     }
 }
