@@ -5596,3 +5596,165 @@ async fn a_connected_client_rebuilds_a_growing_agent_board() {
         diagnostics.recent_disconnects
     );
 }
+
+/// A Client link that delivers at most `RATE` bytes a second from the Host,
+/// like a relay or a tunnel; the Host's writes back up behind it.
+struct ThrottledConnector {
+    inner: LocalConnector,
+}
+
+const THROTTLED_RATE: u64 = 128 * 1024;
+
+impl yttt_transport::TransportConnector for ThrottledConnector {
+    fn connect(
+        &self,
+    ) -> yttt_transport::BoxFuture<
+        '_,
+        Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+    > {
+        Box::pin(async move {
+            let stream = self.inner.connect().await?;
+            Ok(Box::new(Throttled {
+                inner: stream,
+                budget: THROTTLED_RATE / 10,
+                refill: None,
+            }) as yttt_transport::TransportStream)
+        })
+    }
+
+    fn link_profile(&self) -> yttt_transport::LinkProfile {
+        yttt_transport::LinkProfile::REMOTE
+    }
+}
+
+struct Throttled {
+    inner: yttt_transport::TransportStream,
+    /// Bytes the reader may take before the next refill.
+    budget: u64,
+    refill: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl tokio::io::AsyncRead for Throttled {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = &mut *self;
+        if this.budget == 0 {
+            let refill = this
+                .refill
+                .get_or_insert_with(|| Box::pin(tokio::time::sleep(Duration::from_millis(100))));
+            std::task::ready!(refill.as_mut().poll(cx));
+            this.refill = None;
+            this.budget = THROTTLED_RATE / 10;
+        }
+        let allowed = (this.budget as usize).min(buf.remaining());
+        let mut limited = tokio::io::ReadBuf::new(buf.initialize_unfilled_to(allowed));
+        std::task::ready!(std::pin::Pin::new(&mut this.inner).poll_read(cx, &mut limited))?;
+        let read = limited.filled().len();
+        buf.advance(read);
+        this.budget -= read as u64;
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncWrite for Throttled {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// The 2026-11 storm: a build writes thousands of files in a project while a
+/// Client reads at 128 KB/s. The Client must stay connected and its requests
+/// must keep being answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_build_in_a_project_does_not_disconnect_a_slow_client() {
+    let host = RunningHost::start().await;
+    let client = ClientCore::connect(
+        ThrottledConnector {
+            inner: LocalConnector::new(host_endpoint(&host.bootstrap)),
+        },
+        ClientIdentity {
+            expected_environment: None,
+            credential_generation: 0,
+            session_nonce: host.session_nonce("slow-client"),
+            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+            build: host.bootstrap.build.clone(),
+            profile_id: host.bootstrap.profile_id.clone(),
+            client_instance_id: ClientInstanceId::new("slow-client"),
+            host_epoch_hint: None,
+            can_force_stop: false,
+            channel: yttt_protocol::ConnectionChannel::Session,
+        },
+        AuthToken::from_bytes(host.token),
+    )
+    .await
+    .unwrap();
+    let project_root = host._temp.path().join("built-project");
+    fs::create_dir_all(project_root.join("target")).unwrap();
+    client
+        .request(Request::Project(ProjectRequest::Register {
+            view_id: "slow-view".to_string(),
+            project_id: ProjectId::new("built-project"),
+            root: host_path(&project_root),
+        }))
+        .await
+        .unwrap();
+
+    let build = std::thread::spawn({
+        let target = project_root.join("target");
+        move || {
+            for round in 0..3 {
+                for file in 0..2000 {
+                    fs::write(target.join(format!("{file}.o")), format!("{round}")).unwrap();
+                }
+            }
+        }
+    });
+    let mut slowest = Duration::ZERO;
+    while !build.is_finished() {
+        let started = std::time::Instant::now();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            client.request(Request::ListResources),
+        )
+        .await
+        .expect("a request went unanswered during the build")
+        .unwrap();
+        slowest = slowest.max(started.elapsed());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    build.join().unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client.request(Request::ListResources).await.unwrap();
+
+    let diagnostics = client.diagnostics();
+    assert_eq!(
+        diagnostics.reconnects, 0,
+        "the slow Client was disconnected: {:?}",
+        diagnostics.recent_disconnects
+    );
+    assert!(
+        slowest < Duration::from_secs(5),
+        "a request took {slowest:?}"
+    );
+}

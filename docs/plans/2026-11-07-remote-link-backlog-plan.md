@@ -47,7 +47,7 @@
 
 ## A3：慢链路回归测试
 
-- [ ] 测试夹具：Host 会话写端经限速（约 128 KB/s）的双工流；持续 Agent 更新期间，`Workspace::Open` 响应在有界时间内到达。**未完成：** A1 已在写端接缝上锁住积压上限；完整 Host 加限速流的端到端夹具留待 B1 一起做（B1 同样需要“对端不读”的会话夹具）。
+- [x] 测试夹具：Client 经限速 128 KB/s 的连接读取；项目内连续写 6,000 个文件（模拟构建）期间请求持续得到回复、Client 不被断开（`a_build_in_a_project_does_not_disconnect_a_slow_client`，去掉 `ProjectChanged` 合并即以 `NotConnected` 失败）。
 
 ---
 
