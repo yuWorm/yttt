@@ -127,6 +127,10 @@ pub struct AgentSnapshotUpdate {
     pub host_epoch: u64,
     pub sequence: u64,
     pub snapshot: AgentSnapshot,
+    /// The Host left the board out because the connection did not ask for
+    /// boards; `snapshot.board` is empty and says nothing about the board.
+    #[serde(default)]
+    pub board_omitted: bool,
 }
 
 /// An Agent snapshot whose board is given as a patch to the board of the

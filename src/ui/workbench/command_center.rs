@@ -48,6 +48,20 @@ pub(super) struct CommandCenterState {
     question_scroll: gpui::ScrollHandle,
     management_session: Option<String>,
     pub(super) pending_terminal_termination: Option<String>,
+    /// Asks the Host for Agent boards while the command center is shown.
+    board_interest: Option<BoardInterestReport>,
+}
+
+/// This window's request for Agent boards; dropping it withdraws the request.
+struct BoardInterestReport {
+    runtime: std::sync::Arc<crate::host_runtime::DesktopHostRuntime>,
+    scope: u64,
+}
+
+impl Drop for BoardInterestReport {
+    fn drop(&mut self) {
+        self.runtime.set_agent_board_interest(self.scope, false);
+    }
 }
 
 #[derive(Clone)]
@@ -330,6 +344,27 @@ impl WorkbenchView {
                     ),
             )
             .child(lower)
+    }
+
+    /// Asks the Host for Agent boards while the command center is the active
+    /// view: nothing else shows them, so a remote link carries them only then.
+    pub(super) fn report_agent_board_interest(&mut self, window: &Window) {
+        let runtime = self
+            .terminal
+            .host_runtime
+            .clone()
+            .filter(|_| self.command_center_is_active());
+        let scope = window.window_handle().window_id().as_u64();
+        if let (Some(report), Some(runtime)) = (&self.command_center.board_interest, &runtime)
+            && std::sync::Arc::ptr_eq(&report.runtime, runtime)
+            && report.scope == scope
+        {
+            return;
+        }
+        self.command_center.board_interest = runtime.map(|runtime| {
+            runtime.set_agent_board_interest(scope, true);
+            BoardInterestReport { runtime, scope }
+        });
     }
 
     pub(super) fn command_center_stop_live_updates(&mut self) {
@@ -5038,6 +5073,7 @@ mod tests {
                 host_epoch: 7,
                 sequence: 1,
                 snapshot,
+                board_omitted: false,
             }]);
             let live = sources
                 .iter()

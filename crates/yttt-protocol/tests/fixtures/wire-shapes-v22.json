@@ -219,6 +219,7 @@
   },
   "AgentSnapshotUpdate": {
     "": [
+      "board_omitted",
       "host_epoch",
       "scope",
       "sequence",
@@ -304,6 +305,7 @@
   },
   "ClientHello": {
     "": [
+      "accepts_agent_board_interest",
       "accepts_agent_board_patches",
       "accepts_compression",
       "build",
@@ -1247,6 +1249,9 @@
     "ResizeTerminal": [],
     "ScrollTerminal": [],
     "SearchTerminal": [],
+    "SetAgentBoardInterest": [
+      "watch"
+    ],
     "SetLoginStartupConsent": [
       "granted"
     ],

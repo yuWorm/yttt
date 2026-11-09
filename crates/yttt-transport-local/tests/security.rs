@@ -275,6 +275,7 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
             endpoint_id: None,
             accepts_compression: false,
             accepts_agent_board_patches: false,
+            accepts_agent_board_interest: false,
         };
         yttt_transport_local::send_handshake(
             &mut client_stream,

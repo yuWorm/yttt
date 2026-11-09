@@ -844,6 +844,12 @@ impl DesktopHostRuntime {
         self.client.clear_visible_terminals(scope);
     }
 
+    /// Whether one window (`scope`) shows Agent boards; see
+    /// [`ClientCore::set_agent_board_interest`].
+    pub fn set_agent_board_interest(&self, scope: u64, watch: bool) {
+        self.client.set_agent_board_interest(scope, watch);
+    }
+
     pub fn resource_catalog(&self) -> Option<Arc<ResourceCatalog>> {
         self.client.resource_catalog()
     }
@@ -1065,6 +1071,7 @@ mod tests {
             )
             .snapshot()
             .clone(),
+            board_omitted: false,
         };
         let quiet = snapshot("quiet", 7);
         let noisy = snapshot("noisy", 20);

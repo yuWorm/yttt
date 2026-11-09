@@ -114,6 +114,7 @@ mod tests {
                 updated_at: sequence,
                 board: Default::default(),
             },
+            board_omitted: false,
         }
     }
 

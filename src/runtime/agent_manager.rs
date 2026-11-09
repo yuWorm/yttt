@@ -32,7 +32,7 @@ impl AgentPaneAddress {
 pub struct AgentManager {
     runtime: AgentRuntime,
     snapshot_client: Option<AgentSnapshotClient>,
-    host_snapshot_sequences: HashMap<AgentPaneAddress, (u64, u64, u64)>,
+    host_snapshot_sequences: HashMap<AgentPaneAddress, (u64, u64, u64, bool)>,
 }
 
 impl Default for AgentManager {
@@ -94,7 +94,13 @@ impl AgentManager {
         address: &AgentPaneAddress,
         update: &AgentSnapshotUpdate,
     ) -> bool {
-        let cursor = (update.host_epoch, update.scope.generation, update.sequence);
+        // The same state with the board it first came without is newer.
+        let cursor = (
+            update.host_epoch,
+            update.scope.generation,
+            update.sequence,
+            !update.board_omitted,
+        );
         if self
             .host_snapshot_sequences
             .get(address)
@@ -136,6 +142,7 @@ mod tests {
             )
             .snapshot()
             .clone(),
+            board_omitted: false,
         };
 
         assert!(manager.accept_host_snapshot(&address, &update(4, 3, 2)));
@@ -148,5 +155,34 @@ mod tests {
 
         manager.forget_pane(&address);
         assert!(manager.accept_host_snapshot(&address, &update(4, 3, 2)));
+    }
+
+    #[test]
+    fn a_host_snapshot_with_its_board_replaces_the_same_one_without() {
+        let mut manager = AgentManager::default();
+        let address = AgentPaneAddress::new("project", "tab", "pane");
+        let update = |board_omitted| AgentSnapshotUpdate {
+            scope: AgentHookScope {
+                project_id: "project".to_string(),
+                tab_id: "tab".to_string(),
+                pane_id: "pane".to_string(),
+                generation: 1,
+            },
+            terminal_session_id: TerminalSessionId::new("project:tab:pane"),
+            host_epoch: 1,
+            sequence: 7,
+            snapshot: AgentReducer::new(
+                AgentInstanceId::new("agent").unwrap(),
+                ProviderId::new("codex").unwrap(),
+                1,
+            )
+            .snapshot()
+            .clone(),
+            board_omitted,
+        };
+        assert!(manager.accept_host_snapshot(&address, &update(true)));
+        assert!(manager.accept_host_snapshot(&address, &update(false)));
+        assert!(!manager.accept_host_snapshot(&address, &update(true)));
+        assert!(!manager.accept_host_snapshot(&address, &update(false)));
     }
 }

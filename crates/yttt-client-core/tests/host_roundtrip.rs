@@ -146,6 +146,54 @@ impl RunningHost {
         .unwrap()
     }
 
+    /// A Client over the Host's TLS remote access, which `local` turns on.
+    async fn tls_client(&self, local: &ClientCore, id: &str) -> ClientCore {
+        use yttt_protocol::remote_access::{RemoteAccessRequest, RemoteAccessResponse};
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        local
+            .request(Request::RemoteAccess(RemoteAccessRequest::SetEnabled {
+                enabled: true,
+                listen_address: address,
+                confirm_non_loopback: false,
+            }))
+            .await
+            .unwrap();
+        let Response::RemoteAccess(RemoteAccessResponse::ConnectionInfo(info)) = local
+            .request(Request::RemoteAccess(
+                RemoteAccessRequest::ExportConnectionInfo,
+            ))
+            .await
+            .unwrap()
+        else {
+            panic!("connection info")
+        };
+        ClientCore::connect(
+            yttt_transport_tls::TlsConnector::new(
+                address.to_string(),
+                info.certificate_der.clone(),
+            )
+            .unwrap(),
+            ClientIdentity {
+                expected_environment: Some(info.environment_id.clone()),
+                credential_generation: info.credential_generation,
+                session_nonce: self.session_nonce(id),
+                supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+                build: self.bootstrap.build.clone(),
+                profile_id: info.profile_id.clone(),
+                client_instance_id: ClientInstanceId::new(id),
+                host_epoch_hint: None,
+                can_force_stop: false,
+                channel: yttt_protocol::ConnectionChannel::Session,
+            },
+            AuthToken::from_bytes(info.work_secret),
+        )
+        .await
+        .unwrap()
+    }
+
     async fn lifecycle_request(
         &self,
         body: LifecycleRequest,
@@ -5512,49 +5560,8 @@ fn post_agent_hook(environment: &[String], provider: &str, body: &[u8]) {
 async fn a_connected_client_rebuilds_a_growing_agent_board() {
     let host = RunningHost::start().await;
     let client = host.client("board-watcher").await;
-    let environment_file = host._temp.path().join("agent-environment");
     let session_id = TerminalSessionId::new("board-agent");
-    let mut spec = spawn_spec();
-    spec.session_id = session_id.clone();
-    spec.project_id = ProjectId::new("project");
-    spec.environment.push((
-        "YTTT_TEST_AGENT_ENVIRONMENT_FILE".to_string(),
-        environment_file.to_string_lossy().into_owned(),
-    ));
-    spec.execution = TerminalExecutionSpec::Command {
-        shell: "/bin/sh".to_string(),
-        program: "/bin/sh".to_string(),
-        args: vec![
-            "-lc".to_string(),
-            concat!(
-                "printf '%s\\n%s\\n%s\\n' ",
-                "\"$YTTT_AGENT_HOOK_ENDPOINT\" ",
-                "\"$YTTT_AGENT_HOOK_TOKEN\" ",
-                "\"$YTTT_AGENT_HOOK_SCOPE\" ",
-                "> \"$YTTT_TEST_AGENT_ENVIRONMENT_FILE\"; sleep 30"
-            )
-            .to_string(),
-        ],
-        return_to_shell: false,
-    };
-    client
-        .request(spawn_request(spec, host.host_epoch()))
-        .await
-        .unwrap();
-    let environment = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(contents) = fs::read_to_string(&environment_file) {
-                let values = contents.lines().map(str::to_string).collect::<Vec<_>>();
-                if values.len() == 3 && values.iter().all(|value| !value.is_empty()) {
-                    break values;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("Host-injected Agent environment timeout");
-
+    let environment = spawn_hooked_agent(&host, &client, &session_id).await;
     post_agent_hook(
         &environment,
         "omp",
@@ -5562,11 +5569,7 @@ async fn a_connected_client_rebuilds_a_growing_agent_board() {
     );
     const MESSAGES: usize = 40;
     for id in 0..MESSAGES {
-        let body = format!(
-            r#"{{"event":"board_event","payload":{{"board":{{"kind":"message","message":{{"id":"m{id}","execution_id":"run","role":"assistant","text":"{}","timestamp":{id}}}}}}}}}"#,
-            "x".repeat(2048)
-        );
-        post_agent_hook(&environment, "omp", body.as_bytes());
+        post_board_message(&environment, id, 2048);
     }
 
     let messages = tokio::time::timeout(Duration::from_secs(10), async {
@@ -5595,6 +5598,154 @@ async fn a_connected_client_rebuilds_a_growing_agent_board() {
         "a patch did not fit: {:?}",
         diagnostics.recent_disconnects
     );
+}
+
+/// Starts a terminal that reports Agent hooks; returns its hook endpoint,
+/// token and scope.
+async fn spawn_hooked_agent(
+    host: &RunningHost,
+    client: &ClientCore,
+    session_id: &TerminalSessionId,
+) -> Vec<String> {
+    let environment_file = host
+        ._temp
+        .path()
+        .join(format!("agent-environment-{session_id}"));
+    let mut spec = spawn_spec();
+    spec.session_id = session_id.clone();
+    spec.project_id = ProjectId::new("project");
+    spec.environment.push((
+        "YTTT_TEST_AGENT_ENVIRONMENT_FILE".to_string(),
+        environment_file.to_string_lossy().into_owned(),
+    ));
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-lc".to_string(),
+            concat!(
+                "printf '%s\\n%s\\n%s\\n' ",
+                "\"$YTTT_AGENT_HOOK_ENDPOINT\" ",
+                "\"$YTTT_AGENT_HOOK_TOKEN\" ",
+                "\"$YTTT_AGENT_HOOK_SCOPE\" ",
+                "> \"$YTTT_TEST_AGENT_ENVIRONMENT_FILE\"; sleep 30"
+            )
+            .to_string(),
+        ],
+        return_to_shell: false,
+    };
+    client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(contents) = fs::read_to_string(&environment_file) {
+                let values = contents.lines().map(str::to_string).collect::<Vec<_>>();
+                if values.len() == 3 && values.iter().all(|value| !value.is_empty()) {
+                    break values;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Host-injected Agent environment timeout")
+}
+
+fn post_board_message(environment: &[String], id: usize, bytes: usize) {
+    let body = format!(
+        r#"{{"event":"board_event","payload":{{"board":{{"kind":"message","message":{{"id":"m{id}","execution_id":"run","role":"assistant","text":"{}","timestamp":{id}}}}}}}}}"#,
+        "x".repeat(bytes)
+    );
+    post_agent_hook(environment, "omp", body.as_bytes());
+}
+
+/// The Agent snapshot `client` holds for `session_id` once it reaches `sequence`.
+async fn agent_snapshot_at(
+    client: &ClientCore,
+    session_id: &TerminalSessionId,
+    sequence: u64,
+) -> yttt_protocol::agent::AgentSnapshotUpdate {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(update) = client
+                .agent_snapshots()
+                .into_iter()
+                .find(|update| &update.terminal_session_id == session_id)
+                .filter(|update| update.sequence >= sequence)
+            {
+                break update;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the Client never reached the Agent state")
+}
+
+/// A Client on a network ingress gets an Agent's state either way but its
+/// board only while it asks for boards; local Clients always get boards.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_remote_client_receives_agent_boards_only_while_it_watches() {
+    let host = RunningHost::start().await;
+    let local = host.client("board-desktop").await;
+    let session_id = TerminalSessionId::new("watched-agent");
+    let environment = spawn_hooked_agent(&host, &local, &session_id).await;
+    post_agent_hook(
+        &environment,
+        "omp",
+        br#"{"event":"session_start","payload":{"session_id":"omp-session"}}"#,
+    );
+    for id in 0..3 {
+        post_board_message(&environment, id, 64);
+    }
+    let messages =
+        |update: &yttt_protocol::agent::AgentSnapshotUpdate| update.snapshot.board.messages.len();
+    let held = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let held = agent_snapshot_at(&local, &session_id, 0).await;
+            if messages(&held) == 3 {
+                break held;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the local Client never held the board");
+    assert!(!held.board_omitted);
+
+    // Connected now, the remote Client reads the state as a snapshot page.
+    let remote = host.tls_client(&local, "board-remote").await;
+    let summary = agent_snapshot_at(&remote, &session_id, held.sequence).await;
+    assert!(summary.board_omitted, "an unwatching Client got the board");
+    assert_eq!(messages(&summary), 0);
+    assert_eq!(summary.snapshot.turn_state, held.snapshot.turn_state);
+
+    remote.set_agent_board_interest(1, true);
+    let watched = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let update = agent_snapshot_at(&remote, &session_id, held.sequence).await;
+            if !update.board_omitted {
+                break update;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the board never arrived after asking for it");
+    assert_eq!(messages(&watched), 3);
+
+    remote.set_agent_board_interest(1, false);
+    // The withdrawal and the next hook race; wait until the Host has it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    post_board_message(&environment, 3, 64);
+    let next = agent_snapshot_at(&local, &session_id, held.sequence + 1).await;
+    assert_eq!(messages(&next), 4);
+    let kept = agent_snapshot_at(&remote, &session_id, next.sequence).await;
+    assert!(kept.board_omitted, "a withdrawn Client still got the board");
+    assert_eq!(messages(&kept), 3, "the last board held is kept");
+    assert_eq!(remote.diagnostics().reconnects, 0);
 }
 
 /// A Client link that delivers at most `RATE` bytes a second from the Host,

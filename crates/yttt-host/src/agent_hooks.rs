@@ -872,6 +872,7 @@ fn current_snapshot(host_epoch: u64, record: &AgentRecord) -> AgentSnapshotUpdat
         host_epoch,
         sequence: record.sequence,
         snapshot: record.reducer.snapshot().clone(),
+        board_omitted: false,
     }
 }
 

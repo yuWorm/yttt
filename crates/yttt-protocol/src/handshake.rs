@@ -122,6 +122,10 @@ pub struct ClientHello {
     /// The Client reads `ServerEvent::AgentSnapshotPatch`.
     #[serde(default)]
     pub accepts_agent_board_patches: bool,
+    /// The Client asks for Agent boards with `Request::SetAgentBoardInterest`;
+    /// until it does, its Agent snapshots come with `board_omitted` set.
+    #[serde(default)]
+    pub accepts_agent_board_interest: bool,
 }
 
 /// One authenticated Client session uses one `Session` connection for requests,

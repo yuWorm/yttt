@@ -233,6 +233,15 @@ pub enum Request {
     /// Makes this Client the terminal controller, moving every terminal lease
     /// to it. Answered with `TerminalController`.
     TakeTerminalController,
+    /// Whether this connection receives Agent boards: Agent snapshots sent
+    /// while it does not have `board_omitted` set and an empty board. A
+    /// Client that turns it on reads the boards it lacks with
+    /// `ReadAgentSnapshots`, leaving those Agents out of its cursors.
+    /// Answered with `Applied`; a Host that predates it answers
+    /// `Unsupported` and always sends boards.
+    SetAgentBoardInterest {
+        watch: bool,
+    },
 }
 
 impl Request {
@@ -251,6 +260,7 @@ impl Request {
             | Self::AcknowledgeTerminalExit { .. }
             | Self::ReadAgentSnapshots { .. }
             | Self::SetTerminalVisibility { .. }
+            | Self::SetAgentBoardInterest { .. }
             | Self::ReadTerminalController => None,
             Self::SpawnTerminal { .. }
             | Self::TerminalInput(_)
@@ -349,6 +359,7 @@ impl Request {
             | Self::ListResources
             | Self::ReadAgentSnapshots { .. }
             | Self::SetTerminalVisibility { .. }
+            | Self::SetAgentBoardInterest { .. }
             | Self::ReadTerminalController
             | Self::TakeTerminalController => String::new(),
         }

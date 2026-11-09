@@ -65,6 +65,7 @@ fn context() -> TestContext {
             next_request_id: Arc::new(AtomicU64::new(1)),
             diagnostics: Arc::default(),
             visibility: watch::channel(None).1,
+            board_interest: watch::channel(false).1,
             shutdown,
             link: LinkProfile::LOCAL,
             agent_boards: Arc::default(),
@@ -188,6 +189,7 @@ fn agent_snapshot(host_epoch: u64) -> AgentSnapshotUpdate {
             updated_at: 1,
             board: Default::default(),
         },
+        board_omitted: false,
     }
 }
 
@@ -518,6 +520,146 @@ async fn a_new_session_resubscribes_attached_terminals() {
     ));
     shutdown.send(true).unwrap();
     assert!(session.await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_session_asks_for_agent_boards_before_reading_snapshots_and_when_asked() {
+    let mut context = context();
+    let (interest, board_interest) = watch::channel(true);
+    context.session.board_interest = board_interest;
+    // One Agent held whole, one held without its board.
+    let mut summary = agent_state(4, 0);
+    summary.scope.pane_id = "summary".into();
+    summary.board_omitted = true;
+    apply_agent_snapshots(
+        vec![agent_state(3, 1), summary],
+        &context.agent_snapshots,
+        &context.current_host_epoch,
+        1,
+        &context.events,
+    );
+    let (client, mut server) = tokio::io::duplex(8192);
+    let host = tokio::spawn(async move {
+        let mut bodies = Vec::new();
+        let mut withdrawn = false;
+        loop {
+            let ControlMessage::Request(request) = receive_control(&mut server).await.unwrap()
+            else {
+                panic!("expected a request");
+            };
+            let watch = match request.body {
+                Request::SetAgentBoardInterest { watch } => Some(watch),
+                _ => None,
+            };
+            bodies.push(request.body);
+            withdrawn |= watch == Some(false);
+            if withdrawn && watch == Some(true) {
+                let ControlMessage::Request(request) = receive_control(&mut server).await.unwrap()
+                else {
+                    panic!("expected a request");
+                };
+                bodies.push(request.body);
+                break;
+            }
+        }
+        (bodies, server)
+    });
+    let shutdown = context.shutdown_tx.clone();
+    let session = tokio::spawn(async move { run_session(client, &context).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    interest.send_replace(false);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    interest.send_replace(true);
+    let (bodies, _server) = host.await.unwrap();
+    let asked = bodies
+        .iter()
+        .position(|body| matches!(body, Request::SetAgentBoardInterest { watch: true }))
+        .expect("a watching session asks for boards");
+    let read = bodies
+        .iter()
+        .position(|body| matches!(body, Request::ReadAgentSnapshots { .. }))
+        .expect("the session reads Agent snapshots");
+    assert!(asked < read, "{bodies:?}");
+    // Asking again re-reads only the Agent held without its board.
+    let [
+        Request::SetAgentBoardInterest { watch: false },
+        Request::SetAgentBoardInterest { watch: true },
+        Request::ReadAgentSnapshots { acknowledged },
+    ] = &bodies[bodies.len() - 3..]
+    else {
+        panic!("{bodies:?}");
+    };
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0].sequence, 3);
+    shutdown.send(true).unwrap();
+    assert!(session.await.unwrap().is_none());
+}
+
+#[test]
+fn a_snapshot_without_its_board_keeps_the_board_held() {
+    let context = context();
+    let apply = |update: AgentSnapshotUpdate| {
+        apply_agent_snapshots(
+            vec![update],
+            &context.agent_snapshots,
+            &context.current_host_epoch,
+            1,
+            &context.events,
+        );
+    };
+    let held = |context: &TestContext| {
+        context
+            .agent_snapshots
+            .read()
+            .values()
+            .next()
+            .cloned()
+            .unwrap()
+    };
+    apply(agent_state(1, 3));
+    let mut omitted = agent_state(2, 0);
+    omitted.board_omitted = true;
+    omitted.snapshot.updated_at = 2;
+    apply(omitted.clone());
+    let kept = held(&context);
+    assert_eq!((kept.sequence, kept.snapshot.updated_at), (2, 2));
+    assert_eq!(kept.snapshot.board.messages.len(), 3);
+    assert!(kept.board_omitted);
+    // The same state with its board replaces it; the omitted one again does not.
+    apply(agent_state(2, 5));
+    assert_eq!(held(&context).snapshot.board.messages.len(), 5);
+    apply(omitted);
+    assert_eq!(held(&context).snapshot.board.messages.len(), 5);
+    assert!(!held(&context).board_omitted);
+}
+
+#[test]
+fn a_snapshot_without_its_board_drops_the_patch_base() {
+    let context = context();
+    resolve_agent_board(
+        agent_event(ServerEvent::AgentSnapshot(Box::new(agent_state(1, 2)))),
+        &context,
+    )
+    .unwrap();
+    let mut omitted = agent_state(2, 0);
+    omitted.board_omitted = true;
+    resolve_agent_board(
+        agent_event(ServerEvent::AgentSnapshot(Box::new(omitted))),
+        &context,
+    )
+    .unwrap();
+    // The empty board of the omitted snapshot is no base for a patch.
+    let next = agent_state(3, 3);
+    let patch =
+        ServerEvent::AgentSnapshotPatch(Box::new(yttt_protocol::agent::AgentSnapshotPatch {
+            update: next.clone(),
+            base_sequence: 2,
+            board: next
+                .snapshot
+                .board
+                .patch_from(&agent_state(2, 0).snapshot.board),
+        }));
+    assert!(resolve_agent_board(agent_event(patch), &context).is_err());
 }
 
 #[tokio::test]

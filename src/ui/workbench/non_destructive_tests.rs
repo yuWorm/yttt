@@ -1603,6 +1603,7 @@ fn closing_and_reopening_a_reused_tab_id_drops_stale_agent_state(cx: &mut TestAp
         host_epoch: 1,
         sequence: 1,
         snapshot: reducer.snapshot().clone(),
+        board_omitted: false,
     };
     let mut late_update = active_update.clone();
     late_update.sequence = 2;
@@ -1689,6 +1690,7 @@ fn session_end_removes_the_agent_from_the_live_sidebar(cx: &mut TestAppContext) 
                 host_epoch: 1,
                 sequence: 1,
                 snapshot: running,
+                board_omitted: false,
             },
             window,
             cx,
@@ -1712,6 +1714,7 @@ fn session_end_removes_the_agent_from_the_live_sidebar(cx: &mut TestAppContext) 
                 host_epoch: 1,
                 sequence: 2,
                 snapshot: exited,
+                board_omitted: false,
             },
             window,
             cx,

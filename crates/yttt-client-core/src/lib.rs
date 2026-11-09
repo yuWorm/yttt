@@ -179,6 +179,9 @@ struct ClientCoreInner {
     client_id: yttt_core::model::ids::ClientInstanceId,
     visibility_scopes: Mutex<VisibilityScopes>,
     visibility: watch::Sender<Option<Arc<VisibleTerminals>>>,
+    /// Windows that show Agent boards; the Host sends boards while any does.
+    board_scopes: Mutex<HashSet<u64>>,
+    board_interest: watch::Sender<bool>,
     link: LinkProfile,
 }
 
@@ -228,6 +231,7 @@ enum PendingRequest {
     Catalog,
     AgentSnapshots,
     Visibility,
+    BoardInterest,
     /// Resubscribes to an attached terminal on a new connection.
     Resubscribe(TerminalSessionId),
     /// Reopens a workspace on a new connection, which subscribes to its layout.
@@ -248,6 +252,7 @@ struct ClientSessionContext {
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
+    board_interest: watch::Receiver<bool>,
     shutdown: watch::Receiver<bool>,
     /// The connector's heartbeat and liveness timing.
     link: LinkProfile,
@@ -281,6 +286,7 @@ impl ClientCore {
         let next_request_id = Arc::new(AtomicU64::new(1));
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
         let (visibility, visibility_rx) = watch::channel(None);
+        let (board_interest, board_interest_rx) = watch::channel(false);
         let (initial_tx, initial_rx) = oneshot::channel();
         let supervisor = tokio::spawn(run_supervisor(
             connector.clone(),
@@ -289,6 +295,7 @@ impl ClientCore {
             command_rx,
             interactive_rx,
             visibility_rx,
+            board_interest_rx,
             events.clone(),
             state_tx,
             terminal_state.clone(),
@@ -320,6 +327,8 @@ impl ClientCore {
             client_id: identity.client_instance_id.clone(),
             visibility_scopes: Mutex::default(),
             visibility,
+            board_scopes: Mutex::default(),
+            board_interest,
             link: connector.link_profile(),
             supervisor: Mutex::new(Some(supervisor)),
         });
@@ -415,6 +424,21 @@ impl ClientCore {
                 revision: scopes.revision,
                 sessions,
             })));
+    }
+
+    /// Records whether one window (`scope`) shows Agent boards. While none
+    /// does, a Host that supports it sends Agent snapshots without their
+    /// boards, and each snapshot keeps the last board this Client held.
+    pub fn set_agent_board_interest(&self, scope: u64, watch: bool) {
+        let mut scopes = self.inner.board_scopes.lock();
+        let changed = if watch {
+            scopes.insert(scope)
+        } else {
+            scopes.remove(&scope)
+        };
+        if changed {
+            self.inner.board_interest.send_replace(!scopes.is_empty());
+        }
     }
 
     pub fn diagnostics(&self) -> ClientPipelineDiagnosticsSnapshot {
@@ -607,6 +631,7 @@ async fn run_supervisor(
     mut commands: mpsc::Receiver<ClientCommand>,
     mut interactive_commands: mpsc::Receiver<ClientCommand>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
+    board_interest: watch::Receiver<bool>,
     events: broadcast::Sender<ClientEvent>,
     state: watch::Sender<ConnectionState>,
     terminal_state: Arc<RwLock<TerminalState>>,
@@ -699,6 +724,7 @@ async fn run_supervisor(
             next_request_id: next_request_id.clone(),
             diagnostics: diagnostics.clone(),
             visibility: visibility.clone(),
+            board_interest: board_interest.clone(),
             shutdown: shutdown.clone(),
             link: connector.link_profile(),
             agent_boards: Arc::default(),
@@ -912,6 +938,10 @@ async fn connected_session(
     // session reports the current set until the Host declines the request.
     let mut visibility_supported = true;
     visibility.mark_changed();
+    // Like visibility, board interest is per connection: a new one starts
+    // without boards until it asks.
+    let mut board_interest = context.board_interest.clone();
+    let mut board_interest_supported = true;
     let next_internal_request_id = || context.next_request_id.fetch_add(1, Ordering::Relaxed);
     let actor = || Some(context.identity.client_instance_id.to_string());
     if send_internal_request(
@@ -926,13 +956,27 @@ async fn connected_session(
     {
         return Some("failed to request Host resource catalog".to_string());
     }
+    // Asked before reading snapshots, so the first page already has boards.
+    if *board_interest.borrow_and_update()
+        && send_internal_request(
+            &writer,
+            &mut pending,
+            &next_internal_request_id,
+            actor(),
+            Request::SetAgentBoardInterest { watch: true },
+            PendingRequest::BoardInterest,
+        )
+        .is_err()
+    {
+        return Some("failed to ask for Agent boards".to_string());
+    }
     if send_internal_request(
         &writer,
         &mut pending,
         &next_internal_request_id,
         actor(),
         Request::ReadAgentSnapshots {
-            acknowledged: agent_snapshot_cursors(context),
+            acknowledged: agent_snapshot_cursors(context, *board_interest.borrow()),
         },
         PendingRequest::AgentSnapshots,
     )
@@ -1131,12 +1175,20 @@ async fn connected_session(
                         ) {
                             visibility_supported = false;
                         }
+                        if matches!(
+                            (&pending_request, &response.result),
+                            (PendingRequest::BoardInterest, Err(failure))
+                                if failure.code == yttt_protocol::FailureCode::Unsupported
+                        ) {
+                            // An older Host always sends boards.
+                            board_interest_supported = false;
+                        }
                         let more_agents = matches!((&pending_request, &response.result),
                             (PendingRequest::AgentSnapshots, Ok(Response::AgentSnapshots { has_more: true, .. })));
                         handle_response(pending_request, response.result, context);
                         if more_agents && send_internal_request(
                             &writer, &mut pending, &next_internal_request_id, actor(),
-                            Request::ReadAgentSnapshots { acknowledged: agent_snapshot_cursors(context) },
+                            Request::ReadAgentSnapshots { acknowledged: agent_snapshot_cursors(context, *board_interest.borrow()) },
                             PendingRequest::AgentSnapshots,
                         ).is_err() {
                             break 'connected Some("failed to read next Agent snapshot page".to_string());
@@ -1226,6 +1278,41 @@ async fn connected_session(
                     break Some("failed to refresh Host resource catalog".to_string());
                 }
             }
+            changed = board_interest.changed(), if board_interest_supported => {
+                if changed.is_err() {
+                    board_interest_supported = false;
+                    continue;
+                }
+                let watch = *board_interest.borrow_and_update();
+                if send_internal_request(
+                    &writer,
+                    &mut pending,
+                    &next_internal_request_id,
+                    actor(),
+                    Request::SetAgentBoardInterest { watch },
+                    PendingRequest::BoardInterest,
+                )
+                .is_err()
+                {
+                    break Some("failed to change Agent board interest".to_string());
+                }
+                // Reads the boards of the Agents held only as summaries.
+                if watch
+                    && send_internal_request(
+                        &writer,
+                        &mut pending,
+                        &next_internal_request_id,
+                        actor(),
+                        Request::ReadAgentSnapshots {
+                            acknowledged: agent_snapshot_cursors(context, true),
+                        },
+                        PendingRequest::AgentSnapshots,
+                    )
+                    .is_err()
+                {
+                    break Some("failed to read Agent boards".to_string());
+                }
+            }
             changed = visibility.changed(), if visibility_supported => {
                 if changed.is_err() {
                     visibility_supported = false;
@@ -1298,11 +1385,18 @@ async fn connected_session(
     disconnected
 }
 
-fn agent_snapshot_cursors(context: &ClientSessionContext) -> Vec<AgentSnapshotCursor> {
+/// The Agent states this Client holds, for the Host to send only newer ones.
+/// `with_boards` leaves out those held without their board, so the Host
+/// sends them again with it.
+fn agent_snapshot_cursors(
+    context: &ClientSessionContext,
+    with_boards: bool,
+) -> Vec<AgentSnapshotCursor> {
     context
         .agent_snapshots
         .read()
         .values()
+        .filter(|update| !(with_boards && update.board_omitted))
         .map(|update| AgentSnapshotCursor {
             scope: update.scope.clone(),
             host_epoch: update.host_epoch,
@@ -1329,10 +1423,15 @@ fn resolve_agent_board(
     } = event;
     let body = match body {
         ServerEvent::AgentSnapshot(update) => {
-            context.agent_boards.lock().insert(
-                agent_board_key(&update.scope),
-                (update.sequence, update.snapshot.board.clone()),
-            );
+            let key = agent_board_key(&update.scope);
+            let mut boards = context.agent_boards.lock();
+            // The Host forgets its patch base when it leaves a board out.
+            if update.board_omitted {
+                boards.remove(&key);
+            } else {
+                boards.insert(key, (update.sequence, update.snapshot.board.clone()));
+            }
+            drop(boards);
             ServerEvent::AgentSnapshot(update)
         }
         ServerEvent::AgentSnapshotPatch(patch) => {
@@ -1498,7 +1597,7 @@ fn handle_response(
             }
             let _ = reply.send(result.map_err(ClientCoreError::Protocol));
         }
-        PendingRequest::Visibility => {}
+        PendingRequest::Visibility | PendingRequest::BoardInterest => {}
         PendingRequest::Reopen(workspace_id) => match result {
             Ok(Response::Workspace(WorkspaceResponse::Opened { layout, .. })) => {
                 apply_workspace_layout(workspace_id, layout, context);
@@ -1700,18 +1799,20 @@ fn apply_agent_snapshots(
             continue;
         }
         let key = agent_address_key(&update.scope);
+        let mut update = update;
         let applied = {
             let mut snapshots = snapshots.write();
-            let stale = snapshots.get(&key).is_some_and(|current| {
-                current.host_epoch > update.host_epoch
-                    || (current.host_epoch == update.host_epoch
-                        && (current.scope.generation > update.scope.generation
-                            || (current.scope.generation == update.scope.generation
-                                && current.sequence >= update.sequence)))
-            });
-            if stale {
+            let current = snapshots.get(&key);
+            if current.is_some_and(|current| !supersedes(&update, current)) {
                 false
             } else {
+                if update.board_omitted
+                    && let Some(current) = current
+                    && current.host_epoch == update.host_epoch
+                    && current.scope.generation == update.scope.generation
+                {
+                    update.snapshot.board = current.snapshot.board.clone();
+                }
                 snapshots.insert(key, update.clone());
                 true
             }
@@ -1720,6 +1821,20 @@ fn apply_agent_snapshots(
             let _ = events.send(ClientEvent::AgentSnapshotUpdated(Box::new(update)));
         }
     }
+}
+
+/// Whether `update` replaces `current` of the same Agent pane: it is newer,
+/// or it is the same state with the board that `current` came without.
+fn supersedes(update: &AgentSnapshotUpdate, current: &AgentSnapshotUpdate) -> bool {
+    let order = |snapshot: &AgentSnapshotUpdate| {
+        (
+            snapshot.host_epoch,
+            snapshot.scope.generation,
+            snapshot.sequence,
+            !snapshot.board_omitted,
+        )
+    };
+    order(update) > order(current)
 }
 
 fn apply_project_token_usage_batch(

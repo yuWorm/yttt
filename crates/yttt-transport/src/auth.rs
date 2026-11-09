@@ -150,6 +150,8 @@ pub struct AuthenticatedClient {
     pub accepts_compression: bool,
     /// The Client reads Agent board patches.
     pub accepts_agent_board_patches: bool,
+    /// The Client asks for Agent boards when it shows them.
+    pub accepts_agent_board_interest: bool,
     pub session: AuthenticatedSession,
 }
 
@@ -265,6 +267,7 @@ where
         },
         accepts_compression: true,
         accepts_agent_board_patches: true,
+        accepts_agent_board_interest: true,
     };
     send_handshake(stream, &HandshakeMessage::ClientHello(hello.clone())).await?;
     let challenge = match receive_handshake(stream).await? {
@@ -499,6 +502,7 @@ where
         channel: hello.channel,
         accepts_compression: hello.accepts_compression,
         accepts_agent_board_patches: hello.accepts_agent_board_patches,
+        accepts_agent_board_interest: hello.accepts_agent_board_interest,
         session: AuthenticatedSession {
             ingress: identity.ingress,
             credential_generation: identity.credential_generation,

@@ -1047,6 +1047,10 @@ async fn serve_client_session(
         SessionFeatures {
             compress: compresses(context.identity.ingress, authenticated.accepts_compression),
             agent_board_patches: authenticated.accepts_agent_board_patches,
+            agent_board_interest: omits_unwatched_boards(
+                context.identity.ingress,
+                authenticated.accepts_agent_board_interest,
+            ),
         },
         context,
     )
@@ -1198,11 +1202,33 @@ fn compresses(ingress: yttt_transport::IngressKind, accepts_compression: bool) -
     accepts_compression && ingress != yttt_transport::IngressKind::LocalAdmin
 }
 
+/// Whether a Session connection leaves Agent boards out until its Client
+/// asks for them: over a network ingress, to a Client that asks. Local IPC
+/// costs nothing, and local tools read boards without asking.
+fn omits_unwatched_boards(ingress: yttt_transport::IngressKind, accepts_interest: bool) -> bool {
+    accepts_interest && ingress != yttt_transport::IngressKind::LocalAdmin
+}
+
 /// What a Session connection's Client reads beyond the baseline protocol.
 #[derive(Clone, Copy)]
 struct SessionFeatures {
     compress: bool,
     agent_board_patches: bool,
+    /// Agent boards are sent only while the Client asks for them.
+    agent_board_interest: bool,
+}
+
+/// Takes the boards out of an Agent snapshot page for a connection that did
+/// not ask for them.
+fn omit_page_boards(response: &mut HostResponse) {
+    if let Ok(Response::AgentSnapshots { snapshots, .. }) = &mut response.result {
+        snapshots.iter_mut().for_each(omit_board);
+    }
+}
+
+fn omit_board(update: &mut AgentSnapshotUpdate) {
+    update.snapshot.board = yttt_agent_core::AgentBoardSnapshot::default();
+    update.board_omitted = true;
 }
 
 /// Serves one authenticated Client over its single Session connection:
@@ -1226,6 +1252,8 @@ async fn serve_session_connection(
     let _diagnostics = context
         .runtime
         .register_session_writer(&client_id, writer.clone());
+    // Whether this connection receives Agent boards.
+    let (boards, boards_watched) = watch::channel(!features.agent_board_interest);
     let mut streams = TerminalStreams {
         context: TerminalStreamContext {
             writer: writer.clone(),
@@ -1274,6 +1302,7 @@ async fn serve_session_connection(
             client_id.clone(),
             attachments.clone(),
             features.agent_board_patches,
+            boards_watched,
             context.clone(),
         );
         let writer = writer.clone();
@@ -1334,9 +1363,20 @@ async fn serve_session_connection(
                         .try_recv()
                         .unwrap_or_else(|_| "session reader stopped".to_string()));
                 };
-                if recovery_request(&request.body) {
+                if let Request::SetAgentBoardInterest { watch } = request.body {
+                    // A connection that always receives boards keeps them.
+                    if features.agent_board_interest {
+                        boards.send_replace(watch);
+                    }
+                    writer
+                        .send_reliable(&ControlMessage::Response(HostResponse {
+                            request_id: request.request_id,
+                            result: Ok(Response::Applied),
+                        }))
+                        .map_err(|error| error.to_string())?;
+                } else if recovery_request(&request.body) {
                     let uses_attachments = request_uses_terminal_attachments(&request.body);
-                    let (response, changed) = dispatch_control_request(
+                    let (mut response, changed) = dispatch_control_request(
                         request,
                         &client_id,
                         &attachments,
@@ -1344,6 +1384,9 @@ async fn serve_session_connection(
                         context,
                     )
                     .await;
+                    if !*boards.borrow() {
+                        omit_page_boards(&mut response);
+                    }
                     writer
                         .send_reliable(&ControlMessage::Response(response))
                         .map_err(|error| error.to_string())?;
@@ -1361,9 +1404,12 @@ async fn serve_session_connection(
                 return Err(reason.unwrap_or_else(|_| "session reader stopped".to_string()));
             }
             finished = running.join_next(), if !running.is_empty() => {
-                let (response, changed, uses_attachments, attached) = finished
+                let (mut response, changed, uses_attachments, attached) = finished
                     .ok_or("request set emptied")?
                     .map_err(|error| format!("request task failed: {error}"))?;
+                if !*boards.borrow() {
+                    omit_page_boards(&mut response);
+                }
                 writer
                     .send_reliable(&ControlMessage::Response(response))
                     .map_err(|error| error.to_string())?;
@@ -1893,10 +1939,15 @@ struct SentAgentBoards {
 /// With `boards`, a snapshot after the first of an Agent travels as an
 /// `AgentSnapshotPatch` to the board the Client will hold when it arrives:
 /// the one whose writing started last, since a waiting one is replaced.
+///
+/// Without `with_board` the snapshot leaves its board out, and the next one
+/// with a board is whole: the Client drops its patch base on such a snapshot.
+/// A Client that starts watching boards reads the ones it lacks itself.
 fn send_agent_snapshot(
     writer: &SessionWriter,
     host_sequence: &AtomicU64,
     boards: Option<&mut SentAgentBoards>,
+    with_board: bool,
     mut update: AgentSnapshotUpdate,
 ) -> Result<(), ()> {
     let scope = &update.scope;
@@ -1904,6 +1955,19 @@ fn send_agent_snapshot(
         "agent-snapshot:{}:{}:{}:{}",
         scope.project_id, scope.tab_id, scope.pane_id, scope.generation
     );
+    if !with_board {
+        if let Some(boards) = boards {
+            boards.written.remove(&key);
+            boards.waiting.remove(&key);
+        }
+        omit_board(&mut update);
+        return send_latest_state_event(
+            writer,
+            host_sequence,
+            &key,
+            ServerEvent::AgentSnapshot(Box::new(update)),
+        );
+    }
     let Some(boards) = boards else {
         return send_latest_state_event(
             writer,
@@ -2053,6 +2117,7 @@ fn forward_state_events(
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
     agent_board_patches: bool,
+    boards_watched: watch::Receiver<bool>,
     context: ConnectionContext,
 ) -> impl Future<Output = Result<(), ()>> + Send {
     let mut ssh_events = context.ssh.subscribe();
@@ -2161,11 +2226,13 @@ fn forward_state_events(
                         }
                         Err(broadcast::error::RecvError::Closed) => return Err(()),
                     };
+                    let with_board = *boards_watched.borrow();
                     for update in updates {
                         send_agent_snapshot(
                             &writer,
                             &context.host_sequence,
                             agent_boards.as_mut(),
+                            with_board,
                             update,
                         )?;
                     }
@@ -2832,6 +2899,8 @@ async fn handle_request(
             runtime.set_client_visibility(client_id, revision, visible.into_iter().collect());
             Ok(Response::Applied)
         }
+        // The Session connection applies it before dispatching requests.
+        Request::SetAgentBoardInterest { .. } => Ok(Response::Applied),
         Request::Workspace(request) => {
             use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
             let workspaces = context.workspaces.clone();
@@ -3892,6 +3961,20 @@ mod session_idle_tests {
         }
     }
 
+    #[test]
+    fn only_network_sessions_to_asking_clients_leave_boards_out() {
+        use yttt_transport::IngressKind;
+        assert!(!omits_unwatched_boards(IngressKind::LocalAdmin, true));
+        for ingress in [
+            IngressKind::TlsWork,
+            IngressKind::SshWork,
+            IngressKind::P2pWork,
+        ] {
+            assert!(omits_unwatched_boards(ingress, true));
+            assert!(!omits_unwatched_boards(ingress, false));
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn local_connections_have_no_idle_timeout() {
         assert_eq!(
@@ -3951,6 +4034,7 @@ mod state_event_coalescing_tests {
                 updated_at: sequence,
                 board: Default::default(),
             },
+            board_omitted: false,
         }
     }
 
@@ -3975,8 +4059,14 @@ mod state_event_coalescing_tests {
         let host_sequence = AtomicU64::new(1);
         for sequence in 1..=100 {
             for pane in ["a", "b"] {
-                send_agent_snapshot(&writer, &host_sequence, None, agent_update(pane, sequence))
-                    .unwrap();
+                send_agent_snapshot(
+                    &writer,
+                    &host_sequence,
+                    None,
+                    true,
+                    agent_update(pane, sequence),
+                )
+                .unwrap();
             }
             send_token_usage(&writer, &host_sequence, token_usage(sequence)).unwrap();
         }
@@ -4047,7 +4137,8 @@ mod state_event_coalescing_tests {
             for sequence in 1..=200 {
                 let mut update = agent_update("a", sequence);
                 update.snapshot.board = board_with(sequence as usize);
-                send_agent_snapshot(&writer, &host_sequence, Some(&mut boards), update).unwrap();
+                send_agent_snapshot(&writer, &host_sequence, Some(&mut boards), true, update)
+                    .unwrap();
                 if sequence % 7 == 0 {
                     tokio::task::yield_now().await;
                 }

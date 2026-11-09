@@ -34,6 +34,7 @@ fn client_hello() -> ClientHello {
         endpoint_id: None,
         accepts_compression: false,
         accepts_agent_board_patches: false,
+        accepts_agent_board_interest: false,
     }
 }
 
