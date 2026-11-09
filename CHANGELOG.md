@@ -12,6 +12,8 @@
 - Remote connections (TLS, SSH, P2P) compress the Host's large messages: Agent states, the resource catalog, layouts and terminal snapshots shrink to about a third, so a window through a relay or tunnel restores faster and uses less traffic. Older versions on either end keep talking uncompressed. A Linux Host's TLS connections no longer let the kernel hold megabytes of unsent data.
 - Agent 更新只发送看板上变化的部分：新增一条消息时不再重发整份看板（omp agent 单份可达 0.9 MB），远程窗口经慢链路时 Agent 状态更新快得多。旧版本两端之间照常发送完整状态。
 - An Agent update sends only what changed on its board: a new message no longer resends the whole board (up to 0.9 MB for an omp agent), so Agent state keeps up far better in a remote window on a slow link. Older versions on either end keep sending whole states.
+- 远程窗口短暂断开（15 秒内）时不再用对话框盖住窗口：内容变暗但仍可阅读，顶部提示正在恢复并可立即重连；超过 15 秒才显示带原因与“关闭窗口”的对话框。
+- A remote window that drops briefly (under 15 seconds) no longer covers itself with a dialog: its content dims but stays readable, with a notice at the top that it is restoring the link and a Reconnect Now button; the dialog with the reason and Close Window appears after 15 seconds.
 - 远程窗口在电脑唤醒或网络切换（换 Wi-Fi、插拔网线、开关 VPN）后几秒内恢复连接：立即确认链路，5 秒没有回应就重连，不再等满 20 秒；正在重连时立即重试。`client.log` 记下触发原因。
 - A remote window recovers within seconds after the computer wakes or the network changes (another Wi-Fi, a cable, a VPN turned on or off): it checks the link at once and reconnects if nothing answers within 5 seconds, instead of waiting out 20; a reconnect in progress tries again immediately. `client.log` notes what triggered it.
 - 远程窗口打开工作区时不再先下载每个 Agent 的完整看板（一个 22 个 Agent 的工作区约 4 MB），只取状态概要即可显示；看板在首次打开指挥中心时补齐。经穿透工具或 relay 恢复工作区快得多。
