@@ -35,7 +35,7 @@ impl WorkspaceBackups {
     /// Keeps the current record at `current` before it is replaced.
     pub(crate) fn preserve(&self, workspace_id: &str, current: &Path, now_millis: u64) {
         if let Err(error) = self.try_preserve(workspace_id, current, now_millis) {
-            eprintln!("workspace {workspace_id} backup failed: {error}");
+            tracing::warn!("workspace {workspace_id} backup failed: {error}");
         }
     }
 
@@ -102,7 +102,7 @@ impl WorkspaceBackups {
             match accept(&bytes) {
                 Ok(value) => return Ok(Some((bytes, value))),
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "workspace {workspace_id} backup {} is unreadable: {error}",
                         candidate.display()
                     );
@@ -116,7 +116,9 @@ impl WorkspaceBackups {
         match fs::remove_dir_all(self.directory(workspace_id)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => eprintln!("workspace {workspace_id} backups were not removed: {error}"),
+            Err(error) => {
+                tracing::warn!("workspace {workspace_id} backups were not removed: {error}")
+            }
         }
     }
 }

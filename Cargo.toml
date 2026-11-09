@@ -89,6 +89,7 @@ rand = "0.8"
 zeroize = "1"
 yttt-transport-tls = { path = "crates/yttt-transport-tls" }
 notify = "7.0.0"
+tracing = "0.1"
 # Network change events; already in the tree through iroh.
 netwatch = "0.19"
 n0-watcher = "1"

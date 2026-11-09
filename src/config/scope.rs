@@ -90,6 +90,7 @@ const SETTING_KEYS: &[&str] = &[
     "project_panel.width",
     "project_panel.project_sidebar_width",
     "project_panel.collapsed_agent_projects",
+    "diagnostics.verbose_logs",
 ];
 
 pub fn setting_keys() -> &'static [&'static str] {
@@ -107,7 +108,8 @@ pub fn setting_scope(key: &str) -> SettingsScope {
         | "editor.tab_size"
         | "editor.auto_detect_language"
         | "editor.default_language"
-        | "editor.lsp" => SettingsScope::Host,
+        | "editor.lsp"
+        | "diagnostics.verbose_logs" => SettingsScope::Host,
         _ if key.starts_with("agent.")
             || key.starts_with("terminal.environment.")
             || key.starts_with("default_layout.")
@@ -450,6 +452,7 @@ pub fn host_settings_changed(candidate: &AppSettings, confirmed: &AppSettings) -
         || candidate.editor.auto_detect_language != confirmed.editor.auto_detect_language
         || candidate.editor.default_language != confirmed.editor.default_language
         || candidate.editor.lsp != confirmed.editor.lsp
+        || candidate.diagnostics != confirmed.diagnostics
 }
 
 fn device_settings_changed(candidate: &AppSettings, confirmed: &AppSettings) -> bool {
@@ -817,6 +820,7 @@ mod tests {
             "editor.default_language",
             "editor.lsp.enabled",
             "editor.lsp.command",
+            "diagnostics.verbose_logs",
         ] {
             assert_eq!(setting_scope(key), SettingsScope::Host, "{key}");
         }

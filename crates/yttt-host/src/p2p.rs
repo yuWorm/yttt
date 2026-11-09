@@ -486,7 +486,7 @@ async fn serve_work_connection(
                 explained = true;
                 if connection.path_kind() == yttt_transport_iroh::PathKind::Relay {
                     let report = shared.endpoint.path_report(&connection);
-                    eprintln!("{} P2P device {device} still on the relay: {report}", super::log_timestamp());
+                    tracing::info!(%device, %report, "P2P device still on the relay");
                 }
                 continue;
             }

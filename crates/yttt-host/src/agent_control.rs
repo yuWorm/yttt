@@ -147,7 +147,7 @@ impl AgentControl {
                 self.deliveries.lock().remove(session_id);
             }
             Ok(false) => {}
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "worker {} was not marked as driven by a person: {}",
                 session_id.as_str(),
                 error.message
@@ -187,7 +187,7 @@ impl AgentControl {
                 text
             };
             if let Err(error) = self.paste_and_enter(&agent, &text) {
-                eprintln!(
+                tracing::warn!(
                     "a queued message for {} was not delivered: {}",
                     agent.as_str(),
                     error.message
@@ -430,7 +430,7 @@ impl AgentControl {
             match self.runtime.terminate(&session_id) {
                 Ok(_) | Err(HostRuntimeError::NotFound(_)) => {}
                 Err(error) => {
-                    eprintln!("closed pane terminal {session_id} was not terminated: {error}");
+                    tracing::warn!("closed pane terminal {session_id} was not terminated: {error}");
                 }
             }
         }

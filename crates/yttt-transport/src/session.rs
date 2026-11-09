@@ -119,6 +119,8 @@ pub struct SessionQueueStats {
     pub reliable_bytes_high_water: usize,
     /// How long the oldest waiting reliable message has waited.
     pub oldest_reliable_wait: Option<Duration>,
+    /// Bytes written to the connection so far, frame headers included.
+    pub written_bytes: u64,
 }
 
 /// A render lane refused a frame: it exceeds the lane budget or the connection closed.
@@ -183,6 +185,7 @@ struct State {
     reliable_streak: usize,
     reliable_items_high_water: usize,
     reliable_bytes_high_water: usize,
+    written_bytes: u64,
 }
 
 impl State {
@@ -572,6 +575,7 @@ impl SessionWriter {
             reliable_items_high_water: state.reliable_items_high_water,
             reliable_bytes_high_water: state.reliable_bytes_high_water,
             oldest_reliable_wait: state.reliable.front().map(|item| item.queued_at.elapsed()),
+            written_bytes: state.written_bytes,
         }
     }
 
@@ -767,7 +771,11 @@ async fn run_writer(shared: Arc<Shared>, mut writer: impl AsyncWrite + Unpin) {
             shared.close(SessionCloseReason::WriteFailed);
             return;
         }
-        shared.state.lock().finish(slot);
+        {
+            let mut state = shared.state.lock();
+            state.written_bytes += frame.len() as u64;
+            state.finish(slot);
+        }
         shared.progress.notify_waiters();
     }
 }

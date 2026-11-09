@@ -1079,6 +1079,38 @@ fn settings_general_rows(
             root,
             style,
             theme,
+            text.get(UiTextKey::SettingsSectionDiagnostics),
+            false,
+        ))
+        .child(
+            scoped_settings_row(
+                root,
+                "diagnostics.verbose_logs",
+                style,
+                theme,
+                text.get(UiTextKey::SettingsVerboseLogs),
+                text.get(UiTextKey::SettingsVerboseLogsDescription),
+                settings_switch(
+                    "settings-verbose-logs",
+                    root.verbose_logs_enabled(),
+                    theme,
+                    style.ui_style,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_verbose_logs_enabled(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-verbose-logs".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-verbose-logs-row".to_string()),
+        )
+        .child(settings_section_header(
+            root,
+            style,
+            theme,
             text.get(UiTextKey::SettingsSectionNewTabs),
             false,
         ))
@@ -3433,6 +3465,7 @@ fn read_only_setting_value(root: &WorkbenchView, key: &str) -> String {
         "editor.lsp.command" => settings.editor.lsp.command.clone(),
         "agent.primary" => root.primary_agent().display_name().to_string(),
         "agent.sessions_enabled" => settings.agent.sessions_enabled.to_string(),
+        "diagnostics.verbose_logs" => settings.diagnostics.verbose_logs.to_string(),
         _ => root.ui_text.get(UiTextKey::SettingsUnbound).to_string(),
     }
 }

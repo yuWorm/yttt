@@ -6,6 +6,7 @@ mod audit;
 mod device_settings;
 pub mod diagnostics;
 mod lifecycle;
+pub mod logging;
 mod p2p;
 mod pane_launch;
 mod pane_runtime;
@@ -212,6 +213,16 @@ where
         &bootstrap.state_root,
         &bootstrap.config_root,
     )?));
+    // The log detail follows `[diagnostics] verbose_logs` as Clients change it.
+    tokio::spawn({
+        let mut changes = workspaces.subscribe_config_changes();
+        let config_root = bootstrap.config_root.clone();
+        async move {
+            while changes.changed().await.is_ok() {
+                logging::set_verbose(logging::verbose_setting(&config_root));
+            }
+        }
+    });
     let (listener, work_listener) = bind()
         .await
         .map_err(|error| HostError::Transport(error.into()))?;
@@ -441,7 +452,7 @@ where
                         stream
                     }
                     Err(error) => {
-                        eprintln!("local accept failed: {error}");
+                        tracing::warn!("local accept failed: {error}");
                         accept_backoff = (accept_backoff * 2)
                             .clamp(Duration::from_millis(10), remote_access::MAX_ACCEPT_BACKOFF);
                         next_accept = tokio::time::Instant::now() + accept_backoff;
@@ -1029,7 +1040,25 @@ async fn serve_client_session(
     }
     context.runtime.resume_client(&client_id);
     context.lifecycle.client_connected();
-    log_session(&client_id, generation, "connected");
+    let features = SessionFeatures {
+        compress: compresses(context.identity.ingress, authenticated.accepts_compression),
+        agent_board_patches: authenticated.accepts_agent_board_patches,
+        agent_board_interest: omits_unwatched_boards(
+            context.identity.ingress,
+            authenticated.accepts_agent_board_interest,
+        ),
+    };
+    tracing::info!(
+        client = %client_id,
+        generation,
+        ingress = ?context.identity.ingress,
+        protocol = authenticated.selected_version,
+        compress = features.compress,
+        board_patches = features.agent_board_patches,
+        board_interest = features.agent_board_interest,
+        "session connected"
+    );
+    let connected_at = std::time::Instant::now();
     let attachments = shared_terminal_attachments(context, &client_id);
     let request_journal = {
         let mut journals = context.request_journals.lock();
@@ -1038,23 +1067,19 @@ async fn serve_client_session(
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(RequestJournal::default())))
             .clone()
     };
+    let mut writer = None;
     let result = serve_session_connection(
         stream,
         client_id.clone(),
         attachments.clone(),
         request_journal,
         replaced,
-        SessionFeatures {
-            compress: compresses(context.identity.ingress, authenticated.accepts_compression),
-            agent_board_patches: authenticated.accepts_agent_board_patches,
-            agent_board_interest: omits_unwatched_boards(
-                context.identity.ingress,
-                authenticated.accepts_agent_board_interest,
-            ),
-        },
+        features,
+        &mut writer,
         context,
     )
     .await;
+    let stats = writer.map(|writer| writer.queue_stats());
     // A dropped connection keeps the Client's leases for a grace period: it
     // usually means the Client reconnects, not that it left.
     context.runtime.suspend_client(&client_id);
@@ -1087,24 +1112,32 @@ async fn serve_client_session(
     }
     context.lifecycle.client_disconnected();
     context.lifecycle.resource_changed();
+    // The Host log is otherwise the only trace of why a Client reconnected.
+    let lasted_millis = connected_at.elapsed().as_millis() as u64;
+    let sent_bytes = stats.as_ref().map_or(0, |stats| stats.written_bytes);
+    let queue_high_water_bytes = stats
+        .as_ref()
+        .map_or(0, |stats| stats.reliable_bytes_high_water);
     match &result {
-        Ok(()) => log_session(&client_id, generation, "ended"),
-        Err(reason) => log_session(&client_id, generation, &format!("dropped: {reason}")),
+        Ok(()) => tracing::info!(
+            client = %client_id,
+            generation,
+            lasted_millis,
+            sent_bytes,
+            queue_high_water_bytes,
+            "session ended"
+        ),
+        Err(reason) => tracing::warn!(
+            client = %client_id,
+            generation,
+            lasted_millis,
+            sent_bytes,
+            queue_high_water_bytes,
+            %reason,
+            "session dropped"
+        ),
     }
     result.map_err(|_| ())
-}
-
-/// Records a Session connection change in the Host log, which is otherwise
-/// the only trace of why a Client reconnected.
-fn log_session(client_id: &ClientInstanceId, generation: u64, change: &str) {
-    eprintln!(
-        "{} session {client_id} #{generation} {change}",
-        log_timestamp()
-    );
-}
-
-fn log_timestamp() -> impl std::fmt::Display {
-    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z")
 }
 
 fn shared_terminal_attachments(
@@ -1233,6 +1266,8 @@ fn omit_board(update: &mut AgentSnapshotUpdate) {
 
 /// Serves one authenticated Client over its single Session connection:
 /// requests and responses, terminal input, state events, and terminal frames.
+/// `writer_out` receives the connection's writer, whose totals the caller logs.
+#[allow(clippy::too_many_arguments)]
 async fn serve_session_connection(
     stream: TransportStream,
     client_id: ClientInstanceId,
@@ -1240,12 +1275,14 @@ async fn serve_session_connection(
     request_journal: Arc<tokio::sync::Mutex<RequestJournal>>,
     mut replaced: watch::Receiver<bool>,
     features: SessionFeatures,
+    writer_out: &mut Option<SessionWriter>,
     context: &ConnectionContext,
 ) -> Result<(), String> {
     const MAX_QUEUED_REQUESTS: usize = 64;
     let (reader, writer) = tokio::io::split(stream);
     let reader = SessionReader::new(reader);
     let (writer, _writer_task) = SessionWriter::spawn(writer);
+    *writer_out = Some(writer.clone());
     if features.compress {
         writer.compress_large_messages();
     }
@@ -1347,9 +1384,12 @@ async fn serve_session_connection(
             running.spawn(async move {
                 let session_id = attached_session(&request.body).cloned();
                 let uses_attachments = request_uses_terminal_attachments(&request.body);
+                let kind = request.body.kind();
+                let started = std::time::Instant::now();
                 let (response, changed) =
                     dispatch_control_request(request, &client_id, &attachments, &journal, &context)
                         .await;
+                log_request(&client_id, kind, started, &response);
                 let attached = session_id.filter(|_| response.result.is_ok());
                 (response, changed, uses_attachments, attached)
             });
@@ -1368,6 +1408,7 @@ async fn serve_session_connection(
                     if features.agent_board_interest {
                         boards.send_replace(watch);
                     }
+                    tracing::debug!(client = %client_id, watch, "Agent board interest");
                     writer
                         .send_reliable(&ControlMessage::Response(HostResponse {
                             request_id: request.request_id,
@@ -1376,6 +1417,8 @@ async fn serve_session_connection(
                         .map_err(|error| error.to_string())?;
                 } else if recovery_request(&request.body) {
                     let uses_attachments = request_uses_terminal_attachments(&request.body);
+                    let kind = request.body.kind();
+                    let started = std::time::Instant::now();
                     let (mut response, changed) = dispatch_control_request(
                         request,
                         &client_id,
@@ -1384,6 +1427,7 @@ async fn serve_session_connection(
                         context,
                     )
                     .await;
+                    log_request(&client_id, kind, started, &response);
                     if !*boards.borrow() {
                         omit_page_boards(&mut response);
                     }
@@ -1439,6 +1483,47 @@ async fn serve_session_connection(
                 }
             }
         }
+    }
+}
+
+/// A request slower than this is logged at normal detail.
+const SLOW_REQUEST: Duration = Duration::from_secs(1);
+
+/// Logs a request the Session connection executed: every one in verbose
+/// detail, a slow or failed one always.
+fn log_request(
+    client_id: &ClientInstanceId,
+    kind: &'static str,
+    started: std::time::Instant,
+    response: &HostResponse,
+) {
+    let elapsed = started.elapsed();
+    let millis = elapsed.as_millis() as u64;
+    match &response.result {
+        Err(failure) if failure.code != FailureCode::NotFound => tracing::info!(
+            client = %client_id,
+            request = kind,
+            id = response.request_id,
+            millis,
+            code = ?failure.code,
+            message = %failure.message,
+            "request failed"
+        ),
+        _ if elapsed >= SLOW_REQUEST => tracing::info!(
+            client = %client_id,
+            request = kind,
+            id = response.request_id,
+            millis,
+            "slow request"
+        ),
+        result => tracing::debug!(
+            client = %client_id,
+            request = kind,
+            id = response.request_id,
+            millis,
+            ok = result.is_ok(),
+            "request"
+        ),
     }
 }
 
@@ -1894,10 +1979,12 @@ async fn run_interactive_requests(
             let now = std::time::Instant::now();
             let (logged_at, suppressed) = rejections.entry(session_id.clone()).or_default();
             if logged_at.is_none_or(|at| now.duration_since(at) >= INPUT_REJECTION_LOG_INTERVAL) {
-                eprintln!(
-                    "{} session {client_id} input to {session_id} rejected ({} more since last report): {error:?}",
-                    log_timestamp(),
-                    *suppressed
+                tracing::warn!(
+                    client = %client_id,
+                    terminal = %session_id,
+                    suppressed = *suppressed,
+                    ?error,
+                    "terminal input rejected"
                 );
                 *logged_at = Some(now);
                 *suppressed = 0;
@@ -2952,7 +3039,7 @@ async fn handle_request(
                     match runtime.terminate(&session_id) {
                         Ok(_) | Err(HostRuntimeError::NotFound(_)) => {}
                         Err(error) => {
-                            eprintln!(
+                            tracing::warn!(
                                 "closed pane terminal {session_id} was not terminated: {error}"
                             );
                         }

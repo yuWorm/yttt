@@ -38,6 +38,17 @@ pub struct AppSettings {
     #[serde(skip)]
     pub bars: ShellBarsSettings,
     pub project_panel: ProjectPanelSettings,
+    pub diagnostics: DiagnosticsSettings,
+}
+
+/// Host-scoped, so one switch sets the detail of the Host's `host.log` and
+/// of `client.log` in every window connected to it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DiagnosticsSettings {
+    /// Log every request, slow heartbeats, Agent snapshot pages and the
+    /// transports' debug events, not only failures and connection changes.
+    pub verbose_logs: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

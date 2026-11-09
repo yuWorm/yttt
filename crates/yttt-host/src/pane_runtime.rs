@@ -218,7 +218,7 @@ impl PaneRuntime {
         {
             Ok(targets) => targets,
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "panes of workspace {} were not claimed: {}",
                     workspace_id.as_str(),
                     error.message
@@ -287,7 +287,7 @@ impl PaneRuntime {
         if planned.agent.is_some()
             && let Err(error) = self.provision_agents()
         {
-            eprintln!(
+            tracing::warn!(
                 "Agent pane {} did not start: Agent integration was not installed: {error}",
                 target.address.terminal_session_id().as_str()
             );
@@ -357,14 +357,14 @@ impl PaneRuntime {
 
     fn launch_failed(&self, workspace_id: &WorkspaceId, address: &PaneAddress, error: &str) {
         let session_id = address.terminal_session_id();
-        eprintln!("pane {} did not start: {error}", session_id.as_str());
+        tracing::warn!("pane {} did not start: {error}", session_id.as_str());
         self.launched.lock().remove(&session_id);
         self.record_exited(workspace_id, address);
     }
 
     fn record_exited(&self, workspace_id: &WorkspaceId, address: &PaneAddress) {
         if let Err(error) = self.workspaces.record_pane_exited(workspace_id, address) {
-            eprintln!(
+            tracing::warn!(
                 "exit of pane {} was not recorded: {}",
                 address.terminal_session_id().as_str(),
                 error.message
@@ -405,7 +405,7 @@ impl PaneRuntime {
                 return;
             }
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "exit of pane {} was not recorded: {}",
                     session_id.as_str(),
                     error.message
@@ -422,7 +422,7 @@ impl PaneRuntime {
                 };
                 match self.workspaces.apply(workspace_id, intent, None) {
                     Ok(_) => self.discard(session_id),
-                    Err(error) => eprintln!(
+                    Err(error) => tracing::warn!(
                         "exited pane {} was not closed: {}",
                         session_id.as_str(),
                         error.message

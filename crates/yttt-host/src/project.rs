@@ -329,7 +329,7 @@ impl HostProjectRuntime {
                     view_id: "workspace-restore".to_string(),
                 },
             ) {
-                eprintln!("saved project is unavailable: {error}");
+                tracing::warn!("saved project is unavailable: {error}");
             }
         }
         let mut roots = self

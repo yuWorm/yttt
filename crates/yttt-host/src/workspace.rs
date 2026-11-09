@@ -306,12 +306,14 @@ impl WorkspaceService {
                 }
                 Err(RecordLoadError::Fatal(error)) => return Err(error),
                 Err(RecordLoadError::Migration(error)) => {
-                    eprintln!("workspace {identifier} was not migrated and is kept aside: {error}");
+                    tracing::warn!(
+                        "workspace {identifier} was not migrated and is kept aside: {error}"
+                    );
                     fs::rename(&path, &legacy_path)?;
                     continue;
                 }
                 Err(RecordLoadError::Unreadable(error)) => {
-                    eprintln!("workspace {identifier} state is unreadable: {error}");
+                    tracing::warn!("workspace {identifier} state is unreadable: {error}");
                     let recovered =
                         backups.recover(identifier, &path, crate::now_millis(), |bytes| {
                             load(bytes).map_err(|error| match error {
@@ -321,7 +323,7 @@ impl WorkspaceService {
                             })
                         })?;
                     let Some((_, (record, _))) = recovered else {
-                        eprintln!("workspace {identifier} has no readable backup");
+                        tracing::warn!("workspace {identifier} has no readable backup");
                         continue;
                     };
                     (record, true)
@@ -805,7 +807,7 @@ impl WorkspaceService {
             .is_some_and(|record| record.agents_changed)
             && let Err(error) = self.store_agent_states(state, &workspace_id)
         {
-            eprintln!(
+            tracing::warn!(
                 "Agent states of workspace {} were not stored: {}",
                 workspace_id.as_str(),
                 error.message
@@ -1111,7 +1113,7 @@ impl WorkspaceService {
             .collect::<Vec<_>>();
         for workspace_id in changed {
             if let Err(error) = self.store_agent_states(&mut state, &workspace_id) {
-                eprintln!(
+                tracing::warn!(
                     "Agent states of workspace {} were not stored: {}",
                     workspace_id.as_str(),
                     error.message
@@ -2037,7 +2039,7 @@ fn load_agent_snapshots(
             Ok(snapshot) => {
                 let _ = layout.set_agent_snapshot(&address, Some(snapshot));
             }
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "Agent state of pane {} in workspace {} is unreadable: {error}",
                 address.terminal_session_id().as_str(),
                 workspace_id.as_str()

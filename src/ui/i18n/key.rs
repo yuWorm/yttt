@@ -1100,6 +1100,8 @@ pub enum UiTextKey {
     SettingsTerminalOsc52Policy,
     SettingsTerminalOsc52PolicyDescription,
     SettingsTerminalKittyKeyboard,
+    SettingsVerboseLogs,
+    SettingsVerboseLogsDescription,
     SettingsTerminalKittyKeyboardDescription,
     SettingsLayoutSource,
     SettingsLayoutSourceDescription,

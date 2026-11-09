@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
+tracing = "0.1"
 yttt-agent-core = { path = "../yttt-agent-core" }
 yttt-control-client = { path = "../yttt-control-client" }
 yttt-core = { path = "../yttt-core" }

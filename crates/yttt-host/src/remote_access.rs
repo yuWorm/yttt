@@ -393,10 +393,12 @@ impl Manager {
             delay,
         });
         self.effective = RemoteAccessState::Failed;
+        tracing::warn!(%error, retry_secs = delay.as_secs(), "remote access listener failed");
         self.error = Some(format!("{error}; retrying in {} s", delay.as_secs()));
     }
     fn p2p_failed(&mut self, error: String) {
         self.p2p_effective = RemoteAccessState::Failed;
+        tracing::warn!(%error, "P2P failed");
         self.p2p_error = Some(error);
     }
     async fn rebind(&mut self) {
@@ -738,7 +740,7 @@ impl Manager {
                             ticket: Some(ticket.clone()),
                         };
                         if let Err(error) = p2p::save_relay_account(&root, &cached) {
-                            eprintln!("could not cache the relay ticket: {error}");
+                            tracing::warn!("could not cache the relay ticket: {error}");
                         }
                         Some(ticket)
                     }
@@ -818,10 +820,20 @@ impl Manager {
             restart_after_unix,
         });
         self.p2p_effective = RemoteAccessState::Listening;
+        tracing::info!(
+            relay = self
+                .p2p
+                .as_ref()
+                .and_then(|p2p| p2p.relay_url.lock().clone())
+                .as_deref()
+                .unwrap_or("none"),
+            "P2P listening"
+        );
         Ok(())
     }
     async fn stop_p2p(&mut self) {
         if let Some(p2p) = self.p2p.take() {
+            tracing::info!("P2P closing");
             self.p2p_effective = RemoteAccessState::Stopping;
             self.pairing
                 .lock()
@@ -870,6 +882,7 @@ impl Manager {
     }
     async fn stop_network(&mut self) {
         if let Some(network) = self.network.take() {
+            tracing::info!(address = %network.address, "remote access closing");
             self.effective = RemoteAccessState::Stopping;
             self.admission.close(IngressKind::TlsWork);
             network.cancel.send_replace(true);
@@ -942,6 +955,7 @@ impl Manager {
             task,
         });
         self.effective = RemoteAccessState::Listening;
+        tracing::info!(%address, generation = credentials.generation, "remote access listening");
         Ok(())
     }
 }
@@ -1168,7 +1182,7 @@ async fn keep_relay_ticket(
                 ticket: Some(ticket.clone()),
             };
             if let Err(error) = p2p::save_relay_account(&root, &stored) {
-                eprintln!("could not cache the relay ticket: {error}");
+                tracing::warn!("could not cache the relay ticket: {error}");
             }
             {
                 let mut status = status.lock();

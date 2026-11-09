@@ -1257,6 +1257,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsTerminalOsc52Policy => "OSC 52 剪贴板访问",
         UiTextKey::SettingsTerminalOsc52PolicyDescription => "控制终端应用对系统剪贴板的访问权限。",
         UiTextKey::SettingsTerminalKittyKeyboard => "Kitty 键盘协议",
+        UiTextKey::SettingsVerboseLogs => "详细日志",
+        UiTextKey::SettingsVerboseLogsDescription => {
+            "在 host.log 与 client.log 中记录每个请求的耗时、偏慢的心跳、Agent 状态分页与连接内部细节，用于排查连接问题。Host 与所有连到它的窗口一起生效，日志增长更快，排查完请关闭。"
+        }
         UiTextKey::SettingsTerminalKittyKeyboardDescription => "允许终端应用协商 Kitty 键盘协议。",
         UiTextKey::SettingsLayoutSource => "布局来源",
         UiTextKey::SettingsLayoutSourceDescription => "当前项目布局来源。",

@@ -416,7 +416,6 @@ pub fn connect(
                 events,
                 cancellation,
                 label,
-                &launch.local_profile.paths().logs,
             )
         }
     }
@@ -477,7 +476,6 @@ fn connect_paired(
         .thread_name("yttt-paired-host-client")
         .build()
         .map_err(|error| error.to_string())?;
-    let logs = launch.local_profile.paths().logs.clone();
     // A signed-in relay account puts this device on the node of the Host it
     // connects to, as the control plane says. Without one, or if the control
     // plane cannot be reached or the Host is not on the account, the relay
@@ -499,7 +497,7 @@ fn connect_paired(
             Ok(ticket) => Some(ticket),
             Err(error) => {
                 let line = format!("relay account unavailable, using the pairing relay: {error}");
-                runtime.block_on(crate::connection_log::note(&logs, &label, &line));
+                crate::connection_log::note(&label, &line);
                 None
             }
         }
@@ -525,7 +523,6 @@ fn connect_paired(
         }))
         .map_err(|error| format!("cannot open the P2P endpoint: {error}"))?;
     if let (Some(session), Some(ticket)) = (account, ticket) {
-        let logs = logs.clone();
         let label = label.clone();
         runtime.spawn(yttt_control_client::keep_ticket(
             session,
@@ -535,23 +532,16 @@ fn connect_paired(
             ticket,
             |_| {},
             move |error| {
-                let line = format!("relay ticket renewal failed: {error}");
-                let logs = logs.clone();
-                let label = label.clone();
-                tokio::spawn(
-                    async move { crate::connection_log::note(&logs, &label, &line).await },
+                crate::connection_log::note(
+                    &label,
+                    &format!("relay ticket renewal failed: {error}"),
                 );
             },
         ));
     }
     let connector = Arc::new(host.connector(endpoint));
     set_p2p_path(P2pPath::Connecting);
-    watch_path(
-        &runtime,
-        connector.clone(),
-        launch.local_profile.paths().logs.clone(),
-        label.clone(),
-    );
+    watch_path(&runtime, connector.clone(), label.clone());
     let identity = ClientIdentity {
         expected_environment: Some(host.environment_id.clone()),
         credential_generation: 0,
@@ -582,7 +572,6 @@ fn connect_paired(
         events,
         cancellation,
         label,
-        &launch.local_profile.paths().logs,
     )
 }
 
@@ -595,7 +584,6 @@ const RELAY_EXPLAIN_AFTER: Duration = Duration::from_secs(20);
 fn watch_path(
     runtime: &tokio::runtime::Runtime,
     connector: Arc<yttt_transport_iroh::IrohConnector>,
-    logs: PathBuf,
     label: String,
 ) {
     runtime.spawn(async move {
@@ -610,7 +598,7 @@ fn watch_path(
             {
                 relay_since = None;
                 let line = format!("P2P still on the relay: {report}");
-                crate::connection_log::note(&logs, &label, &line).await;
+                crate::connection_log::note(&label, &line);
             }
             if path != reported {
                 reported = path;
@@ -630,7 +618,7 @@ fn watch_path(
                         continue;
                     }
                 };
-                crate::connection_log::note(&logs, &label, line).await;
+                crate::connection_log::note(&label, line);
             }
         }
     });
@@ -832,7 +820,6 @@ fn connect_ssh(
         events,
         cancellation,
         label,
-        &launch.local_profile.paths().logs,
     )
 }
 
@@ -869,7 +856,6 @@ fn initialize_environment(
     events: flume::Sender<RemoteConnectEvent>,
     cancellation: RemoteConnectCancellation,
     label: String,
-    logs: &Path,
 ) -> Result<RemoteEnvironment, String> {
     cancellation.check(&events)?;
     let client = Arc::new(runtime.block_on(async {
@@ -880,8 +866,8 @@ fn initialize_environment(
             _ = cancellation.cancelled(&events) => Err(CONNECT_CANCELLED.to_string()),
         }
     })?);
-    crate::connection_log::follow(client.clone(), runtime.handle(), logs, label.clone());
-    crate::link_watch::follow(client.clone(), runtime.handle(), logs, label.clone());
+    crate::connection_log::follow(client.clone(), runtime.handle(), label.clone());
+    crate::link_watch::follow(client.clone(), runtime.handle(), label.clone());
     let environment = match runtime.block_on(async {
         cancellation.check(&events)?;
         tokio::select! {

@@ -4,7 +4,6 @@
 //! wait out its whole liveness timeout before it reconnects.
 
 use std::{
-    path::Path,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -19,17 +18,11 @@ const WAKE_TICK: Duration = Duration::from_secs(2);
 const WAKE_SLACK: Duration = Duration::from_secs(8);
 
 /// Probes `client` after each system wake and each major network change,
-/// noting why in `logs/client.log`, until the Client stops.
-pub(crate) fn follow(
-    client: Arc<ClientCore>,
-    runtime: &tokio::runtime::Handle,
-    logs: &Path,
-    label: String,
-) {
-    let logs = logs.to_path_buf();
+/// noting why in `client.log`, until the Client stops.
+pub(crate) fn follow(client: Arc<ClientCore>, runtime: &tokio::runtime::Handle, label: String) {
     let weak = Arc::downgrade(&client);
     runtime.spawn({
-        let (weak, logs, label) = (weak.clone(), logs.clone(), label.clone());
+        let (weak, label) = (weak.clone(), label.clone());
         async move {
             loop {
                 let before = SystemTime::now();
@@ -39,7 +32,7 @@ pub(crate) fn follow(
                 };
                 let wall = SystemTime::now().duration_since(before).unwrap_or_default();
                 if slept(wall) {
-                    probe(&client, &logs, &label, "the system woke").await;
+                    probe(&client, &label, "the system woke");
                 }
             }
         }
@@ -57,7 +50,7 @@ pub(crate) fn follow(
                 return;
             };
             if major {
-                probe(&client, &logs, &label, "the network changed").await;
+                probe(&client, &label, "the network changed");
             }
         }
     });
@@ -69,9 +62,9 @@ fn slept(wall: Duration) -> bool {
     wall > WAKE_TICK + WAKE_SLACK
 }
 
-async fn probe(client: &ClientCore, logs: &Path, label: &str, why: &str) {
+fn probe(client: &ClientCore, label: &str, why: &str) {
     client.probe_now();
-    crate::connection_log::note(logs, label, &format!("{why}; checking the Host link")).await;
+    crate::connection_log::note(label, &format!("{why}; checking the Host link"));
 }
 
 #[cfg(test)]

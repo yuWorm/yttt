@@ -254,6 +254,10 @@ impl WorkbenchView {
         self.app_settings.terminal.kitty_keyboard
     }
 
+    pub fn verbose_logs_enabled(&self) -> bool {
+        self.app_settings.diagnostics.verbose_logs
+    }
+
     pub fn vim_mode_setting(&self) -> VimModeSetting {
         self.app_settings.vim.mode
     }
@@ -1233,6 +1237,12 @@ impl WorkbenchView {
         kitty_keyboard: bool,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.terminal.kitty_keyboard = kitty_keyboard;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    /// Saves the log detail; the Host and every connected window follow it.
+    pub fn set_verbose_logs_enabled(&mut self, verbose: bool) -> Result<(), WorkbenchError> {
+        self.app_settings.diagnostics.verbose_logs = verbose;
         self.save_app_settings_and_refresh_runtime()
     }
 

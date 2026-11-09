@@ -574,7 +574,28 @@ impl WorkbenchView {
         let task = cx.background_spawn({
             let workspace_id = workspace_id.clone();
             let references = references.clone();
-            async move { read_agent_states(&runtime, &workspace_id, references) }
+            async move {
+                let started = std::time::Instant::now();
+                let read = read_agent_states(&runtime, &workspace_id, references);
+                match &read {
+                    Ok(bodies) => tracing::info!(
+                        workspace = workspace_id.as_str(),
+                        states = bodies.len(),
+                        bytes = bodies
+                            .iter()
+                            .map(|(_, content)| content.len())
+                            .sum::<usize>(),
+                        millis = started.elapsed().as_millis() as u64,
+                        "Agent boards read"
+                    ),
+                    Err(error) => tracing::warn!(
+                        workspace = workspace_id.as_str(),
+                        %error,
+                        "Agent boards were not read; trying again when the command center opens"
+                    ),
+                }
+                read
+            }
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -1001,6 +1022,7 @@ fn open_workspace(
     require_existing: bool,
 ) -> Result<OpenedWorkspace, OpenWorkspaceError> {
     let failed = OpenWorkspaceError::Failed;
+    let started = std::time::Instant::now();
     if !require_existing {
         runtime
             .workspace_request(WorkspaceRequest::Register {
@@ -1061,6 +1083,7 @@ fn open_workspace(
     }
     // Over a remote link the boards, nearly all of each state, wait until
     // something shows them.
+    let opened_millis = started.elapsed().as_millis() as u64;
     let agent_states =
         if runtime.is_remote() && agent_state::summaries_cover(&references, &summaries) {
             agent_state::OpenedAgentStates::Summaries(summaries)
@@ -1069,6 +1092,26 @@ fn open_workspace(
                 read_agent_states(runtime, &workspace_id, references).map_err(failed)?,
             )
         };
+    let (summaries, bodies, body_bytes) = match &agent_states {
+        agent_state::OpenedAgentStates::Summaries(summaries) => (summaries.len(), 0, 0),
+        agent_state::OpenedAgentStates::Bodies(bodies) => (
+            0,
+            bodies.len(),
+            bodies
+                .iter()
+                .map(|(_, content)| content.len())
+                .sum::<usize>(),
+        ),
+    };
+    tracing::info!(
+        workspace = workspace_id.as_str(),
+        opened_millis,
+        total_millis = started.elapsed().as_millis() as u64,
+        agent_summaries = summaries,
+        agent_states = bodies,
+        agent_state_bytes = body_bytes,
+        "workspace opened"
+    );
     let HostConnectionState::Ready {
         host_epoch,
         connection_sequence,

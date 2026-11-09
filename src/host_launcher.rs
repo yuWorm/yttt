@@ -874,6 +874,19 @@ pub async fn run_host_process(
         build: parsed.build,
         lifetime: parsed.lifetime,
     };
+    // The launcher points stderr at `host.log`.
+    yttt_host::logging::install(
+        std::io::stderr,
+        yttt_host::logging::verbose_setting(&bootstrap.config_root),
+    );
+    tracing::info!(
+        version = %bootstrap.build.product_version,
+        build = %bootstrap.build.build_fingerprint,
+        profile = %bootstrap.profile_id,
+        pid = std::process::id(),
+        lifetime = ?bootstrap.lifetime,
+        "Host starting"
+    );
     let endpoint =
         LocalEndpoint::for_profile(bootstrap.profile_id.clone(), bootstrap.runtime_root.clone());
     yttt_host::run(bootstrap, || LocalListener::bind(endpoint)).await?;
@@ -1053,7 +1066,16 @@ fn validate_token_file(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Past this size a starting Host moves `host.log` to `host.log.1`; the Host
+/// writes to it through stderr, which cannot rotate while it runs.
+const MAX_HOST_LOG_BYTES: u64 = 16 * 1024 * 1024;
+
 fn open_host_log(path: &Path) -> io::Result<File> {
+    if fs::metadata(path).is_ok_and(|metadata| metadata.len() > MAX_HOST_LOG_BYTES) {
+        let mut rotated = path.as_os_str().to_owned();
+        rotated.push(".1");
+        fs::rename(path, rotated)?;
+    }
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]

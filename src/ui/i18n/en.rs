@@ -1525,6 +1525,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Control terminal application access to the system clipboard."
         }
         UiTextKey::SettingsTerminalKittyKeyboard => "Kitty keyboard protocol",
+        UiTextKey::SettingsVerboseLogs => "Verbose logs",
+        UiTextKey::SettingsVerboseLogsDescription => {
+            "Record every request with its timing, slow heartbeats, Agent state pages and connection internals in host.log and client.log, for tracking down connection problems. Applies to the Host and every window connected to it; the logs grow faster, so turn it off afterwards."
+        }
         UiTextKey::SettingsTerminalKittyKeyboardDescription => {
             "Allow terminal applications to negotiate the Kitty keyboard protocol."
         }

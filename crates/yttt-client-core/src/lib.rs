@@ -210,14 +210,25 @@ struct ClientCommand {
 pub struct PendingClientRequest {
     response: oneshot::Receiver<Result<Response, ClientCoreError>>,
     deadline: tokio::time::Instant,
+    kind: &'static str,
+    sent_at: tokio::time::Instant,
 }
 
 impl PendingClientRequest {
     pub async fn wait(self) -> Result<Response, ClientCoreError> {
-        tokio::time::timeout_at(self.deadline, self.response)
+        let result = tokio::time::timeout_at(self.deadline, self.response)
             .await
-            .map_err(|_| ClientCoreError::RequestTimeout)?
-            .map_err(|_| ClientCoreError::SupervisorStopped)?
+            .map_err(|_| ClientCoreError::RequestTimeout)
+            .and_then(|reply| reply.map_err(|_| ClientCoreError::SupervisorStopped)?);
+        let millis = self.sent_at.elapsed().as_millis() as u64;
+        match &result {
+            Err(ClientCoreError::RequestTimeout) => {
+                tracing::warn!(request = self.kind, millis, "request timed out");
+            }
+            Err(error) => tracing::debug!(request = self.kind, millis, %error, "request failed"),
+            Ok(_) => tracing::debug!(request = self.kind, millis, "request answered"),
+        }
+        result
     }
 }
 
@@ -566,11 +577,15 @@ impl ClientCore {
             return Err(ClientCoreError::NotConnected);
         }
         let timeout = self.request_timeout(&body);
+        let kind = body.kind();
         let (reply, response) = oneshot::channel();
         self.enqueue_command(body, Some(reply))?;
+        let sent_at = tokio::time::Instant::now();
         Ok(PendingClientRequest {
             response,
-            deadline: tokio::time::Instant::now() + timeout,
+            deadline: sent_at + timeout,
+            kind,
+            sent_at,
         })
     }
 
@@ -684,6 +699,12 @@ async fn run_supervisor(
             Ok(established) => break established,
             Err(ConnectFailure::Retry(message)) => {
                 initial_attempt += 1;
+                tracing::info!(
+                    attempt = initial_attempt,
+                    %message,
+                    retry_millis = retry_delay(initial_attempt, &identity).as_millis() as u64,
+                    "connect failed"
+                );
                 set_state(
                     &state,
                     &events,
@@ -698,6 +719,7 @@ async fn run_supervisor(
                 }
             }
             Err(ConnectFailure::Fatal(message)) => {
+                tracing::warn!(%message, "Host lost");
                 set_state(
                     &state,
                     &events,
@@ -721,6 +743,12 @@ async fn run_supervisor(
     };
     install_host_epoch(connection.host.host_epoch, &epoch_state);
     identity.host_epoch_hint = Some(connection.host.host_epoch);
+    tracing::info!(
+        host_epoch = connection.host.host_epoch,
+        connection = connection.host.connection_sequence,
+        remote = connector.link_profile() == LinkProfile::REMOTE,
+        "session ready"
+    );
     set_state(
         &state,
         &events,
@@ -766,9 +794,17 @@ async fn run_supervisor(
             set_state(&state, &events, ConnectionState::Disconnected);
             return;
         };
-        attempt = reconnect_attempt(attempt, connected_at.elapsed());
+        let lasted = connected_at.elapsed();
+        attempt = reconnect_attempt(attempt, lasted);
         diagnostics.record_reconnect();
         diagnostics.record_disconnect(&message);
+        tracing::warn!(
+            reason = %message,
+            lasted_millis = lasted.as_millis() as u64,
+            attempt,
+            retry_millis = retry_delay(attempt, &identity).as_millis() as u64,
+            "session lost"
+        );
         while let Ok(command) = commands.try_recv() {
             if let Some(reply) = command.reply {
                 let _ = reply.send(Err(ClientCoreError::NotConnected));
@@ -815,6 +851,12 @@ async fn run_supervisor(
                     connection = new_connection;
                     install_host_epoch(connection.host.host_epoch, &epoch_state);
                     identity.host_epoch_hint = Some(connection.host.host_epoch);
+                    tracing::info!(
+                        host_epoch = connection.host.host_epoch,
+                        connection = connection.host.connection_sequence,
+                        attempt,
+                        "session ready"
+                    );
                     connected_at = tokio::time::Instant::now();
                     diagnostics.record_recovered();
                     set_state(
@@ -829,6 +871,12 @@ async fn run_supervisor(
                 }
                 Err(ConnectFailure::Retry(message)) => {
                     attempt = attempt.saturating_add(1);
+                    tracing::info!(
+                        attempt,
+                        %message,
+                        retry_millis = retry_delay(attempt, &identity).as_millis() as u64,
+                        "connect failed"
+                    );
                     set_state(
                         &state,
                         &events,
@@ -847,6 +895,7 @@ async fn run_supervisor(
                     }
                 }
                 Err(ConnectFailure::Fatal(message)) => {
+                    tracing::warn!(%message, "Host lost");
                     set_state(&state, &events, ConnectionState::HostLost { message });
                     return;
                 }
@@ -923,6 +972,7 @@ async fn establish(
     identity: &ClientIdentity,
     token: &Credential,
 ) -> Result<(TransportStream, AuthenticatedHost), ConnectFailure> {
+    let started = tokio::time::Instant::now();
     let mut stream = tokio::time::timeout(
         connector.link_profile().connect_timeout,
         connector.connect(),
@@ -933,9 +983,18 @@ async fn establish(
         TransportError::Permanent(message) => ConnectFailure::Fatal(message),
         error => ConnectFailure::Retry(error.to_string()),
     })?;
+    let transport_millis = started.elapsed().as_millis() as u64;
     let host = client_handshake_with(&mut stream, identity, token)
         .await
         .map_err(ConnectFailure::from)?;
+    tracing::debug!(
+        channel = ?identity.channel,
+        transport_millis,
+        handshake_millis = started.elapsed().as_millis() as u64 - transport_millis,
+        host_epoch = host.host_epoch,
+        protocol = host.selected_version,
+        "Host connection open"
+    );
     Ok((stream, host))
 }
 
@@ -1186,7 +1245,9 @@ async fn connected_session(
                                 break Some("Host rejected heartbeat".into());
                             }
                             if let Some((_, sent_at)) = heartbeat.take() {
-                                context.diagnostics.record_heartbeat(tokio::time::Instant::now().saturating_duration_since(sent_at));
+                                let round_trip = tokio::time::Instant::now().saturating_duration_since(sent_at);
+                                log_heartbeat(round_trip, context.link);
+                                context.diagnostics.record_heartbeat(round_trip);
                             }
                             continue;
                         }
@@ -1313,6 +1374,7 @@ async fn connected_session(
                     continue;
                 }
                 let watch = *board_interest.borrow_and_update();
+                tracing::debug!(watch, "Agent board interest");
                 if send_internal_request(
                     &writer,
                     &mut pending,
@@ -1385,6 +1447,7 @@ async fn connected_session(
                 }
             }
             () = context.probe.notified(), if probes => {
+                tracing::info!(running = probe_started.is_some(), "probing the Host link");
                 let now = tokio::time::Instant::now();
                 probe_started.get_or_insert(now);
                 // A heartbeat already waiting may have been lost with the old path.
@@ -1395,6 +1458,7 @@ async fn connected_session(
             }
             () = sleep_until_probe_deadline(probe_started) => {
                 let started = probe_started.take().expect("a probe is running");
+                tracing::debug!(answered = last_inbound >= started, "probe finished");
                 if last_inbound < started {
                     break Some(format!(
                         "Host did not answer within {} s of a wake or network change",
@@ -1498,6 +1562,17 @@ fn resolve_agent_board(
         host_sequence,
         body,
     })
+}
+
+/// A heartbeat that took a quarter of the time after which the link counts
+/// as unstable is logged at normal detail; every one is at trace.
+fn log_heartbeat(round_trip: Duration, link: LinkProfile) {
+    let millis = round_trip.as_millis() as u64;
+    if round_trip >= link.unstable_after / 4 {
+        tracing::info!(millis, "slow heartbeat");
+    } else {
+        tracing::trace!(millis, "heartbeat");
+    }
 }
 
 /// Sends a heartbeat Ping; returns its request ID and when it was sent.
@@ -1689,9 +1764,18 @@ fn handle_response(
             if let Ok(Response::AgentSnapshots {
                 snapshots,
                 project_token_usage: summaries,
-                ..
+                has_more,
             }) = result
             {
+                tracing::debug!(
+                    snapshots = snapshots.len(),
+                    without_boards = snapshots
+                        .iter()
+                        .filter(|update| update.board_omitted)
+                        .count(),
+                    has_more,
+                    "Agent snapshot page"
+                );
                 apply_agent_snapshots(
                     snapshots,
                     &context.agent_snapshots,

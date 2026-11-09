@@ -308,6 +308,12 @@ async fn queue_stats_show_what_waits_and_for_how_long() {
     assert_eq!((stats.reliable_items, stats.reliable_bytes), (0, 0));
     assert_eq!(stats.oldest_reliable_wait, None);
     assert_eq!(stats.reliable_items_high_water, 2);
+    let sent = [event(0), event(1), event(2)]
+        .iter()
+        .map(|message| encoded(message).len())
+        .sum::<usize>()
+        + encoded(&ping(3)).len();
+    assert_eq!(stats.written_bytes, sent as u64);
 }
 
 fn compressible(request_id: u64) -> ControlMessage {

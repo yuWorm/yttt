@@ -453,6 +453,41 @@ pub enum WorkspaceRequest {
 }
 
 impl WorkspaceRequest {
+    /// The request's name for logs, such as `Workspace.Open`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Environment => "Workspace.Environment",
+            Self::List => "Workspace.List",
+            Self::Register { .. } => "Workspace.Register",
+            Self::InstallAgentHooks => "Workspace.InstallAgentHooks",
+            Self::AgentSessions { .. } => "Workspace.AgentSessions",
+            Self::MutateAgentSession { .. } => "Workspace.MutateAgentSession",
+            Self::Browse { .. } => "Workspace.Browse",
+            Self::ReadConfig { .. } => "Workspace.ReadConfig",
+            Self::ListConfig { .. } => "Workspace.ListConfig",
+            Self::CreateConfigDirectory { .. } => "Workspace.CreateConfigDirectory",
+            Self::RemoveConfigDirectory { .. } => "Workspace.RemoveConfigDirectory",
+            Self::RenameConfigDirectory { .. } => "Workspace.RenameConfigDirectory",
+            Self::DeleteConfig { .. } => "Workspace.DeleteConfig",
+            Self::WriteConfig { .. } => "Workspace.WriteConfig",
+            Self::ReadProjectConfig { .. } => "Workspace.ReadProjectConfig",
+            Self::WriteProjectConfig { .. } => "Workspace.WriteProjectConfig",
+            Self::DeleteProjectConfig { .. } => "Workspace.DeleteProjectConfig",
+            Self::Open { .. } => "Workspace.Open",
+            Self::Apply { .. } => "Workspace.Apply",
+            Self::AcquireDocument { .. } => "Workspace.AcquireDocument",
+            Self::PutDocumentDraft { .. } => "Workspace.PutDocumentDraft",
+            Self::GetDocumentDraft { .. } => "Workspace.GetDocumentDraft",
+            Self::ReleaseDocument { .. } => "Workspace.ReleaseDocument",
+            Self::OmpSessionExists { .. } => "Workspace.OmpSessionExists",
+            Self::SetRestoreOnStartup { .. } => "Workspace.SetRestoreOnStartup",
+            Self::Forget { .. } => "Workspace.Forget",
+            Self::OpenExisting { .. } => "Workspace.OpenExisting",
+            Self::GetAgentState { .. } => "Workspace.GetAgentState",
+            Self::SetActive { .. } => "Workspace.SetActive",
+        }
+    }
+
     pub fn is_mutation(&self) -> bool {
         !matches!(
             self,

@@ -245,6 +245,50 @@ pub enum Request {
 }
 
 impl Request {
+    /// The request's name for logs, such as `AttachTerminal` or `Workspace.Open`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Ping { .. } => "Ping",
+            Self::ListResources => "ListResources",
+            Self::SpawnTerminal { .. } => "SpawnTerminal",
+            Self::AttachTerminal(..) => "AttachTerminal",
+            Self::DetachTerminal { .. } => "DetachTerminal",
+            Self::AcquireTerminalLease { .. } => "AcquireTerminalLease",
+            Self::ReleaseTerminalLease { .. } => "ReleaseTerminalLease",
+            Self::TerminalInput(..) => "TerminalInput",
+            Self::ResizeTerminal(..) => "ResizeTerminal",
+            Self::ScrollTerminal(..) => "ScrollTerminal",
+            Self::ReadTerminalViewport(..) => "ReadTerminalViewport",
+            Self::SearchTerminal(..) => "SearchTerminal",
+            Self::SetTerminalQueryPalette(..) => "SetTerminalQueryPalette",
+            Self::RequestCheckpoint { .. } => "RequestCheckpoint",
+            Self::AcknowledgeTerminalExit { .. } => "AcknowledgeTerminalExit",
+            Self::TerminateTerminal { .. } => "TerminateTerminal",
+            Self::TerminateMany { .. } => "TerminateMany",
+            Self::SshConnect(..) => "SshConnect",
+            Self::SshDisconnect { .. } => "SshDisconnect",
+            Self::CredentialAnswer { .. } => "CredentialAnswer",
+            Self::DeleteSshCredential { .. } => "DeleteSshCredential",
+            Self::RemoteFile(..) => "RemoteFile",
+            Self::RemoteCommand(..) => "RemoteCommand",
+            Self::Project(..) => "Project",
+            Self::ReadAgentSnapshots { .. } => "ReadAgentSnapshots",
+            Self::RequestTerminalControl { .. } => "RequestTerminalControl",
+            Self::ReleaseTerminalControl { .. } => "ReleaseTerminalControl",
+            Self::Workspace(request) => request.kind(),
+            Self::ReadDeviceSettings => "ReadDeviceSettings",
+            Self::SetLoginStartupConsent { .. } => "SetLoginStartupConsent",
+            Self::RemoteAccess(..) => "RemoteAccess",
+            Self::AgentCommand(..) => "AgentCommand",
+            Self::SetTerminalVisibility { .. } => "SetTerminalVisibility",
+            Self::ReadTerminalController => "ReadTerminalController",
+            Self::TakeTerminalController => "TakeTerminalController",
+            Self::SetAgentBoardInterest { .. } => "SetAgentBoardInterest",
+        }
+    }
+}
+
+impl Request {
     pub fn required_capability(&self) -> Option<Capability> {
         match self {
             Self::Ping { .. }

@@ -1000,7 +1000,7 @@ fn serve_blocking_control(stream: TcpStream, state: &Arc<AgentState>, request: H
     if spawned.is_err() {
         // The closure, with the stream and the slot, was dropped: the caller
         // sees a closed connection and the slot is free again.
-        eprintln!("an Agent control request was dropped: no thread could be started");
+        tracing::warn!("an Agent control request was dropped: no thread could be started");
     }
 }
 
