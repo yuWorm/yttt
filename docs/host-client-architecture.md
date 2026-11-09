@@ -392,6 +392,12 @@ workspace 只保留一份未发出的布局：新布局占据旧布局在可靠�
 且布局仍在其后入队的 `TerminalExit` 之前到达。Client 只接受 revision 更大的布局；重连后对已打开的
 workspace 重新 `OpenExisting`，Host epoch 变化时清空布局但保留已打开集合。
 
+`Opened` 另带 `agent_summaries`：每个 `agent_states` 引用对应 pane 当前的 Agent 状态，去掉 board。保存的 Agent
+状态几乎全是 board（实测一个 22 个 Agent 的工作区 4.08 MB，board 占 99.9%，其余每份约 370 字节）。本机窗口照旧以
+`GetAgentState` 逐个读取完整状态；远程窗口在摘要覆盖全部引用时只用摘要恢复 pane，指挥中心首次打开时才在后台读取
+完整状态，把 board 补进 pane（pane 尚无 board 时整份采用，否则以 `merge_retained` 作为保留的历史）。读取失败时
+下次打开指挥中心再试。旧 Host 不带摘要，Client 照旧读取完整状态。
+
 每次替换记录前，当前文件先复制到 `workspace-backups/<id>/backup-1.json`（依次后移，保留 3 份）；
 至多每 15 分钟另存一份 `history-<millis>.json`（保留 48 份）。备份尽力而为，失败不阻止持久化。
 启动时无法解析的记录先移为同目录的 `corrupt-<millis>.json`，再由最新可解析的备份（先轮转备份，

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** 1.1 完成（手工验证待做）；其余未开始。
+**状态：** 1.1、1.2 完成（手工验证待做）；其余未开始。
 
 **依据：** 2026-11-09 对 Herdr、T3 Code、Orca、Cindy 远程链路实现的阅读（源码与设计文档），对照 yttt 在 `2026-11-07-remote-link-backlog-plan.md` 完成后的状态。
 
@@ -47,8 +47,10 @@ yttt 已对齐的部分不再列入：终端语义快照＋增量、每终端一
 
 ## 1.2：打开工作区时不下载 board
 
-- [ ] 先测量：远程打开工作区时 `GetAgentState` 逐个读取每个 pane 保存的 Agent 状态（JSON，带完整 board，摘要校验），记录 24 个 Agent 时的字节数与耗时。
-- [ ] 若可观：打开工作区只取概要（新请求或 `GetAgentState` 的追加参数，旧 Host 回退为读完整状态），完整 board 在订阅 board 时补齐。具体形状在测量后定。
+- [x] 测量（2026-11-09，本机 Host 的活动工作区）：22 份保存的 Agent 状态共 4,080,940 字节 JSON，最大一份 1,072,406 字节，board 占 99.9%，其余字段约 370 字节；远程打开时逐个 `GetAgentState` 串行读取。压缩后约 1.3 MB，130 KB/s 链路约 10 s，超额 relay（16 KB/s）一分多钟。
+- [x] `Opened` 追加 `agent_summaries`（每个引用对应 pane 当前状态、去掉 board；Host 从内存中的布局生成，不读盘）。远程窗口在摘要覆盖全部引用时只用摘要恢复，跳过全部 `GetAgentState`；指挥中心首次打开时后台读取完整状态并把 board 补进 pane。本机窗口与旧 Host 照旧读取完整状态。**偏离：** 没有给 `GetAgentState` 加参数——Host 内存中已有各 pane 的状态，随 `Opened` 一并带回还省掉每个 Agent 一次往返。
+- [x] 测试：`an_opened_workspace_summarizes_each_agent_state_without_its_board`（含 Host 重启后；去掉摘要即失败）；`summaries_stand_for_the_states_only_when_they_cover_every_one`、`a_summary_for_a_missing_pane_fails_the_restore`、`a_stored_board_fills_an_empty_one_and_trails_a_live_one`。**偏离：** 桌面的恢复与补读接线没有界面测试（需要 GPUI 夹具）。
+- [ ] 手工验证：Windows 远程窗口进入工作区明显更快；打开指挥中心后，已结束的 Agent 也显示完整看板。
 
 ---
 

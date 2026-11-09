@@ -103,6 +103,9 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `Request::SetAgentBoardInterest { watch }`(回 `Applied`)订阅 board;网络入口上未订阅时 Host 发出的
   `AgentSnapshotUpdate` 置 `board_omitted`(带缺省,旧端读作 `false`)且 board 为空,`ReadAgentSnapshots` 每页同样处理。
   旧 Client 不声明,照常收到 board;旧 Host 对该请求回 `Unsupported`(未知请求),新 Client 视为总会收到 board。
+  v22 内追加(未升版本):`WorkspaceResponse::Opened.agent_summaries`(带缺省)为
+  `AgentStateSummary { reference, snapshot }` 列表,`snapshot` 是 pane 当前 Agent 状态、board 为空。旧 Client 忽略该字段;
+  旧 Host 不发,新 Client 在摘要不覆盖全部 `agent_states` 时照旧以 `GetAgentState` 读取完整状态。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，
