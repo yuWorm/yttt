@@ -298,3 +298,57 @@ fn legacy_agent_history_migrates_atomically_without_losing_acceptance_or_revisio
         content
     );
 }
+
+#[test]
+fn an_opened_workspace_summarizes_each_agent_state_without_its_board() {
+    let root = tempfile::tempdir().unwrap();
+    let (service, client) = setup(root.path());
+    let id = agent_workspace(root.path(), &service, &client, "summaries", 3);
+    let contents = (0..3)
+        .map(|tab| agent_content(&format!("agent-{tab}"), 8))
+        .collect::<Vec<_>>();
+    for (tab, content) in contents.iter().enumerate() {
+        record_agent(&service, &id, tab, content);
+    }
+    service.flush_agent_states();
+    // A restarted Host summarizes the states it read back too.
+    drop(service);
+    let (service, client) = setup(root.path());
+    let WorkspaceResponse::Opened {
+        agent_states,
+        agent_summaries,
+        ..
+    } = service
+        .handle(
+            &client,
+            WorkspaceRequest::Open {
+                workspace_id: id.clone(),
+            },
+        )
+        .unwrap()
+    else {
+        panic!("workspace")
+    };
+    assert_eq!(agent_states.len(), 3);
+    assert_eq!(
+        agent_summaries
+            .iter()
+            .map(|summary| &summary.reference)
+            .collect::<Vec<_>>(),
+        agent_states.iter().collect::<Vec<_>>()
+    );
+    for summary in &agent_summaries {
+        let stored: AgentSnapshot = serde_json::from_slice(
+            &read_agent(&service, &client, &id, &summary.reference).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(summary.snapshot.board, Default::default());
+        assert_eq!(
+            AgentSnapshot {
+                board: Default::default(),
+                ..stored
+            },
+            summary.snapshot
+        );
+    }
+}

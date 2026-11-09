@@ -133,6 +133,14 @@ impl AgentStateRef {
     }
 }
 
+/// A pane's current Agent state without its board, which is nearly all of a
+/// stored Agent state; the board stays readable with `GetAgentState`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStateSummary {
+    pub reference: AgentStateRef,
+    pub snapshot: yttt_agent_core::AgentSnapshot,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSummary {
     pub workspace_id: WorkspaceId,
@@ -501,6 +509,11 @@ pub enum WorkspaceResponse {
         layout: yttt_core::model::host_workspace::HostWorkspaceState,
         documents: Vec<DocumentState>,
         agent_states: Vec<AgentStateRef>,
+        /// Each of `agent_states` without its board, so a Client on a slow
+        /// link can show its panes before reading any board. Empty from a
+        /// Host that predates it.
+        #[serde(default)]
+        agent_summaries: Vec<AgentStateSummary>,
     },
     /// Confirms an applied layout intent and the revision it produced.
     Applied {

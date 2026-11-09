@@ -24,8 +24,8 @@ use yttt_core::model::{
 use yttt_protocol::{
     FailureCode, HostPath, PathSegment, ProjectRelativePath, ProtocolFailure,
     workspace::{
-        AgentSessionOperation, AgentStateCleared, AgentStateRef, DocumentLease, DocumentUpdate,
-        DraftContentRevision, DraftRef, WorkspaceConfig, WorkspaceConfigRevision,
+        AgentSessionOperation, AgentStateCleared, AgentStateRef, AgentStateSummary, DocumentLease,
+        DocumentUpdate, DraftContentRevision, DraftRef, WorkspaceConfig, WorkspaceConfigRevision,
         WorkspaceDirectory, WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind,
         WorkspaceEnvironment, WorkspaceId, WorkspaceLayoutUpdate, WorkspaceProjectConfig,
         WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary,
@@ -816,11 +816,13 @@ impl WorkspaceService {
                 layout: record.layout.state(),
                 documents: Self::document_states(state, &workspace_id, record),
                 agent_states: record.agent_states.clone(),
+                agent_summaries: agent_summaries(record),
             },
             None => WorkspaceResponse::Opened {
                 layout: HostWorkspace::new().state(),
                 documents: Vec::new(),
                 agent_states: Vec::new(),
+                agent_summaries: Vec::new(),
             },
         };
         if let Some(subscriber) = state.subscribers.get_mut(client_id) {
@@ -1820,6 +1822,29 @@ fn workspace_summary(id: &WorkspaceId, record: &WorkspaceRecord) -> WorkspaceSum
         restore_on_startup: record.restore_on_startup,
         active: false,
     }
+}
+
+/// The published Agent states of `record` without their boards, read from
+/// the pane snapshots they were stored from.
+fn agent_summaries(record: &WorkspaceRecord) -> Vec<AgentStateSummary> {
+    let snapshots = record.layout.agent_snapshots();
+    record
+        .agent_states
+        .iter()
+        .filter_map(|reference| {
+            let (_, snapshot) = snapshots.iter().find(|(address, _)| {
+                address.project_id == reference.project_id
+                    && address.tab_id == reference.tab_id
+                    && address.pane_id == reference.pane_id
+            })?;
+            let mut snapshot = (*snapshot).clone();
+            snapshot.board = yttt_agent_core::AgentBoardSnapshot::default();
+            Some(AgentStateSummary {
+                reference: reference.clone(),
+                snapshot,
+            })
+        })
+        .collect()
 }
 
 fn workspace_is_empty(record: &WorkspaceRecord) -> bool {

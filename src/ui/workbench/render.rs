@@ -315,7 +315,7 @@ impl Render for WorkbenchView {
             }
         };
         self.report_visible_terminals(window);
-        self.report_agent_board_interest(window);
+        self.report_agent_board_interest(window, cx);
         let default_active_content_focus_scheduled = default_active_content_focus_requested
             && match self.active_work_item() {
                 Some(WorkItemId::Terminal(_)) => self.terminal.pending_terminal_focus.is_none(),

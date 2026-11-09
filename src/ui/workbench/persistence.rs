@@ -30,8 +30,8 @@ use yttt_protocol::{
     HostPath,
     project::{ContentRevision, ProjectFileFingerprint},
     workspace::{
-        DocumentState, DraftBase, DraftContentRevision, DraftRef, MAX_DRAFT_CONTENT_BYTES,
-        WorkspaceId, WorkspaceRequest, WorkspaceResponse,
+        AgentStateRef, DocumentState, DraftBase, DraftContentRevision, DraftRef,
+        MAX_DRAFT_CONTENT_BYTES, WorkspaceId, WorkspaceRequest, WorkspaceResponse,
     },
 };
 
@@ -89,13 +89,16 @@ pub(super) struct WorkspacePersistenceState {
     outage_shown: bool,
     /// A workspace from history that replaces this window's.
     pending_switch: Option<WorkspaceId>,
+    /// Agent states opened as summaries whose boards are not read yet.
+    unread_agent_boards: Vec<AgentStateRef>,
+    agent_boards_in_flight: bool,
 }
 
 /// A workspace as the Host returned it, with the Agent states of its panes.
 struct OpenedWorkspace {
     layout: HostWorkspaceState,
     documents: Vec<DocumentState>,
-    agent_states: agent_state::AgentStateBodies,
+    agent_states: agent_state::OpenedAgentStates,
     host_epoch: u64,
     connection_sequence: u64,
 }
@@ -523,6 +526,67 @@ impl WorkbenchView {
         }
     }
 
+    /// Reads the boards of the Agent states this window opened as summaries,
+    /// once something shows boards. A failed read is tried again the next time.
+    pub(super) fn read_unread_agent_boards(&mut self, cx: &mut Context<Self>) {
+        let persistence = &mut self.workspace_persistence;
+        if persistence.unread_agent_boards.is_empty() || persistence.agent_boards_in_flight {
+            return;
+        }
+        let (Some(runtime), Some(workspace_id)) = (
+            self.terminal.host_runtime.clone(),
+            persistence.view.as_ref().map(|view| view.id().clone()),
+        ) else {
+            return;
+        };
+        let references = std::mem::take(&mut persistence.unread_agent_boards);
+        let host_epoch = persistence.host_epoch;
+        persistence.agent_boards_in_flight = true;
+        let task = cx.background_spawn({
+            let workspace_id = workspace_id.clone();
+            let references = references.clone();
+            async move { read_agent_states(&runtime, &workspace_id, references) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |root, cx| {
+                let persistence = &mut root.workspace_persistence;
+                persistence.agent_boards_in_flight = false;
+                let current = persistence.host_epoch == host_epoch
+                    && persistence
+                        .view
+                        .as_ref()
+                        .is_some_and(|view| *view.id() == workspace_id);
+                if !current {
+                    return;
+                }
+                let bodies = match result {
+                    Ok(bodies) => bodies,
+                    Err(_) => {
+                        persistence.unread_agent_boards = references;
+                        return;
+                    }
+                };
+                for (reference, content) in bodies {
+                    let Ok(stored) = agent_state::decode(&reference, &content) else {
+                        continue;
+                    };
+                    let address = AgentPaneAddress::new(
+                        reference.project_id.as_str(),
+                        &reference.tab_id,
+                        &reference.pane_id,
+                    );
+                    if let Some(mut snapshot) = root.pane_agent_snapshot(&address).cloned() {
+                        agent_state::add_stored_board(&mut snapshot, stored);
+                        let _ = root.record_agent_runtime_snapshot(address, snapshot);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Opens the workspace on the Host and shows it: the first time, or for
     /// a Host that restarted, as a whole; otherwise only the document states,
     /// since the layout mirror already follows the Host.
@@ -586,23 +650,34 @@ impl WorkbenchView {
         let same_host = self.workspace_persistence.host_epoch == Some(opened.host_epoch);
         if first || !same_host {
             let mut layout = opened.layout;
-            let restored = agent_state::restore(
-                &mut layout.workspace,
-                &opened
-                    .agent_states
-                    .iter()
-                    .map(|(reference, _)| reference.clone())
-                    .collect::<Vec<_>>(),
-                |reference| {
-                    opened
-                        .agent_states
+            let (restored, unread_boards) = match &opened.agent_states {
+                agent_state::OpenedAgentStates::Bodies(bodies) => (
+                    agent_state::restore(
+                        &mut layout.workspace,
+                        &bodies
+                            .iter()
+                            .map(|(reference, _)| reference.clone())
+                            .collect::<Vec<_>>(),
+                        |reference| {
+                            bodies
+                                .iter()
+                                .find(|(body, _)| body == reference)
+                                .map(|(_, content)| content.clone())
+                                .ok_or_else(|| "Host Agent state body is missing".into())
+                        },
+                    ),
+                    Vec::new(),
+                ),
+                agent_state::OpenedAgentStates::Summaries(summaries) => (
+                    agent_state::restore_summaries(&mut layout.workspace, summaries),
+                    summaries
                         .iter()
-                        .find(|(body, _)| body == reference)
-                        .map(|(_, content)| content.clone())
-                        .ok_or_else(|| "Host Agent state body is missing".into())
-                },
-            )
-            .and_then(|()| HostWorkspace::restore(layout).map_err(|error| error.to_string()));
+                        .map(|summary| summary.reference.clone())
+                        .collect(),
+                ),
+            };
+            let restored = restored
+                .and_then(|()| HostWorkspace::restore(layout).map_err(|error| error.to_string()));
             let host = match restored {
                 Ok(host) => host,
                 Err(error) => {
@@ -617,7 +692,12 @@ impl WorkbenchView {
             if first {
                 self.reset_window_workspace();
             }
+            self.workspace_persistence.unread_agent_boards = unread_boards;
             self.workspace_persistence.host_epoch = Some(opened.host_epoch);
+            // A command center already open does not open again to read them.
+            if self.command_center_is_active() {
+                self.read_unread_agent_boards(cx);
+            }
             self.replace_with_host_layout(
                 host,
                 host_mirror::HostAgentStates::Included,
@@ -909,13 +989,14 @@ fn open_workspace(
             workspace_id: workspace_id.clone(),
         }
     };
-    let (layout, documents, references) =
+    let (layout, documents, references, summaries) =
         match runtime.request_blocking_typed(yttt_protocol::Request::Workspace(request)) {
             Ok(yttt_protocol::Response::Workspace(WorkspaceResponse::Opened {
                 layout,
                 documents,
                 agent_states,
-            })) => (layout, documents, agent_states),
+                agent_summaries,
+            })) => (layout, documents, agent_states, agent_summaries),
             Err(yttt_client_core::ClientCoreError::Protocol(failure))
                 if failure.code == yttt_protocol::FailureCode::NotFound =>
             {
@@ -949,15 +1030,16 @@ fn open_workspace(
                 .map_err(failed)?;
         }
     }
-    let agent_states = agent_state::read_published(references, |reference| {
-        runtime.request_blocking_typed(yttt_protocol::Request::Workspace(
-            WorkspaceRequest::GetAgentState {
-                workspace_id: workspace_id.clone(),
-                reference: reference.clone(),
-            },
-        ))
-    })
-    .map_err(failed)?;
+    // Over a remote link the boards, nearly all of each state, wait until
+    // something shows them.
+    let agent_states =
+        if runtime.is_remote() && agent_state::summaries_cover(&references, &summaries) {
+            agent_state::OpenedAgentStates::Summaries(summaries)
+        } else {
+            agent_state::OpenedAgentStates::Bodies(
+                read_agent_states(runtime, &workspace_id, references).map_err(failed)?,
+            )
+        };
     let HostConnectionState::Ready {
         host_epoch,
         connection_sequence,
@@ -971,6 +1053,21 @@ fn open_workspace(
         agent_states,
         host_epoch,
         connection_sequence,
+    })
+}
+
+fn read_agent_states(
+    runtime: &crate::host_runtime::DesktopHostRuntime,
+    workspace_id: &WorkspaceId,
+    references: Vec<AgentStateRef>,
+) -> Result<agent_state::AgentStateBodies, String> {
+    agent_state::read_published(references, |reference| {
+        runtime.request_blocking_typed(yttt_protocol::Request::Workspace(
+            WorkspaceRequest::GetAgentState {
+                workspace_id: workspace_id.clone(),
+                reference: reference.clone(),
+            },
+        ))
     })
 }
 

@@ -211,7 +211,7 @@ impl WorkbenchView {
         true
     }
 
-    fn pane_agent_snapshot(&self, address: &AgentPaneAddress) -> Option<&AgentSnapshot> {
+    pub(super) fn pane_agent_snapshot(&self, address: &AgentPaneAddress) -> Option<&AgentSnapshot> {
         self.workspace
             .project(&ProjectId::new(&address.project_id))?
             .tab_state(&address.tab_id)?

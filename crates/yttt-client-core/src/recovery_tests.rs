@@ -1072,6 +1072,7 @@ fn the_layout_mirror_keeps_the_newest_revision_until_the_host_changes() {
             layout: layout(2),
             documents: Vec::new(),
             agent_states: Vec::new(),
+            agent_summaries: Vec::new(),
         })),
         &context,
     );

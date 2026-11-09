@@ -348,7 +348,8 @@ impl WorkbenchView {
 
     /// Asks the Host for Agent boards while the command center is the active
     /// view: nothing else shows them, so a remote link carries them only then.
-    pub(super) fn report_agent_board_interest(&mut self, window: &Window) {
+    /// Opening it also reads the boards of the workspace's stored Agent states.
+    pub(super) fn report_agent_board_interest(&mut self, window: &Window, cx: &mut Context<Self>) {
         let runtime = self
             .terminal
             .host_runtime
@@ -361,10 +362,14 @@ impl WorkbenchView {
         {
             return;
         }
+        let watching = runtime.is_some();
         self.command_center.board_interest = runtime.map(|runtime| {
             runtime.set_agent_board_interest(scope, true);
             BoardInterestReport { runtime, scope }
         });
+        if watching {
+            self.read_unread_agent_boards(cx);
+        }
     }
 
     pub(super) fn command_center_stop_live_updates(&mut self) {

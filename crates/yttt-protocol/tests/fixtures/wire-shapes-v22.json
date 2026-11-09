@@ -242,6 +242,12 @@
       "tab_id"
     ]
   },
+  "AgentStateSummary": {
+    "": [
+      "reference",
+      "snapshot"
+    ]
+  },
   "AgentTask": {
     "": [
       "source",
@@ -2054,6 +2060,7 @@
     "OmpSessionExists": [],
     "Opened": [
       "agent_states",
+      "agent_summaries",
       "documents",
       "layout"
     ],
