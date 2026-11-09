@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-11-09
+
 - 修复本机与远程窗口在构建、checkout 等大量文件变化时反复断开重连（Host 日志 `send queue overflowed`）：同一项目的文件变化合并为一条，资源目录与配置通知也合并；每次连接不再把 Agent 状态推送两遍。
 - Fix local and remote windows dropping and reconnecting over and over while a build or checkout changes many files (`send queue overflowed` in the Host log): a project's file changes merge into one message, catalog and config notices merge too, and a connection no longer receives every Agent state twice.
 - 修复慢链路上远程终端不刷新：可靠消息持续到达时终端帧仍能轮到发送。大消息拆成更小的块，P2P 连接最多预先交给 QUIC 256 KB，心跳与按键不再排在数 MB 数据之后，减少“连接不稳定”与误判断线。
