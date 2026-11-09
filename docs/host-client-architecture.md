@@ -209,6 +209,11 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
    改为 `refresh_all`；注册 epoch 不同则以新者为准）。项目文件监听对每个文件事件各发一次，一次构建或
    checkout 即可产生上千条；逐条排队时可靠队列溢出、连接被关闭，重连后又遇到同一批事件。
    `ResourceCatalogChanged` 与 `ConfigChanged` 不带内容，也按类型合并。
+   声明 `accepts_agent_board_patches` 的 Client 只在每个 Agent 的第一份状态收到完整 board，之后收到
+   `AgentSnapshotPatch`：对本连接上次交付给它的 board 的按位置补丁（复制一段或放入新条目）。基准是该 Agent
+   最近一条已开始写出的消息，因为仍在等待的那条会被替换；`SessionWriter::send_reliable_latest_if` 只在
+   “是否仍有等待中的同键消息”与构造时一致才入队，避免补丁落在另一个基准上。Client 重建完整快照再发布；
+   补丁对不上即断开重连。新增一条消息时补丁只有该消息和几个复制段，不再重发整份 board。
 3. 渲染：每个已附加终端一个渲染 lane，Host 只在 lane 空闲时放入一帧，其余在渲染槽中合并；
    lane 之间轮转。可靠消息连续写出 64 KiB 后，若有渲染项的前序可靠消息都已写完，先写一项渲染再继续，
    使可靠消息持续到达的慢链路上终端仍然刷新；渲染项从不越过在它之前排队的可靠消息，因此终端的首帧

@@ -94,6 +94,11 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   Host 只在网络入口(TLS、SSH、P2P)且对方声明时压缩 ≥ 4 KiB 且确实变小的消息;Client 不压缩发往 Host 的消息。
   旧 Client 不声明,Host 照常发送明文;新 Client 对旧 Host 声明无效,不受影响。
   同期 session 分块从 256 KiB 改为 32 KiB(接收端对块大小没有要求,新旧互通)。
+  v22 内追加(未升版本):Agent board 补丁。`ClientHello.accepts_agent_board_patches`(带缺省)声明 Client 能读
+  `ServerEvent::AgentSnapshotPatch(AgentSnapshotPatch { update, base_sequence, board })`:`update.snapshot.board` 为空,
+  `board`(`AgentBoardPatch`)的每个列表是 `ListPatchStep::Keep { from, count }`(复制本连接为同一 Agent、同一 generation
+  上次交付、sequence 为 `base_sequence` 的 board 中的一段)或 `Put(entry)` 的序列。Client 重建出完整快照后再交给界面;
+  对不上基准即断开 session 连接,新连接从完整快照开始。旧 Client 不声明,只收到 `AgentSnapshot`。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

@@ -110,7 +110,7 @@
 
 # F：后续
 
-- [ ] Agent 快照瘦身：推送不带完整 `board`，或只发增量，按需读取全量（协议变更）。
+- [x] Agent 快照瘦身：每个 Agent 首份状态之后以 `AgentSnapshotPatch` 发送 board 补丁（`a_connected_client_rebuilds_a_growing_agent_board`、`agent_board_patches_rebuild_the_newest_board_on_a_slow_reader`）。
 - [x] P2P／QUIC 发送缓冲：流窗口 256 KiB、连接发送窗口 512 KiB（原默认 1.25 MB / 10 MB），会话分块 32 KiB（`a_writer_stops_soon_after_the_peer_stops_reading`）。
 - [x] 断连风暴（2026-11-09 诊断）：`ProjectChanged` 按项目合并、可靠消息连续 64 KiB 后让渲染、连上即断时退避不清零、溢出原因细分（`fix/link-storm`）。
 - [x] TLS／TCP 发送缓冲：Linux 设 `TCP_NOTSENT_LOWAT` 64 KiB；macOS、Windows 无安全接口，未设；穿透工具自身的缓冲无法控制。
