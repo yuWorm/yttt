@@ -12,6 +12,8 @@
 - Remote connections (TLS, SSH, P2P) compress the Host's large messages: Agent states, the resource catalog, layouts and terminal snapshots shrink to about a third, so a window through a relay or tunnel restores faster and uses less traffic. Older versions on either end keep talking uncompressed. A Linux Host's TLS connections no longer let the kernel hold megabytes of unsent data.
 - Agent 更新只发送看板上变化的部分：新增一条消息时不再重发整份看板（omp agent 单份可达 0.9 MB），远程窗口经慢链路时 Agent 状态更新快得多。旧版本两端之间照常发送完整状态。
 - An Agent update sends only what changed on its board: a new message no longer resends the whole board (up to 0.9 MB for an omp agent), so Agent state keeps up far better in a remote window on a slow link. Older versions on either end keep sending whole states.
+- 远程窗口在电脑唤醒或网络切换（换 Wi-Fi、插拔网线、开关 VPN）后几秒内恢复连接：立即确认链路，5 秒没有回应就重连，不再等满 20 秒；正在重连时立即重试。`client.log` 记下触发原因。
+- A remote window recovers within seconds after the computer wakes or the network changes (another Wi-Fi, a cable, a VPN turned on or off): it checks the link at once and reconnects if nothing answers within 5 seconds, instead of waiting out 20; a reconnect in progress tries again immediately. `client.log` notes what triggered it.
 - 远程窗口打开工作区时不再先下载每个 Agent 的完整看板（一个 22 个 Agent 的工作区约 4 MB），只取状态概要即可显示；看板在首次打开指挥中心时补齐。经穿透工具或 relay 恢复工作区快得多。
 - A remote window opens its workspace without first downloading every Agent's whole board (about 4 MB for a workspace with 22 Agents); a summary of each Agent is enough to show it, and the boards arrive the first time the command center opens. Restoring a workspace through a tunnel or relay is much faster.
 - 远程窗口只在打开指挥中心时接收 Agent 看板：其余时候 Agent 更新只带状态等概要（约 1 KB），不再随看板增长；打开指挥中心时补齐全部看板。本机窗口与旧版本两端之间照常发送看板。

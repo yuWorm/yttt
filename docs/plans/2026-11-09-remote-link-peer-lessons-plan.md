@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** 1.1、1.2 完成（手工验证待做）；其余未开始。
+**状态：** 1、3 完成（手工验证待做）；其余未开始。**顺序调整（2026-11-09）：** 1 完成后各类状态消息都已按键合并、Agent 未订阅时只有概要，2 的收益变小，先做 3；2 等日志中仍出现队列溢出再做。
 
 **依据：** 2026-11-09 对 Herdr、T3 Code、Orca、Cindy 远程链路实现的阅读（源码与设计文档），对照 yttt 在 `2026-11-07-remote-link-backlog-plan.md` 完成后的状态。
 
@@ -21,7 +21,7 @@ yttt 已对齐的部分不再列入：终端语义快照＋增量、每终端一
 
 ## 执行约束
 
-- [ ] 1 → 5 顺序执行；每项单独提交，项内每步先有失败的测试。
+- [ ] 1 → 5 顺序执行（3 已提前到 2 之前，见状态）；每项单独提交，项内每步先有失败的测试。
 - [ ] 协议只做追加：新增字段带 `#[serde(default)]`，新增请求在旧 Host 上回 `Unsupported`；改动 wire 形状时重写 `wire-shapes-v22.json` 并说明兼容性。
 - [ ] 新旧两端任意组合都能工作：旧 Client 照旧收到全部 board；新 Client 连旧 Host 照旧收到全部 board。
 - [ ] 每项结束时同步 `docs/host-client-architecture.md` 对应章节与 `CHANGELOG.md`。
@@ -68,8 +68,10 @@ yttt 已对齐的部分不再列入：终端语义快照＋增量、每终端一
 
 现状：只有心跳（远程 2 s 间隔、6 s 不稳定、20 s 断开）；笔记本合盖再打开要等约 20 s 才重连。
 
-- [ ] 桌面监听系统唤醒与网络变化（macOS、Windows），触发一次立即心跳；短时间无回应即走 `retry_now`。
-- [ ] 测试：注入“唤醒”后，失效连接在数秒内被替换；健康连接不被打断。
+- [x] `ClientCore::probe_now`：已连接时立即发心跳，`PROBE_TIMEOUT`（5 s）内无任何入站消息即断开重连；未连接时立即重试。本机 IPC 不探测。
+- [x] 远程窗口（`src/link_watch.rs`）：唤醒以墙上时钟与 2 s 定时器的差距判断（> 8 s 视为睡眠），网络变化用 `netwatch` 的 `is_major_change`；触发原因写入 `client.log`。
+- [x] 测试：`a_probed_session_that_hears_nothing_is_replaced_within_the_probe_timeout`（去掉探测即以 20 s 的心跳超时失败）、`a_probed_session_that_answers_stays_up`、`only_a_tick_far_longer_than_its_timer_counts_as_a_sleep`。**偏离：** 系统唤醒与网络事件本身无法在测试中注入，只测判断与探测。
+- [ ] 手工验证：Windows 远程窗口合盖数分钟再打开，数秒内恢复（`client.log` 有“the system woke”一行）；切换 Wi-Fi 同样。
 
 ---
 
