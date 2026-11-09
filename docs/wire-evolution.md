@@ -88,6 +88,12 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   桌面 socket 的 `DesktopControlCommand` 追加 `CreateAgent.role`、`AssignAgent`、`SetAgentController`:
   旧桌面会忽略 `role`(静默创建 worker),新 CLI 搭配旧桌面时 `--role orchestrator` 不生效。编排者与 Host 之间的
   `/control/v1/*` 是 hook listener 上的本机 HTTP JSON 接口,不经过 session 连接,不属于本样本。
+  v22 内追加(未升版本):压缩。`ClientHello.accepts_compression`(`#[serde(default)]`,旧端读作 `false`)
+  声明 Client 能读 `ControlMessage::Compressed(CompressedMessage { deflate })`(raw DEFLATE 的 CBOR 字节串,
+  内容是一条完整 control payload,可以再分块,不得嵌套 `Compressed` 或 `Chunk`,解压后不超过 32 MiB)。
+  Host 只在网络入口(TLS、SSH、P2P)且对方声明时压缩 ≥ 4 KiB 且确实变小的消息;Client 不压缩发往 Host 的消息。
+  旧 Client 不声明,Host 照常发送明文;新 Client 对旧 Host 声明无效,不受影响。
+  同期 session 分块从 256 KiB 改为 32 KiB(接收端对块大小没有要求,新旧互通)。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

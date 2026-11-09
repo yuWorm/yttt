@@ -8,6 +8,10 @@
 - Fix remote terminals not updating on a slow link: terminal frames get their turn while other messages keep arriving. Large messages travel in smaller pieces and a P2P connection hands QUIC at most 256 KB ahead of the reader, so heartbeats and keystrokes no longer wait behind megabytes, with fewer "Unstable connection" notices and false disconnects.
 - 连上即被断开的连接不再每 0.1 秒重连一次：连接保持 30 秒后退避才从头开始。远程连接确认会话的等待由 10 秒延长到 30 秒。Host 日志写明溢出的是哪一类队列。
 - A connection dropped as soon as it is up is no longer redialed every 0.1 seconds: the backoff starts over only after a connection lasted 30 seconds. A remote connection waits 30 seconds instead of 10 to confirm its session. The Host log names which queue overflowed.
+- 远程连接（TLS、SSH、P2P）压缩 Host 发出的大消息：Agent 状态、资源目录、布局与终端快照约缩小到三分之一，经 relay 或穿透工具时恢复更快、更省流量。旧版本两端之间照常不压缩。Linux Host 的 TLS 连接不再让内核积压数 MB 未发数据。
+- Remote connections (TLS, SSH, P2P) compress the Host's large messages: Agent states, the resource catalog, layouts and terminal snapshots shrink to about a third, so a window through a relay or tunnel restores faster and uses less traffic. Older versions on either end keep talking uncompressed. A Linux Host's TLS connections no longer let the kernel hold megabytes of unsent data.
+- Host 诊断文件 `host-diagnostics.jsonl` 记录每个 Client 的发送队列：等待的消息数与字节、高水位、最老消息已等待多久。
+- The Host's `host-diagnostics.jsonl` records each Client's send queue: messages and bytes waiting, their high-water marks, and how long the oldest has waited.
 
 ## 0.5.2 - 2026-11-08
 

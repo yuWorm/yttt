@@ -113,6 +113,8 @@
 - [ ] Agent 快照瘦身：推送不带完整 `board`，或只发增量，按需读取全量（协议变更）。
 - [x] P2P／QUIC 发送缓冲：流窗口 256 KiB、连接发送窗口 512 KiB（原默认 1.25 MB / 10 MB），会话分块 32 KiB（`a_writer_stops_soon_after_the_peer_stops_reading`）。
 - [x] 断连风暴（2026-11-09 诊断）：`ProjectChanged` 按项目合并、可靠消息连续 64 KiB 后让渲染、连上即断时退避不清零、溢出原因细分（`fix/link-storm`）。
-- [ ] TLS／TCP 发送缓冲：`TCP_NOTSENT_LOWAT` 需要 unsafe setsockopt，未做；穿透工具自身的缓冲无法控制。
-- [ ] 远程链路压缩大消息（协议变更）。
+- [x] TLS／TCP 发送缓冲：Linux 设 `TCP_NOTSENT_LOWAT` 64 KiB；macOS、Windows 无安全接口，未设；穿透工具自身的缓冲无法控制。
+- [x] 远程链路压缩大消息：`ClientHello.accepts_compression` + `ControlMessage::Compressed`（DEFLATE），仅 Host→Client、仅网络入口。
+- [x] 诊断：`host-diagnostics.jsonl` schema 7 的 `session_queues`。
+- [ ] `ProjectChanged` 只发给打开了该项目的会话（合并后收益小，未做）。
 - [ ] P2P 始终 relay 的原因排查（两端网络、UDP 打洞）。

@@ -215,6 +215,13 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
    snapshot 仍在附加它的响应之后。
 
 队列从不等待空间：超出上限即关闭连接，对端重连并对账；关闭原因写明是交互条数、可靠条数还是可靠字节超限。
+`host-diagnostics.jsonl`（schema 7）的 `session_queues` 每 5 s 记录每个已连接 Client 写端的交互与可靠消息数、
+可靠字节、各自高水位与最老可靠消息已等待的时长。
+
+网络入口（TLS、SSH、P2P）上，Client 在握手中声明 `accepts_compression` 后，Host 把编码后不小于 4 KiB
+且压缩后确实变小的消息以 raw DEFLATE（`ControlMessage::Compressed`，最快档）发送，先压缩再分块；
+接收端解压上限 32 MiB，拒绝嵌套。本机 IPC 不压缩。omp Agent 状态约压到三分之一。
+Linux 上 TLS socket 设 `TCP_NOTSENT_LOWAT` 64 KiB，内核未发出的数据不再积到数 MB；macOS、Windows 无安全接口，不设。
 编码后超过 32 KiB 的消息拆为
 `ControlMessage::Chunk` 序列，块之间可以插入交互帧，但可靠消息与渲染帧不互相穿插，
 因此可靠顺序端到端成立；接收端（`SessionReader`）同时拼接至多 4 个 stream，总量不超过
