@@ -1044,6 +1044,7 @@ async fn serve_client_session(
         attachments.clone(),
         request_journal,
         replaced,
+        compresses(context.identity.ingress, authenticated.accepts_compression),
         context,
     )
     .await;
@@ -1190,18 +1191,29 @@ const STOPPING_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Serves one authenticated Client over its single Session connection:
 /// requests and responses, terminal input, state events, and terminal frames.
+/// Whether a Session connection sends its large messages compressed: over a
+/// network ingress, to a Client that reads them. Local IPC gains nothing.
+fn compresses(ingress: yttt_transport::IngressKind, accepts_compression: bool) -> bool {
+    accepts_compression && ingress != yttt_transport::IngressKind::LocalAdmin
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn serve_session_connection(
     stream: TransportStream,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
     request_journal: Arc<tokio::sync::Mutex<RequestJournal>>,
     mut replaced: watch::Receiver<bool>,
+    compress: bool,
     context: &ConnectionContext,
 ) -> Result<(), String> {
     const MAX_QUEUED_REQUESTS: usize = 64;
     let (reader, writer) = tokio::io::split(stream);
     let reader = SessionReader::new(reader);
     let (writer, _writer_task) = SessionWriter::spawn(writer);
+    if compress {
+        writer.compress_large_messages();
+    }
     let _diagnostics = context
         .runtime
         .register_session_writer(&client_id, writer.clone());
@@ -1459,9 +1471,10 @@ async fn read_session_requests<R: tokio::io::AsyncRead + Unpin>(
             ControlMessage::Request(request) => requests
                 .try_send(request)
                 .map_err(|_| "request queue overflowed".to_string()),
-            ControlMessage::Response(_) | ControlMessage::Event(_) | ControlMessage::Chunk(_) => {
-                Err("Client sent a Host message".to_string())
-            }
+            ControlMessage::Response(_)
+            | ControlMessage::Event(_)
+            | ControlMessage::Chunk(_)
+            | ControlMessage::Compressed(_) => Err("Client sent a Host message".to_string()),
         };
         if let Err(reason) = queued {
             break reason;
@@ -3796,6 +3809,20 @@ mod session_idle_tests {
         assert!(pipe.failed.try_recv().is_err());
         let reason = pipe.failed.await.unwrap();
         assert!(reason.contains("no message"), "{reason}");
+    }
+
+    #[test]
+    fn only_network_sessions_to_willing_clients_compress() {
+        use yttt_transport::IngressKind;
+        assert!(!compresses(IngressKind::LocalAdmin, true));
+        for ingress in [
+            IngressKind::TlsWork,
+            IngressKind::SshWork,
+            IngressKind::P2pWork,
+        ] {
+            assert!(compresses(ingress, true));
+            assert!(!compresses(ingress, false));
+        }
     }
 
     #[tokio::test(start_paused = true)]

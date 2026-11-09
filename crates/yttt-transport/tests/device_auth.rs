@@ -253,6 +253,7 @@ fn hello_for(endpoint_id: EndpointKey) -> yttt_protocol::ClientHello {
         nonce: Nonce([0; 32]),
         channel: ConnectionChannel::Session,
         endpoint_id: Some(endpoint_id),
+        accepts_compression: false,
     }
 }
 

@@ -18,12 +18,17 @@
 //! the chunks of another message; reliable and render messages never
 //! interleave with each other, so reliable order holds end to end.
 //! [`SessionReader`] reassembles chunks on the receiving side.
+//!
+//! A writer told to [`SessionWriter::compress_large_messages`] sends payloads
+//! of [`COMPRESS_MIN_BYTES`] or more as `ControlMessage::Compressed` when that
+//! saves space; the reader inflates them, refusing anything past the frame limit.
 
 use std::{
     collections::{HashMap, VecDeque},
+    io::{Read as _, Write as _},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -35,8 +40,8 @@ use tokio::{
     task::JoinHandle,
 };
 use yttt_protocol::{
-    ControlMessage, FrameKind, HEADER_LEN, MAX_FRAME_BYTES, MessageChunk, ProtocolCodecError,
-    decode_control_message, decode_control_payload, encode_message,
+    CompressedMessage, ControlMessage, FrameKind, HEADER_LEN, MAX_FRAME_BYTES, MessageChunk,
+    ProtocolCodecError, decode_control_message, decode_control_payload, encode_message,
 };
 
 use crate::wire::{WireError, WireReceiveDiagnostics, receive_frame, resolve_control, send_frame};
@@ -52,6 +57,8 @@ const RELIABLE_ITEMS: usize = 1024;
 /// A larger reliable message is admitted only into an empty queue.
 const RELIABLE_BYTES: usize = MAX_FRAME_BYTES;
 const MAX_OPEN_CHUNK_STREAMS: usize = 4;
+/// Payloads at least this large are compressed when compression is on.
+pub const COMPRESS_MIN_BYTES: usize = 4 * 1024;
 /// Reliable bytes written in a row after which a waiting render item goes next.
 pub const RELIABLE_BURST_BYTES: usize = 64 * 1024;
 
@@ -334,6 +341,7 @@ struct Shared {
     closed: watch::Sender<bool>,
     next_chunk_stream: AtomicU64,
     next_lane: AtomicU64,
+    compress: AtomicBool,
 }
 
 impl Shared {
@@ -353,8 +361,13 @@ impl Shared {
         self.progress.notify_waiters();
     }
 
-    /// Splits an encoded control frame into chunk frames when its payload is large.
+    /// Compresses an encoded control frame when that is on and saves space,
+    /// then splits it into chunk frames when its payload is large.
     fn split(&self, frame: Arc<[u8]>) -> Result<Item, ProtocolCodecError> {
+        let frame = match self.compress.load(Ordering::Relaxed) {
+            true => compress_frame(frame)?,
+            false => frame,
+        };
         let payload_len = frame.len().saturating_sub(HEADER_LEN);
         if payload_len <= CHUNK_PAYLOAD_BYTES {
             let bytes = frame.len();
@@ -448,6 +461,7 @@ impl SessionWriter {
             closed,
             next_chunk_stream: AtomicU64::new(1),
             next_lane: AtomicU64::new(1),
+            compress: AtomicBool::new(false),
         });
         let task = tokio::spawn(run_writer(shared.clone(), writer));
         (
@@ -456,6 +470,12 @@ impl SessionWriter {
             },
             SessionWriterTask { shared, task },
         )
+    }
+
+    /// Sends later messages of [`COMPRESS_MIN_BYTES`] or more compressed. Only
+    /// for a peer that reads `ControlMessage::Compressed`.
+    pub fn compress_large_messages(&self) {
+        self.shared.compress.store(true, Ordering::Relaxed);
     }
 
     /// Queues a message ahead of reliable and render traffic.
@@ -725,6 +745,41 @@ async fn run_writer(shared: Arc<Shared>, mut writer: impl AsyncWrite + Unpin) {
     }
 }
 
+/// `frame` as a `Compressed` frame when its payload is large and compresses
+/// to less, otherwise unchanged.
+fn compress_frame(frame: Arc<[u8]>) -> Result<Arc<[u8]>, ProtocolCodecError> {
+    let payload = &frame[HEADER_LEN.min(frame.len())..];
+    if payload.len() < COMPRESS_MIN_BYTES {
+        return Ok(frame);
+    }
+    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(payload)?;
+    let deflate = encoder.finish()?;
+    // The envelope adds a few bytes; keep the original unless it clearly shrinks.
+    if deflate.len() + deflate.len() / 8 >= payload.len() {
+        return Ok(frame);
+    }
+    Ok(Arc::from(encode_message(
+        FrameKind::Control,
+        &ControlMessage::Compressed(CompressedMessage { deflate }),
+    )?))
+}
+
+/// The payload `compressed` holds, refusing one past the frame limit.
+fn inflate(compressed: &CompressedMessage) -> Result<Vec<u8>, WireError> {
+    let mut payload = Vec::new();
+    flate2::read::DeflateDecoder::new(compressed.deflate.as_slice())
+        .take(MAX_FRAME_BYTES as u64 + 1)
+        .read_to_end(&mut payload)
+        .map_err(|_| WireError::InvalidCompression("the payload does not inflate"))?;
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(WireError::InvalidCompression(
+            "the payload exceeds the frame limit",
+        ));
+    }
+    Ok(payload)
+}
+
 #[derive(Default)]
 struct ChunkAssembler {
     streams: HashMap<u64, Vec<u8>>,
@@ -779,7 +834,8 @@ impl<R: AsyncRead + Unpin> SessionReader<R> {
 
     /// Skips events added by a newer peer, resolves unrecognized responses as
     /// `FailureCode::Unsupported`, and surfaces unrecognized requests as
-    /// `WireError::unsupported_request_id`. Never returns a `Chunk`.
+    /// `WireError::unsupported_request_id`. Never returns a `Chunk` or a
+    /// `Compressed`.
     pub async fn receive_observed(
         &mut self,
     ) -> Result<(ControlMessage, WireReceiveDiagnostics), WireError> {
@@ -805,6 +861,22 @@ impl<R: AsyncRead + Unpin> SessionReader<R> {
                     (decoded, payload.len())
                 }
                 decoded => (decoded, frame.payload.len()),
+            };
+            let (decoded, payload_bytes) = match decoded {
+                Ok(ControlMessage::Compressed(compressed)) => {
+                    let payload = inflate(&compressed)?;
+                    let decoded = decode_control_payload(&payload);
+                    if matches!(
+                        decoded,
+                        Ok(ControlMessage::Chunk(_) | ControlMessage::Compressed(_))
+                    ) {
+                        return Err(WireError::InvalidCompression(
+                            "compressed messages cannot nest",
+                        ));
+                    }
+                    (decoded, payload.len())
+                }
+                decoded => (decoded, payload_bytes),
             };
             let Some(message) = resolve_control(decoded)? else {
                 payload_read_and_check = Duration::ZERO;

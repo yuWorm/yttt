@@ -32,6 +32,7 @@ fn client_hello() -> ClientHello {
         channel: ConnectionChannel::Session,
         nonce: Nonce([7; 32]),
         endpoint_id: None,
+        accepts_compression: false,
     }
 }
 

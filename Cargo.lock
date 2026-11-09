@@ -13748,6 +13748,7 @@ name = "yttt-transport"
 version = "0.5.2"
 dependencies = [
  "ed25519-dalek",
+ "flate2",
  "hmac 0.12.1",
  "parking_lot",
  "rand 0.8.6",

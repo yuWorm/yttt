@@ -21,9 +21,9 @@ pub use codec::{
     encode_message, read_frame, write_frame,
 };
 pub use control::{
-    Capability, ClientRequest, ControlMessage, FailureCode, HostBlocker, HostEvent, HostResponse,
-    MessageChunk, ProtocolFailure, Request, ResourceCatalog, Response, ServerEvent,
-    TerminalControlDeniedReason, TerminalController, TerminalLease, TerminalPlacement,
+    Capability, ClientRequest, CompressedMessage, ControlMessage, FailureCode, HostBlocker,
+    HostEvent, HostResponse, MessageChunk, ProtocolFailure, Request, ResourceCatalog, Response,
+    ServerEvent, TerminalControlDeniedReason, TerminalController, TerminalLease, TerminalPlacement,
     TerminalTerminationResult,
 };
 pub use desktop::{

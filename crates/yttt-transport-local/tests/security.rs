@@ -273,6 +273,7 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
             nonce: yttt_protocol::Nonce([8; 32]),
             channel: ConnectionChannel::Session,
             endpoint_id: None,
+            accepts_compression: false,
         };
         yttt_transport_local::send_handshake(
             &mut client_stream,

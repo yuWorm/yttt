@@ -1149,7 +1149,8 @@ async fn connected_session(
                     }
                     ControlMessage::Request(_)
                     | ControlMessage::TerminalInput { .. }
-                    | ControlMessage::Chunk(_) => {
+                    | ControlMessage::Chunk(_)
+                    | ControlMessage::Compressed(_) => {
                         break Some("Host sent a client message on the session".to_string());
                     }
                 }

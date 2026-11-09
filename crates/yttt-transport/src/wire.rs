@@ -58,6 +58,8 @@ pub enum WireError {
     },
     #[error("invalid chunked message: {0}")]
     InvalidChunk(&'static str),
+    #[error("invalid compressed message: {0}")]
+    InvalidCompression(&'static str),
 }
 
 impl WireError {

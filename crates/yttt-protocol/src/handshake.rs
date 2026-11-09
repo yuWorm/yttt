@@ -115,6 +115,10 @@ pub struct ClientHello {
     /// The Client's device key; set only on the P2P ingress.
     #[serde(default)]
     pub endpoint_id: Option<EndpointKey>,
+    /// The Client reads `ControlMessage::Compressed`; a Host may then send its
+    /// large messages compressed.
+    #[serde(default)]
+    pub accepts_compression: bool,
 }
 
 /// One authenticated Client session uses one `Session` connection for requests,

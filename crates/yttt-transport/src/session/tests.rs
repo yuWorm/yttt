@@ -310,6 +310,79 @@ async fn queue_stats_show_what_waits_and_for_how_long() {
     assert_eq!(stats.reliable_items_high_water, 2);
 }
 
+fn compressible(request_id: u64) -> ControlMessage {
+    large_request(request_id, 4 * CHUNK_PAYLOAD_BYTES)
+}
+
+fn encoded(message: &ControlMessage) -> Arc<[u8]> {
+    Arc::from(encode_message(FrameKind::Control, message).unwrap())
+}
+
+#[tokio::test]
+async fn a_compressing_writer_sends_large_messages_smaller_and_intact() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1 << 20);
+    let large = compressible(1);
+    let frame = encoded(&large);
+    let plain = writer.shared.split(frame.clone()).unwrap().bytes;
+    assert!(plain >= frame.len());
+
+    writer.compress_large_messages();
+    assert!(writer.shared.split(frame.clone()).unwrap().bytes < plain / 10);
+    let small = encoded(&event(2));
+    assert_eq!(
+        writer.shared.split(small.clone()).unwrap().bytes,
+        small.len()
+    );
+
+    writer.send_reliable(&large).unwrap();
+    assert_eq!(next(&mut reader).await, large);
+    let lane = writer.open_render_lane(None);
+    lane.enqueue_frame(encoded(&compressible(2))).unwrap();
+    assert_eq!(next(&mut reader).await, compressible(2));
+}
+
+#[tokio::test]
+async fn the_reader_refuses_nested_or_oversized_compressed_messages() {
+    async fn read_compressed(payload: &[u8]) -> Result<ControlMessage, WireError> {
+        let (local, peer) = duplex(1 << 20);
+        let (_, mut peer) = split(peer);
+        let mut reader = SessionReader::new(local);
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut encoder, payload).unwrap();
+        let frame = encode_message(
+            FrameKind::Control,
+            &ControlMessage::Compressed(CompressedMessage {
+                deflate: encoder.finish().unwrap(),
+            }),
+        )
+        .unwrap();
+        peer.write_all(&frame).await.unwrap();
+        reader.receive().await
+    }
+
+    let plain = encoded(&event(1));
+    assert_eq!(
+        read_compressed(&plain[HEADER_LEN..]).await.unwrap(),
+        event(1)
+    );
+    let nested = encode_message(
+        FrameKind::Control,
+        &ControlMessage::Compressed(CompressedMessage {
+            deflate: Vec::new(),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        read_compressed(&nested[HEADER_LEN..]).await,
+        Err(WireError::InvalidCompression(_))
+    ));
+    assert!(matches!(
+        read_compressed(&vec![0; MAX_FRAME_BYTES + 1]).await,
+        Err(WireError::InvalidCompression(_))
+    ));
+}
+
 async fn write_chunk(peer: &mut WriteHalf<DuplexStream>, stream: u64, last: bool, bytes: &[u8]) {
     let frame = encode_message(
         FrameKind::Control,

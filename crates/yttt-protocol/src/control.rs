@@ -117,6 +117,17 @@ pub enum ControlMessage {
         input: TerminalInput,
     },
     Chunk(MessageChunk),
+    /// A control message payload compressed with raw DEFLATE. Sent only to a
+    /// Client whose `ClientHello::accepts_compression` is set.
+    Compressed(CompressedMessage),
+}
+
+/// One encoded `ControlMessage` payload, DEFLATE-compressed. It may travel in
+/// chunks but never holds another `Compressed` or a `Chunk`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompressedMessage {
+    #[serde(with = "serde_bytes")]
+    pub deflate: Vec<u8>,
 }
 
 /// A slice of one encoded `ControlMessage` payload too large to send as a

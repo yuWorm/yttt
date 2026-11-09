@@ -288,6 +288,7 @@
   },
   "ClientHello": {
     "": [
+      "accepts_compression",
       "build",
       "can_force_stop",
       "channel",
@@ -309,6 +310,11 @@
       "request_id"
     ]
   },
+  "CompressedMessage": {
+    "": [
+      "deflate"
+    ]
+  },
   "ConnectionChannel": {
     "DesktopOwner": [],
     "Lifecycle": [],
@@ -323,6 +329,7 @@
   },
   "ControlMessage": {
     "Chunk": [],
+    "Compressed": [],
     "Event": [],
     "Request": [],
     "Response": [],
