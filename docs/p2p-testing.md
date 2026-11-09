@@ -121,11 +121,12 @@ Host 的 `host.log`（服务器 Host 为 `server.log`）为 `P2P device <密钥>
 
 - relay 节点没有域名（`http://` 地址）时，设备永远“经 relay”，见 `docs/relay-operations.md`。
 - 设备或 Host 开着全局代理 / TUN 模式（如 Clash 的 TUN、`198.18.x.x` 这类 fake-ip）时，UDP 走代理，QUIC 地址探测失败，也只能“经 relay”。给 relay 节点的 IP 设直连规则，或测试时关掉 TUN。
+- 桌面 Host 与设备打开设置页“诊断 › 详细日志”后，`host.log` 与 `client.log` 记下每个请求的耗时、连接的传输与握手耗时和偏慢的心跳；要看 iroh 的打洞过程，用 `YTTT_LOG=info,iroh=debug` 启动 yttt。
 - 无桌面 Host 用 `RUST_LOG=iroh=debug yttt-server ensure` 启动后，`server.log` 里能看到 iroh 的连接与打洞过程；`yttt-server p2p status` 的 `clients` 列出当前连着的设备。
 
 ## 6. 出问题时收集什么
 
 - Host：“远程访问此电脑”页的错误文字，或 `yttt-server p2p status` 的输出；服务器 Host 的日志在 `~/.local/state/yttt/remote/default/logs/server.log`（设置了 `XDG_STATE_HOME` 时以它代替 `~/.local/state`）。
-- 设备：`logs/client.log` 的最后几十行，和连接窗口里显示的错误。
+- 设备：`logs/client.log` 的最后几十行，和连接窗口里显示的错误；能复现时先打开“诊断 › 详细日志”再收集，两端日志都会更详细。
 - 两台机器各自的网络环境：是否同一路由器、是否有公司防火墙或 VPN、Windows 防火墙是否弹窗。
 - 配对失败时设备上显示的原因：`拒绝`、`邀请已关闭`（码过期或被第二台设备用过）、`认证失败`（码抄错）。

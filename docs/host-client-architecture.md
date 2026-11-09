@@ -845,9 +845,21 @@ root PID 选择最近的已知 Agent descendant，以两个连续 miss 作为退
 
 错误日志可记录 request kind、resource ID、epoch、sequence、queue depth 和耗时；不得记录 terminal input、clipboard、token、password、private key、完整环境变量或文件正文。
 
-连接变化有时间戳日志：Desktop 把断开原因、重连耗时与 `HostLost` 写入 profile `logs/client.log`（1 MiB 轮转一次），
-ClientCore diagnostics 保留最近 16 次断开记录；Host 在 `host.log` 记录每条 session 连接的建立与结束原因
-（读失败、写超时、队列溢出、被替换），单向输入被拒按终端每 10 s 至多记一条并带被抑制次数。
+日志经 `tracing` 写出（`yttt_host::logging`）：Host 进程写 stderr，即启动器打开的 `host.log`（启动时超过 16 MiB 先移为
+`host.log.1`）；Desktop 与远程窗口进程写 profile `logs/client.log`（8 MiB 轮转一次）。每行为本地时间、级别、模块与字段。
+详细程度由 Host 作用域的 `[diagnostics] verbose_logs`（设置页“诊断 › 详细日志”）决定，一个开关同时作用于 Host 与连到它的所有窗口：
+Host 在配置写入后重读它，窗口按其显示的设置同步，不需重启。环境变量 `YTTT_LOG` 以 `tracing` 过滤语法覆盖二者
+（如 `YTTT_LOG=yttt_host=trace,iroh=debug`）。
+
+- 常态（本项目 info、其余 warn）：session 建立（入口、协议版本、压缩／board 补丁／board 订阅）与结束（持续毫秒、发出字节、
+  可靠队列字节高水位、原因：读失败、写超时、队列溢出、被替换）；失败或超过 1 s 的请求（类型、编号、毫秒、失败码）；Client 的
+  连接失败（第几次、原因、下次重试毫秒）、session 就绪与丢失、请求超时、往返超过 `unstable_after / 4` 的心跳、唤醒／网络变化探测；
+  远程访问与 P2P 的启停与失败；工作区打开（毫秒、Agent 概要或完整状态的份数与字节）与看板补读。单向输入被拒按终端每 10 s
+  至多记一条并带被抑制次数。
+- 详细（本项目 debug、其余 info）：另记每个请求（Host 侧执行毫秒、Client 侧往返毫秒）、连接的传输与握手耗时、Agent 快照分页
+  （份数、无 board 的份数）、board 订阅切换，以及 iroh 等依赖的 info 事件。Ping 与终端输入不逐条记录。
+
+ClientCore diagnostics 保留最近 16 次断开记录。
 
 常驻 Host diagnostics 每 5 s 采样并写入 bounded rotating JSONL；missed tick 使用 `Skip`，
 不会在 runtime 恢复后补跑一串采样。terminal input、parser 和队列 latency 计数仍逐事件累计，
