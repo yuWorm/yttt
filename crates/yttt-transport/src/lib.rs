@@ -15,7 +15,8 @@ pub use auth::{
 pub use error::TransportError;
 pub use memory::{MemoryConnector, MemoryListener, memory_pair};
 pub use session::{
-    CHUNK_PAYLOAD_BYTES, RENDER_LANE_BYTES, RenderLane, RenderObserver, RenderRejected,
+    CHUNK_PAYLOAD_BYTES, QueueOverflow, RELIABLE_BURST_BYTES, RENDER_LANE_BYTES, RenderLane,
+    RenderObserver, RenderRejected,
     SessionCloseReason, SessionReader, SessionSendError, SessionWriter, SessionWriterTask,
 };
 pub use stream::{

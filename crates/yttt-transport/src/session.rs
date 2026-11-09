@@ -5,6 +5,11 @@
 //! 2. reliable messages (other requests, responses, and events) in FIFO order;
 //! 3. render frames, one item at a time per [`RenderLane`], round-robin across lanes.
 //!
+//! Render frames still get a turn while reliable messages keep arriving: after
+//! [`RELIABLE_BURST_BYTES`] of reliable messages in a row, one render item goes
+//! next. A render item never overtakes a reliable message queued before it, so
+//! a terminal's opening Snapshot still follows the response that attached it.
+//!
 //! Queues never wait for space: a sender that exceeds a bound closes the
 //! connection, and the peer reconnects and reconciles.
 //!
@@ -37,7 +42,9 @@ use yttt_protocol::{
 use crate::wire::{WireError, WireReceiveDiagnostics, receive_frame, resolve_control, send_frame};
 
 /// Encoded payloads above this size travel as `ControlMessage::Chunk` frames.
-pub const CHUNK_PAYLOAD_BYTES: usize = 256 * 1024;
+/// Interactive frames wait at most one chunk, so on a 128 KB/s link a
+/// keystroke's echo or a heartbeat waits about a quarter second.
+pub const CHUNK_PAYLOAD_BYTES: usize = 32 * 1024;
 /// Byte budget of one render lane. A larger frame is admitted only into an empty lane.
 pub const RENDER_LANE_BYTES: usize = 512 * 1024;
 const INTERACTIVE_ITEMS: usize = 1024;
@@ -45,6 +52,8 @@ const RELIABLE_ITEMS: usize = 1024;
 /// A larger reliable message is admitted only into an empty queue.
 const RELIABLE_BYTES: usize = MAX_FRAME_BYTES;
 const MAX_OPEN_CHUNK_STREAMS: usize = 4;
+/// Reliable bytes written in a row after which a waiting render item goes next.
+pub const RELIABLE_BURST_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionSendError {
@@ -62,16 +71,30 @@ pub enum SessionCloseReason {
     /// This end closed it.
     Local,
     /// A send queue exceeded its bound.
-    Overflow,
+    Overflow(QueueOverflow),
     /// A frame write failed or made no progress before its deadline.
     WriteFailed,
+}
+
+/// Which bound a send queue exceeded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueOverflow {
+    InteractiveItems,
+    ReliableItems,
+    ReliableBytes,
 }
 
 impl std::fmt::Display for SessionCloseReason {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Local => "closed locally",
-            Self::Overflow => "send queue overflowed",
+            Self::Overflow(QueueOverflow::InteractiveItems) => {
+                "send queue overflowed: interactive messages"
+            }
+            Self::Overflow(QueueOverflow::ReliableItems) => {
+                "send queue overflowed: reliable messages"
+            }
+            Self::Overflow(QueueOverflow::ReliableBytes) => "send queue overflowed: reliable bytes",
             Self::WriteFailed => "write failed or timed out",
         })
     }
@@ -95,6 +118,9 @@ struct Item {
     after_lane: Option<u64>,
     /// A later reliable item with the same key replaces this one while it waits.
     latest: Option<Arc<str>>,
+    /// A reliable item's place in reliable order; for a render item, the last
+    /// reliable item queued before it, which must be written first.
+    sequence: u64,
 }
 
 struct RenderQueue {
@@ -127,6 +153,12 @@ struct State {
     current: Option<(Source, Item)>,
     render: HashMap<u64, RenderQueue>,
     render_ready: VecDeque<u64>,
+    /// The sequence of the last reliable item queued.
+    reliable_queued: u64,
+    /// The sequence of the last reliable item written.
+    reliable_written: u64,
+    /// Reliable bytes started in a row while render items waited.
+    reliable_streak: usize,
 }
 
 impl State {
@@ -155,9 +187,17 @@ impl State {
             {
                 return Some(item);
             }
+            if self.reliable_streak >= RELIABLE_BURST_BYTES
+                && let Some(item) = self.pop_due_render()
+            {
+                self.reliable_streak = 0;
+                return Some(item);
+            }
             let item = self.reliable.pop_front()?;
+            self.reliable_streak += item.bytes;
             return Some((Source::Reliable, item));
         }
+        self.reliable_streak = 0;
         while let Some(lane) = self.render_ready.pop_front() {
             let Some(queue) = self.render.get_mut(&lane) else {
                 continue;
@@ -168,6 +208,21 @@ impl State {
             }
         }
         None
+    }
+
+    /// The next render item, in lane turn, whose preceding reliable items are written.
+    fn pop_due_render(&mut self) -> Option<(Source, Item)> {
+        let position = self.render_ready.iter().position(|lane| {
+            self.render
+                .get(lane)
+                .and_then(|queue| queue.items.front())
+                .is_some_and(|item| item.sequence <= self.reliable_written)
+        })?;
+        let lane = self.render_ready.remove(position)?;
+        if let Some(queue) = self.render.get_mut(&lane) {
+            queue.ready = false;
+        }
+        self.pop_render(lane)
     }
 
     fn pop_render(&mut self, lane: u64) -> Option<(Source, Item)> {
@@ -211,6 +266,7 @@ impl State {
                 match source {
                     Source::Reliable => {
                         self.reliable_bytes = self.reliable_bytes.saturating_sub(item.bytes);
+                        self.reliable_written = self.reliable_written.max(item.sequence);
                     }
                     Source::Render { lane, started_at } => {
                         if let Some(queue) = self.render.get_mut(&lane) {
@@ -264,6 +320,11 @@ struct Shared {
 }
 
 impl Shared {
+    fn overflow(&self, kind: QueueOverflow) -> SessionSendError {
+        self.close(SessionCloseReason::Overflow(kind));
+        SessionSendError::Overflow
+    }
+
     fn close(&self, reason: SessionCloseReason) {
         {
             let mut state = self.state.lock();
@@ -285,6 +346,7 @@ impl Shared {
                 bytes,
                 after_lane: None,
                 latest: None,
+                sequence: 0,
             });
         }
         let stream = self.next_chunk_stream.fetch_add(1, Ordering::Relaxed);
@@ -309,6 +371,7 @@ impl Shared {
             bytes,
             after_lane: None,
             latest: None,
+            sequence: 0,
         })
     }
 
@@ -424,12 +487,23 @@ impl SessionWriter {
         let others = state.reliable_bytes - state.reliable[position].bytes;
         if others != 0 && item.bytes > RELIABLE_BYTES.saturating_sub(others) {
             drop(state);
-            self.shared.close(SessionCloseReason::Overflow);
-            return Err(SessionSendError::Overflow);
+            return Err(self.shared.overflow(QueueOverflow::ReliableBytes));
         }
         state.reliable_bytes = others + item.bytes;
+        item.sequence = state.reliable[position].sequence;
         state.reliable[position] = item;
         Ok(())
+    }
+
+    /// Whether a reliable message queued with `key` is still waiting, so a
+    /// newer [`Self::send_reliable_latest`] with that key would replace it.
+    pub fn is_waiting(&self, key: &str) -> bool {
+        self.shared
+            .state
+            .lock()
+            .reliable
+            .iter()
+            .any(|queued| queued.latest.as_deref() == Some(key))
     }
 
     /// Opens a render lane whose frames are written only when no reliable message waits.
@@ -487,24 +561,27 @@ impl SessionWriter {
         &self,
         mut state: parking_lot::MutexGuard<'_, State>,
         priority: Priority,
-        item: Item,
+        mut item: Item,
     ) -> Result<(), SessionSendError> {
-        let admitted = match priority {
-            Priority::Interactive => state.interactive.len() < INTERACTIVE_ITEMS,
-            Priority::Reliable => {
-                state.reliable.len() < RELIABLE_ITEMS
-                    && (state.reliable_bytes == 0
-                        || item.bytes <= RELIABLE_BYTES.saturating_sub(state.reliable_bytes))
+        let refused = match priority {
+            Priority::Interactive => (state.interactive.len() >= INTERACTIVE_ITEMS)
+                .then_some(QueueOverflow::InteractiveItems),
+            Priority::Reliable if state.reliable.len() >= RELIABLE_ITEMS => {
+                Some(QueueOverflow::ReliableItems)
             }
+            Priority::Reliable => (state.reliable_bytes != 0
+                && item.bytes > RELIABLE_BYTES.saturating_sub(state.reliable_bytes))
+            .then_some(QueueOverflow::ReliableBytes),
         };
-        if !admitted {
+        if let Some(kind) = refused {
             drop(state);
-            self.shared.close(SessionCloseReason::Overflow);
-            return Err(SessionSendError::Overflow);
+            return Err(self.shared.overflow(kind));
         }
         match priority {
             Priority::Interactive => state.interactive.push_back(item),
             Priority::Reliable => {
+                state.reliable_queued += 1;
+                item.sequence = state.reliable_queued;
                 state.reliable_bytes += item.bytes;
                 state.reliable.push_back(item);
             }
@@ -525,11 +602,12 @@ pub struct RenderLane {
 impl RenderLane {
     /// Admits a pre-encoded control frame while the lane stays within budget.
     pub fn enqueue_frame(&self, frame: Arc<[u8]>) -> Result<(), RenderRejected> {
-        let item = self.shared.split(frame).map_err(|_| RenderRejected)?;
+        let mut item = self.shared.split(frame).map_err(|_| RenderRejected)?;
         let mut state = self.shared.state.lock();
         if state.closed {
             return Err(RenderRejected);
         }
+        item.sequence = state.reliable_queued;
         let Some(queue) = state.render.get_mut(&self.id) else {
             return Err(RenderRejected);
         };

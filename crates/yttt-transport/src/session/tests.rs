@@ -183,6 +183,10 @@ async fn reliable_overflow_closes_the_connection() {
     tokio::time::timeout(Duration::from_secs(1), writer.closed())
         .await
         .unwrap();
+    assert_eq!(
+        writer.close_reason(),
+        Some(SessionCloseReason::Overflow(QueueOverflow::ReliableItems))
+    );
     assert!(matches!(
         writer.send_interactive(&ping(1)),
         Err(SessionSendError::Closed)
@@ -234,6 +238,51 @@ async fn repeated_keyed_messages_to_a_stalled_peer_do_not_overflow() {
         4 * RELIABLE_ITEMS as u64
     );
     assert_eq!(sequence(&next(&mut reader).await), u64::MAX);
+}
+
+#[tokio::test]
+async fn a_render_frame_gets_a_turn_in_a_steady_reliable_stream() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    let lane = writer.open_render_lane(None);
+    let first = large_request(1, RELIABLE_BURST_BYTES);
+    occupy_writer(&writer, &first).await;
+    lane.enqueue_frame(render_frame(100)).unwrap();
+    writer.send_reliable(&event(2)).unwrap();
+    writer.send_reliable(&event(3)).unwrap();
+
+    assert_eq!(next(&mut reader).await, first);
+    assert_eq!(sequence(&next(&mut reader).await), 100);
+    assert_eq!(sequence(&next(&mut reader).await), 2);
+    assert_eq!(sequence(&next(&mut reader).await), 3);
+}
+
+#[tokio::test]
+async fn a_render_frame_never_overtakes_a_reliable_message_queued_before_it() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    let lane = writer.open_render_lane(None);
+    let first = large_request(1, RELIABLE_BURST_BYTES);
+    occupy_writer(&writer, &first).await;
+    writer.send_reliable(&event(2)).unwrap();
+    lane.enqueue_frame(render_frame(100)).unwrap();
+    writer.send_reliable(&event(3)).unwrap();
+
+    assert_eq!(next(&mut reader).await, first);
+    assert_eq!(sequence(&next(&mut reader).await), 2);
+    assert_eq!(sequence(&next(&mut reader).await), 100);
+    assert_eq!(sequence(&next(&mut reader).await), 3);
+}
+
+#[tokio::test]
+async fn a_keyed_message_is_waiting_until_its_writing_starts() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    occupy_writer(&writer, &event(0)).await;
+    assert!(!writer.is_waiting("a"));
+    writer.send_reliable_latest("a", &event(1)).unwrap();
+    assert!(writer.is_waiting("a"));
+
+    assert_eq!(sequence(&next(&mut reader).await), 0);
+    assert_eq!(sequence(&next(&mut reader).await), 1);
+    assert!(!writer.is_waiting("a"));
 }
 
 async fn write_chunk(peer: &mut WriteHalf<DuplexStream>, stream: u64, last: bool, bytes: &[u8]) {
