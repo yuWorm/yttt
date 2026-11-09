@@ -12,6 +12,7 @@ pub mod config;
 mod connection_log;
 pub mod desktop_shell;
 pub mod desktop_tray;
+mod link_watch;
 pub use yttt_core::model;
 pub mod host_launcher;
 pub mod host_runtime;

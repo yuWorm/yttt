@@ -89,6 +89,9 @@ rand = "0.8"
 zeroize = "1"
 yttt-transport-tls = { path = "crates/yttt-transport-tls" }
 notify = "7.0.0"
+# Network change events; already in the tree through iroh.
+netwatch = "0.19"
+n0-watcher = "1"
 notify-rust = "4.18"
 nucleo-matcher = "0.3.1"
 reqwest_client = { workspace = true }

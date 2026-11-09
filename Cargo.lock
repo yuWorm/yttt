@@ -13332,6 +13332,8 @@ dependencies = [
  "gpui-pre-reqwest-client",
  "ignore",
  "image",
+ "n0-watcher",
+ "netwatch",
  "notify 7.0.0",
  "notify-rust",
  "nucleo-matcher",

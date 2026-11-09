@@ -66,6 +66,7 @@ fn context() -> TestContext {
             diagnostics: Arc::default(),
             visibility: watch::channel(None).1,
             board_interest: watch::channel(false).1,
+            probe: Arc::default(),
             shutdown,
             link: LinkProfile::LOCAL,
             agent_boards: Arc::default(),
@@ -591,6 +592,67 @@ async fn a_session_asks_for_agent_boards_before_reading_snapshots_and_when_asked
     };
     assert_eq!(acknowledged.len(), 1);
     assert_eq!(acknowledged[0].sequence, 3);
+    shutdown.send(true).unwrap();
+    assert!(session.await.unwrap().is_none());
+}
+
+/// A Host that reads requests and answers Pings only when `answers` is set.
+async fn serve_pings(mut server: tokio::io::DuplexStream, answers: bool) {
+    while let Ok(message) = receive_control(&mut server).await {
+        if let ControlMessage::Request(ClientRequest {
+            request_id,
+            body: Request::Ping { sent_millis },
+            ..
+        }) = message
+            && answers
+        {
+            let pong = ControlMessage::Response(HostResponse {
+                request_id,
+                result: Ok(Response::Pong {
+                    sent_millis,
+                    host_millis: 0,
+                }),
+            });
+            if send_control(&mut server, &pong).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// A path that died while the system slept: the Host never hears the probe.
+#[tokio::test(start_paused = true)]
+async fn a_probed_session_that_hears_nothing_is_replaced_within_the_probe_timeout() {
+    let mut context = context();
+    context.session.link = LinkProfile::REMOTE;
+    let probe = context.probe.clone();
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let _host = tokio::spawn(serve_pings(server, false));
+    let started = tokio::time::Instant::now();
+    let session = tokio::spawn(async move { run_session(client, &context).await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    probe.notify_one();
+    let reason = session.await.unwrap().expect("the session ends");
+    assert!(reason.contains("wake or network change"), "{reason}");
+    // Without the probe the link would wait out its 20 s liveness timeout.
+    assert!(
+        started.elapsed() <= Duration::from_secs(1) + PROBE_TIMEOUT + Duration::from_millis(100)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_probed_session_that_answers_stays_up() {
+    let mut context = context();
+    context.session.link = LinkProfile::REMOTE;
+    let probe = context.probe.clone();
+    let shutdown = context.shutdown_tx.clone();
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let _host = tokio::spawn(serve_pings(server, true));
+    let session = tokio::spawn(async move { run_session(client, &context).await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    probe.notify_one();
+    tokio::time::sleep(PROBE_TIMEOUT * 3).await;
+    assert!(!session.is_finished(), "{:?}", session.await);
     shutdown.send(true).unwrap();
     assert!(session.await.unwrap().is_none());
 }

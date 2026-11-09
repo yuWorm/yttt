@@ -64,6 +64,10 @@ impl Drop for ShutdownOnDrop {
     }
 }
 
+/// How long a probed session may stay silent before it is replaced. Any
+/// message proves the link: a Pong may queue behind data already sent.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How long a connection must stay up before its loss starts the backoff over.
 const STABLE_CONNECTION: Duration = Duration::from_secs(30);
 
@@ -175,6 +179,8 @@ struct ClientCoreInner {
     shutdown: watch::Sender<bool>,
     /// Wakes a reconnect that is backing off or stuck connecting.
     retry: Arc<Notify>,
+    /// Asks the connected session to prove at once that it reaches the Host.
+    probe: Arc<Notify>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     client_id: yttt_core::model::ids::ClientInstanceId,
     visibility_scopes: Mutex<VisibilityScopes>,
@@ -253,6 +259,7 @@ struct ClientSessionContext {
     diagnostics: Arc<ClientPipelineDiagnostics>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
     board_interest: watch::Receiver<bool>,
+    probe: Arc<Notify>,
     shutdown: watch::Receiver<bool>,
     /// The connector's heartbeat and liveness timing.
     link: LinkProfile,
@@ -278,6 +285,7 @@ impl ClientCore {
         let terminal_state = Arc::new(RwLock::new(TerminalState::default()));
         let (shutdown, _) = watch::channel(false);
         let retry = Arc::new(Notify::new());
+        let probe = Arc::new(Notify::new());
         let host_epoch = Arc::new(RwLock::new(None));
         let catalog = Arc::new(RwLock::new(None));
         let agent_snapshots = Arc::new(RwLock::new(HashMap::new()));
@@ -308,6 +316,7 @@ impl ClientCore {
             diagnostics.clone(),
             shutdown.clone(),
             retry.clone(),
+            probe.clone(),
             initial_tx,
         ));
         let inner = Arc::new(ClientCoreInner {
@@ -323,6 +332,7 @@ impl ClientCore {
             workspace_layouts,
             shutdown,
             retry,
+            probe,
             diagnostics,
             client_id: identity.client_instance_id.clone(),
             visibility_scopes: Mutex::default(),
@@ -357,6 +367,19 @@ impl ClientCore {
         // Kept until the supervisor next waits: it reports a reconnect state
         // before it starts waiting, and a retry in between must not be lost.
         self.inner.retry.notify_one();
+    }
+
+    /// Checks at once that the session still reaches the Host, as after the
+    /// system wakes or the network changes, when a connection can be dead
+    /// without having closed. A session that hears nothing from the Host
+    /// within [`PROBE_TIMEOUT`] is replaced; a reconnect that is backing off
+    /// tries again now.
+    pub fn probe_now(&self) {
+        if matches!(&*self.inner.state.borrow(), ConnectionState::Ready { .. }) {
+            self.inner.probe.notify_one();
+        } else {
+            self.inner.retry.notify_one();
+        }
     }
 
     pub fn state(&self) -> ConnectionState {
@@ -644,6 +667,7 @@ async fn run_supervisor(
     diagnostics: Arc<ClientPipelineDiagnostics>,
     shutdown_tx: watch::Sender<bool>,
     retry: Arc<Notify>,
+    probe: Arc<Notify>,
     initial: oneshot::Sender<Result<(), String>>,
 ) {
     let _shutdown_guard = ShutdownOnDrop(shutdown_tx.clone());
@@ -725,6 +749,7 @@ async fn run_supervisor(
             diagnostics: diagnostics.clone(),
             visibility: visibility.clone(),
             board_interest: board_interest.clone(),
+            probe: probe.clone(),
             shutdown: shutdown.clone(),
             link: connector.link_profile(),
             agent_boards: Arc::default(),
@@ -1077,6 +1102,10 @@ async fn connected_session(
     // already in flight.
     let mut heartbeat = None::<(u64, tokio::time::Instant)>;
     let mut last_inbound = tokio::time::Instant::now();
+    // When an unanswered probe started. Local IPC reports a closed peer
+    // itself, so only a network link is probed.
+    let mut probe_started = None::<tokio::time::Instant>;
+    let probes = context.link != LinkProfile::LOCAL;
     let mut heartbeat_tick = tokio::time::interval_at(
         tokio::time::Instant::now() + context.link.heartbeat_interval,
         context.link.heartbeat_interval,
@@ -1350,16 +1379,28 @@ async fn connected_session(
                     }
                     continue;
                 }
-                let request_id = context.next_request_id.fetch_add(1, Ordering::Relaxed);
-                let ping = ControlMessage::Request(ClientRequest::new(
-                    request_id,
-                    Request::Ping { sent_millis: request_id },
-                ));
-                if let Err(error) = writer.send_interactive(&ping) {
-                    break Some(error.to_string());
+                match send_heartbeat(&writer, context) {
+                    Ok(sent) => heartbeat = Some(sent),
+                    Err(error) => break Some(error),
                 }
-                heartbeat = Some((request_id, tokio::time::Instant::now()));
-                context.diagnostics.record_heartbeat_sent(std::time::Instant::now());
+            }
+            () = context.probe.notified(), if probes => {
+                let now = tokio::time::Instant::now();
+                probe_started.get_or_insert(now);
+                // A heartbeat already waiting may have been lost with the old path.
+                match send_heartbeat(&writer, context) {
+                    Ok(sent) => heartbeat = Some(sent),
+                    Err(error) => break Some(error),
+                }
+            }
+            () = sleep_until_probe_deadline(probe_started) => {
+                let started = probe_started.take().expect("a probe is running");
+                if last_inbound < started {
+                    break Some(format!(
+                        "Host did not answer within {} s of a wake or network change",
+                        PROBE_TIMEOUT.as_secs()
+                    ));
+                }
             }
             _ = cleanup.tick() => {
                 pending.retain(|_, request| !matches!(request, PendingRequest::User { reply, .. } if reply.is_closed()));
@@ -1457,6 +1498,35 @@ fn resolve_agent_board(
         host_sequence,
         body,
     })
+}
+
+/// Sends a heartbeat Ping; returns its request ID and when it was sent.
+fn send_heartbeat(
+    writer: &SessionWriter,
+    context: &ClientSessionContext,
+) -> Result<(u64, tokio::time::Instant), String> {
+    let request_id = context.next_request_id.fetch_add(1, Ordering::Relaxed);
+    let ping = ControlMessage::Request(ClientRequest::new(
+        request_id,
+        Request::Ping {
+            sent_millis: request_id,
+        },
+    ));
+    writer
+        .send_interactive(&ping)
+        .map_err(|error| error.to_string())?;
+    context
+        .diagnostics
+        .record_heartbeat_sent(std::time::Instant::now());
+    Ok((request_id, tokio::time::Instant::now()))
+}
+
+/// Resolves when a probe started at `started` has had its time; never without one.
+async fn sleep_until_probe_deadline(started: Option<tokio::time::Instant>) {
+    match started {
+        Some(started) => tokio::time::sleep_until(started + PROBE_TIMEOUT).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Applies a Host state event and publishes it. `Err` means the client is shutting down.

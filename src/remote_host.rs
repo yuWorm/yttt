@@ -881,6 +881,7 @@ fn initialize_environment(
         }
     })?);
     crate::connection_log::follow(client.clone(), runtime.handle(), logs, label.clone());
+    crate::link_watch::follow(client.clone(), runtime.handle(), logs, label.clone());
     let environment = match runtime.block_on(async {
         cancellation.check(&events)?;
         tokio::select! {
