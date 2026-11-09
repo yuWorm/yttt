@@ -254,6 +254,7 @@ fn hello_for(endpoint_id: EndpointKey) -> yttt_protocol::ClientHello {
         channel: ConnectionChannel::Session,
         endpoint_id: Some(endpoint_id),
         accepts_compression: false,
+        accepts_agent_board_patches: false,
     }
 }
 

@@ -67,6 +67,7 @@ fn context() -> TestContext {
             visibility: watch::channel(None).1,
             shutdown,
             link: LinkProfile::LOCAL,
+            agent_boards: Arc::default(),
         },
         shutdown_tx,
     }
@@ -188,6 +189,91 @@ fn agent_snapshot(host_epoch: u64) -> AgentSnapshotUpdate {
             board: Default::default(),
         },
     }
+}
+
+fn board_message(id: usize) -> yttt_agent_core::AgentBoardMessage {
+    yttt_agent_core::AgentBoardMessage {
+        id: format!("message-{id}"),
+        execution_id: "run".into(),
+        role: yttt_agent_core::AgentMessageRole::Assistant,
+        text: format!("text {id}"),
+        timestamp: id as u64,
+        truncated: false,
+    }
+}
+
+fn agent_state(sequence: u64, messages: usize) -> AgentSnapshotUpdate {
+    let mut update = agent_snapshot(1);
+    update.sequence = sequence;
+    update.snapshot.board.messages = (0..messages).map(board_message).collect();
+    update
+}
+
+fn agent_event(body: ServerEvent) -> HostEvent {
+    HostEvent {
+        host_sequence: 1,
+        body,
+    }
+}
+
+fn agent_patch(
+    base: &AgentSnapshotUpdate,
+    base_sequence: u64,
+    next: &AgentSnapshotUpdate,
+) -> HostEvent {
+    let mut update = next.clone();
+    update.snapshot.board = Default::default();
+    agent_event(ServerEvent::AgentSnapshotPatch(Box::new(
+        yttt_protocol::agent::AgentSnapshotPatch {
+            update,
+            base_sequence,
+            board: next.snapshot.board.patch_from(&base.snapshot.board),
+        },
+    )))
+}
+
+fn delivered_board(event: HostEvent) -> (u64, Vec<yttt_agent_core::AgentBoardMessage>) {
+    match event.body {
+        ServerEvent::AgentSnapshot(update) => (update.sequence, update.snapshot.board.messages),
+        other => panic!("expected a whole Agent snapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_agent_board_patch_is_delivered_as_the_whole_snapshot() {
+    let context = context();
+    let first = agent_state(1, 3);
+    let second = agent_state(2, 4);
+    let third = agent_state(3, 6);
+    resolve_agent_board(
+        agent_event(ServerEvent::AgentSnapshot(Box::new(first.clone()))),
+        &context,
+    )
+    .unwrap();
+    let delivered = resolve_agent_board(agent_patch(&first, 1, &second), &context).unwrap();
+    assert_eq!(
+        delivered_board(delivered),
+        (2, second.snapshot.board.messages.clone())
+    );
+    let delivered = resolve_agent_board(agent_patch(&second, 2, &third), &context).unwrap();
+    assert_eq!(
+        delivered_board(delivered),
+        (3, third.snapshot.board.messages)
+    );
+}
+
+#[test]
+fn an_agent_board_patch_for_another_board_ends_the_connection() {
+    let context = context();
+    let first = agent_state(1, 3);
+    let second = agent_state(2, 4);
+    assert!(resolve_agent_board(agent_patch(&first, 1, &second), &context).is_err());
+    resolve_agent_board(
+        agent_event(ServerEvent::AgentSnapshot(Box::new(first.clone()))),
+        &context,
+    )
+    .unwrap();
+    assert!(resolve_agent_board(agent_patch(&first, 7, &second), &context).is_err());
 }
 
 #[tokio::test]

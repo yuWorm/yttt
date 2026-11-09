@@ -508,6 +508,8 @@ pub enum ServerEvent {
     ConfigChanged,
     /// Another Client took terminal control, or the controller left.
     TerminalControllerChanged(TerminalController),
+    /// An Agent's newer state with only what changed on its board.
+    AgentSnapshotPatch(Box<crate::agent::AgentSnapshotPatch>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

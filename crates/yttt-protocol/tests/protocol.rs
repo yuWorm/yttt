@@ -33,6 +33,7 @@ fn client_hello() -> ClientHello {
         nonce: Nonce([7; 32]),
         endpoint_id: None,
         accepts_compression: false,
+        accepts_agent_board_patches: false,
     }
 }
 

@@ -119,6 +119,9 @@ pub struct ClientHello {
     /// large messages compressed.
     #[serde(default)]
     pub accepts_compression: bool,
+    /// The Client reads `ServerEvent::AgentSnapshotPatch`.
+    #[serde(default)]
+    pub accepts_agent_board_patches: bool,
 }
 
 /// One authenticated Client session uses one `Session` connection for requests,

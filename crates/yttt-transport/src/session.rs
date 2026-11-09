@@ -510,18 +510,45 @@ impl SessionWriter {
         key: &str,
         message: &ControlMessage,
     ) -> Result<(), SessionSendError> {
+        self.push_latest(key, message, None).map(|_| ())
+    }
+
+    /// [`Self::send_reliable_latest`] only while [`Self::is_waiting`] for `key`
+    /// still answers `waiting`; otherwise queues nothing and returns `false`.
+    /// A message built from what the receiver will hold once the waiting one
+    /// is written, or replaced, then never lands on the other assumption.
+    pub fn send_reliable_latest_if(
+        &self,
+        key: &str,
+        waiting: bool,
+        message: &ControlMessage,
+    ) -> Result<bool, SessionSendError> {
+        self.push_latest(key, message, Some(waiting))
+    }
+
+    fn push_latest(
+        &self,
+        key: &str,
+        message: &ControlMessage,
+        expect_waiting: Option<bool>,
+    ) -> Result<bool, SessionSendError> {
         let mut item = self.encode(message)?;
         item.latest = Some(Arc::from(key));
         let mut state = self.shared.state.lock();
         if state.closed {
             return Err(SessionSendError::Closed);
         }
-        let Some(position) = state
+        let position = state
             .reliable
             .iter()
-            .position(|queued| queued.latest.as_deref() == Some(key))
-        else {
-            return self.push_locked(state, Priority::Reliable, item);
+            .position(|queued| queued.latest.as_deref() == Some(key));
+        if expect_waiting.is_some_and(|waiting| waiting != position.is_some()) {
+            return Ok(false);
+        }
+        let Some(position) = position else {
+            return self
+                .push_locked(state, Priority::Reliable, item)
+                .map(|()| true);
         };
         let others = state.reliable_bytes - state.reliable[position].bytes;
         if others != 0 && item.bytes > RELIABLE_BYTES.saturating_sub(others) {
@@ -533,7 +560,7 @@ impl SessionWriter {
         item.sequence = state.reliable[position].sequence;
         item.queued_at = state.reliable[position].queued_at;
         state.reliable[position] = item;
-        Ok(())
+        Ok(true)
     }
 
     pub fn queue_stats(&self) -> SessionQueueStats {

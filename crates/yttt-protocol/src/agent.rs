@@ -129,6 +129,17 @@ pub struct AgentSnapshotUpdate {
     pub snapshot: AgentSnapshot,
 }
 
+/// An Agent snapshot whose board is given as a patch to the board of the
+/// snapshot or patch this connection sent with `base_sequence` for the same
+/// Agent and generation; `update.snapshot.board` is empty. Sent only to a
+/// Client whose `ClientHello::accepts_agent_board_patches` is set.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSnapshotPatch {
+    pub update: AgentSnapshotUpdate,
+    pub base_sequence: u64,
+    pub board: yttt_agent_core::AgentBoardPatch,
+}
+
 /// Fences an interaction to the exact Host, terminal generation and agent instance shown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentCommandRequest {

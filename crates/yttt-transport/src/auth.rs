@@ -148,6 +148,8 @@ pub struct AuthenticatedClient {
     pub channel: ConnectionChannel,
     /// The Client reads compressed messages.
     pub accepts_compression: bool,
+    /// The Client reads Agent board patches.
+    pub accepts_agent_board_patches: bool,
     pub session: AuthenticatedSession,
 }
 
@@ -262,6 +264,7 @@ where
             Credential::DeviceKey(device) => Some(device.local()),
         },
         accepts_compression: true,
+        accepts_agent_board_patches: true,
     };
     send_handshake(stream, &HandshakeMessage::ClientHello(hello.clone())).await?;
     let challenge = match receive_handshake(stream).await? {
@@ -495,6 +498,7 @@ where
         selected_version,
         channel: hello.channel,
         accepts_compression: hello.accepts_compression,
+        accepts_agent_board_patches: hello.accepts_agent_board_patches,
         session: AuthenticatedSession {
             ingress: identity.ingress,
             credential_generation: identity.credential_generation,

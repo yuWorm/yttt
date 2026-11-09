@@ -5486,3 +5486,113 @@ async fn a_configuration_write_tells_other_clients_to_reload() {
     .await
     .expect("configuration change notification timeout");
 }
+
+/// Posts one hook event as the Agent of the terminal whose environment is given.
+fn post_agent_hook(environment: &[String], provider: &str, body: &[u8]) {
+    let endpoint = environment[0].strip_prefix("http://").unwrap();
+    let mut stream = TcpStream::connect(endpoint).unwrap();
+    write!(
+        stream,
+        "POST /hook/{provider} HTTP/1.1\r\nContent-Length: {}\r\nx-yttt-agent-hook-token: {}\r\nx-yttt-agent-hook-scope: {}\r\nConnection: close\r\n\r\n",
+        body.len(),
+        environment[1],
+        environment[2],
+    )
+    .unwrap();
+    stream.write_all(body).unwrap();
+    stream.flush().unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 204"), "{response}");
+}
+
+/// After an Agent's first state, a connected Client receives board patches
+/// and must still hold every message of the board.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connected_client_rebuilds_a_growing_agent_board() {
+    let host = RunningHost::start().await;
+    let client = host.client("board-watcher").await;
+    let environment_file = host._temp.path().join("agent-environment");
+    let session_id = TerminalSessionId::new("board-agent");
+    let mut spec = spawn_spec();
+    spec.session_id = session_id.clone();
+    spec.project_id = ProjectId::new("project");
+    spec.environment.push((
+        "YTTT_TEST_AGENT_ENVIRONMENT_FILE".to_string(),
+        environment_file.to_string_lossy().into_owned(),
+    ));
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-lc".to_string(),
+            concat!(
+                "printf '%s\\n%s\\n%s\\n' ",
+                "\"$YTTT_AGENT_HOOK_ENDPOINT\" ",
+                "\"$YTTT_AGENT_HOOK_TOKEN\" ",
+                "\"$YTTT_AGENT_HOOK_SCOPE\" ",
+                "> \"$YTTT_TEST_AGENT_ENVIRONMENT_FILE\"; sleep 30"
+            )
+            .to_string(),
+        ],
+        return_to_shell: false,
+    };
+    client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap();
+    let environment = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(contents) = fs::read_to_string(&environment_file) {
+                let values = contents.lines().map(str::to_string).collect::<Vec<_>>();
+                if values.len() == 3 && values.iter().all(|value| !value.is_empty()) {
+                    break values;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Host-injected Agent environment timeout");
+
+    post_agent_hook(
+        &environment,
+        "omp",
+        br#"{"event":"session_start","payload":{"session_id":"omp-session"}}"#,
+    );
+    const MESSAGES: usize = 40;
+    for id in 0..MESSAGES {
+        let body = format!(
+            r#"{{"event":"board_event","payload":{{"board":{{"kind":"message","message":{{"id":"m{id}","execution_id":"run","role":"assistant","text":"{}","timestamp":{id}}}}}}}}}"#,
+            "x".repeat(2048)
+        );
+        post_agent_hook(&environment, "omp", body.as_bytes());
+    }
+
+    let messages = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let messages = client
+                .agent_snapshots()
+                .into_iter()
+                .find(|update| update.terminal_session_id == session_id)
+                .map(|update| update.snapshot.board.messages)
+                .unwrap_or_default();
+            if messages.len() == MESSAGES {
+                break messages;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the Client never held the whole board");
+    for (index, message) in messages.iter().enumerate() {
+        assert_eq!(message.id, format!("m{index}"));
+        assert_eq!(message.text.len(), 2048);
+    }
+    let diagnostics = client.diagnostics();
+    assert_eq!(
+        diagnostics.reconnects, 0,
+        "a patch did not fit: {:?}",
+        diagnostics.recent_disconnects
+    );
+}

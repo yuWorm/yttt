@@ -20,6 +20,15 @@
       "truncated"
     ]
   },
+  "AgentBoardPatch": {
+    "": [
+      "dropped_messages",
+      "executions",
+      "messages",
+      "questions",
+      "tasks"
+    ]
+  },
   "AgentBoardSnapshot": {
     "": [
       "dropped_messages",
@@ -201,6 +210,13 @@
       "sequence"
     ]
   },
+  "AgentSnapshotPatch": {
+    "": [
+      "base_sequence",
+      "board",
+      "update"
+    ]
+  },
   "AgentSnapshotUpdate": {
     "": [
       "host_epoch",
@@ -288,6 +304,7 @@
   },
   "ClientHello": {
     "": [
+      "accepts_agent_board_patches",
       "accepts_compression",
       "build",
       "can_force_stop",
@@ -576,6 +593,13 @@
       "request_id",
       "result"
     ]
+  },
+  "ListPatchStep": {
+    "Keep": [
+      "count",
+      "from"
+    ],
+    "Put": []
   },
   "MessageChunk": {
     "": [
@@ -1463,6 +1487,7 @@
   },
   "ServerEvent": {
     "AgentSnapshot": [],
+    "AgentSnapshotPatch": [],
     "AgentStateCleared": [],
     "ConfigChanged": [],
     "CredentialChallenge": [],

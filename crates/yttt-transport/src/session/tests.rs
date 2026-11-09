@@ -383,6 +383,40 @@ async fn the_reader_refuses_nested_or_oversized_compressed_messages() {
     ));
 }
 
+#[tokio::test]
+async fn a_conditional_keyed_message_is_refused_once_the_waiting_one_has_started() {
+    let (writer, _task, mut reader, _peer) = paused_pair(1);
+    occupy_writer(&writer, &event(0)).await;
+    assert!(
+        !writer
+            .send_reliable_latest_if("a", true, &event(1))
+            .unwrap()
+    );
+    assert!(
+        writer
+            .send_reliable_latest_if("a", false, &event(1))
+            .unwrap()
+    );
+    assert!(
+        !writer
+            .send_reliable_latest_if("a", false, &event(2))
+            .unwrap()
+    );
+    assert!(
+        writer
+            .send_reliable_latest_if("a", true, &event(3))
+            .unwrap()
+    );
+
+    assert_eq!(sequence(&next(&mut reader).await), 0);
+    assert_eq!(sequence(&next(&mut reader).await), 3);
+    assert!(
+        !writer
+            .send_reliable_latest_if("a", true, &event(4))
+            .unwrap()
+    );
+}
+
 async fn write_chunk(peer: &mut WriteHalf<DuplexStream>, stream: u64, last: bool, bytes: &[u8]) {
     let frame = encode_message(
         FrameKind::Control,

@@ -1044,7 +1044,10 @@ async fn serve_client_session(
         attachments.clone(),
         request_journal,
         replaced,
-        compresses(context.identity.ingress, authenticated.accepts_compression),
+        SessionFeatures {
+            compress: compresses(context.identity.ingress, authenticated.accepts_compression),
+            agent_board_patches: authenticated.accepts_agent_board_patches,
+        },
         context,
     )
     .await;
@@ -1189,29 +1192,35 @@ impl Drop for AbortOnDrop {
 /// How long a stopping Host waits for a connection to write `HostStopping`.
 const STOPPING_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Serves one authenticated Client over its single Session connection:
-/// requests and responses, terminal input, state events, and terminal frames.
 /// Whether a Session connection sends its large messages compressed: over a
 /// network ingress, to a Client that reads them. Local IPC gains nothing.
 fn compresses(ingress: yttt_transport::IngressKind, accepts_compression: bool) -> bool {
     accepts_compression && ingress != yttt_transport::IngressKind::LocalAdmin
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What a Session connection's Client reads beyond the baseline protocol.
+#[derive(Clone, Copy)]
+struct SessionFeatures {
+    compress: bool,
+    agent_board_patches: bool,
+}
+
+/// Serves one authenticated Client over its single Session connection:
+/// requests and responses, terminal input, state events, and terminal frames.
 async fn serve_session_connection(
     stream: TransportStream,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
     request_journal: Arc<tokio::sync::Mutex<RequestJournal>>,
     mut replaced: watch::Receiver<bool>,
-    compress: bool,
+    features: SessionFeatures,
     context: &ConnectionContext,
 ) -> Result<(), String> {
     const MAX_QUEUED_REQUESTS: usize = 64;
     let (reader, writer) = tokio::io::split(stream);
     let reader = SessionReader::new(reader);
     let (writer, _writer_task) = SessionWriter::spawn(writer);
-    if compress {
+    if features.compress {
         writer.compress_large_messages();
     }
     let _diagnostics = context
@@ -1264,6 +1273,7 @@ async fn serve_session_connection(
             writer.clone(),
             client_id.clone(),
             attachments.clone(),
+            features.agent_board_patches,
             context.clone(),
         );
         let writer = writer.clone();
@@ -1865,26 +1875,76 @@ fn send_host_state_event(
         .map_err(|_| ())
 }
 
+/// The Agent boards one connection has queued, by snapshot key, so an Agent's
+/// next state can carry only what changed on the board its Client will hold.
+#[derive(Default)]
+struct SentAgentBoards {
+    /// The board of each Agent's last message whose writing has started.
+    written: HashMap<String, (u64, yttt_agent_core::AgentBoardSnapshot)>,
+    /// The board of each Agent's message still waiting; a newer one replaces it.
+    waiting: HashMap<String, (u64, yttt_agent_core::AgentBoardSnapshot)>,
+}
+
 /// Queues an Agent snapshot in place of an unsent one of the same Agent, so a
 /// Client on a slow link holds at most the newest state of each Agent. The
 /// generation is part of the key: a later Agent in the same pane must not
 /// overtake the `AgentStateCleared` queued after its predecessor.
+///
+/// With `boards`, a snapshot after the first of an Agent travels as an
+/// `AgentSnapshotPatch` to the board the Client will hold when it arrives:
+/// the one whose writing started last, since a waiting one is replaced.
 fn send_agent_snapshot(
     writer: &SessionWriter,
     host_sequence: &AtomicU64,
-    update: AgentSnapshotUpdate,
+    boards: Option<&mut SentAgentBoards>,
+    mut update: AgentSnapshotUpdate,
 ) -> Result<(), ()> {
     let scope = &update.scope;
     let key = format!(
         "agent-snapshot:{}:{}:{}:{}",
         scope.project_id, scope.tab_id, scope.pane_id, scope.generation
     );
-    send_latest_state_event(
-        writer,
-        host_sequence,
-        &key,
-        ServerEvent::AgentSnapshot(Box::new(update)),
-    )
+    let Some(boards) = boards else {
+        return send_latest_state_event(
+            writer,
+            host_sequence,
+            &key,
+            ServerEvent::AgentSnapshot(Box::new(update)),
+        );
+    };
+    let board = std::mem::take(&mut update.snapshot.board);
+    loop {
+        let waiting = writer.is_waiting(&key);
+        if !waiting && let Some(started) = boards.waiting.remove(&key) {
+            boards.written.insert(key.clone(), started);
+        }
+        let body = match boards.written.get(&key) {
+            Some((base_sequence, base)) => ServerEvent::AgentSnapshotPatch(Box::new(
+                yttt_protocol::agent::AgentSnapshotPatch {
+                    update: update.clone(),
+                    base_sequence: *base_sequence,
+                    board: board.patch_from(base),
+                },
+            )),
+            None => {
+                let mut full = update.clone();
+                full.snapshot.board = board.clone();
+                ServerEvent::AgentSnapshot(Box::new(full))
+            }
+        };
+        let message = ControlMessage::Event(HostEvent {
+            host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
+            body,
+        });
+        // A waiting message that started meanwhile is now the Client's base.
+        if writer
+            .send_reliable_latest_if(&key, waiting, &message)
+            .map_err(|_| ())?
+        {
+            boards.waiting.insert(key, (update.sequence, board));
+            return Ok(());
+        }
+    }
 }
 
 /// Queues a project's token usage in place of an unsent one of the same project.
@@ -1992,6 +2052,7 @@ fn forward_state_events(
     writer: SessionWriter,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
+    agent_board_patches: bool,
     context: ConnectionContext,
 ) -> impl Future<Output = Result<(), ()>> + Send {
     let mut ssh_events = context.ssh.subscribe();
@@ -2005,6 +2066,7 @@ fn forward_state_events(
     async move {
         let context = &context;
         let mut projects_waiting = HashMap::new();
+        let mut agent_boards = agent_board_patches.then(SentAgentBoards::default);
         for summary in context.agent_hooks.project_token_usage() {
             send_token_usage(&writer, &context.host_sequence, summary)?;
         }
@@ -2100,7 +2162,12 @@ fn forward_state_events(
                         Err(broadcast::error::RecvError::Closed) => return Err(()),
                     };
                     for update in updates {
-                        send_agent_snapshot(&writer, &context.host_sequence, update)?;
+                        send_agent_snapshot(
+                            &writer,
+                            &context.host_sequence,
+                            agent_boards.as_mut(),
+                            update,
+                        )?;
                     }
                 }
                 event = token_usage_events.recv() => {
@@ -3908,7 +3975,8 @@ mod state_event_coalescing_tests {
         let host_sequence = AtomicU64::new(1);
         for sequence in 1..=100 {
             for pane in ["a", "b"] {
-                send_agent_snapshot(&writer, &host_sequence, agent_update(pane, sequence)).unwrap();
+                send_agent_snapshot(&writer, &host_sequence, None, agent_update(pane, sequence))
+                    .unwrap();
             }
             send_token_usage(&writer, &host_sequence, token_usage(sequence)).unwrap();
         }
@@ -3948,6 +4016,77 @@ mod state_event_coalescing_tests {
             snapshots.len()
         );
         assert!(usages.len() <= 4, "{} token usages queued", usages.len());
+    }
+
+    fn board_with(messages: usize) -> yttt_agent_core::AgentBoardSnapshot {
+        yttt_agent_core::AgentBoardSnapshot {
+            messages: (0..messages)
+                .map(|id| yttt_agent_core::AgentBoardMessage {
+                    id: format!("message-{id}"),
+                    execution_id: "run".into(),
+                    role: yttt_agent_core::AgentMessageRole::Assistant,
+                    text: "x".repeat(1024),
+                    timestamp: id as u64,
+                    truncated: false,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Each patch must apply to the board the reader holds, even when newer
+    /// states replace waiting ones and writing starts in between.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn agent_board_patches_rebuild_the_newest_board_on_a_slow_reader() {
+        let (host, client) = tokio::io::duplex(1024);
+        let (_host_read, host_write) = tokio::io::split(host);
+        let (writer, _writer_task) = SessionWriter::spawn(host_write);
+        let sender = tokio::spawn(async move {
+            let host_sequence = AtomicU64::new(1);
+            let mut boards = SentAgentBoards::default();
+            for sequence in 1..=200 {
+                let mut update = agent_update("a", sequence);
+                update.snapshot.board = board_with(sequence as usize);
+                send_agent_snapshot(&writer, &host_sequence, Some(&mut boards), update).unwrap();
+                if sequence % 7 == 0 {
+                    tokio::task::yield_now().await;
+                }
+            }
+            writer
+        });
+
+        let mut reader = SessionReader::new(client);
+        let mut held: Option<(u64, yttt_agent_core::AgentBoardSnapshot)> = None;
+        let mut patches = 0;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while held.as_ref().is_none_or(|(sequence, _)| *sequence < 200) {
+                let ControlMessage::Event(event) = reader.receive().await.unwrap() else {
+                    continue;
+                };
+                match event.body {
+                    ServerEvent::AgentSnapshot(update) => {
+                        assert!(held.is_none(), "only the first state is sent whole");
+                        held = Some((update.sequence, update.snapshot.board));
+                    }
+                    ServerEvent::AgentSnapshotPatch(patch) => {
+                        let (base_sequence, base) = held.take().expect("a base board");
+                        assert_eq!(patch.base_sequence, base_sequence);
+                        assert!(patch.update.snapshot.board.messages.is_empty());
+                        let board =
+                            yttt_agent_core::AgentBoardSnapshot::patched(&base, &patch.board)
+                                .expect("the patch fits its base");
+                        held = Some((patch.update.sequence, board));
+                        patches += 1;
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("the newest state arrives");
+        let _writer = sender.await.unwrap();
+        assert!(patches > 0);
+        assert_eq!(held.unwrap().1, board_with(200));
     }
 
     fn file_change(project: &str, path: &str) -> ProjectChange {

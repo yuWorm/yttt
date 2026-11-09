@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod board;
+mod board_patch;
 mod event;
 mod model;
 mod provider;
@@ -12,6 +13,7 @@ pub use board::{
     AgentPlanDelta, AgentPlanItem, AgentPlanStatus, AgentQuestion, AgentQuestionAnswer,
     AgentQuestionOption, AgentQuestionRecord, AgentQuestionRequest, AgentQuestionState,
 };
+pub use board_patch::{AgentBoardPatch, ListPatchStep};
 pub use event::AgentEventKind;
 pub use model::{
     AgentAction, AgentExitReason, AgentIdError, AgentInstanceId, AgentProcessExit,

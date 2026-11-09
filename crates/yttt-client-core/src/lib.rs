@@ -251,6 +251,9 @@ struct ClientSessionContext {
     shutdown: watch::Receiver<bool>,
     /// The connector's heartbeat and liveness timing.
     link: LinkProfile,
+    /// The board this connection last delivered for each Agent, by
+    /// [`agent_board_key`], which the Host's next patch applies to.
+    agent_boards: Arc<Mutex<HashMap<String, (u64, yttt_agent_core::AgentBoardSnapshot)>>>,
 }
 
 impl ClientCore {
@@ -698,6 +701,7 @@ async fn run_supervisor(
             visibility: visibility.clone(),
             shutdown: shutdown.clone(),
             link: connector.link_profile(),
+            agent_boards: Arc::default(),
         };
         let disconnected = connected_session(
             connection,
@@ -1003,6 +1007,10 @@ async fn connected_session(
         }
     }
     for event in buffered {
+        let event = match resolve_agent_board(event, context) {
+            Ok(event) => event,
+            Err(reason) => return Some(reason),
+        };
         if handle_state_event(event, context).is_err() {
             return None;
         }
@@ -1143,6 +1151,10 @@ async fn connected_session(
                         }
                     }
                     ControlMessage::Event(event) => {
+                        let event = match resolve_agent_board(event, context) {
+                            Ok(event) => event,
+                            Err(reason) => break Some(reason),
+                        };
                         if handle_state_event(event, context).is_err() {
                             break None;
                         }
@@ -1297,6 +1309,55 @@ fn agent_snapshot_cursors(context: &ClientSessionContext) -> Vec<AgentSnapshotCu
             sequence: update.sequence,
         })
         .collect()
+}
+
+fn agent_board_key(scope: &yttt_protocol::agent::AgentHookScope) -> String {
+    format!("{}\u{1f}{}", agent_address_key(scope), scope.generation)
+}
+
+/// Turns an Agent board patch into the whole snapshot it stands for, using
+/// the board this connection last delivered for that Agent, and remembers
+/// every board delivered. `Err` when a patch does not fit: the Host broke the
+/// stream contract, and the next connection starts from whole snapshots.
+fn resolve_agent_board(
+    event: HostEvent,
+    context: &ClientSessionContext,
+) -> Result<HostEvent, String> {
+    let HostEvent {
+        host_sequence,
+        body,
+    } = event;
+    let body = match body {
+        ServerEvent::AgentSnapshot(update) => {
+            context.agent_boards.lock().insert(
+                agent_board_key(&update.scope),
+                (update.sequence, update.snapshot.board.clone()),
+            );
+            ServerEvent::AgentSnapshot(update)
+        }
+        ServerEvent::AgentSnapshotPatch(patch) => {
+            let yttt_protocol::agent::AgentSnapshotPatch {
+                mut update,
+                base_sequence,
+                board,
+            } = *patch;
+            let key = agent_board_key(&update.scope);
+            let mut boards = context.agent_boards.lock();
+            let rebuilt = boards
+                .get(&key)
+                .filter(|(sequence, _)| *sequence == base_sequence)
+                .and_then(|(_, base)| yttt_agent_core::AgentBoardSnapshot::patched(base, &board))
+                .ok_or_else(|| "Agent board patch does not fit the board held".to_string())?;
+            boards.insert(key, (update.sequence, rebuilt.clone()));
+            update.snapshot.board = rebuilt;
+            ServerEvent::AgentSnapshot(Box::new(update))
+        }
+        body => body,
+    };
+    Ok(HostEvent {
+        host_sequence,
+        body,
+    })
 }
 
 /// Applies a Host state event and publishes it. `Err` means the client is shutting down.
