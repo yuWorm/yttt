@@ -27,6 +27,14 @@ const CLOSE_REVOKED: u32 = 2;
 /// Keeps NAT bindings and relay paths warm between Session heartbeats.
 const KEEP_ALIVE: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bytes a sender may have outstanding on one stream beyond what the peer read.
+/// The Session puts heartbeats and keystrokes ahead of bulk messages only among
+/// bytes it still holds; QUIC's 1.25 MB default left a heartbeat 5 s behind on
+/// a 250 KB/s relay and over a minute behind on a throttled one. 256 KB still
+/// carries about 5 MB/s at a 50 ms round trip.
+const STREAM_WINDOW: u32 = 256 * 1024;
+/// Bytes a sender may have outstanding across all of a connection's streams.
+const SEND_WINDOW: u64 = 2 * STREAM_WINDOW as u64;
 
 /// Decides which peers an endpoint serves. Must answer quickly; it runs inside
 /// iroh's handshake processing.
@@ -189,6 +197,8 @@ impl IrohEndpoint {
         };
         let transport = QuicTransportConfig::builder()
             .keep_alive_interval(KEEP_ALIVE)
+            .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
+            .send_window(SEND_WINDOW)
             .build();
         let mut builder = Endpoint::builder(presets::Minimal)
             .secret_key(SecretKey::from_bytes(&config.secret))

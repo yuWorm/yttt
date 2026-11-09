@@ -190,3 +190,42 @@ async fn a_new_stream_rechecks_the_gate_on_a_live_connection() {
     host.close().await;
     server.await.unwrap();
 }
+
+/// The Session schedules heartbeats and keystrokes ahead of bulk messages, but
+/// only among bytes not yet handed to QUIC. A peer that has not read must stop
+/// the writer after a small window, or a heartbeat waits behind megabytes on a
+/// slow relay.
+#[tokio::test]
+async fn a_writer_stops_soon_after_the_peer_stops_reading() {
+    let gate = Arc::new(ListGate::default());
+    gate.allow(endpoint_key(&CLIENT_SECRET));
+    let host = host(gate).await;
+    let address = address_of(&host);
+    let (accepted, mut held) = tokio::sync::mpsc::channel(1);
+    let server = tokio::spawn({
+        let host = host.clone();
+        async move {
+            let connection = host.accept().await.unwrap();
+            let stream = connection.accept_stream().await.unwrap();
+            accepted.send((connection, stream)).await.unwrap();
+            std::future::pending::<()>().await;
+        }
+    });
+    let connector = IrohConnector::new(client().await, address, ALPN);
+    let mut stream = connector.connect().await.unwrap();
+    let chunk = vec![0_u8; 16 * 1024];
+    let mut written = 0;
+    while let Ok(result) =
+        tokio::time::timeout(Duration::from_millis(500), stream.write_all(&chunk)).await
+    {
+        result.unwrap();
+        written += chunk.len();
+        assert!(written <= 4 * 1024 * 1024, "the writer never stopped");
+    }
+    let _held = held.recv().await.unwrap();
+    assert!(
+        written <= 512 * 1024,
+        "{written} bytes were accepted for a peer that read nothing"
+    );
+    server.abort();
+}
