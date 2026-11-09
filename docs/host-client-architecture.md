@@ -214,6 +214,15 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
    最近一条已开始写出的消息，因为仍在等待的那条会被替换；`SessionWriter::send_reliable_latest_if` 只在
    “是否仍有等待中的同键消息”与构造时一致才入队，避免补丁落在另一个基准上。Client 重建完整快照再发布；
    补丁对不上即断开重连。新增一条消息时补丁只有该消息和几个复制段，不再重发整份 board。
+   网络入口（TLS、SSH、P2P）上声明 `accepts_agent_board_interest` 的 Client 默认不收 board：Agent snapshot
+   事件与 `ReadAgentSnapshots` 每页都去掉 board 并置 `board_omitted`，Host 同时丢弃该 Agent 的补丁基准。
+   Client 用 `SetAgentBoardInterest { watch }` 订阅，随后再发一次 `ReadAgentSnapshots`，游标不含只持有概要的
+   Agent，Host 按页带 board 返回它们；连接开始时已订阅则先上报订阅再读第一页，board 只发一遍。Host 不主动重发：
+   它不知道 Client 在之前的连接里收到的是哪些概要。只有指挥中心读取 board 内容，所以桌面只在指挥中心是当前视图时订阅；
+   概要字段（状态、等待原因与提示、任务、当前动作、进程退出）照常送达。Client 收到 `board_omitted` 的
+   snapshot 时沿用本端为同一 Agent、同一 generation 最后持有的 board，同序号的完整 snapshot 可以替换它。
+   本机 IPC 一律带 board：本机流量不受限，`yttt agents list` 等本机工具不必先订阅。远程 Client 上的
+   `agents list` 报告的是本端最后持有的 board。旧 Host 对该请求回 `Unsupported`，照常发送 board。
 3. 渲染：每个已附加终端一个渲染 lane，Host 只在 lane 空闲时放入一帧，其余在渲染槽中合并；
    lane 之间轮转。可靠消息连续写出 64 KiB 后，若有渲染项的前序可靠消息都已写完，先写一项渲染再继续，
    使可靠消息持续到达的慢链路上终端仍然刷新；渲染项从不越过在它之前排队的可靠消息，因此终端的首帧
@@ -733,7 +742,7 @@ Disconnected -> Connecting -> Ready
 - Host 读网络入口（TLS、SSH 工作入口）的 session 连接时，60 s 没有任何入站消息即关闭连接，随后进入 lease 宽限期；
   对端休眠或断网不再留下占用远程客户端名额与 lease 的连接。本机 IPC 无此期限。
 - Host 最多保留 64 个认证 Client 会话，包括最多 16 个闲置会话。闲置会话最多保留 5 分钟，保留窗口内可继续使用请求日志；活动会话不参与淘汰。
-- 重连成功：更新 host epoch/connection sequence，立即请求 catalog 与 Agent 快照、对已附加终端重新订阅并重新上报可见集合；终端流以 Host snapshot 恢复 mirror。Host epoch 变化时清除旧 mirror 与已附加集合。
+- 重连成功：更新 host epoch/connection sequence，立即请求 catalog 与 Agent 快照（订阅了 board 时先上报订阅）、对已附加终端重新订阅并重新上报可见集合；终端流以 Host snapshot 恢复 mirror。Host epoch 变化时清除旧 mirror 与已附加集合。
   Host 在新连接上只先推项目 token 用量与每个项目一条 `refresh_all` 变更；Agent 快照由 Client 的
   `ReadAgentSnapshots` 按游标分页读取，Host 不再另推全量（原先每次连接发两遍，约 4 MB 时慢链路要半分钟以上）。
   状态事件的订阅在读入第一个请求之前建立，读取之后的变化一定以事件到达。

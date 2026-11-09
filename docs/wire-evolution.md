@@ -99,6 +99,10 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   `board`(`AgentBoardPatch`)的每个列表是 `ListPatchStep::Keep { from, count }`(复制本连接为同一 Agent、同一 generation
   上次交付、sequence 为 `base_sequence` 的 board 中的一段)或 `Put(entry)` 的序列。Client 重建出完整快照后再交给界面;
   对不上基准即断开 session 连接,新连接从完整快照开始。旧 Client 不声明,只收到 `AgentSnapshot`。
+  v22 内追加(未升版本):Agent board 订阅。`ClientHello.accepts_agent_board_interest`(带缺省)声明 Client 会用
+  `Request::SetAgentBoardInterest { watch }`(回 `Applied`)订阅 board;网络入口上未订阅时 Host 发出的
+  `AgentSnapshotUpdate` 置 `board_omitted`(带缺省,旧端读作 `false`)且 board 为空,`ReadAgentSnapshots` 每页同样处理。
+  旧 Client 不声明,照常收到 board;旧 Host 对该请求回 `Unsupported`(未知请求),新 Client 视为总会收到 board。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

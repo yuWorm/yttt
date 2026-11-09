@@ -12,6 +12,8 @@
 - Remote connections (TLS, SSH, P2P) compress the Host's large messages: Agent states, the resource catalog, layouts and terminal snapshots shrink to about a third, so a window through a relay or tunnel restores faster and uses less traffic. Older versions on either end keep talking uncompressed. A Linux Host's TLS connections no longer let the kernel hold megabytes of unsent data.
 - Agent 更新只发送看板上变化的部分：新增一条消息时不再重发整份看板（omp agent 单份可达 0.9 MB），远程窗口经慢链路时 Agent 状态更新快得多。旧版本两端之间照常发送完整状态。
 - An Agent update sends only what changed on its board: a new message no longer resends the whole board (up to 0.9 MB for an omp agent), so Agent state keeps up far better in a remote window on a slow link. Older versions on either end keep sending whole states.
+- 远程窗口只在打开指挥中心时接收 Agent 看板：其余时候 Agent 更新只带状态等概要（约 1 KB），不再随看板增长；打开指挥中心时补齐全部看板。本机窗口与旧版本两端之间照常发送看板。
+- A remote window receives Agent boards only while the command center is open: otherwise an Agent update carries its status and other summary fields (about 1 KB) instead of growing with the board, and opening the command center brings every board up to date. Local windows, and older versions on either end, keep receiving boards.
 - P2P 连接经 relay 超过 20 秒时，设备的 `client.log` 与 Host 的 `host.log` 各写一行原因：本端通告的地址（公网、内网、代理 TUN）、每条路径及最可能的原因（如代理 TUN 模式、没有发现公网地址、打洞失败）。
 - A P2P connection on the relay for more than 20 seconds gets a line on each side, in the device's `client.log` and the Host's `host.log`: the addresses that end advertises (public, private, proxy TUN), each path, and the likeliest reason, such as a proxy's TUN mode, no public address found, or failed hole punching.
 - Host 诊断文件 `host-diagnostics.jsonl` 记录每个 Client 的发送队列：等待的消息数与字节、高水位、最老消息已等待多久。

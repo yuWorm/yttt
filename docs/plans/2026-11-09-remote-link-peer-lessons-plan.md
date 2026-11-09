@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** 1.1 进行中；其余未开始。
+**状态：** 1.1 完成（手工验证待做）；其余未开始。
 
 **依据：** 2026-11-09 对 Herdr、T3 Code、Orca、Cindy 远程链路实现的阅读（源码与设计文档），对照 yttt 在 `2026-11-07-remote-link-backlog-plan.md` 完成后的状态。
 
@@ -37,10 +37,11 @@ yttt 已对齐的部分不再列入：终端语义快照＋增量、每终端一
 ## 1.1：会话级 board 订阅
 
 - [ ] 协议：`ClientHello.accepts_agent_board_interest`；`Request::SetAgentBoardInterest { watch }`，回 `Applied`；`AgentSnapshotUpdate.board_omitted`。均带 `#[serde(default)]`，重写 wire 形状。
-- [ ] Host：声明了该能力的会话从“不需要 board”开始；此时 Agent 快照事件与 `ReadAgentSnapshots` 回复都去掉 board 并标记 `board_omitted`，同时忘记该 Agent 已交付的补丁基准。收到 `watch: true` 后按 lag 补发路径重发全部当前快照（带 board，能补丁则补丁）。
-- [ ] ClientCore：订阅意愿跨重连保留，每次连接在 `ReadAgentSnapshots` 之前上报；Host 回 `Unsupported` 时视为总会收到 board。收到 `board_omitted` 的快照时沿用本端为同一 Agent、同一 generation 持有的最后一份 board，并丢弃补丁基准；同序号的完整快照可替换 `board_omitted` 的那份。
-- [ ] 桌面：指挥中心处于活动导航时订阅，离开时取消；同序号的完整快照能被桌面的 Agent 状态接受。
-- [ ] 测试：未订阅的会话收到的 Agent 快照没有 board；订阅后收到完整 board，取消后又不带；重连后订阅意愿仍在；旧 Client（不声明能力）仍收到 board；ClientCore 沿用 board 与同序号替换的单元测试。
+- [x] Host：网络入口上声明了该能力的会话从“不需要 board”开始；此时 Agent 快照事件与 `ReadAgentSnapshots` 回复都去掉 board 并标记 `board_omitted`，同时忘记该 Agent 已交付的补丁基准。本机 IPC 一律带 board（`yttt agents list` 等本机工具不必订阅）。**偏离：** 订阅后不由 Host 重发全部快照，而由 Client 重读只持有概要的 Agent（游标不含它们）：Host 不知道 Client 在之前的连接里收到的是哪些概要，且连接开始时 Host 重发会与第一页重复。
+- [x] ClientCore：订阅意愿跨重连保留，每次连接在 `ReadAgentSnapshots` 之前上报；Host 回 `Unsupported` 时视为总会收到 board。收到 `board_omitted` 的快照时沿用本端为同一 Agent、同一 generation 持有的最后一份 board，并丢弃补丁基准；同序号的完整快照可替换 `board_omitted` 的那份。
+- [x] 桌面：指挥中心处于活动导航时订阅，离开时取消；同序号的完整快照能被桌面的 Agent 状态接受。**偏离：** 订阅的接线没有单独的界面测试（需要 GPUI 夹具），由 ClientCore 与端到端测试覆盖其下各层。
+- [x] 测试：`a_remote_client_receives_agent_boards_only_while_it_watches`（TLS 入口：分页与事件都不带 board，订阅后补齐，取消后保留最后一份）；`a_session_asks_for_agent_boards_before_reading_snapshots_and_when_asked`；`a_snapshot_without_its_board_keeps_the_board_held`、`a_snapshot_without_its_board_drops_the_patch_base`；`a_host_snapshot_with_its_board_replaces_the_same_one_without`；`only_network_sessions_to_asking_clients_leave_boards_out`。去掉各自的实现后均失败。
+- [ ] 手工验证：Windows 远程窗口不打开指挥中心时，Host 诊断的该会话发送字节随 Agent 更新明显减少；打开指挥中心后看板完整。
 
 **验收：** 远程 Client 不打开指挥中心时，Agent 更新只传概要（约 1 KB/份），不再随 board 增长。
 
