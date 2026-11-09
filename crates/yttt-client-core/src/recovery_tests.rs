@@ -674,6 +674,22 @@ fn workspace_and_project_requests_get_longer_on_a_remote_link() {
     assert_eq!(request_timeout(&ping, LinkProfile::REMOTE), REQUEST_TIMEOUT);
 }
 
+/// A Host that drops a connection as soon as it is up must not be redialed
+/// at the first backoff step forever; only a connection that lasted resets it.
+#[test]
+fn a_connection_dropped_soon_after_it_came_up_keeps_backing_off() {
+    assert_eq!(reconnect_attempt(0, Duration::from_millis(300)), 1);
+    assert_eq!(reconnect_attempt(3, Duration::from_millis(300)), 4);
+    assert_eq!(reconnect_attempt(3, STABLE_CONNECTION), 1);
+    assert_eq!(reconnect_attempt(u32::MAX, Duration::ZERO), u32::MAX);
+}
+
+#[test]
+fn binding_a_session_waits_longer_on_a_remote_link() {
+    assert_eq!(binding_timeout(LinkProfile::LOCAL), REQUEST_TIMEOUT);
+    assert!(binding_timeout(LinkProfile::REMOTE) >= LinkProfile::REMOTE.liveness_timeout);
+}
+
 #[test]
 fn handshake_rejections_have_explicit_retry_policy() {
     use yttt_protocol::RejectReason::*;

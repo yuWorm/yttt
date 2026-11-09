@@ -46,6 +46,7 @@ const EVENT_CAPACITY: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const INITIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REMOTE_BINDING_TIMEOUT: Duration = Duration::from_secs(30);
 /// How many liveness timeouts a Pong may lag while other messages arrive.
 const HEARTBEAT_UNANSWERED_FACTOR: u32 = 4;
 
@@ -60,6 +61,31 @@ struct ShutdownOnDrop(watch::Sender<bool>);
 impl Drop for ShutdownOnDrop {
     fn drop(&mut self) {
         self.0.send_replace(true);
+    }
+}
+
+/// How long a connection must stay up before its loss starts the backoff over.
+const STABLE_CONNECTION: Duration = Duration::from_secs(30);
+
+/// The reconnect attempt after a connection that stayed up for `connected_for`.
+/// A Host that drops connections as soon as they are up, such as one whose
+/// send queue to this Client keeps overflowing, is redialed ever more slowly
+/// instead of ten times a second.
+fn reconnect_attempt(previous: u32, connected_for: Duration) -> u32 {
+    if connected_for >= STABLE_CONNECTION {
+        1
+    } else {
+        previous.saturating_add(1)
+    }
+}
+
+/// How long a new Session connection may take to prove its binding. Over a
+/// network link the Host's first state events may be ahead of the reply.
+fn binding_timeout(link: LinkProfile) -> Duration {
+    if link == LinkProfile::REMOTE {
+        REMOTE_BINDING_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
     }
 }
 
@@ -654,6 +680,7 @@ async fn run_supervisor(
     let _ = initial.send(Ok(()));
     let (catalog_requests, mut catalog_rx) = mpsc::channel(1);
     let mut attempt = 0_u32;
+    let mut connected_at = tokio::time::Instant::now();
     loop {
         let session = ClientSessionContext {
             catalog_requests: catalog_requests.clone(),
@@ -684,7 +711,7 @@ async fn run_supervisor(
             set_state(&state, &events, ConnectionState::Disconnected);
             return;
         };
-        attempt = attempt.saturating_add(1);
+        attempt = reconnect_attempt(attempt, connected_at.elapsed());
         diagnostics.record_reconnect();
         diagnostics.record_disconnect(&message);
         while let Ok(command) = commands.try_recv() {
@@ -733,7 +760,7 @@ async fn run_supervisor(
                     connection = new_connection;
                     install_host_epoch(connection.host.host_epoch, &epoch_state);
                     identity.host_epoch_hint = Some(connection.host.host_epoch);
-                    attempt = 0;
+                    connected_at = tokio::time::Instant::now();
                     diagnostics.record_recovered();
                     set_state(
                         &state,
@@ -805,7 +832,7 @@ async fn establish_session(
             Request::Ping { sent_millis: 0 },
         )))
         .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
-    let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + binding_timeout(connector.link_profile());
     let mut buffered = Vec::new();
     loop {
         let message = tokio::time::timeout_at(deadline, reader.receive())
