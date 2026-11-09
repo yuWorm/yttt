@@ -103,7 +103,7 @@
 - [x] `LinkProfile` 增加 `heartbeat_interval`（本机 5 s，远程 2 s）与 `unstable_after`（6 s）；远程 `liveness_timeout` 由 45 s 收紧到 20 s（静默期限：仍在送达数据的慢链路不受影响）。
 - [x] 远程窗口状态栏在 Host 名或 P2P 路径后显示延迟（≥ 300 ms 警告色）或“连接不稳定”；TLS 窗口此前不显示链路。
 - [x] 断开遮罩（B2）显示次数、时长与原因；遮罩消失时提示“已重新连接”与断开时长。
-- [ ] 重连不重复拉取 Agent 状态：未做，留到 F 的快照瘦身一起处理。
+- [x] 重连不重复拉取 Agent 状态：Host 不再在新连接上推全量 Agent 快照，只由 Client 的 `ReadAgentSnapshots` 按游标读取（`fix/link-storm`）。
 - [ ] 手工验证：Windows 远程窗口状态栏显示延迟；拔网线数秒内显示“连接不稳定”，约 20 s 后出现断开遮罩；恢复网络后遮罩消失并提示断开时长。
 
 ---
@@ -111,5 +111,8 @@
 # F：后续
 
 - [ ] Agent 快照瘦身：推送不带完整 `board`，或只发增量，按需读取全量（协议变更）。
-- [ ] P2P／QUIC 发送缓冲：限制已交给 QUIC 但未发出的字节，使交互帧不排在大块数据后。
+- [x] P2P／QUIC 发送缓冲：流窗口 256 KiB、连接发送窗口 512 KiB（原默认 1.25 MB / 10 MB），会话分块 32 KiB（`a_writer_stops_soon_after_the_peer_stops_reading`）。
+- [x] 断连风暴（2026-11-09 诊断）：`ProjectChanged` 按项目合并、可靠消息连续 64 KiB 后让渲染、连上即断时退避不清零、溢出原因细分（`fix/link-storm`）。
+- [ ] TLS／TCP 发送缓冲：`TCP_NOTSENT_LOWAT` 需要 unsafe setsockopt，未做；穿透工具自身的缓冲无法控制。
+- [ ] 远程链路压缩大消息（协议变更）。
 - [ ] P2P 始终 relay 的原因排查（两端网络、UDP 打洞）。

@@ -205,10 +205,17 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
    （每个 agent 地址加 generation）与项目 token 用量（每个项目）。omp agent 的 snapshot 带完整
    board，单个可达约 1 MB；不合并时，比 agent 更新慢的链路上可靠队列永远排不空，工作区响应排在其后。
    generation 进入键，使同一 pane 的新一代 agent 不越过排在旧一代之后的 `AgentStateCleared`。
+   `ProjectChanged` 按项目合并：新变更并入仍在等待的同项目变更（路径取并集、刷新标记取或，超过 256 个路径
+   改为 `refresh_all`；注册 epoch 不同则以新者为准）。项目文件监听对每个文件事件各发一次，一次构建或
+   checkout 即可产生上千条；逐条排队时可靠队列溢出、连接被关闭，重连后又遇到同一批事件。
+   `ResourceCatalogChanged` 与 `ConfigChanged` 不带内容，也按类型合并。
 3. 渲染：每个已附加终端一个渲染 lane，Host 只在 lane 空闲时放入一帧，其余在渲染槽中合并；
-   lane 之间轮转。
+   lane 之间轮转。可靠消息连续写出 64 KiB 后，若有渲染项的前序可靠消息都已写完，先写一项渲染再继续，
+   使可靠消息持续到达的慢链路上终端仍然刷新；渲染项从不越过在它之前排队的可靠消息，因此终端的首帧
+   snapshot 仍在附加它的响应之后。
 
-队列从不等待空间：超出上限即关闭连接，对端重连并对账。编码后超过 256 KiB 的消息拆为
+队列从不等待空间：超出上限即关闭连接，对端重连并对账；关闭原因写明是交互条数、可靠条数还是可靠字节超限。
+编码后超过 32 KiB 的消息拆为
 `ControlMessage::Chunk` 序列，块之间可以插入交互帧，但可靠消息与渲染帧不互相穿插，
 因此可靠顺序端到端成立；接收端（`SessionReader`）同时拼接至多 4 个 stream，总量不超过
 32 MiB。可靠消息若关联终端 X（如 `TerminalExit`），写端先发完 X 的 lane 中已排队的帧，
@@ -585,7 +592,9 @@ PTY child 退出后：
 | session 写端交互队列 | 1024 messages |
 | session 写端可靠队列 | 1024 messages / 32 MiB |
 | session 渲染 lane | 每终端 1 帧在途 |
-| session 分块 | 256 KiB / chunk，接收端 4 个 stream、共 32 MiB |
+| session 分块 | 32 KiB / chunk，接收端 4 个 stream、共 32 MiB |
+| session 可靠连续写出后让渲染 | 64 KiB |
+| P2P QUIC 流窗口 / 连接发送窗口 | 256 KiB / 512 KiB |
 | Desktop semantic update mailbox | 64 updates / terminal |
 | Client event broadcast | 256 events |
 | request timeout | 10 s |
@@ -690,6 +699,8 @@ Disconnected -> Connecting -> Ready
 恢复规则：
 
 - 临时 I/O、握手超时、AlreadyConnected、StaleHostEpoch 或 HostShuttingDown：保留 mirrors，使用带抖动的指数退避，初次重试 100–200 ms，上限 5 s。永久错误停止重试。
+  连上的连接保持 30 s 后断开，退避才从头开始；连上即被断开（如 Host 写队列一再溢出）时退避继续增长，不会每 0.1 s 重连一次。
+- 新连接以一个 Ping 证明会话绑定：本机等待 10 s，远程 30 s（Host 的首批状态事件可能排在回复之前）。
 - `ClientCore::retry_now` 跳过当前退避，并放弃仍在进行的连接尝试另起一次：失效路径上的尝试否则要等满连接期限。
 - 远程窗口在会话断开超过 1 s（或已停止重试）时以居中遮罩显示 Host 名、第几次重连与已断开时长、断开原因，
   提供“立即重连”（`retry_now`，停止重试后不显示）与“关闭窗口”；恢复后遮罩消失。
@@ -711,6 +722,9 @@ Disconnected -> Connecting -> Ready
   对端休眠或断网不再留下占用远程客户端名额与 lease 的连接。本机 IPC 无此期限。
 - Host 最多保留 64 个认证 Client 会话，包括最多 16 个闲置会话。闲置会话最多保留 5 分钟，保留窗口内可继续使用请求日志；活动会话不参与淘汰。
 - 重连成功：更新 host epoch/connection sequence，立即请求 catalog 与 Agent 快照、对已附加终端重新订阅并重新上报可见集合；终端流以 Host snapshot 恢复 mirror。Host epoch 变化时清除旧 mirror 与已附加集合。
+  Host 在新连接上只先推项目 token 用量与每个项目一条 `refresh_all` 变更；Agent 快照由 Client 的
+  `ReadAgentSnapshots` 按游标分页读取，Host 不再另推全量（原先每次连接发两遍，约 4 MB 时慢链路要半分钟以上）。
+  状态事件的订阅在读入第一个请求之前建立，读取之后的变化一定以事件到达。
 - Host 在断线期间仍存活：相同 terminal ID 通过新连接的 snapshot 及后续 delta 继续。
 - Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，保留 tab、pane 和编辑器布局。pane 由 Host 恢复（见 §7.0）：记录为 `Running` 而终端不在的 pane 以 shell 重建（不执行旧启动命令），Agent 按保存的 provider resume；已启动的 lazy tab 也参与。其他命令保持 `Exited`。
 - 带 Agent 会话元数据的 `Exited` pane 同样由 Host 在恢复时按保存的 provider resume，包括普通 shell 中启动的 Agent；不重放 pane 原命令。无保存会话的已退出 pane 保持停止；重连或观察者附加都不会启动进程。

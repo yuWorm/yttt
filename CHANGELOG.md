@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- 修复本机与远程窗口在构建、checkout 等大量文件变化时反复断开重连（Host 日志 `send queue overflowed`）：同一项目的文件变化合并为一条，资源目录与配置通知也合并；每次连接不再把 Agent 状态推送两遍。
+- Fix local and remote windows dropping and reconnecting over and over while a build or checkout changes many files (`send queue overflowed` in the Host log): a project's file changes merge into one message, catalog and config notices merge too, and a connection no longer receives every Agent state twice.
+- 修复慢链路上远程终端不刷新：可靠消息持续到达时终端帧仍能轮到发送。大消息拆成更小的块，P2P 连接最多预先交给 QUIC 256 KB，心跳与按键不再排在数 MB 数据之后，减少“连接不稳定”与误判断线。
+- Fix remote terminals not updating on a slow link: terminal frames get their turn while other messages keep arriving. Large messages travel in smaller pieces and a P2P connection hands QUIC at most 256 KB ahead of the reader, so heartbeats and keystrokes no longer wait behind megabytes, with fewer "Unstable connection" notices and false disconnects.
+- 连上即被断开的连接不再每 0.1 秒重连一次：连接保持 30 秒后退避才从头开始。远程连接确认会话的等待由 10 秒延长到 30 秒。Host 日志写明溢出的是哪一类队列。
+- A connection dropped as soon as it is up is no longer redialed every 0.1 seconds: the backoff starts over only after a connection lasted 30 seconds. A remote connection waits 30 seconds instead of 10 to confirm its session. The Host log names which queue overflowed.
+
 ## 0.5.2 - 2026-11-08
 
 - 修复本机连接一次失败（如客户端在连上前放弃）会使 Host 退出、所有终端随之结束；现在 Host 稍候继续接受连接。断开遮罩的“立即重连”在重连刚开始时点击不再无效。
