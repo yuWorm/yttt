@@ -66,6 +66,7 @@ use yttt_protocol::{
     RESOURCE_PROTOCOL_VERSION, Request, ResourceCatalog, Response, ServerEvent,
     TerminalTerminationResult,
     agent::{AgentSnapshotUpdate, ProjectTokenUsage},
+    project::ProjectChange,
     terminal::{
         AttachTerminal, TerminalLeaseMode, TerminalSpawnSpec, TerminalViewportAnchor,
         TerminalViewportRead, TerminatedTerminal, TerminationMode,
@@ -1884,6 +1885,69 @@ fn send_token_usage(
     )
 }
 
+/// Most changed paths one merged project change lists; past it the change
+/// asks for a full refresh instead.
+const MAX_MERGED_PROJECT_PATHS: usize = 256;
+
+/// Queues a project change, merged into the one still waiting for the same
+/// project, so a burst of file events (a build, a checkout) costs one queued
+/// message per project instead of one per file. `waiting` holds what was last
+/// queued for each project.
+fn send_project_change(
+    writer: &SessionWriter,
+    host_sequence: &AtomicU64,
+    waiting: &mut HashMap<yttt_core::model::ids::ProjectId, ProjectChange>,
+    change: ProjectChange,
+) -> Result<(), ()> {
+    let key = format!("project-changed:{}", change.project_id);
+    let change = match waiting.remove(&change.project_id) {
+        Some(queued) if writer.is_waiting(&key) => merge_project_change(queued, change),
+        _ => change,
+    };
+    waiting.insert(change.project_id.clone(), change.clone());
+    send_latest_state_event(
+        writer,
+        host_sequence,
+        &key,
+        ServerEvent::ProjectChanged(change),
+    )
+}
+
+/// One change covering both. A newer registration supersedes the older one's change.
+fn merge_project_change(mut queued: ProjectChange, next: ProjectChange) -> ProjectChange {
+    if queued.registration_epoch != next.registration_epoch {
+        return next;
+    }
+    queued.refresh_status |= next.refresh_status;
+    queued.refresh_tree |= next.refresh_tree;
+    queued.refresh_all |= next.refresh_all;
+    for path in next.relative_paths {
+        if !queued.relative_paths.contains(&path) {
+            queued.relative_paths.push(path);
+        }
+    }
+    if queued.refresh_all || queued.relative_paths.len() > MAX_MERGED_PROJECT_PATHS {
+        queued.relative_paths.clear();
+        queued.refresh_all = true;
+    }
+    queued
+}
+
+/// Queues a notice whose content the Client reads afresh, such as
+/// `ResourceCatalogChanged`: one still waiting already covers a newer one.
+fn send_notice(
+    writer: &SessionWriter,
+    host_sequence: &AtomicU64,
+    body: ServerEvent,
+) -> Result<(), ()> {
+    let key = match &body {
+        ServerEvent::ResourceCatalogChanged => "resource-catalog-changed",
+        ServerEvent::ConfigChanged => "config-changed",
+        _ => unreachable!("only content-free notices are coalesced"),
+    };
+    send_latest_state_event(writer, host_sequence, key, body)
+}
+
 fn send_latest_state_event(
     writer: &SessionWriter,
     host_sequence: &AtomicU64,
@@ -1903,13 +1967,16 @@ fn send_latest_state_event(
 
 /// Forwards Host state changes to one Session connection as reliable events.
 /// Terminal exits travel with their terminal's stream instead.
-async fn forward_state_events(
+///
+/// Subscribes before returning, so a change after the Client's first
+/// `ReadAgentSnapshots` page always reaches it as an event. The Client reads
+/// Agent states itself on every connection, so they are not pushed up front.
+fn forward_state_events(
     writer: SessionWriter,
     client_id: ClientInstanceId,
     attachments: SharedTerminalAttachments,
     context: ConnectionContext,
-) -> Result<(), ()> {
-    let context = &context;
+) -> impl Future<Output = Result<(), ()>> + Send {
     let mut ssh_events = context.ssh.subscribe();
     let mut agent_hook_events = context.agent_hooks.subscribe();
     let mut token_usage_events = context.agent_hooks.subscribe_token_usage();
@@ -1918,140 +1985,131 @@ async fn forward_state_events(
     let mut control_events = context.runtime.subscribe_control();
     let mut config_changes = context.workspaces.subscribe_config_changes();
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
-    for update in context.agent_hooks.snapshots_after(&[]) {
-        send_agent_snapshot(&writer, &context.host_sequence, update)?;
-    }
-    for summary in context.agent_hooks.project_token_usage() {
-        send_token_usage(&writer, &context.host_sequence, summary)?;
-    }
-    for change in context.projects.resync_changes() {
-        send_host_state_event(&writer, context, ServerEvent::ProjectChanged(change))?;
-    }
-    loop {
-        tokio::select! {
-            event = runtime_events.recv() => match event {
-                // Only a scrolled-back attachment counts output; the check
-                // avoids taking the attachment lock for every frame.
-                Ok(HostTerminalEvent::Update { session_id, .. })
-                    if context.runtime.attachment_scrolled(&session_id, &client_id) =>
-                {
-                    if let Some(attachment) = attachments.lock().await.get_mut(&session_id)
-                        && attachment.display_offset != 0
+    async move {
+        let context = &context;
+        let mut projects_waiting = HashMap::new();
+        for summary in context.agent_hooks.project_token_usage() {
+            send_token_usage(&writer, &context.host_sequence, summary)?;
+        }
+        for change in context.projects.resync_changes() {
+            send_project_change(
+                &writer,
+                &context.host_sequence,
+                &mut projects_waiting,
+                change,
+            )?;
+        }
+        loop {
+            tokio::select! {
+                event = runtime_events.recv() => match event {
+                    // Only a scrolled-back attachment counts output; the check
+                    // avoids taking the attachment lock for every frame.
+                    Ok(HostTerminalEvent::Update { session_id, .. })
+                        if context.runtime.attachment_scrolled(&session_id, &client_id) =>
                     {
-                        attachment.unseen_output = attachment.unseen_output.saturating_add(1);
+                        if let Some(attachment) = attachments.lock().await.get_mut(&session_id)
+                            && attachment.display_offset != 0
+                        {
+                            attachment.unseen_output = attachment.unseen_output.saturating_add(1);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        for (session_id, attachment) in attachments.lock().await.iter_mut() {
+                            let scrolled = attachment.display_offset != 0;
+                            attachment.note_lagged(skipped);
+                            context
+                                .runtime
+                                .note_attachment_lag(session_id, &client_id, skipped, scrolled);
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return Err(()),
+                },
+                event = control_events.recv() => {
+                    let bodies = {
+                        let mut subscriptions = attachments.lock().await;
+                        match event {
+                            Ok(event) => control_event(event, &client_id, &mut subscriptions)
+                                .into_iter()
+                                .collect(),
+                            // Missed lease changes are recovered from current state.
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                resync_leases(&context.runtime, &client_id, &mut subscriptions)
+                            }
+                            Err(broadcast::error::RecvError::Closed) => return Err(()),
+                        }
+                    };
+                    for body in bodies {
+                        send_host_state_event(&writer, context, body)?;
                     }
                 }
-                Ok(_) => {}
-                Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    for (session_id, attachment) in attachments.lock().await.iter_mut() {
-                        let scrolled = attachment.display_offset != 0;
-                        attachment.note_lagged(skipped);
-                        context
-                            .runtime
-                            .note_attachment_lag(session_id, &client_id, skipped, scrolled);
-                    }
-                }
-                Err(broadcast::error::RecvError::Closed) => return Err(()),
-            },
-            event = control_events.recv() => {
-                let bodies = {
-                    let mut subscriptions = attachments.lock().await;
-                    match event {
-                        Ok(event) => control_event(event, &client_id, &mut subscriptions)
+                event = ssh_events.recv() => {
+                    let bodies = match event {
+                        Ok(event) => match event.for_client(&client_id) {
+                            Some(body) => vec![body.clone()],
+                            None => continue,
+                        },
+                        // Replay current states; the catalog refresh also drops
+                        // connections whose disconnect was missed.
+                        Err(broadcast::error::RecvError::Lagged(_)) => context
+                            .ssh
+                            .statuses()
                             .into_iter()
+                            .map(ServerEvent::SshStateChanged)
+                            .chain([ServerEvent::ResourceCatalogChanged])
                             .collect(),
-                        // Missed lease changes are recovered from current state.
+                        Err(broadcast::error::RecvError::Closed) => return Err(()),
+                    };
+                    for body in bodies {
+                        send_host_state_event(&writer, context, body)?;
+                    }
+                }
+                event = project_events.recv() => {
+                    let changes = match event {
+                        Ok(change) => vec![change],
+                        Err(broadcast::error::RecvError::Lagged(_)) => context.projects.resync_changes(),
+                        Err(broadcast::error::RecvError::Closed) => return Err(()),
+                    };
+                    for change in changes {
+                        send_project_change(&writer, &context.host_sequence, &mut projects_waiting, change)?;
+                    }
+                }
+                event = agent_hook_events.recv() => {
+                    let updates = match event {
+                        Ok(update) => vec![update],
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            resync_leases(&context.runtime, &client_id, &mut subscriptions)
+                            context.agent_hooks.snapshots_after(&[])
                         }
                         Err(broadcast::error::RecvError::Closed) => return Err(()),
+                    };
+                    for update in updates {
+                        send_agent_snapshot(&writer, &context.host_sequence, update)?;
                     }
-                };
-                for body in bodies {
-                    send_host_state_event(&writer, context, body)?;
                 }
-            }
-            event = ssh_events.recv() => {
-                let bodies = match event {
-                    Ok(event) => match event.for_client(&client_id) {
-                        Some(body) => vec![body.clone()],
-                        None => continue,
-                    },
-                    // Replay current states; the catalog refresh also drops
-                    // connections whose disconnect was missed.
-                    Err(broadcast::error::RecvError::Lagged(_)) => context
-                        .ssh
-                        .statuses()
-                        .into_iter()
-                        .map(ServerEvent::SshStateChanged)
-                        .chain([ServerEvent::ResourceCatalogChanged])
-                        .collect(),
-                    Err(broadcast::error::RecvError::Closed) => return Err(()),
-                };
-                for body in bodies {
-                    send_host_state_event(&writer, context, body)?;
-                }
-            }
-            event = project_events.recv() => {
-                match event {
-                    Ok(change) => {
-                        send_host_state_event(
-                            &writer,
-                            context,
-                            ServerEvent::ProjectChanged(change),
-                        )?;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        for change in context.projects.resync_changes() {
-                            send_host_state_event(
-                                &writer,
-                                context,
-                                ServerEvent::ProjectChanged(change),
-                            )?;
+                event = token_usage_events.recv() => {
+                    let summaries = match event {
+                        Ok(summary) => vec![summary],
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            context.agent_hooks.project_token_usage()
                         }
+                        Err(broadcast::error::RecvError::Closed) => return Err(()),
+                    };
+                    for summary in summaries {
+                        send_token_usage(&writer, &context.host_sequence, summary)?;
                     }
-                    Err(broadcast::error::RecvError::Closed) => return Err(()),
                 }
-            }
-            event = agent_hook_events.recv() => {
-                let updates = match event {
-                    Ok(update) => vec![update],
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        context.agent_hooks.snapshots_after(&[])
+                changed = config_changes.changed() => {
+                    if changed.is_err() {
+                        return Err(());
                     }
-                    Err(broadcast::error::RecvError::Closed) => return Err(()),
-                };
-                for update in updates {
-                    send_agent_snapshot(&writer, &context.host_sequence, update)?;
+                    send_notice(&writer, &context.host_sequence, ServerEvent::ConfigChanged)?;
                 }
-            }
-            event = token_usage_events.recv() => {
-                let summaries = match event {
-                    Ok(summary) => vec![summary],
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        context.agent_hooks.project_token_usage()
+                changed = resource_changes.changed() => {
+                    if changed.is_err() {
+                        return Err(());
                     }
-                    Err(broadcast::error::RecvError::Closed) => return Err(()),
-                };
-                for summary in summaries {
-                    send_token_usage(&writer, &context.host_sequence, summary)?;
+                    send_notice(&writer, &context.host_sequence, ServerEvent::ResourceCatalogChanged)?;
                 }
-            }
-            changed = config_changes.changed() => {
-                if changed.is_err() {
-                    return Err(());
-                }
-                send_host_state_event(&writer, context, ServerEvent::ConfigChanged)?;
-            }
-            changed = resource_changes.changed() => {
-                if changed.is_err() {
-                    return Err(());
-                }
-                send_host_state_event(
-                    &writer,
-                    context,
-                    ServerEvent::ResourceCatalogChanged,
-                )?;
             }
         }
     }
@@ -3859,5 +3917,86 @@ mod state_event_coalescing_tests {
             snapshots.len()
         );
         assert!(usages.len() <= 4, "{} token usages queued", usages.len());
+    }
+
+    fn file_change(project: &str, path: &str) -> ProjectChange {
+        ProjectChange {
+            project_id: yttt_core::model::ids::ProjectId::new(project),
+            registration_epoch: 1,
+            relative_paths: vec![
+                yttt_protocol::path::ProjectRelativePath::from_utf8(path).unwrap(),
+            ],
+            refresh_status: true,
+            refresh_tree: false,
+            refresh_all: false,
+        }
+    }
+
+    /// A build writes thousands of files; a Client that reads slower than the
+    /// watcher reports them must not overflow its queue and be disconnected.
+    #[tokio::test]
+    async fn a_burst_of_file_events_queues_one_merged_change_per_project() {
+        let (host, client) = tokio::io::duplex(1024);
+        let (_host_read, host_write) = tokio::io::split(host);
+        let (writer, _writer_task) = SessionWriter::spawn(host_write);
+        let host_sequence = AtomicU64::new(1);
+        let mut waiting = HashMap::new();
+        for file in 0..4 * 1024 {
+            let change = file_change("build", &format!("target/{file}.o"));
+            send_project_change(&writer, &host_sequence, &mut waiting, change).unwrap();
+        }
+        for file in ["a.rs", "b.rs"] {
+            let change = file_change("edit", file);
+            send_project_change(&writer, &host_sequence, &mut waiting, change).unwrap();
+        }
+
+        let mut reader = SessionReader::new(client);
+        let mut changes = Vec::new();
+        let received = tokio::time::timeout(Duration::from_secs(5), async {
+            while !changes
+                .iter()
+                .any(|change: &ProjectChange| change.project_id.as_str() == "edit")
+            {
+                if let ControlMessage::Event(HostEvent {
+                    body: ServerEvent::ProjectChanged(change),
+                    ..
+                }) = reader.receive().await.unwrap()
+                {
+                    changes.push(change);
+                }
+            }
+        })
+        .await;
+        assert!(
+            received.is_ok(),
+            "the edit never arrived: {}",
+            changes.len()
+        );
+        assert!(
+            changes.len() <= 8,
+            "{} project changes queued",
+            changes.len()
+        );
+        let build = changes
+            .iter()
+            .rfind(|change| change.project_id.as_str() == "build")
+            .unwrap();
+        assert!(build.refresh_all && build.relative_paths.is_empty());
+        let edit = changes.last().unwrap();
+        assert_eq!(edit.relative_paths.len(), 2);
+        assert!(edit.refresh_status && !edit.refresh_all);
+    }
+
+    #[test]
+    fn a_merged_project_change_covers_both_and_a_newer_registration_wins() {
+        let mut tree = file_change("project", "src");
+        tree.refresh_tree = true;
+        let merged = merge_project_change(file_change("project", "a.rs"), tree);
+        assert_eq!(merged.relative_paths.len(), 2);
+        assert!(merged.refresh_status && merged.refresh_tree && !merged.refresh_all);
+
+        let mut newer = file_change("project", "b.rs");
+        newer.registration_epoch = 2;
+        assert_eq!(merge_project_change(merged, newer.clone()), newer);
     }
 }
