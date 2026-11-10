@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- 修复远程窗口在 Agent 会话面板刷新时整窗卡住数秒：Host 扫描 Agent 历史不再挡住同一窗口的文件、配置与终端请求。
+- Fix a remote window freezing for seconds whenever its Agent sessions panel refreshed: the Host's scan of Agent history no longer holds up the window's file, configuration and terminal requests.
+- 在 Host 上用编辑器直接修改配置文件（如 `settings.toml`）会立即通知所有窗口；远程窗口不再每 2 秒经网络重读配置。
+- Editing a configuration file such as `settings.toml` directly on the Host now reaches every window at once, and a remote window no longer rereads its configuration over the network every 2 seconds.
+- 日志更易读：每行标明写入它的进程（`host`、`desktop`、`remote-window`）与 pid；详细日志不再被每秒一次的配置读取刷屏；窗口自行关闭的连接不再记为警告。
+- Logs read more easily: each line names the process that wrote it (`host`, `desktop`, `remote-window`) and its pid, verbose logs are no longer flooded by a configuration read every second, and a connection its window closed itself is no longer logged as a warning.
+
 - 远程窗口在 Host 停止响应约 6 秒时就变暗提示“暂未响应，正在等待”，并可“立即检查”，不必等到 20 秒判定断开；之后断开时直接转为重连提示。
 - A remote window dims about 6 seconds after its Host stops answering, saying it is waiting, with a Check Now button, instead of looking frozen until the link is given up on at 20 seconds; if the link is then lost, the notice turns into the reconnecting one.
 

@@ -21,8 +21,10 @@ use yttt_protocol::{
 };
 
 /// How long a cached remote configuration document is served before a read
-/// also refreshes it in the background.
-const CONFIG_REFRESH_AFTER: Duration = Duration::from_secs(2);
+/// also refreshes it in the background. The Host reports every change, edits
+/// on disk included, and each report refreshes the cache at once; this only
+/// covers a Host too old to report edits made on disk.
+const CONFIG_REFRESH_AFTER: Duration = Duration::from_secs(30);
 
 /// A remote configuration document as last read or written.
 struct CachedConfig {

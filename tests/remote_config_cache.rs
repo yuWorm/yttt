@@ -148,9 +148,9 @@ fn remote_configuration_reads_are_served_from_a_refreshing_cache() {
         .unwrap();
     eventually(&storage, &settings, b"# second\n");
 
-    // An edit on the Host's disk is picked up by the periodic refresh.
+    // An edit on the Host's disk is announced too, long before the cache
+    // would refresh on its own.
     fs::write(&settings, b"# third\n").unwrap();
-    std::thread::sleep(Duration::from_millis(2_100));
     eventually(&storage, &settings, b"# third\n");
 
     // A local write after a refresh uses the newest revision.

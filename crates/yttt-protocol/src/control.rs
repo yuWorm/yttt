@@ -244,6 +244,13 @@ pub enum Request {
     },
 }
 
+/// Whether requests of `kind` (see [`Request::kind`]) are ones a Client
+/// repeats as a matter of course, such as rereading its configuration every
+/// second; their routine answers are logged only at trace detail.
+pub fn is_routine_request_kind(kind: &str) -> bool {
+    matches!(kind, "Workspace.ReadConfig" | "Workspace.ReadProjectConfig")
+}
+
 impl Request {
     /// The request's name for logs, such as `AttachTerminal` or `Workspace.Open`.
     pub fn kind(&self) -> &'static str {

@@ -185,6 +185,11 @@ mutation 在 journal replay **之前**验证认证会话；journal 按 Client �
 admission/backpressure；需要同步验证错误的诊断调用仍可显式发送 request/response 形式的
 `Request::TerminalInput`。
 
+其余请求在每个 session 内逐个执行，回复按完成顺序发出。例外是只读 Host 磁盘、不碰其他请求所改状态的慢请求
+（`Workspace.AgentSessions` 扫描 Agent 历史、`Workspace.OmpSessionExists`）：它们到达即在队列旁执行，同一 session
+至多 2 个，更多的照常排队；它们不进入请求 journal（journal 在请求执行期间被持有，会照样挡住队列，且只读请求无需重放）。
+因此打开 Agent 会话面板时数秒的扫描不再让同一窗口的文件、配置与终端 lease 请求等待。
+
 ### 5.3 server event
 
 Host event 具有：
@@ -331,11 +336,11 @@ Host 记录本机桌面正在显示的工作区（`WorkspaceRequest::SetActive`�
 也不重放排队 mutation。Session 连接握手后，Client 以一次 `Ping` 往返确认 Host 已把连接绑定到
 本 Client 会话，之后才报告 Ready：以他人会话身份连接会在绑定时被 Host 关闭。
 
-远程环境的配置读取经 `HostStorage` 缓存：同一路径只有首次读取等待网络，之后立即返回缓存，缓存超过 2 s
-的读取同时在后台刷新；Host 在配置经它写入、删除或改名成功后向所有连接发 `ServerEvent::ConfigChanged`，
-Client 收到后、以及每次重连就绪后在后台刷新全部缓存。本地写入推进缓存代次，更早发出的后台刷新不能覆盖它；
-写入使用缓存中最新的 revision。直接在 Host 磁盘上的修改由周期刷新发现。远程链路上 `Workspace` 与
-`Project` 请求的期限为 120 s。
+远程环境的配置读取经 `HostStorage` 缓存：同一路径只有首次读取等待网络，之后立即返回缓存；Host 在配置经它写入、
+删除或改名成功后，以及配置目录中的 `.toml` 文件在磁盘上被直接修改后（`logs/`、`runtime/`、`state/` 除外；
+变化平静 300 ms 后合并为一次），向所有连接发 `ServerEvent::ConfigChanged`，Client 收到后、以及每次重连就绪后
+在后台刷新全部缓存。缓存超过 30 s 的读取另在后台刷新一次，只为不监视磁盘的旧 Host 兜底。本地写入推进缓存代次，
+更早发出的后台刷新不能覆盖它；写入使用缓存中最新的 revision。远程链路上 `Workspace` 与 `Project` 请求的期限为 120 s。
 
 HostBootstrap 显式传入原 `config_root`，不根据 Server descriptor 猜路径。共享配置 RPC 只允许
 已知配置文件与 `projects`、`themes`、`agent-providers` 子树，拒绝设备状态、密钥和 symlink 越界。
@@ -850,18 +855,21 @@ root PID 选择最近的已知 Agent descendant，以两个连续 miss 作为退
 错误日志可记录 request kind、resource ID、epoch、sequence、queue depth 和耗时；不得记录 terminal input、clipboard、token、password、private key、完整环境变量或文件正文。
 
 日志经 `tracing` 写出（`yttt_host::logging`）：Host 进程写 stderr，即启动器打开的 `host.log`（启动时超过 16 MiB 先移为
-`host.log.1`）；Desktop 与远程窗口进程写 profile `logs/client.log`（8 MiB 轮转一次）。每行为本地时间、级别、模块与字段。
+`host.log.1`）；Desktop 与远程窗口进程写 profile `logs/client.log`（8 MiB 轮转一次）。每行为本地时间、写入进程与 pid
+（`host#…`、`desktop#…`、`remote-window#…`，几个进程共用一个文件）、级别、模块与字段。
 详细程度由 Host 作用域的 `[diagnostics] verbose_logs`（设置页“诊断 › 详细日志”）决定，一个开关同时作用于 Host 与连到它的所有窗口：
-Host 在配置写入后重读它，窗口按其显示的设置同步，不需重启。环境变量 `YTTT_LOG` 以 `tracing` 过滤语法覆盖二者
+Host 在配置变化（经它写入或在磁盘上直接修改）后重读它，窗口按其显示的设置同步，不需重启。环境变量 `YTTT_LOG` 以 `tracing` 过滤语法覆盖二者
 （如 `YTTT_LOG=yttt_host=trace,iroh=debug`）。
 
 - 常态（本项目 info、其余 warn）：session 建立（入口、协议版本、压缩／board 补丁／board 订阅）与结束（持续毫秒、发出字节、
-  可靠队列字节高水位、原因：读失败、写超时、队列溢出、被替换）；失败或超过 1 s 的请求（类型、编号、毫秒、失败码）；Client 的
+  可靠队列字节高水位、原因：读失败、写超时、队列溢出、被替换；Client 在消息之间自行关闭连接记为 info 的 `session ended`，
+  不是 warn 的 `session dropped`）；失败或超过 1 s 的请求（类型、编号、毫秒、失败码）；Client 的
   连接失败（第几次、原因、下次重试毫秒）、session 就绪与丢失、请求超时、往返超过 `unstable_after / 4` 的心跳、唤醒／网络变化探测；
   远程访问与 P2P 的启停与失败；工作区打开（毫秒、Agent 概要或完整状态的份数与字节）与看板补读。单向输入被拒按终端每 10 s
   至多记一条并带被抑制次数。
 - 详细（本项目 debug、其余 info）：另记每个请求（Host 侧执行毫秒、Client 侧往返毫秒）、连接的传输与握手耗时、Agent 快照分页
-  （份数、无 board 的份数）、board 订阅切换，以及 iroh 等依赖的 info 事件。Ping 与终端输入不逐条记录。
+  （份数、无 board 的份数）、board 订阅切换，以及 iroh 等依赖的 info 事件。Ping 与终端输入不逐条记录；窗口每秒同步设置
+  所读的 `Workspace.ReadConfig`／`ReadProjectConfig` 只在 trace 记录（慢于 1 s 的照常记录）。
 
 ClientCore diagnostics 保留最近 16 次断开记录。
 

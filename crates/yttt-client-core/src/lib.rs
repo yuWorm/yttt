@@ -226,6 +226,9 @@ impl PendingClientRequest {
                 tracing::warn!(request = self.kind, millis, "request timed out");
             }
             Err(error) => tracing::debug!(request = self.kind, millis, %error, "request failed"),
+            Ok(_) if yttt_protocol::is_routine_request_kind(self.kind) && millis < 1_000 => {
+                tracing::trace!(request = self.kind, millis, "request answered");
+            }
             Ok(_) => tracing::debug!(request = self.kind, millis, "request answered"),
         }
         result
@@ -2173,9 +2176,10 @@ impl From<HandshakeError> for ConnectFailure {
         use yttt_protocol::RejectReason;
         let retryable = match &error {
             HandshakeError::Timeout => true,
-            HandshakeError::Wire(yttt_transport::WireError::Codec(
-                yttt_protocol::ProtocolCodecError::Io(_),
-            )) => true,
+            HandshakeError::Wire(
+                yttt_transport::WireError::Codec(yttt_protocol::ProtocolCodecError::Io(_))
+                | yttt_transport::WireError::Closed,
+            ) => true,
             HandshakeError::Rejected(reason) => match reason {
                 RejectReason::StaleHostEpoch
                 | RejectReason::AlreadyConnected

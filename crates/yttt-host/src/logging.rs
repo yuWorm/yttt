@@ -62,9 +62,10 @@ fn filter(verbose: bool) -> EnvFilter {
         .unwrap_or_else(|| EnvFilter::new(filter_directives(verbose)))
 }
 
-/// Installs this process's subscriber, writing lines to `writer`. Only the
-/// first call in a process installs one.
-pub fn install<W>(writer: W, verbose: bool)
+/// Installs this process's subscriber, writing lines to `writer`, each
+/// marked with `process` and the process id, since processes share a file.
+/// Only the first call in a process installs one.
+pub fn install<W>(writer: W, process: &'static str, verbose: bool)
 where
     W: for<'writer> fmt::MakeWriter<'writer> + Send + Sync + 'static,
 {
@@ -72,7 +73,10 @@ where
     let lines = fmt::layer()
         .with_writer(writer)
         .with_ansi(false)
-        .with_timer(LocalTime);
+        .with_timer(LocalTime {
+            process,
+            pid: std::process::id(),
+        });
     if tracing_subscriber::registry()
         .with(filter)
         .with(lines)
@@ -113,15 +117,21 @@ pub fn verbose_setting(config_root: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Timestamps in local time, as the logs always had.
-struct LocalTime;
+/// Timestamps in local time, as the logs always had, followed by the
+/// process that wrote the line, such as `remote-window#8328`.
+struct LocalTime {
+    process: &'static str,
+    pid: u32,
+}
 
 impl fmt::time::FormatTime for LocalTime {
     fn format_time(&self, writer: &mut fmt::format::Writer<'_>) -> std::fmt::Result {
         write!(
             writer,
-            "{}",
-            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z")
+            "{} {}#{}",
+            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
+            self.process,
+            self.pid
         )
     }
 }
@@ -235,7 +245,7 @@ mod tests {
         }
         let logs = tempfile::tempdir().unwrap();
         let path = logs.path().join("host.log");
-        install(RotatingFile::new(path.clone(), 1 << 20), false);
+        install(RotatingFile::new(path.clone(), 1 << 20), "test", false);
         tracing::info!("normal line");
         tracing::debug!("verbose line one");
         set_verbose(true);
@@ -244,7 +254,10 @@ mod tests {
         tracing::debug!("verbose line three");
         let log = std::fs::read_to_string(&path).unwrap();
         assert!(
-            log.contains("INFO yttt_host::logging::tests: normal line"),
+            log.contains(&format!(
+                " test#{}  INFO yttt_host::logging::tests: normal line",
+                std::process::id()
+            )),
             "{log}"
         );
         assert!(!log.contains("verbose line one"), "{log}");

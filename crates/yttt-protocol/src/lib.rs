@@ -24,7 +24,7 @@ pub use control::{
     Capability, ClientRequest, CompressedMessage, ControlMessage, FailureCode, HostBlocker,
     HostEvent, HostResponse, MessageChunk, ProtocolFailure, Request, ResourceCatalog, Response,
     ServerEvent, TerminalControlDeniedReason, TerminalController, TerminalLease, TerminalPlacement,
-    TerminalTerminationResult,
+    TerminalTerminationResult, is_routine_request_kind,
 };
 pub use desktop::{
     DesktopShellMessage, DesktopShellRejectReason, DesktopShellRequest,

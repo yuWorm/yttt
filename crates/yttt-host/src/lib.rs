@@ -213,7 +213,13 @@ where
         &bootstrap.state_root,
         &bootstrap.config_root,
     )?));
-    // The log detail follows `[diagnostics] verbose_logs` as Clients change it.
+    // Held for the Host's life; without it, edits made on disk reach Clients
+    // only when they next read the file.
+    let _config_watcher = workspaces
+        .watch_config_files()
+        .inspect_err(|error| tracing::warn!(%error, "cannot watch the configuration files"))
+        .ok();
+    // The log detail follows `[diagnostics] verbose_logs` as it changes.
     tokio::spawn({
         let mut changes = workspaces.subscribe_config_changes();
         let config_root = bootstrap.config_root.clone();
@@ -752,7 +758,10 @@ impl RequestJournal {
 fn request_is_journalable(request: &Request) -> bool {
     // Credential and SSH connect messages carry secrets and must never enter
     // the replayable request journal, even when a later remote profile exists.
+    // A standalone read is worth no replay, and the journal is held while a
+    // journaled request runs, which would hold up the session's queue anyway.
     !recovery_request(request)
+        && !standalone_request(request)
         && !matches!(
             request,
             Request::SshConnect(_)
@@ -1127,6 +1136,17 @@ async fn serve_client_session(
             queue_high_water_bytes,
             "session ended"
         ),
+        // A Client that closes its own connection, such as one that only
+        // checked the Host is up, is no failure.
+        Err(reason) if reason == CLIENT_CLOSED => tracing::info!(
+            client = %client_id,
+            generation,
+            lasted_millis,
+            sent_bytes,
+            queue_high_water_bytes,
+            %reason,
+            "session ended"
+        ),
         Err(reason) => tracing::warn!(
             client = %client_id,
             generation,
@@ -1205,6 +1225,24 @@ fn request_changes_resource_catalog(request: &Request) -> bool {
         _ => false,
     }
 }
+
+/// Requests that read the Host machine's disk without touching any state a
+/// session's other requests change, and may take seconds: scanning Agent
+/// history. They run beside the session's queue instead of holding it, so a
+/// remote window keeps reading files and configuration meanwhile.
+fn standalone_request(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Workspace(
+            yttt_protocol::workspace::WorkspaceRequest::AgentSessions { .. }
+                | yttt_protocol::workspace::WorkspaceRequest::OmpSessionExists { .. }
+        )
+    )
+}
+
+/// How many standalone requests of one session run at once; more wait in
+/// the session's queue.
+const MAX_STANDALONE_REQUESTS: usize = 2;
 
 fn recovery_request(request: &Request) -> bool {
     matches!(
@@ -1373,6 +1411,7 @@ async fn serve_session_connection(
     let mut stop = context.stop.clone();
     let mut queued = VecDeque::<ClientRequest>::new();
     let mut running = tokio::task::JoinSet::new();
+    let mut standalone = tokio::task::JoinSet::new();
     loop {
         if running.is_empty()
             && let Some(request) = queued.pop_front()
@@ -1440,9 +1479,38 @@ async fn serve_session_connection(
                     if changed {
                         context.lifecycle.resource_changed();
                     }
+                } else if standalone_request(&request.body)
+                    && standalone.len() < MAX_STANDALONE_REQUESTS
+                {
+                    let context = context.clone();
+                    let client_id = client_id.clone();
+                    let attachments = attachments.clone();
+                    let journal = request_journal.clone();
+                    standalone.spawn(async move {
+                        let kind = request.body.kind();
+                        let started = std::time::Instant::now();
+                        let (response, _) = dispatch_control_request(
+                            request,
+                            &client_id,
+                            &attachments,
+                            &journal,
+                            &context,
+                        )
+                        .await;
+                        log_request(&client_id, kind, started, &response);
+                        response
+                    });
                 } else {
                     queued.push_back(request);
                 }
+            }
+            finished = standalone.join_next(), if !standalone.is_empty() => {
+                let response = finished
+                    .ok_or("request set emptied")?
+                    .map_err(|error| format!("request task failed: {error}"))?;
+                writer
+                    .send_reliable(&ControlMessage::Response(response))
+                    .map_err(|error| error.to_string())?;
             }
             reason = &mut failed => {
                 return Err(reason.unwrap_or_else(|_| "session reader stopped".to_string()));
@@ -1486,6 +1554,9 @@ async fn serve_session_connection(
     }
 }
 
+/// Why a session ended when its Client closed the connection between messages.
+const CLIENT_CLOSED: &str = "the Client closed the connection";
+
 /// A request slower than this is logged at normal detail.
 const SLOW_REQUEST: Duration = Duration::from_secs(1);
 
@@ -1515,6 +1586,14 @@ fn log_request(
             id = response.request_id,
             millis,
             "slow request"
+        ),
+        result if yttt_protocol::is_routine_request_kind(kind) => tracing::trace!(
+            client = %client_id,
+            request = kind,
+            id = response.request_id,
+            millis,
+            ok = result.is_ok(),
+            "request"
         ),
         result => tracing::debug!(
             client = %client_id,
@@ -1570,6 +1649,7 @@ async fn read_session_requests<R: tokio::io::AsyncRead + Unpin>(
         };
         let message = match received {
             Ok(message) => message,
+            Err(yttt_transport::WireError::Closed) => break CLIENT_CLOSED.to_string(),
             Err(error) => {
                 let Some(request_id) = error.unsupported_request_id() else {
                     break format!("read failed: {error}");

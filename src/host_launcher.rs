@@ -877,6 +877,7 @@ pub async fn run_host_process(
     // The launcher points stderr at `host.log`.
     yttt_host::logging::install(
         std::io::stderr,
+        "host",
         yttt_host::logging::verbose_setting(&bootstrap.config_root),
     );
     tracing::info!(

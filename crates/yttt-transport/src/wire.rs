@@ -60,6 +60,10 @@ pub enum WireError {
     InvalidChunk(&'static str),
     #[error("invalid compressed message: {0}")]
     InvalidCompression(&'static str),
+    /// The peer ended the stream between frames: it closed the connection,
+    /// rather than the connection breaking partway through a frame.
+    #[error("the peer closed the connection")]
+    Closed,
 }
 
 impl WireError {
@@ -114,8 +118,15 @@ pub(crate) async fn receive_frame(
     max_encoded_bytes: usize,
 ) -> Result<(DecodedFrame, Duration), WireError> {
     let mut header_bytes = [0_u8; HEADER_LEN];
+    let first = stream
+        .read(&mut header_bytes)
+        .await
+        .map_err(ProtocolCodecError::Io)?;
+    if first == 0 {
+        return Err(WireError::Closed);
+    }
     stream
-        .read_exact(&mut header_bytes)
+        .read_exact(&mut header_bytes[first..])
         .await
         .map_err(ProtocolCodecError::Io)?;
     let header = decode_header(&header_bytes)?;
@@ -277,6 +288,29 @@ mod tests {
     use yttt_protocol::{ClientRequest, FailureCode, Request};
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_stream_that_ends_between_frames_is_closed_and_one_cut_short_is_not() {
+        let mut empty: &[u8] = &[];
+        assert!(matches!(
+            receive_frame(&mut empty, FrameKind::Control, 1 << 20).await,
+            Err(WireError::Closed)
+        ));
+        let frame = encode_message(
+            FrameKind::Control,
+            &ControlMessage::Request(ClientRequest::new(1, Request::Ping { sent_millis: 0 })),
+        )
+        .unwrap();
+        let mut cut: &[u8] = &frame[..3];
+        assert!(matches!(
+            receive_frame(&mut cut, FrameKind::Control, 1 << 20).await,
+            Err(WireError::Codec(ProtocolCodecError::Io(_)))
+        ));
+        let mut whole: &[u8] = &frame;
+        receive_frame(&mut whole, FrameKind::Control, 1 << 20)
+            .await
+            .unwrap();
+    }
 
     #[derive(Serialize)]
     enum FutureBody {

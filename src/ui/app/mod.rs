@@ -60,7 +60,7 @@ pub fn run(
     desktop_shell: Arc<DesktopShellRuntime>,
     initial_command: DesktopShellCommand,
 ) {
-    crate::connection_log::install(&profile.paths().logs);
+    crate::connection_log::install(&profile.paths().logs, "desktop");
     tracing::info!(version = env!("CARGO_PKG_VERSION"), profile = %profile.id(), "desktop starting");
     if let Err(error) = crate::config::scope::bind_device_profile(&profile) {
         eprintln!("failed to initialize device preferences: {error}");
@@ -185,7 +185,7 @@ pub fn run(
 }
 
 pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
-    crate::connection_log::install(&launch.local_profile.paths().logs);
+    crate::connection_log::install(&launch.local_profile.paths().logs, "remote-window");
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         "remote window starting"

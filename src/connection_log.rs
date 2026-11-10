@@ -12,10 +12,13 @@ const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Sends this process's log lines to `logs/client.log`. Its detail starts
 /// normal and follows the settings once they are read.
-pub(crate) fn install(logs: &Path) {
+/// `process` names this process in each line, as `desktop` or
+/// `remote-window`, since both write the same file.
+pub(crate) fn install(logs: &Path, process: &'static str) {
     let _ = std::fs::create_dir_all(logs);
     yttt_host::logging::install(
         yttt_host::logging::RotatingFile::new(logs.join(LOG_FILE), MAX_LOG_BYTES),
+        process,
         false,
     );
 }

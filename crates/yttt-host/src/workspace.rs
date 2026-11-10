@@ -45,6 +45,29 @@ const MAX_BROWSE_ENTRIES: usize = 4096;
 
 /// Host-owned persistent remote workspace state for one profile.
 ///
+/// How long the configuration directory stays quiet after a change before
+/// it is reported, so an editor's save or a write and rename count once.
+const CONFIG_FILE_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Whether `path` is a configuration document under `config_root`: a TOML
+/// file outside the logs, runtime files and state that share the directory
+/// and change all the time.
+fn is_config_document(config_root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(config_root) else {
+        return false;
+    };
+    let busy = relative.components().next().is_some_and(|first| {
+        matches!(
+            first.as_os_str().to_str(),
+            Some("logs" | "runtime" | "state")
+        )
+    });
+    !busy
+        && relative
+            .extension()
+            .is_some_and(|extension| extension == "toml")
+}
+
 /// All mutations run under one mutex. A successful mutation has first been serialized, fsynced,
 /// atomically replaced, and directory-fsynced; only then is its in-memory state made visible.
 pub struct WorkspaceService {
@@ -447,10 +470,54 @@ impl WorkspaceService {
         response
     }
 
-    /// Notifies when configuration changes through the Host; edits made on
-    /// disk directly are not seen.
+    /// Notifies when configuration changes, through the Host or, once
+    /// [`watch_config_files`] runs, on disk directly.
     pub(crate) fn subscribe_config_changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.config_changes.subscribe()
+    }
+
+    /// Reports configuration edited on disk directly, as in an editor, to
+    /// the same subscribers as changes made through the Host, so Clients
+    /// can follow the Host's events instead of polling for such edits.
+    /// Changes arriving together are reported once.
+    pub(crate) fn watch_config_files(
+        self: &Arc<Self>,
+    ) -> notify::Result<notify::RecommendedWatcher> {
+        use notify::Watcher as _;
+        let (changed_tx, mut changed) = tokio::sync::mpsc::unbounded_channel::<()>();
+        // Events name the directory as the platform resolves it: macOS
+        // reports `/private/var` for a root under `/var`.
+        let roots = [
+            self.config_root.clone(),
+            fs::canonicalize(&self.config_root).unwrap_or_else(|_| self.config_root.clone()),
+        ];
+        let mut watcher =
+            notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                let Ok(event) = result else {
+                    return;
+                };
+                if event.need_rescan()
+                    || event
+                        .paths
+                        .iter()
+                        .any(|path| roots.iter().any(|root| is_config_document(root, path)))
+                {
+                    let _ = changed_tx.send(());
+                }
+            })?;
+        watcher.watch(&self.config_root, notify::RecursiveMode::Recursive)?;
+        let service = Arc::downgrade(self);
+        tokio::spawn(async move {
+            while changed.recv().await.is_some() {
+                tokio::time::sleep(CONFIG_FILE_SETTLE).await;
+                while changed.try_recv().is_ok() {}
+                let Some(service) = service.upgrade() else {
+                    break;
+                };
+                service.config_changes.send_modify(|changes| *changes += 1);
+            }
+        });
+        Ok(watcher)
     }
 
     fn handle_request(

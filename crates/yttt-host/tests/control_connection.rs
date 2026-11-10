@@ -464,3 +464,73 @@ async fn requests_from_a_newer_client_are_unsupported_without_dropping_the_conne
         Ok(Response::Pong { .. })
     ));
 }
+
+/// Scanning Agent history reads the Host's disk and can take seconds; the
+/// session's other requests must not wait for it. A FIFO in place of Codex's
+/// session index holds the scan open until the test writes to it.
+#[tokio::test]
+async fn a_slow_agent_history_scan_does_not_hold_up_the_sessions_other_requests() {
+    let host = RunningHost::start().await;
+    let codex = tempfile::tempdir().unwrap();
+    let index = codex.path().join("session_index.jsonl");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&index)
+            .status()
+            .unwrap()
+            .success()
+    );
+    // SAFETY: no other test in this binary reads or writes CODEX_HOME.
+    unsafe { std::env::set_var("CODEX_HOME", codex.path()) };
+    let mut stream = host.control_client("history-scan").await;
+    send_control(
+        &mut stream,
+        &ControlMessage::Request(ClientRequest::new(
+            1,
+            Request::Workspace(WorkspaceRequest::AgentSessions {
+                providers: vec!["codex".to_string()],
+                project_root: yttt_protocol::path::HostPath::from_path(codex.path()).unwrap(),
+            }),
+        )),
+    )
+    .await
+    .unwrap();
+
+    let listed = tokio::time::timeout(
+        Duration::from_secs(5),
+        control_request(&mut stream, 2, Request::Workspace(WorkspaceRequest::List)),
+    )
+    .await;
+    // Opened for reading and writing, the FIFO opens at once and lets the
+    // scan's open finish; closed, it reads as an empty index. Released before
+    // any assertion, so a failure does not leave the scan blocked forever.
+    drop(
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&index)
+            .unwrap(),
+    );
+    let listed = listed.expect("a request after the scan waited for it");
+    assert!(matches!(
+        listed,
+        Ok(Response::Workspace(WorkspaceResponse::Workspaces(_)))
+    ));
+
+    let scanned = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match receive_control(&mut stream).await.unwrap() {
+                ControlMessage::Response(response) if response.request_id == 1 => {
+                    return response.result;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the scan never answered");
+    assert!(matches!(
+        scanned,
+        Ok(Response::Workspace(WorkspaceResponse::AgentSessions { .. }))
+    ));
+}
