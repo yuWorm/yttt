@@ -1464,7 +1464,7 @@ async fn connected_session(
                 tracing::debug!(answered = last_inbound >= started, "probe finished");
                 if last_inbound < started {
                     break Some(format!(
-                        "Host did not answer within {} s of a wake or network change",
+                        "Host did not answer a link check within {} s",
                         PROBE_TIMEOUT.as_secs()
                     ));
                 }

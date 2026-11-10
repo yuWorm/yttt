@@ -158,8 +158,11 @@ impl ClientPipelineDiagnostics {
         round_trips.recent.push_back(duration);
     }
 
+    /// Notes a heartbeat sent at `at`. One sent while another still waits,
+    /// as a probe does, leaves the wait counted from the older one, so a
+    /// link that stopped answering does not look steady again.
     pub(crate) fn record_heartbeat_sent(&self, at: std::time::Instant) {
-        self.round_trips.lock().awaiting_since = Some(at);
+        self.round_trips.lock().awaiting_since.get_or_insert(at);
     }
 
     /// Forgets the link of a session that ended.
@@ -252,6 +255,12 @@ mod tests {
         assert!(late.unstable);
         assert_eq!(late.waiting_for, Some(Duration::from_secs(7)));
         assert_eq!(late.round_trip, Some(Duration::from_millis(45)));
+
+        // A probe's heartbeat does not restart the wait for the first one.
+        diagnostics.record_heartbeat_sent(start + Duration::from_secs(7));
+        let probed = diagnostics.link_health(start + Duration::from_secs(8), unstable_after);
+        assert!(probed.unstable);
+        assert_eq!(probed.waiting_for, Some(Duration::from_secs(8)));
 
         diagnostics.clear_link_health();
         assert_eq!(

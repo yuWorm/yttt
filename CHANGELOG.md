@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 修复远程窗口在“暂未响应”时点“立即检查”后遮罩消失约 5 秒才再出现；检查未得到回应时的断开原因改为“Host 未在 5 秒内回应连接检查”，不再误称唤醒或网络变化。
+- Fix a remote window's dimming going away for about 5 seconds after Check Now while its Host was not responding; when the check gets no answer the disconnect reason now says the Host did not answer a link check, instead of blaming a wake or network change.
+
 - 修复 Windows 升级在 Host 崩溃或被结束后被拒绝（“yttt Host 升级预检失败 … os error 2”）：残留的运行文件不再被当作仍在运行的 Host。此修复从下一次升级起生效，因为预检由已安装的版本执行。
 - Fix a Windows upgrade being refused after the Host crashed or was ended ("yttt Host upgrade preflight failed … os error 2"): runtime files a dead Host left behind no longer count as a running Host. It applies from the next upgrade on, since the installed version runs the preflight.
 

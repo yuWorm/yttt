@@ -633,7 +633,7 @@ async fn a_probed_session_that_hears_nothing_is_replaced_within_the_probe_timeou
     tokio::time::sleep(Duration::from_secs(1)).await;
     probe.notify_one();
     let reason = session.await.unwrap().expect("the session ends");
-    assert!(reason.contains("wake or network change"), "{reason}");
+    assert!(reason.contains("did not answer a link check"), "{reason}");
     // Without the probe the link would wait out its 20 s liveness timeout.
     assert!(
         started.elapsed() <= Duration::from_secs(1) + PROBE_TIMEOUT + Duration::from_millis(100)
