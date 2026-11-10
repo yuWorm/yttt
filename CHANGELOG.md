@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-11-10
+
 - 远程窗口重连后终端尺寸不再先被 Host 拒绝（`ResizeTerminal` StaleEpoch）再补发：附着完成前不发送尺寸，附着后一次发出。
 - After a remote window reconnects, a terminal's size is no longer sent before the Host has attached it, which the Host refused as stale before the size went again; it now goes once, after the attach.
 
