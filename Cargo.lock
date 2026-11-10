@@ -13771,6 +13771,7 @@ name = "yttt-transport-iroh"
 version = "0.5.4"
 dependencies = [
  "iroh",
+ "n0-future",
  "parking_lot",
  "tokio",
  "tracing",

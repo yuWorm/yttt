@@ -39,6 +39,54 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const STREAM_WINDOW: u32 = 256 * 1024;
 /// Bytes a sender may have outstanding across all of a connection's streams.
 const SEND_WINDOW: u64 = 2 * STREAM_WINDOW as u64;
+/// What a receiver lets its peer have outstanding over a relay. A relay
+/// queues what exceeds its rate instead of dropping it, so QUIC fills
+/// whatever window it is given: 256 KB through a relay carrying 40 KB/s held
+/// every heartbeat and reply about 6 s behind. 64 KB keeps that near 1.5 s
+/// and still carries about 200 KB/s at a 300 ms round trip.
+const RELAY_RECEIVE_WINDOW: u32 = 64 * 1024;
+
+/// The connection receive window for a connection whose selected path is
+/// (or is not) a relay.
+fn receive_window(relayed: bool) -> VarInt {
+    if relayed {
+        VarInt::from_u32(RELAY_RECEIVE_WINDOW)
+    } else {
+        VarInt::from_u64(SEND_WINDOW).expect("the send window fits a VarInt")
+    }
+}
+
+/// Keeps `connection`'s receive window to its selected path until it closes.
+fn follow_selected_path(connection: Connection) {
+    use n0_future::StreamExt as _;
+    tokio::spawn(async move {
+        let mut paths = connection.paths_stream();
+        let mut relayed = None;
+        loop {
+            let selected_relay = tokio::select! {
+                paths = paths.next() => match paths {
+                    Some(paths) => paths
+                        .iter()
+                        .find(|path| path.is_selected())
+                        .map(|path| path.is_relay()),
+                    None => break,
+                },
+                _ = connection.closed() => break,
+            };
+            if let Some(relay) = selected_relay
+                && relayed != Some(relay)
+            {
+                relayed = Some(relay);
+                connection.set_receive_window(receive_window(relay));
+                tracing::debug!(
+                    relay,
+                    window = receive_window(relay).into_inner(),
+                    "receive window follows the path"
+                );
+            }
+        }
+    });
+}
 
 /// Decides which peers an endpoint serves. Must answer quickly; it runs inside
 /// iroh's handshake processing.
@@ -202,6 +250,7 @@ impl IrohEndpoint {
         let transport = QuicTransportConfig::builder()
             .keep_alive_interval(KEEP_ALIVE)
             .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
+            .receive_window(receive_window(false))
             .send_window(SEND_WINDOW)
             .build();
         let mut builder = Endpoint::builder(presets::Minimal)
@@ -327,6 +376,7 @@ impl IrohEndpoint {
     }
 
     fn wrap(&self, connection: Connection) -> PeerConnection {
+        follow_selected_path(connection.clone());
         PeerConnection {
             peer: key_of(connection.remote_id()),
             connection,
@@ -498,4 +548,19 @@ fn key_of(key: PublicKey) -> EndpointKey {
 
 fn other(error: impl fmt::Display) -> TransportError {
     TransportError::Other(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_relayed_connection_lets_its_peer_hold_far_less_unread() {
+        let relayed = receive_window(true).into_inner();
+        let direct = receive_window(false).into_inner();
+        assert!(relayed < u64::from(STREAM_WINDOW));
+        assert_eq!(direct, SEND_WINDOW);
+        // Still a few round trips of a 250 KB/s relay at 300 ms.
+        assert!(relayed >= 250_000 * 3 / 10 / 2);
+    }
 }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 经慢速 relay 的远程窗口响应快得多：P2P 连接走 relay 时，两端只允许对方预先发出 64 KB（直连仍为 512 KB）。relay 超速时会排队而不是丢包，此前 256 KB 在约 40 KB/s 的 relay 上让心跳、回复与按键每次都晚约 6 秒，现在约 1.5 秒。
+- A remote window through a slow relay responds far sooner: over a relay each end of a P2P connection lets the other send only 64 KB ahead (512 KB on a direct path). A relay queues what exceeds its rate rather than dropping it, so 256 KB through a relay carrying about 40 KB/s held every heartbeat, reply and keystroke about 6 seconds behind; now it is about 1.5 seconds.
+
 - 远程窗口刚启动时不再 10 秒就报“无法建立连接 · Host connection timed out”：P2P 刚启动时找 relay 与路径可能要十几秒，首次连接现在像重连一样持续重试，最长 90 秒，期间可随时取消。
 - A remote window that just started no longer gives up after 10 seconds with "Host connection timed out": a P2P endpoint can take over ten seconds to reach its relay and find a path, so the first connection now keeps retrying like a reconnect, for up to 90 seconds, and can be cancelled meanwhile.
 

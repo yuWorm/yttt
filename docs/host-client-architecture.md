@@ -627,6 +627,7 @@ PTY child 退出后：
 | session 分块 | 32 KiB / chunk，接收端 4 个 stream、共 32 MiB |
 | session 可靠连续写出后让渲染 | 64 KiB |
 | P2P QUIC 流窗口 / 连接发送窗口 | 256 KiB / 512 KiB |
+| P2P 选中 relay 路径时的连接接收窗口 | 64 KiB（直连 512 KiB）；relay 超速时排队不丢包，窗口多大就排多久 |
 | Desktop semantic update mailbox | 64 updates / terminal |
 | Client event broadcast | 256 events |
 | request timeout | 10 s |
