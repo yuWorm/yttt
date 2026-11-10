@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-11-10
+
 - 修复远程窗口在 Agent 会话面板刷新时整窗卡住数秒：Host 扫描 Agent 历史不再挡住同一窗口的文件、配置与终端请求。
 - Fix a remote window freezing for seconds whenever its Agent sessions panel refreshed: the Host's scan of Agent history no longer holds up the window's file, configuration and terminal requests.
 - 在 Host 上用编辑器直接修改配置文件（如 `settings.toml`）会立即通知所有窗口；远程窗口不再每 2 秒经网络重读配置。
