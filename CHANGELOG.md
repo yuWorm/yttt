@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 远程窗口重连后终端尺寸不再先被 Host 拒绝（`ResizeTerminal` StaleEpoch）再补发：附着完成前不发送尺寸，附着后一次发出。
+- After a remote window reconnects, a terminal's size is no longer sent before the Host has attached it, which the Host refused as stale before the size went again; it now goes once, after the attach.
+
 - P2P 直连断掉后约 7 秒就改走 relay，此前要约 16 秒，期间窗口停在“暂未响应”。
 - When a P2P direct path breaks, the session moves to the relay after about 7 seconds instead of about 16, during which the window sat waiting for its Host.
 

@@ -283,6 +283,11 @@ impl HostTerminalWriter {
             self.pending_geometry.write().take();
             return;
         }
+        // Session epochs start at 1: until the attach reports this terminal's,
+        // a resize is refused as stale. The attach sends the geometry kept here.
+        if self.mutation_context.read().session_epoch == 0 {
+            return;
+        }
         let Some(geometry) = self.pending_geometry.write().take() else {
             return;
         };
