@@ -63,6 +63,38 @@ pub(super) enum HostOutageNotice {
     Dialog,
 }
 
+/// What the window shows of a remote Host link in trouble.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum HostLinkNotice {
+    /// The session is still up, but the Host has not answered a heartbeat
+    /// for `waited`, longer than the link counts as steady. Dimmed like a
+    /// short outage, since the window shows nothing new until it answers.
+    Stalled { waited: Duration },
+    /// The session is down.
+    Outage(crate::host_runtime::HostOutage, HostOutageNotice),
+}
+
+/// The notice for the link now: `outage` is the session being down for
+/// `down_for` milliseconds, `health` the link of a session still up, and
+/// `shown` whether the window shows a notice already, so a stall that turns
+/// into an outage stays dimmed instead of flashing clear for the delay.
+fn host_link_notice(
+    outage: Option<crate::host_runtime::HostOutage>,
+    down_for: u64,
+    health: Option<yttt_client_core::LinkHealth>,
+    shown: bool,
+) -> Option<HostLinkNotice> {
+    if let Some(outage) = outage {
+        let notice =
+            host_outage_notice(&outage, down_for).or(shown.then_some(HostOutageNotice::Brief))?;
+        return Some(HostLinkNotice::Outage(outage, notice));
+    }
+    let health = health.filter(|health| health.unstable)?;
+    Some(HostLinkNotice::Stalled {
+        waited: health.waiting_for.unwrap_or_default(),
+    })
+}
+
 /// The notice for an outage `down_for` milliseconds old, if it is time for one.
 fn host_outage_notice(
     outage: &crate::host_runtime::HostOutage,
@@ -110,8 +142,13 @@ pub(super) struct WorkspacePersistenceState {
     close_prompt_open: bool,
     closing: bool,
     last_error: Option<String>,
-    /// The window shows that its remote Host session is down.
+    /// The window shows that its remote Host link is in trouble.
     outage_shown: bool,
+    /// What it shows has included the session being down, so its end is a
+    /// recovery worth announcing.
+    outage_was_down: bool,
+    /// The kind of notice last logged, so each change is logged once.
+    outage_notice_kind: Option<&'static str>,
     /// A workspace from history that replaces this window's.
     pending_switch: Option<WorkspaceId>,
     /// Agent states opened as summaries whose boards are not read yet.
@@ -226,28 +263,50 @@ impl WorkbenchView {
         ));
     }
 
-    /// Why the remote Host session is down and how to show it, once it has
-    /// been long enough to say.
-    pub(super) fn visible_host_outage(
-        &self,
-    ) -> Option<(crate::host_runtime::HostOutage, HostOutageNotice)> {
-        let outage = self.terminal.host_runtime.as_ref()?.outage()?;
-        let down_for = super::bars::current_unix_millis().saturating_sub(outage.since_unix_millis);
-        let notice = host_outage_notice(&outage, down_for)?;
-        Some((outage, notice))
+    /// Why the remote Host link is in trouble and how to show it, once it
+    /// has been long enough to say.
+    pub(super) fn visible_host_outage(&self) -> Option<HostLinkNotice> {
+        let runtime = self.terminal.host_runtime.as_ref()?;
+        let outage = runtime.outage();
+        let down_for = outage.as_ref().map_or(0, |outage| {
+            super::bars::current_unix_millis().saturating_sub(outage.since_unix_millis)
+        });
+        host_link_notice(
+            outage,
+            down_for,
+            runtime.link_health(),
+            self.workspace_persistence.outage_shown,
+        )
     }
 
     /// Redraws while the outage notice shows, to count its time, and once
     /// more when it goes away.
     fn refresh_host_outage(&mut self, cx: &mut Context<Self>) {
-        let shown = self.visible_host_outage().is_some();
+        let notice = self.visible_host_outage();
+        let shown = notice.is_some();
         if shown || self.workspace_persistence.outage_shown {
             cx.notify();
         }
-        if self.workspace_persistence.outage_shown && !shown {
+        let state = &mut self.workspace_persistence;
+        let kind = notice.as_ref().map(|notice| match notice {
+            HostLinkNotice::Stalled { .. } => "stalled",
+            HostLinkNotice::Outage(_, HostOutageNotice::Brief) => "brief",
+            HostLinkNotice::Outage(_, HostOutageNotice::Dialog) => "dialog",
+        });
+        if kind != state.outage_notice_kind {
+            tracing::info!(notice = kind.unwrap_or("cleared"), "Host link notice");
+            state.outage_notice_kind = kind;
+        }
+        state.outage_was_down |= matches!(notice, Some(HostLinkNotice::Outage(..)));
+        // A stall that ends without losing the session has nothing to announce.
+        let recovered = state.outage_shown && !shown && state.outage_was_down;
+        if !shown {
+            state.outage_was_down = false;
+        }
+        state.outage_shown = shown;
+        if recovered {
             self.announce_host_recovery();
         }
-        self.workspace_persistence.outage_shown = shown;
     }
 
     /// Says the session is back and how long it was down, once the outage
@@ -1217,6 +1276,38 @@ mod outage_notice_tests {
         assert_eq!(
             host_outage_notice(&outage(None), 0),
             Some(HostOutageNotice::Dialog)
+        );
+    }
+
+    #[test]
+    fn a_host_that_stops_answering_dims_the_window_before_the_session_is_lost() {
+        let health = |waited: u64, unstable: bool| yttt_client_core::LinkHealth {
+            round_trip: Some(Duration::from_millis(40)),
+            unstable,
+            waiting_for: Some(Duration::from_secs(waited)),
+        };
+        assert_eq!(host_link_notice(None, 0, None, false), None);
+        assert_eq!(
+            host_link_notice(None, 0, Some(health(3, false)), false),
+            None
+        );
+        assert_eq!(
+            host_link_notice(None, 0, Some(health(7, true)), false),
+            Some(HostLinkNotice::Stalled {
+                waited: Duration::from_secs(7)
+            })
+        );
+        // Once lost, it stays dimmed through the delay a fresh outage waits.
+        assert_eq!(
+            host_link_notice(Some(outage(Some(1))), 100, None, true),
+            Some(HostLinkNotice::Outage(
+                outage(Some(1)),
+                HostOutageNotice::Brief
+            ))
+        );
+        assert_eq!(
+            host_link_notice(Some(outage(Some(1))), 100, None, false),
+            None
         );
     }
 }

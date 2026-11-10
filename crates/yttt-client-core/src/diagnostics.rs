@@ -52,6 +52,9 @@ pub struct LinkHealth {
     /// A heartbeat has waited for its reply longer than the link's
     /// `unstable_after`; the session is still up.
     pub unstable: bool,
+    /// How long the heartbeat still unanswered has waited; `None` when every
+    /// heartbeat has its reply.
+    pub waiting_for: Option<Duration>,
 }
 
 /// One time the Client lost its Host session.
@@ -172,11 +175,13 @@ impl ClientPipelineDiagnostics {
         let round_trips = self.round_trips.lock();
         let mut recent = round_trips.recent.iter().copied().collect::<Vec<_>>();
         recent.sort_unstable();
+        let waiting_for = round_trips
+            .awaiting_since
+            .map(|sent| now.saturating_duration_since(sent));
         LinkHealth {
             round_trip: recent.get(recent.len() / 2).copied(),
-            unstable: round_trips
-                .awaiting_since
-                .is_some_and(|sent| now.saturating_duration_since(sent) >= unstable_after),
+            unstable: waiting_for.is_some_and(|waited| waited >= unstable_after),
+            waiting_for,
         }
     }
 
@@ -245,6 +250,7 @@ mod tests {
         assert!(!waiting.unstable);
         let late = diagnostics.link_health(start + Duration::from_secs(7), unstable_after);
         assert!(late.unstable);
+        assert_eq!(late.waiting_for, Some(Duration::from_secs(7)));
         assert_eq!(late.round_trip, Some(Duration::from_millis(45)));
 
         diagnostics.clear_link_health();

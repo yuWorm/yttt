@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 远程窗口在 Host 停止响应约 6 秒时就变暗提示“暂未响应，正在等待”，并可“立即检查”，不必等到 20 秒判定断开；之后断开时直接转为重连提示。
+- A remote window dims about 6 seconds after its Host stops answering, saying it is waiting, with a Check Now button, instead of looking frozen until the link is given up on at 20 seconds; if the link is then lost, the notice turns into the reconnecting one.
+
 ## 0.5.3 - 2026-11-09
 
 - 修复本机与远程窗口在构建、checkout 等大量文件变化时反复断开重连（Host 日志 `send queue overflowed`）：同一项目的文件变化合并为一条，资源目录与配置通知也合并；每次连接不再把 Agent 状态推送两遍。

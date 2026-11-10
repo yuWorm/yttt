@@ -484,7 +484,7 @@ impl Render for WorkbenchView {
             root = root.children(ssh_host_key_overlay(self, cx));
         }
         // Last, so it covers everything the lost session made stale.
-        if let Some((outage, notice)) = self.visible_host_outage() {
+        if let Some(notice) = self.visible_host_outage() {
             let host = self
                 .terminal
                 .host_runtime
@@ -493,11 +493,15 @@ impl Render for WorkbenchView {
                 .and_then(|label| label.rsplit(" · ").next())
                 .unwrap_or(self.ui_text.get(UiTextKey::TrayHost))
                 .to_string();
+            use super::persistence::{HostLinkNotice, HostOutageNotice};
             root = root.child(match notice {
-                super::persistence::HostOutageNotice::Brief => {
+                HostLinkNotice::Stalled { waited } => {
+                    host_stalled_notice(cx, &self.ui_text, appearance.ui, &host, waited)
+                }
+                HostLinkNotice::Outage(outage, HostOutageNotice::Brief) => {
                     host_outage_notice(cx, &self.ui_text, appearance.ui, &host, &outage)
                 }
-                super::persistence::HostOutageNotice::Dialog => {
+                HostLinkNotice::Outage(outage, HostOutageNotice::Dialog) => {
                     host_outage_dialog(cx, &self.ui_text, appearance.ui, &host, &outage)
                 }
             });

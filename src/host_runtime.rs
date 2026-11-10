@@ -497,6 +497,12 @@ impl DesktopHostRuntime {
         self.client.retry_now();
     }
 
+    /// Checks at once that the session still reaches the Host, replacing it
+    /// when the Host stays silent.
+    pub fn probe_now(&self) {
+        self.client.probe_now();
+    }
+
     pub fn claim_workspace_view(
         &self,
         restore_existing: bool,

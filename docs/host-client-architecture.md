@@ -733,6 +733,10 @@ Disconnected -> Connecting -> Ready
   已断开时长与“立即重连”：唤醒、切换网络等大多在这期间恢复，内容保持可读。断开超过 15 s（或已停止重试）时改为
   居中对话框，显示 Host 名、第几次重连与已断开时长、断开原因，提供“立即重连”（`retry_now`，停止重试后不显示）
   与“关闭窗口”；恢复后遮罩消失。
+- 会话仍在但心跳超过 `LinkProfile::unstable_after`（6 s）未回复时，远程窗口同样变暗，顶部显示“暂未响应，正在等待”、
+  已等待时长与“立即检查”（`probe_now`：5 s 内收不到 Host 任何消息即换新会话），不必等满 `liveness_timeout`。
+  随后会话断开时遮罩不消失，直接转为断开提示；只因等待而变暗、未断开即恢复时不提示“已重新连接”。
+  每次提示种类变化记一行 `Host link notice`（stalled、brief、dialog、cleared）。
 - 底层连接建立的期限由 connector 的 `LinkProfile` 决定：本机 30 s，远程（SSH 隧道、TLS）90 s；TLS connector 内部另以
   TCP 建连（含解析，多个地址错开 250 ms 并行尝试）15 s、TLS 握手 10 s 分别计时；应用握手最多 5 s，控制状态查询最多 10 s；初次 ClientCore 建立仍受 10 s 总期限约束。帧写入连续 30 s 无进展时废弃该流；持续有进展的慢速传输不受整帧总时长限制。
 - 心跳 Ping 以交互优先级每 `LinkProfile::heartbeat_interval`（本机 5 s，远程 2 s）发送一次。有心跳未回复时，

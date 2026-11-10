@@ -1364,8 +1364,6 @@ pub(super) fn project_empty_terminal_state(
         )
 }
 
-/// Covers a remote window whose Host session is down: what happened, and the
-/// two things the user can do about it.
 /// A short outage: the window stays readable under the dimmed layer, which
 /// holds input until the session is back.
 pub(super) fn host_outage_notice(
@@ -1375,19 +1373,71 @@ pub(super) fn host_outage_notice(
     host: &str,
     outage: &crate::host_runtime::HostOutage,
 ) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
-    let ui_style = current_ui_style(cx);
-    let dialog = yttt_dialog_style(theme, ui_style);
     let elapsed = super::bars::format_state_duration(
         super::bars::current_unix_millis().saturating_sub(outage.since_unix_millis),
         ui_text,
     );
-    let progress = ui_text
-        .get(UiTextKey::HostOutageReconnecting)
-        .replace("{attempt}", &outage.attempt.unwrap_or_default().to_string())
-        .replace("{elapsed}", &elapsed);
+    host_link_notice(
+        cx,
+        theme,
+        "host-outage-notice",
+        "host-outage-notice-retry",
+        ui_text
+            .get(UiTextKey::HostOutageBriefTitle)
+            .replace("{host}", host),
+        ui_text
+            .get(UiTextKey::HostOutageReconnecting)
+            .replace("{attempt}", &outage.attempt.unwrap_or_default().to_string())
+            .replace("{elapsed}", &elapsed),
+        ui_text.get(UiTextKey::HostOutageRetry),
+        crate::host_runtime::DesktopHostRuntime::retry_now,
+    )
+}
+
+/// A session still up whose Host has stopped answering: dimmed the same way,
+/// before the session is given up on, with a check that settles it sooner.
+pub(super) fn host_stalled_notice(
+    cx: &mut Context<WorkbenchView>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+    host: &str,
+    waited: std::time::Duration,
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
+    let elapsed = super::bars::format_state_duration(waited.as_millis() as u64, ui_text);
+    host_link_notice(
+        cx,
+        theme,
+        "host-stalled-notice",
+        "host-stalled-notice-probe",
+        ui_text
+            .get(UiTextKey::HostStalledTitle)
+            .replace("{host}", host),
+        ui_text
+            .get(UiTextKey::HostStalledWaiting)
+            .replace("{elapsed}", &elapsed),
+        ui_text.get(UiTextKey::HostStalledProbe),
+        crate::host_runtime::DesktopHostRuntime::probe_now,
+    )
+}
+
+/// A dimmed layer over the window with a line about the Host link, how long
+/// it has been, and one action.
+#[allow(clippy::too_many_arguments)]
+fn host_link_notice(
+    cx: &mut Context<WorkbenchView>,
+    theme: WorkbenchTheme,
+    selector: &'static str,
+    action_id: &'static str,
+    title: String,
+    progress: String,
+    action_label: &'static str,
+    action: fn(&crate::host_runtime::DesktopHostRuntime),
+) -> yttt_ui::primitives::dialog::YtttDialogOverlay {
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
     yttt_dialog_overlay(
         yttt_dialog_surface(theme, ui_style)
-            .debug_selector(|| "host-outage-notice".into())
+            .debug_selector(move || selector.into())
             .flex()
             .items_center()
             .gap(ui_style.spacing.md)
@@ -1397,24 +1447,18 @@ pub(super) fn host_outage_notice(
                     .flex()
                     .flex_col()
                     .gap(ui_style.spacing.xs)
-                    .child(
-                        div().text_sm().child(
-                            ui_text
-                                .get(UiTextKey::HostOutageBriefTitle)
-                                .replace("{host}", host),
-                        ),
-                    )
+                    .child(div().text_sm().child(title))
                     .child(div().text_xs().text_color(dialog.hint).child(progress)),
             )
             .child(yttt_dialog_button(
                 cx,
-                "host-outage-notice-retry",
-                ui_text.get(UiTextKey::HostOutageRetry),
+                action_id,
+                action_label,
                 YtttButtonVariant::Secondary,
                 theme,
-                cx.listener(|this, _, _window, _cx| {
+                cx.listener(move |this, _, _window, _cx| {
                     if let Some(runtime) = &this.terminal.host_runtime {
-                        runtime.retry_now();
+                        action(runtime);
                     }
                 }),
             )),
