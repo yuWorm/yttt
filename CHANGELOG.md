@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 修复 Windows 升级在 Host 崩溃或被结束后被拒绝（“yttt Host 升级预检失败 … os error 2”）：残留的运行文件不再被当作仍在运行的 Host。此修复从下一次升级起生效，因为预检由已安装的版本执行。
+- Fix a Windows upgrade being refused after the Host crashed or was ended ("yttt Host upgrade preflight failed … os error 2"): runtime files a dead Host left behind no longer count as a running Host. It applies from the next upgrade on, since the installed version runs the preflight.
+
 ## 0.5.4 - 2026-11-10
 
 - 修复远程窗口在 Agent 会话面板刷新时整窗卡住数秒：Host 扫描 Agent 历史不再挡住同一窗口的文件、配置与终端请求。

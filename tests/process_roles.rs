@@ -176,6 +176,32 @@ fn desktop_host_cli_starts_reports_reuses_and_stops_the_profile_host() {
     assert!(stopped_status.status.success(), "{stopped_status:?}");
 }
 
+/// A Host that crashed or was killed leaves its runtime files behind; the
+/// installer must not refuse to upgrade because it cannot reach that Host.
+#[test]
+fn installer_preflight_passes_over_files_a_dead_host_left_behind() {
+    let temporary = tempdir().unwrap();
+    let profile_root = temporary.path().join("profile");
+    let profile = installer_profile(&profile_root);
+    let runtime = &profile.paths().runtime;
+    fs::create_dir_all(runtime).unwrap();
+    fs::write(runtime.join("host.pid"), "4194303").unwrap();
+    fs::write(runtime.join("host-ready.json"), "{}").unwrap();
+    let report = temporary.path().join("stale-preflight.txt");
+    let status = Command::new(test_executable())
+        .arg("--installer-host-preflight")
+        .arg(&report)
+        .env("YTTT_PROFILE_ROOT", &profile_root)
+        .status()
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(&report).unwrap(),
+        "not-running\n",
+        "{status:?}"
+    );
+    assert!(status.success());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn installer_preflight_stops_idle_host_and_preserves_busy_host() {
     let temporary = tempdir().unwrap();

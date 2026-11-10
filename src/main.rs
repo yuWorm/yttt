@@ -416,7 +416,12 @@ fn write_installer_preflight_report(path: &PathBuf, message: &str) {
 
 fn run_installer_host_preflight(profile: AppProfile, report: PathBuf) -> i32 {
     let runtime_paths = profile.paths().runtime.clone();
-    if !runtime_paths.join("host-ready.json").exists() && !runtime_paths.join("host.pid").exists() {
+    let files_left =
+        runtime_paths.join("host-ready.json").exists() || runtime_paths.join("host.pid").exists();
+    // A live Host holds the profile lock, which the system releases however
+    // the process ends. Files without it were left by a Host that crashed or
+    // was killed, and there is nothing to stop: connecting would only fail.
+    if !files_left || matches!(yttt_host::profile_lock_is_held(&runtime_paths), Ok(false)) {
         write_installer_preflight_report(&report, "not-running");
         return 0;
     }
