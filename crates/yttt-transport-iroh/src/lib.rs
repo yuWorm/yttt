@@ -56,6 +56,140 @@ fn receive_window(relayed: bool) -> VarInt {
     }
 }
 
+/// How long iroh's own resolver may take for one name.
+const DNS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Resolves names with iroh's resolver and the system's at once, taking the
+/// first answer. iroh asks the configured nameservers itself over UDP, which
+/// a network or firewall that lets only the system resolver through blocks:
+/// the relay's name then never resolved and the relay was out of reach,
+/// though every other program could still look it up. TXT records, which
+/// the system resolver cannot look up, go to iroh's alone.
+#[derive(Debug)]
+struct SystemFallbackResolver {
+    iroh: iroh::dns::DnsResolver,
+}
+
+impl SystemFallbackResolver {
+    fn resolver() -> iroh::dns::DnsResolver {
+        iroh::dns::DnsResolver::custom(Self {
+            iroh: iroh::dns::DnsResolver::new(),
+        })
+    }
+
+    /// The first of iroh's and the system's answers for `host`; iroh's error
+    /// when neither has one.
+    async fn first_answer<A, I>(
+        iroh: impl Future<Output = Result<I, iroh::dns::DnsError>>,
+        host: String,
+        pick: fn(std::net::IpAddr) -> Option<A>,
+    ) -> Result<Vec<A>, iroh::dns::DnsError>
+    where
+        I: Iterator<Item = std::net::IpAddr>,
+    {
+        let system = async move {
+            let addresses = tokio::net::lookup_host((host.as_str(), 0)).await.ok()?;
+            let picked = addresses
+                .filter_map(|address| pick(address.ip()))
+                .collect::<Vec<_>>();
+            (!picked.is_empty()).then_some(picked)
+        };
+        tokio::pin!(iroh, system);
+        let (mut iroh_done, mut system_done, mut iroh_error) = (false, false, None);
+        while !(iroh_done && system_done) {
+            tokio::select! {
+                answer = &mut iroh, if !iroh_done => {
+                    iroh_done = true;
+                    match answer {
+                        Ok(addresses) => {
+                            let picked = addresses.filter_map(pick).collect::<Vec<_>>();
+                            if !picked.is_empty() {
+                                return Ok(picked);
+                            }
+                        }
+                        Err(error) => iroh_error = Some(error),
+                    }
+                }
+                picked = &mut system, if !system_done => {
+                    system_done = true;
+                    if let Some(picked) = picked {
+                        return Ok(picked);
+                    }
+                }
+            }
+        }
+        iroh_error.map_or_else(|| Ok(Vec::new()), Err)
+    }
+}
+
+impl iroh::dns::Resolver for SystemFallbackResolver {
+    fn lookup_ipv4(
+        &self,
+        host: String,
+    ) -> n0_future::boxed::BoxFuture<
+        Result<iroh::dns::BoxIter<std::net::Ipv4Addr>, iroh::dns::DnsError>,
+    > {
+        let iroh = self.iroh.clone();
+        Box::pin(async move {
+            let answer = Self::first_answer(
+                async { iroh.lookup_ipv4(host.clone(), DNS_TIMEOUT).await },
+                host.clone(),
+                |address| match address {
+                    std::net::IpAddr::V4(address) => Some(address),
+                    std::net::IpAddr::V6(_) => None,
+                },
+            )
+            .await?;
+            Ok(Box::new(answer.into_iter()) as iroh::dns::BoxIter<_>)
+        })
+    }
+
+    fn lookup_ipv6(
+        &self,
+        host: String,
+    ) -> n0_future::boxed::BoxFuture<
+        Result<iroh::dns::BoxIter<std::net::Ipv6Addr>, iroh::dns::DnsError>,
+    > {
+        let iroh = self.iroh.clone();
+        Box::pin(async move {
+            let answer = Self::first_answer(
+                async { iroh.lookup_ipv6(host.clone(), DNS_TIMEOUT).await },
+                host.clone(),
+                |address| match address {
+                    std::net::IpAddr::V6(address) => Some(address),
+                    std::net::IpAddr::V4(_) => None,
+                },
+            )
+            .await?;
+            Ok(Box::new(answer.into_iter()) as iroh::dns::BoxIter<_>)
+        })
+    }
+
+    fn lookup_txt(
+        &self,
+        host: String,
+    ) -> n0_future::boxed::BoxFuture<
+        Result<iroh::dns::BoxIter<iroh::dns::TxtRecordData>, iroh::dns::DnsError>,
+    > {
+        let iroh = self.iroh.clone();
+        Box::pin(async move {
+            let records = iroh.lookup_txt(host, DNS_TIMEOUT).await?;
+            Ok(Box::new(records.collect::<Vec<_>>().into_iter()) as iroh::dns::BoxIter<_>)
+        })
+    }
+
+    fn clear_cache(&self) {
+        self.iroh.clear_cache();
+    }
+
+    fn reset(&self) -> Box<dyn iroh::dns::Resolver> {
+        self.iroh.reset();
+        Box::new(Self {
+            iroh: self.iroh.clone(),
+        })
+    }
+}
+
 /// Keeps `connection`'s receive window to its selected path until it closes.
 fn follow_selected_path(connection: Connection) {
     use n0_future::StreamExt as _;
@@ -258,6 +392,7 @@ impl IrohEndpoint {
             .alpns(config.alpns)
             .relay_mode(relay_mode)
             .transport_config(transport)
+            .dns_resolver(SystemFallbackResolver::resolver())
             .hooks(GateHook {
                 gate: config.gate.clone(),
                 registry: registry.clone(),
@@ -562,5 +697,31 @@ mod tests {
         assert_eq!(direct, SEND_WINDOW);
         // Still a few round trips of a 250 KB/s relay at 300 ms.
         assert!(relayed >= 250_000 * 3 / 10 / 2);
+    }
+
+    /// iroh's own lookup never answering, as when its UDP queries are
+    /// blocked, leaves the system's answer to resolve the name.
+    #[tokio::test]
+    async fn a_name_iroh_cannot_resolve_is_resolved_by_the_system() {
+        let answer = tokio::time::timeout(
+            Duration::from_secs(5),
+            SystemFallbackResolver::first_answer(
+                std::future::pending::<
+                    Result<std::iter::Empty<std::net::IpAddr>, iroh::dns::DnsError>,
+                >(),
+                "localhost".to_string(),
+                |address| match address {
+                    std::net::IpAddr::V4(address) => Some(address),
+                    std::net::IpAddr::V6(_) => None,
+                },
+            ),
+        )
+        .await
+        .expect("the system's answer was not taken")
+        .unwrap();
+        assert!(
+            answer.contains(&std::net::Ipv4Addr::LOCALHOST),
+            "{answer:?}"
+        );
     }
 }

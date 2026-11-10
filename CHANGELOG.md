@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 只放行系统 DNS 的网络里 P2P 仍能用 relay：此前 iroh 自己经 UDP 查询 relay 域名，被拦时 relay 完全连不上（日志 `Resolve failed … Request timed out`），现在同时向系统解析器查询，取先到的结果。
+- P2P can still use its relay on a network that lets only the system resolver look names up: iroh queried the relay's name itself over UDP, and when that was blocked the relay was out of reach (`Resolve failed … Request timed out` in the log); the system resolver is now asked at the same time and the first answer wins.
+
 - 经慢速 relay 的远程窗口响应快得多：P2P 连接走 relay 时，两端只允许对方预先发出 64 KB（直连仍为 512 KB）。relay 超速时会排队而不是丢包，此前 256 KB 在约 40 KB/s 的 relay 上让心跳、回复与按键每次都晚约 6 秒，现在约 1.5 秒。
 - A remote window through a slow relay responds far sooner: over a relay each end of a P2P connection lets the other send only 64 KB ahead (512 KB on a direct path). A relay queues what exceeds its rate rather than dropping it, so 256 KB through a relay carrying about 40 KB/s held every heartbeat, reply and keystroke about 6 seconds behind; now it is about 1.5 seconds.
 
