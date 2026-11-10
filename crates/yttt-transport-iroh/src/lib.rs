@@ -56,6 +56,13 @@ fn receive_window(relayed: bool) -> VarInt {
     }
 }
 
+/// How often a direct path is probed, and how long it may stay silent before
+/// it is given up for another, such as the relay. iroh's 5 s and 15 s left a
+/// session whose direct path broke frozen for 16 s before it moved to the
+/// relay; three probes missed in a row is enough to say the path is gone.
+const PATH_KEEP_ALIVE: Duration = Duration::from_secs(2);
+const PATH_IDLE_TIMEOUT: Duration = Duration::from_secs(7);
+
 /// How long iroh's own resolver may take for one name.
 const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -383,6 +390,8 @@ impl IrohEndpoint {
         };
         let transport = QuicTransportConfig::builder()
             .keep_alive_interval(KEEP_ALIVE)
+            .default_path_keep_alive_interval(PATH_KEEP_ALIVE)
+            .default_path_max_idle_timeout(PATH_IDLE_TIMEOUT)
             .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
             .receive_window(receive_window(false))
             .send_window(SEND_WINDOW)

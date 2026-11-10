@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- P2P 直连断掉后约 7 秒就改走 relay，此前要约 16 秒，期间窗口停在“暂未响应”。
+- When a P2P direct path breaks, the session moves to the relay after about 7 seconds instead of about 16, during which the window sat waiting for its Host.
+
 - 只放行系统 DNS 的网络里 P2P 仍能用 relay：此前 iroh 自己经 UDP 查询 relay 域名，被拦时 relay 完全连不上（日志 `Resolve failed … Request timed out`），现在同时向系统解析器查询，取先到的结果。
 - P2P can still use its relay on a network that lets only the system resolver look names up: iroh queried the relay's name itself over UDP, and when that was blocked the relay was out of reach (`Resolve failed … Request timed out` in the log); the system resolver is now asked at the same time and the first answer wins.
 
