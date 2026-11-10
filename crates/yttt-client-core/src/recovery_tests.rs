@@ -1211,3 +1211,48 @@ async fn slow_frame_write_can_exceed_timeout_while_making_progress() {
         .unwrap();
     sink.await.unwrap();
 }
+
+/// A connector whose every attempt fails in a way worth retrying.
+#[derive(Clone)]
+struct UnreachableConnector(LinkProfile);
+
+impl TransportConnector for UnreachableConnector {
+    fn connect(
+        &self,
+    ) -> yttt_transport::BoxFuture<
+        '_,
+        Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+    > {
+        Box::pin(async {
+            Err(yttt_transport::TransportError::Other(
+                "P2P connection timed out".to_string(),
+            ))
+        })
+    }
+
+    fn link_profile(&self) -> LinkProfile {
+        self.0
+    }
+}
+
+/// A remote window that just started can take well over ten seconds to
+/// reach its Host, as a P2P endpoint finds its relay; it keeps trying for
+/// as long as one remote connection may take, while a local one gives up
+/// at ten seconds.
+#[tokio::test(start_paused = true)]
+async fn a_remote_connect_keeps_retrying_for_the_links_connect_timeout() {
+    for (link, waited) in [
+        (LinkProfile::LOCAL, INITIAL_CONNECT_TIMEOUT),
+        (LinkProfile::REMOTE, LinkProfile::REMOTE.connect_timeout),
+    ] {
+        let started = tokio::time::Instant::now();
+        let result = ClientCore::connect(
+            UnreachableConnector(link),
+            identity(),
+            yttt_transport::AuthToken::from_bytes([7; 32]),
+        )
+        .await;
+        assert!(matches!(result, Err(ClientCoreError::ConnectionTimeout)));
+        assert_eq!(started.elapsed().as_secs(), waited.as_secs(), "{link:?}");
+    }
+}

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 远程窗口刚启动时不再 10 秒就报“无法建立连接 · Host connection timed out”：P2P 刚启动时找 relay 与路径可能要十几秒，首次连接现在像重连一样持续重试，最长 90 秒，期间可随时取消。
+- A remote window that just started no longer gives up after 10 seconds with "Host connection timed out": a P2P endpoint can take over ten seconds to reach its relay and find a path, so the first connection now keeps retrying like a reconnect, for up to 90 seconds, and can be cancelled meanwhile.
+
 - 修复远程窗口在“暂未响应”时点“立即检查”后遮罩消失约 5 秒才再出现；检查未得到回应时的断开原因改为“Host 未在 5 秒内回应连接检查”，不再误称唤醒或网络变化。
 - Fix a remote window's dimming going away for about 5 seconds after Check Now while its Host was not responding; when the check gets no answer the disconnect reason now says the Host did not answer a link check, instead of blaming a wake or network change.
 

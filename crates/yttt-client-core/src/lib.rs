@@ -46,6 +46,18 @@ const EVENT_CAPACITY: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const INITIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long [`ClientCore::connect`] keeps retrying before it gives up. A
+/// network link gets as long as one connection to it may take: a P2P
+/// endpoint that just started can need well over ten seconds to reach its
+/// relay and find a path, and the window waiting on it can be cancelled.
+fn initial_connect_timeout(link: LinkProfile) -> Duration {
+    if link == LinkProfile::LOCAL {
+        INITIAL_CONNECT_TIMEOUT
+    } else {
+        link.connect_timeout.max(INITIAL_CONNECT_TIMEOUT)
+    }
+}
 const REMOTE_BINDING_TIMEOUT: Duration = Duration::from_secs(30);
 /// How many liveness timeouts a Pong may lag while other messages arrive.
 const HEARTBEAT_UNANSWERED_FACTOR: u32 = 4;
@@ -356,7 +368,7 @@ impl ClientCore {
             link: connector.link_profile(),
             supervisor: Mutex::new(Some(supervisor)),
         });
-        let initial = tokio::time::timeout(INITIAL_CONNECT_TIMEOUT, initial_rx)
+        let initial = tokio::time::timeout(initial_connect_timeout(inner.link), initial_rx)
             .await
             .map_err(|_| ClientCoreError::ConnectionTimeout)?
             .map_err(|_| ClientCoreError::SupervisorStopped)?;
