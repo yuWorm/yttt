@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 远程窗口在被强制结束后重开时连上得更快：Host 现在并行完成 P2P 握手，一个卡住的握手（例如来自刚被结束的窗口）不再让后续连接排队等它约 30 秒超时。
+- A remote window reopened after being killed connects much sooner: the Host now finishes P2P handshakes side by side, so one that stalls, such as one from the window just killed, no longer makes later connections queue behind its 30-second timeout.
+
+- 控制面连不上的网络里，打开远程窗口不再先空等 20 秒：获取 relay 凭据最多等 5 秒，之后改用配对时的 relay。
+- On a network that cannot reach the control plane, opening a remote window no longer spends 20 seconds before it starts connecting: it waits at most 5 seconds for a relay ticket, then uses the relay from pairing.
+
 ## 0.5.6 - 2026-11-11
 
 - 远程窗口在上一个被强制结束后立即重开时不再要等约 40 秒：P2P 连接在客户端看来已建立、Host 却从未接受时，握手超时后会重新拨号，而不是在这条死连接上反复等待。
