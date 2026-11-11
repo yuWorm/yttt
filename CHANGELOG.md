@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.7 - 2026-11-11
+
 - 远程窗口在被强制结束后重开时连上得更快：Host 现在并行完成 P2P 握手，一个卡住的握手（例如来自刚被结束的窗口）不再让后续连接排队等它约 30 秒超时。
 - A remote window reopened after being killed connects much sooner: the Host now finishes P2P handshakes side by side, so one that stalls, such as one from the window just killed, no longer makes later connections queue behind its 30-second timeout.
 
