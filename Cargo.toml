@@ -5,6 +5,7 @@ members = [
     "crates/yttt-agent-providers",
     "crates/yttt-agent-runtime",
     "crates/yttt-client-core",
+    "crates/yttt-mobile-core",
     "crates/yttt-host",
     "crates/yttt-server",
     "crates/yttt-protocol",
