@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。所有改动都在 `.worktrees/mobile-spike`（分支 `spike/mobile-client`）里进行。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** 未开始。
+**状态：** 0 进行中（Rust target、Android command-line tools、cargo-ndk 已装；SDK 组件安装中）。计划已按 2026-11-11 审查意见修订。
 
 **设计：** [`2026-11-11-mobile-client-design.md`](./2026-11-11-mobile-client-design.md)
 
@@ -12,7 +12,7 @@
 2. 把 Host 语义增量编码为 VT 重绘序列、按屏幕刷新拉取，交给 SwiftTerm / Termux 显示，是否正确、是否流畅。
 3. Termux 终端组件能否接远程数据源。
 
-**不在 spike 内：** 首页、抽屉、文件、通知、Keychain、扫码；Host 协议改动。spike 代码可以粗糙，但 `yttt-mobile-core` 的 VT 编码器按正式代码写（有测试），之后直接沿用。
+**不在 spike 内：** 首页、抽屉、文件、通知、Keychain、扫码；Host 与 wire 协议改动（设计 §7 问题 1、2 的协议改动另立计划）。spike 代码可以粗糙，但 `yttt-mobile-core` 的 VT 编码器按正式代码写（有测试），之后直接沿用。
 
 ---
 
@@ -20,100 +20,114 @@
 
 - [ ] 0 → 7 顺序执行，每项单独提交。
 - [ ] 不改 Host 与 wire 协议；`cargo test --workspace` 在每次提交前保持通过（新 crate 自己的测试也在其中）。
-- [ ] Rust 依赖固定精确版本（与仓库其他 crate 一致）；UniFFI 用 `=0.31.1`，与本机 `uniffi-bindgen 0.31.1` 一致。
-- [ ] 设备私钥在 spike 中存 App 沙盒文件，并在代码里标注“spike：正式版改 Keychain/Keystore”。
+- [ ] 新依赖按仓库多数 crate 的写法用 caret 版本；UniFFI 固定 `=0.31.1`，与本机 `uniffi-bindgen 0.31.1` 一致。
+- [ ] 设备私钥与 `client_instance_id` 在 spike 中存 App 沙盒文件，并在代码里标注“spike：正式版改 Keychain/Keystore”。
+- [ ] 手动测试只连开发 Host（`scripts/run-dev-app.sh`），不连正式 profile：配对会留下受信设备，接管会抢走电脑上的终端。每轮手测结束后在开发 Host 上撤销测试设备，并在本计划里记一笔。
+- [ ] 终端一律以 Observer 附加；只有用户点“接管”时才发 `TakeTerminalController`。
 
 ---
 
 # 0：工具链
 
-- [ ] `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`（不改仓库文件）。
-- [ ] Android：本机没有 SDK/NDK。需要用户同意后安装 command-line tools、platform-tools、一个 API 35 平台、NDK、arm64 模拟器镜像，以及 `cargo-ndk`、`rustup target add aarch64-linux-android`。未安装时第 6 项标为受阻，不影响 1–5。
+- [x] `rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-linux-android`（不改仓库文件）。
+- [x] Android command-line tools（Homebrew cask `android-commandlinetools`，`ANDROID_HOME=/opt/homebrew/share/android-commandlinetools`）、`cargo-ndk`。
+- [ ] `sdkmanager`：`platform-tools`、`platforms;android-35`、`build-tools;35.0.0`、`ndk;28.2.13676358`、`emulator`、`system-images;android-35;google_apis;arm64-v8a`；用 `avdmanager` 建一个 arm64 模拟器。
 
-# 1：`yttt-mobile-core` 骨架
+# 1：`yttt-mobile-core` 骨架与交叉编译
 
-- [ ] 新 crate `crates/yttt-mobile-core`，`crate-type = ["lib", "staticlib", "cdylib"]`，依赖 `yttt-client-core`、`yttt-protocol`、`yttt-transport`、`yttt-transport-iroh`、`yttt-core`、`tokio`、`uniffi`。加入 workspace members。
+- [ ] 新 crate `crates/yttt-mobile-core`，`crate-type = ["lib", "staticlib", "cdylib"]`，依赖 `yttt-client-core`、`yttt-protocol`、`yttt-transport`、`yttt-transport-iroh`、`yttt-terminal-core`（`STYLE_*` 常量）、`yttt-core`、`tokio`、`uniffi`。加入 workspace members。
 - [ ] 一个导出函数 `core_version() -> String` 作为 FFI 冒烟。
+- [ ] `yttt-transport-iroh` 的 iroh 依赖：`fast-apple-datapath` 只在 `cfg(target_os = "macos")` 下启用（私有 API，有 App Store 拒审风险）；`portmapper` 在 iOS / Android 下不启用（UPnP 在 iOS 需要 multicast entitlement）。桌面三平台的 feature 集合保持不变。
 
 **验收：**
-- [ ] `cargo build -p yttt-mobile-core --release --target aarch64-apple-ios-sim` 与 `--target aarch64-apple-ios` 成功；记录 staticlib 大小。
-- [ ] 失败时记录具体是哪个依赖（预期风险点：aws-lc-sys、netwatch、portmapper）以及修法。
+- [ ] `cargo build -p yttt-mobile-core --release` 分别在 `--target aarch64-apple-ios-sim`、`aarch64-apple-ios` 与 `cargo ndk -t arm64-v8a` 下成功；记录 staticlib / `.so` 大小，以及依赖树里 ring 与 aws-lc、两个 reqwest 版本的占比。
+- [ ] `cargo tree -p yttt --target aarch64-apple-darwin -e features -i iroh` 与改动前相同（桌面不受影响）。
+- [ ] 失败时记录具体依赖和修法；aws-lc-sys 编不过就改用 iroh 的 `tls-ring`。
 
 # 2：VT 重绘编码器
 
-`crates/yttt-mobile-core/src/vt.rs`：输入 `SemanticViewport`（来自 `TerminalMirror::viewport()`），输出字节。
+`crates/yttt-mobile-core/src/vt.rs`：输入 `SemanticViewport`，输出字节。规则见设计 §4，要点：
 
-- 状态 `VtEncoder { rows: Vec<u64 /* 行内容 hash */>, cursor, modes, geometry_epoch, session_epoch }`。
-- `encode(&mut self, viewport) -> Vec<u8>`：首次、尺寸或 epoch 变化时 `ESC[H ESC[2J` 后整屏重绘；之后只重绘 hash 变化的行。每行：`CUP` → 每个 span：SGR 全量重设 + 文本（span 之间的空列补空格）→ `ESC[0m ESC[K`。
-- 颜色：`Named` 按 alacritty `NamedColor` 数值映射（0–15 → 30–37 / 90–97，`Foreground`/`Background` → 39/49，其余暗色/亮色变体按其基色），`Indexed` → `38;5;n`，`Rgb` → `38;2;r;g;b`；背景、下划线颜色（`58`）同理。
-- 样式位（`STYLE_*`）→ SGR 1、2、3、4、4:2/4:3/4:4/4:5、7、8、9。
-- 光标：`CUP` 到 `SemanticCursor` 位置、`DECSCUSR` 形状、`DECTCEM` 显隐，放在每次输出末尾。
-- 模式（alacritty `TermMode` 位）变化时输出对应 `DECSET`/`DECRST`：光标键（1）、bracketed paste（2004）、鼠标上报（1000/1002/1003/1006）、焦点上报（1004）。不切换备用屏：重绘总是画在当前屏上。
-- 超链接：span 带 `hyperlink` 时包 OSC 8。
+- 每次输出以 `CSI ?7l`（关自动换行）开头。首次、尺寸、`session_epoch`、`geometry_epoch` 变化时 `ESC[H ESC[2J` 后整屏重绘；之后只重绘内容 hash 变化的行。
+- 每个 span 按 `start_column` 单独 `CUP`，SGR 全量重设后输出文本；不输出 `EL`。
+- 颜色：`Named` 按 alacritty `NamedColor` 数值（0–15 → 30–37 / 90–97，`Foreground`/`Background` → 39/49，暗色和亮色变体按基色），`Indexed` → `38;5;n`，`Rgb` → `38;2;r;g;b`；背景同理；下划线颜色只在有下划线样式且不等于前景时输出 58，默认 59。
+- 样式位（`STYLE_*`）→ SGR 1、2、3、4、4:2–4:5、7、8、9。
+- 调色板覆盖 → OSC 4 / 10 / 11。
+- 模式：`APP_CURSOR` → `?1`，`BRACKETED_PASTE` → `?2004`，`APP_KEYPAD` → `DECKPAM`/`DECKPNM`；`set_interactive(true)` 后才同步鼠标（1000/1002/1003/1006）与焦点（1004）。其余模式不同步。
+- 光标：末尾 `CUP` 到光标位置 + `DECSCUSR` + `DECTCEM`。超链接包 OSC 8。
 
-**测试（先写）：** 用 `yttt-terminal-core` 里已有的 `alacritty_terminal` 做往返：把编码结果喂给一个新的 alacritty `Term`，逐格比较字符、前景、背景、样式位，以及光标位置与模式位。覆盖：
+**测试（先写）：**
 
-- [ ] 纯文本多行；行尾残留被 `EL` 清掉。
-- [ ] Named / Indexed / Rgb 前景与背景，以及默认色。
-- [ ] 各样式位。
-- [ ] CJK 宽字符与组合字符。
-- [ ] 增量：只改一行时输出只含这一行（检查字节里只有一个 `CUP` 行号）。
-- [ ] 尺寸变化、`session_epoch` 变化触发整屏清除重绘。
-- [ ] 光标位置、形状、隐藏；光标键模式与 bracketed paste 模式往返。
-- [ ] 超链接 OSC 8 往返。
+- 往返：编码结果喂给一个新的 alacritty `Term`（`alacritty_terminal` 作 dev-dep），再用 `SemanticTerminalState::capture` 抓回 viewport，与原 viewport 比较行内容、光标、模式位。覆盖：多行文本；Named / Indexed / Rgb 前景背景与默认色；各样式位；CJK 宽字符与组合字符；光标位置、形状、隐藏；光标键与 bracketed paste 模式；超链接。
+- 字节级断言（alacritty 掩盖不了的部分）：输出以 `CSI ?7l` 开头；不含 `CSI K`；增量只改一行时，除末尾的光标 `CUP` 外，`CUP` 的行号只有这一行；下划线颜色缺省时不出现 58；未 `set_interactive` 时不出现 1000/1002/1003/1006/1004。
+- 尺寸与 epoch 变化时输出含 `ESC[2J`。
 
-**验收：** 以上测试通过；`cargo clippy -p yttt-mobile-core` 无警告。
+**验收：** 以上测试通过；`cargo clippy -p yttt-mobile-core --all-targets` 无警告。组件侧的正确性在第 5、6 项另测。
 
 # 3：会话 API（Rust 侧，先不经 FFI）
 
 `crates/yttt-mobile-core/src/session.rs`，在自己的 tokio 运行时上运行：
 
-- `pair(code_text, device_label, device_secret, on_short_code) -> PairedHostRecord`：`PairingCode::decode` → `IrohEndpoint::bind` → `yttt_client_core::p2p::pair`。记录序列化为字节，由调用方保存。
-- `connect(record, device_secret) -> MobileSession`：与 `src/remote_host.rs` 的 `connect_paired` 相同的身份与凭据构造（不含 relay 账号；`client_instance_id` 前缀 `mobile-client-`），`ClientCore::connect`。
+- `pair(code_text, device_label, device_secret, on_short_code) -> PairedHostRecord`：`PairingCode::decode` → `IrohEndpoint::bind` → `yttt_client_core::p2p::pair`。记录里带一个新生成的、按 Host 持久的 `client_instance_id`（前缀 `mobile-client-`）。记录序列化为字节，由调用方保存。
+- `connect(record, device_secret) -> MobileSession`：身份与凭据按 `src/remote_host.rs` 的 `connect_paired` 构造，但不含 relay 账号、ticket 续期、`HostStorage` 与配置绑定；`client_instance_id` 用记录里的值。`ClientCore::connect`。session 构造接受一个注入的 connector，供测试使用。
+- `workspace()`：`WorkspaceRequest::List` → `Open` 标为 active 的那个；不发 `SetActive` 和任何视图 intent。
 - `terminals() -> Vec<TerminalInfo>`：来自 resource catalog。
-- `attach(id)`：按 `src/ui/terminal/pane.rs` 的 `AttachTerminal` 流程以观察者附加；`set_visible_terminals` 只含当前终端。
-- `drain(id) -> Option<Vec<u8>>`：取镜像当前 viewport，经 `VtEncoder` 输出；无变化返回 `None`。
-- `take_control(id)` / `release_control(id)`：沿用 `TakeTerminalController` 与 `AcquireTerminalLease` 的现有流程；`send_input(id, bytes)` 构造 `TerminalMutationContext` 发送；`resize(id, cols, rows)`。
-- 统计：累计字节、`drain` 耗时直方图（p50/p95/max）。
+- `attach(id)`：以 **Observer** 发 `AttachTerminal`（不照抄 `pane.rs` 的 Interactive 附加）；`set_visible_terminals` 只含当前终端。
+- `drain(id) -> Option<Vec<u8>>`：先比较 `terminal_metadata().sequence`，有变化才取 `terminal_snapshot` 交给 `VtEncoder`；无变化返回 `None`。
+- `take_control()`：发 `TakeTerminalController`，从 `TerminalControlGranted` 事件里取 lease epoch；之后 `resize(id, cols, rows)` 与 `send_input(id, bytes)` 按现有 `TerminalMutationContext` 规则发送，编码器 `set_interactive(true)`。没有交还请求（设计 §7 问题 1），spike 中由电脑点接管取回。
+- 统计：累计字节、`drain` 耗时（p50 / p95 / max）。
 
-**桌面冒烟程序** `crates/yttt-mobile-core/examples/mobile_tty.rs`：在 Mac 终端里配对本机 Host、列出终端、附加一个，以 60 Hz 调 `drain` 把字节写到 stdout；`--control` 时进入 raw mode，把 stdin 字节交给 `send_input`。它在桌面上验证整条 Rust 链路与编码结果，不依赖手机。
+**测试（先写）：** 参照 `crates/yttt-client-core/tests/p2p_pairing.rs`（真实 Host + `RelaySetup::Off`）与 `tests/host_roundtrip.rs` 的 `RunningHost`，把需要的夹具复制进 `crates/yttt-mobile-core/tests/`（`yttt-host`、`yttt-transport-local` 作 dev-dep）：
 
-**验收：**
-- [ ] 测试：`drain` 在无变化时返回 `None`；附加后第一次 `drain` 是整屏重绘（用 `yttt-client-core` 现有的内存传输测试夹具，或者在 recovery_tests 的夹具上搭一个最小 Host）。
-- [ ] 手动（需要用户在桌面上确认配对）：`mobile_tty` 显示的内容与桌面一致；运行 `seq 1 200000` 时不卡死，记录 `drain` p95；`--control` 下能输入、vim/htop 等全屏程序可用。
+- [ ] 配对 + 连接成功，记录可序列化往返。
+- [ ] 附加后第一次 `drain` 是整屏重绘；无变化时返回 `None`；终端有输出后再 `drain` 只含变化的行。
+- [ ] 附加后 Host 上该终端的 controller 不是手机，PTY 尺寸未变。
+- [ ] `take_control` 后能输入，输出出现在下一次 `drain` 里。
+
+**桌面冒烟程序** `crates/yttt-mobile-core/examples/mobile_tty.rs`：在 Mac 终端里配对开发 Host、列出终端、附加一个，以 60 Hz 调 `drain` 写到 stdout；`--control` 时进入 raw mode，把 stdin 字节交给 `send_input`。观察模式下本地终端比 Host 窄时右侧被截断（自动换行已关），启动时打印 Host 尺寸。
+
+**验收（手动，需要用户在开发 Host 上确认配对）：**
+- [ ] `mobile_tty` 显示的内容与桌面一致；`seq 1 200000` 时不卡死，记录 `drain` p95。
+- [ ] `--control` 下能输入，vim / htop 可用；电脑上点接管后 `mobile_tty` 回到只读。
+- [ ] 结束后撤销测试设备。
 
 # 4：UniFFI 绑定与 iOS 打包
 
-- [ ] 用 UniFFI proc-macro 导出第 3 项的 API：`MobileCore` 对象、回调接口 `PairingListener { on_short_code(u32) }`、错误类型。异步函数用 UniFFI async（Swift `async`）。
+- [ ] 用 UniFFI proc-macro 导出第 3 项的 API：`MobileCore` 对象、回调接口 `PairingListener { on_short_code(u32) }`、错误类型。异步函数用 UniFFI async，`#[uniffi::export(async_runtime = "tokio")]`。
 - [ ] `scripts/mobile/build-ios.sh`：编译 `aarch64-apple-ios` 与 `aarch64-apple-ios-sim` 的 staticlib，`uniffi-bindgen generate --library` 生成 Swift 绑定，打包 `YtttMobileCore.xcframework`（产物不入库，`.gitignore` 只新增条目）。
 
 **验收：** 脚本一次跑通；生成的 Swift 文件可被第 5 项工程编译。
 
 # 5：iOS spike App
 
-`mobile/ios/`，xcodegen `project.yml` 生成工程，SwiftUI，SPM 依赖 SwiftTerm（固定到一个发布 tag）。
+`mobile/ios/`，xcodegen `project.yml` 生成工程，SwiftUI，SPM 依赖 SwiftTerm（固定到一个发布 tag）。Info.plist 带 `NSLocalNetworkUsageDescription`。
 
 - [ ] 页面 1：粘贴 `YTTT-PAIR:1:` 文本 → 显示六位数字 → 配对成功后保存记录。
 - [ ] 页面 2：终端列表 → 点进页面 3。
 - [ ] 页面 3：SwiftTerm `TerminalView`，scrollback 0；`CADisplayLink` 每帧 `drain` 并 `feed`；“接管”按钮 → `take_control`，按视图尺寸 `resize`，键盘输入经 `TerminalViewDelegate.send` → `send_input`；角落显示字节/秒、`drain` p95、帧率。
 - [ ] 观察模式下固定为 Host 列数，放进横向 `ScrollView`。
+- [ ] 组件侧测试（XCTest）：把第 2 项测试用的几组 viewport 编码结果喂给 SwiftTerm 的 `Terminal`，逐格比较字符与属性，覆盖行尾满列、CJK、颜色与样式。
 
-**验收（模拟器，连本机 Host）：**
+**验收（模拟器，连开发 Host）：**
+- [ ] XCTest 通过。
 - [ ] 配对、连接、观察成功；内容与桌面一致（中文、颜色、光标）。
 - [ ] 接管后能在 shell 和一个 Agent CLI 里输入；方向键、Ctrl-C、粘贴可用。
 - [ ] `seq 1 200000` 期间界面不卡，记录帧率与 `drain` p95。
-- [ ] 若有真机：同一 Wi-Fi 与蜂窝网络（经 Relay）各连一次，记录路径（直连 / Relay）。
+- [ ] 若有真机：同一 Wi-Fi 下连一次（会弹本地网络权限），记录路径（直连 / Relay）。蜂窝网络只在 Host 用自建 relay 时能连；Host 用付费 relay 而手机没登录账号时连不上，属于预期。
+- [ ] 结束后撤销测试设备。
 
-# 6：Android spike App（依赖第 0 项的 Android 工具链）
+# 6：Android spike App
 
 `mobile/android/`，Gradle（Kotlin DSL）+ Compose，`cargo-ndk` 编出 `arm64-v8a` 的 `.so`，UniFFI 生成 Kotlin 绑定。
 
+- [ ] iroh 经 reqwest 0.13 依赖 `rustls-platform-verifier`，在 Android 上要在启动时做 JNI 初始化，并引入它的 Maven 组件。
 - [ ] 引入 Termux `terminal-emulator` / `terminal-view`（JitPack 固定版本），先核实许可证。
 - [ ] 实现远程数据源：不启动本地进程，把 `drain` 字节写进 `TerminalEmulator`，把 `TerminalView` 产生的按键字节交给 `send_input`。记录是否需要 fork。
 - [ ] 页面与 iOS 相同（配对文本、终端列表、终端），`Choreographer` 每帧 `drain`，`AndroidView` 包装。
+- [ ] 组件侧测试（instrumented 或 JVM 单测）：与第 5 项相同的几组输入喂给 `TerminalEmulator`，逐格比较。
 
-**验收（arm64 模拟器，连本机 Host）：** 与第 5 项相同的三条；另记录 `.so` 大小。
+**验收（arm64 模拟器，连开发 Host）：** 与第 5 项相同；另记录 `.so` 大小。
 
 # 7：结论
 
-- [ ] 在设计文档 §8 写下：三个问题的答案、测得的数据、遇到的坑和绕法、对正式实现的修改建议（含第 7 节未决问题 1 的观察结果）。
+- [ ] 在设计文档 §8 写下：三个问题的答案、测得的数据、遇到的坑和绕法、对正式实现的修改建议。

@@ -52,14 +52,19 @@ FFI 约束：
 
 Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带样式的 span，另有光标、模式位、调色板），组件只吃 VT 字节。Rust 核心把镜像状态重新编码为重绘序列：
 
-- 变化行：`CUP` 到该行 → 每个 span 的 SGR 与文本 → `EL`；
-- 光标：位置、`DECSCUSR` 形状、`DECTCEM` 显隐；
-- `TerminalModes` 模式位 → `DECSET`（光标键模式、bracketed paste、鼠标模式），组件据此自行编码按键；
+- 自动换行始终关闭（`CSI ?7l`）：组件从不直接收 Host 的原始输出，关掉后组件与 Host 字宽表不一致时也不会折行或滚屏。
+- 变化行：每个 span 按 `start_column` 单独 `CUP`，再输出 SGR 与文本。span 覆盖整行（含行尾空白），不需要也不输出 `EL`：写满一行后光标处于待换行状态，xterm 语义的组件会让 `EL` 擦掉最后一列。
+- 光标：位置、`DECSCUSR` 形状、`DECTCEM` 显隐，放在每次输出末尾。
+- 调色板：`TerminalPalette` 的覆盖项转 OSC 4 / 10 / 11。
+- 下划线颜色：只在有下划线样式且颜色不等于前景时输出 SGR 58，默认色用 59。
+- 模式位（alacritty `TermMode`）：`APP_CURSOR` → `?1`，`BRACKETED_PASTE` → `?2004`，`APP_KEYPAD` → `DECKPAM`/`DECKPNM`；接管后才同步鼠标（`CLICK` → 1000、`DRAG` → 1002、`MOTION` → 1003、`SGR` → 1006）与焦点（`FOCUS` → 1004）模式，避免观察时的点按变成鼠标上报。`LINE_WRAP`、`INSERT`、`ORIGIN` 不同步。
 - 超链接 → OSC 8；图片 iOS 可转 iTerm2 内联图片，Android 先占位。
+- `drain` 先比较 `terminal_metadata().sequence`，没变化就不克隆 viewport。
 
 终端仍只在 Host 解析一次；组件解析的是我们生成的重绘序列。按键编码由组件完成，不必从 `yttt-terminal/src/input.rs` 抽取。
 
-- 滚动历史在 Host：组件本地 scrollback 设为 0，滑动转 `ScrollTerminal`，搜索用 `SearchTerminal`。
+- 滚动历史在 Host：组件本地 scrollback 设为 0，滑动转 `ScrollTerminal`（`display_offset` 按每个附加单独记录，不影响电脑），搜索用 `SearchTerminal`。备用屏（全屏 TUI）里没有可滚的历史。
+- 始终以 Observer 附加。以 Interactive 附加会 resize PTY 并改写 query palette，还会让手机成为 controller。用户点“接管”之前，不发任何 Interactive 的附加或 lease 请求。
 - 只观察时组件列数固定为 Host 尺寸，放进可横向滚动的容器，双指缩放字号。接管后按手机宽度计算行列并 resize。
 - 断线重连或 epoch 变化：先清屏，再发完整快照的重绘。
 
@@ -67,6 +72,10 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 
 - 导航只在本地：手机不发 `SelectProject`、`FocusPane`、`ActivateItem`、`OpenFile`，电脑上的视图不受影响。进入 tab 时默认显示 Host 共享视图里聚焦的 pane。
 - 文件：`Project::ReadFile`（大文件 `ReadFileChunk`）读；`Project::SaveFile { mode: Check(fingerprint) }` 存，`Conflict` 时让用户选覆盖（`Force`）或重新加载。不使用文档 lease：`acquire_document` 要求文件已经 `OpenFile` 进工作区布局。工作区若显示该文件在电脑上有未保存草稿，打开时提示。
+- SSH 项目的文件走 `RemoteFile`：`Project::ReadFile` 在 SSH 项目上返回 NotFound。
+- 工作区：先 `WorkspaceRequest::List`，再 `Open` 其中标为 active 的那个；`Open` 一个未知 id 会得到空布局。不发 `SetActive`。
+- `client_instance_id` 按 Host 持久化：桌面每次启动换一个 uuid，App 被杀后重启就接不回原来的 lease。
+- 手机上的输入会把对应 Agent 标为由人驱动，并清空编排器待投递的消息（`agent_control.rs`），与桌面输入相同。
 - 首页数据：`AgentSnapshot` 概要（`view_state()`、`waiting_reason`、`waiting_message`、`task`、`current_action`、`state_started_at`），不订阅 board；`TerminalSessionId` 的 `{project}:{tab}:{pane}` 与工作区布局对应。
 
 ## 6. Android 通知
@@ -75,10 +84,13 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 
 ## 7. 未决问题
 
-1. 终端控制权粒度：`TakeTerminalController` 让一个 Client 持有全部 Interactive lease。手机接管时希望只影响当前 pane，进后台自动交还。spike 先观察现有行为，再决定是否改协议。
-2. Termux 组件接远程数据源的方式（自写 session 还是 fork）。
-3. iOS 推送：APNs 只能由 App 发布者发送，需要官方推送网关，暂缓。
-4. Relay 账号登录：现有 OAuth 回调只到 loopback，手机先用设备码流程。
+1. **终端控制权需要改协议。** 现状：`take_terminal_control` 把所有 lease 移给接管方（`yttt-host/src/runtime.rs`）；第一次申请写入的 Client 不需要 Take 就成为 controller（`claim_locked`）；没有“交还”请求，`ReleaseTerminalControl` 只放一个 lease，controller 不变；断线或进后台后控制权保留 60 s，再交给最近连接的 Client。这与 `p2p-relay-architecture.md` §10.4 不采用全局抢占的原则相矛盾。“只接管当前 pane”“交还电脑”“进后台自动交还”需要：按 session 的 controller、显式交还请求、后台时立即交还。spike 期间“交还”只能由电脑点接管完成。
+2. **协议版本锁步。** 两端都用 `ProtocolRange::exact`。商店审核会让手机版落后于桌面版，桌面一升协议手机就连不上。需要决定：Host 支持一个版本范围，或两端同步发布。
+3. **iOS 上架限制。** `yttt-transport-iroh` 无条件启用 iroh 的 `fast-apple-datapath`，用到私有 API `sendmsg_x`/`recvmsg_x`，有被 App Store 拒审的风险，需要改为按 target 启用。portmapper 的 UPnP 在 iOS 上需要 multicast entitlement，移动端关掉。局域网直连需要 `NSLocalNetworkUsageDescription`。
+4. 网络变化：`IrohEndpoint` 没有封装 iroh 的 `network_change`，`link_watch` 在桌面 bin 里，需要新接口。
+5. Termux 组件接远程数据源的方式（自写 session 还是 fork）。
+6. iOS 推送：APNs 只能由 App 发布者发送，需要官方推送网关，暂缓。
+7. Relay 账号登录：现有 OAuth 回调只到 loopback，手机先用设备码流程。不登录账号时，配对得到的 relay 提示只对自建 relay 有效。
 
 ## 8. Spike 结论
 
