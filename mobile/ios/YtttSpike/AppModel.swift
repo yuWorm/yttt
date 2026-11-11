@@ -1,0 +1,113 @@
+import Foundation
+import Security
+
+/// Spike storage: files in Application Support. The real app keeps the
+/// device secret in the Keychain.
+enum Storage {
+    static var directory: URL {
+        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("yttt-spike", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    static func load(_ name: String) -> Data? {
+        try? Data(contentsOf: directory.appendingPathComponent(name))
+    }
+
+    static func save(_ name: String, _ data: Data?) {
+        let url = directory.appendingPathComponent(name)
+        if let data { try? data.write(to: url, options: .atomic) } else { try? FileManager.default.removeItem(at: url) }
+    }
+
+    /// The device's 32-byte secret, created on first use.
+    static func deviceSecret() -> Data {
+        if let secret = load("device-secret"), secret.count == 32 { return secret }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        precondition(SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess)
+        let secret = Data(bytes)
+        save("device-secret", secret)
+        return secret
+    }
+}
+
+final class ShortCodeListener: PairingListener, @unchecked Sendable {
+    private let onCode: @Sendable (UInt32) -> Void
+    init(_ onCode: @escaping @Sendable (UInt32) -> Void) { self.onCode = onCode }
+    func onShortCode(shortCode: UInt32) { onCode(shortCode) }
+}
+
+@MainActor
+final class AppModel: ObservableObject {
+    let core: MobileCore
+    let secret: Data
+    @Published var record: Data?
+    @Published var shortCode: UInt32?
+    @Published var status = ""
+    @Published var busy = false
+    @Published var session: HostSession?
+    @Published var terminals: [TerminalInfo] = []
+
+    init() {
+        core = try! MobileCore()
+        secret = Storage.deviceSecret()
+        record = Storage.load("host.json")
+    }
+
+    var hostLabel: String {
+        guard let record else { return "" }
+        return (try? core.hostLabel(record: record)) ?? ""
+    }
+
+    func pair(code: String) async {
+        busy = true
+        shortCode = nil
+        status = "正在连接 Host…"
+        defer { busy = false }
+        let listener = ShortCodeListener { code in
+            Task { @MainActor in
+                self.shortCode = code
+                self.status = "在电脑上核对数字并确认"
+            }
+        }
+        do {
+            let record = try await core.pair(code: code, deviceLabel: "iOS spike", deviceSecret: secret, listener: listener)
+            Storage.save("host.json", record)
+            self.record = record
+            status = ""
+        } catch {
+            status = "配对失败：\(error.localizedDescription)"
+        }
+    }
+
+    func connect() async {
+        guard session == nil, let record else { return }
+        busy = true
+        status = "正在连接…"
+        defer { busy = false }
+        do {
+            session = try await core.connect(record: record, deviceSecret: secret)
+            status = ""
+            await refresh()
+        } catch {
+            status = "连接失败：\(error.localizedDescription)"
+        }
+    }
+
+    func refresh() async {
+        guard let session else { return }
+        do {
+            terminals = try await session.terminals()
+        } catch {
+            status = "读取终端失败：\(error.localizedDescription)"
+        }
+    }
+
+    func forget() async {
+        await session?.close()
+        session = nil
+        terminals = []
+        Storage.save("host.json", nil)
+        record = nil
+    }
+}
