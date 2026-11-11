@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.6 - 2026-11-11
+
 - 远程窗口在上一个被强制结束后立即重开时不再要等约 40 秒：P2P 连接在客户端看来已建立、Host 却从未接受时，握手超时后会重新拨号，而不是在这条死连接上反复等待。
 - A remote window reopened right after the previous one was killed no longer waits about 40 seconds: when a P2P connection looks established to the client but the Host never accepted it, a handshake that times out now dials again instead of waiting on that dead connection.
 
