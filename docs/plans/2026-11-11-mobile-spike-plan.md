@@ -7,6 +7,11 @@
 **执行记录：**
 - 第 1 项：iOS 的 cdylib 链接要求 `IPHONEOS_DEPLOYMENT_TARGET` 与 C 依赖一致，否则缺 `___chkstk_darwin`；`scripts/mobile/build-ios.sh` 固定为 17.0。未 strip 的 iOS staticlib 86 MB。依赖树里 ring 与 aws-lc、reqwest 0.12 与 0.13 并存；`yttt-terminal-core` 经 alacritty_terminal 带进 signal-hook、rustix-openpty 等 PTY 依赖，手机用不到。
 - 全量测试：CI 那组包 + 两个新 crate，83 个测试目标通过。`yttt-host` 的 `control_connection::a_slow_agent_history_scan_does_not_hold_up_the_sessions_other_requests` 在整组运行时卡死过一次（31 分钟），单独跑与整文件跑都通过；是已有的时序问题（扫描线程晚于测试打开并关闭 FIFO 时会永久阻塞），与本分支无关。
+- 第 3 项手测（spike Host）：按审查建议持久化 `client_instance_id` 后，第二个进程握手成功随即被 Host 关闭、无限重试：Host 把 ID 绑定到首个认证会话并保留 5 分钟。改为每次连接新生成 ID，集成测试加了“关闭后立即重连”。
+- 第 1 项 Android：vendor 的 `alacritty_terminal` 用了 Android libc 没有的 `shm_open`，编不过。mobile-core 只用它和 terminal-core 的样式位、模式位常量，改为本地常量加一致性测试，两者降为 dev-dependency（同时去掉了 signal-hook、rustix-openpty 等 PTY 依赖）。之后 `cargo ndk -t arm64-v8a --platform 26` 通过：`.so` 28 MB，strip 后 18.4 MB，gzip 约 7.1 MB；iOS staticlib 降到 80 MB（未 strip）。
+- 手测改用 `examples/spike_host.rs`：临时 profile 上的真实 `yttt-host`，P2P 不走 relay，自动确认配对，退出即删除，不留受信设备；不碰开发或正式 profile。**偏离**于“只连开发 Host”的约束，隔离更彻底。
+- 第 3 项手测（`mobile_tty`，release）：真实 P2P 配对与连接；观察演示终端，颜色、中文、emoji 正确，每秒的 tick 只重绘一行；接管 shell 后输入的命令执行；`seq 1 200000` 在 Host 上 0.75 s 跑完，客户端收到 49 帧共 244 KB，drain p50 56 µs、p95 102 µs、max 323 µs。vim / htop 与“电脑点接管后回到只读”未测。
+- 第 5 项手测（iOS 模拟器，借环境变量 `YTTT_SPIKE_*` 自动配对、打开、接管、输入）：配对、观察（颜色、中文、emoji、实时刷新，60 fps，drain p95 29 µs）、接管后输入、PTY 改为手机宽度（`$COLUMNS` = 58）都成功，SwiftTerm 自带按键栏可用。方向键、Ctrl-C、粘贴、Agent CLI 与应用内 `seq` 吞吐未测；没有真机。
 - 第 5 项组件测试：SwiftTerm 的 `translateToString` 默认把宽字符的占位格输出为空格，需传 `skipNullCellsFollowingWide: true`；重绘写入的行尾空白是真实空格，`trimRight` 不去掉。两者都是取文本的方式，不是渲染错误。
 
 **设计：** [`2026-11-11-mobile-client-design.md`](./2026-11-11-mobile-client-design.md)
@@ -26,7 +31,7 @@
 - [ ] 0 → 7 顺序执行，每项单独提交。
 - [x] 不改 Host 与 wire 协议；每次提交前，CI `validation.yml` “Test workspace” 那组包（`--all-targets --locked --no-fail-fast`）加上 `yttt-mobile-core`、`yttt-transport-iroh` 保持通过。不用 `--workspace`：它会编译 vendor 里 `gpui-markdown-editor` 的测试，那些测试在 master 上就编不过，CI 也不跑。
 - [x] 新依赖按仓库多数 crate 的写法用 caret 版本；UniFFI 固定 `=0.31.1`，与本机 `uniffi-bindgen 0.31.1` 一致。
-- [x] 设备私钥与 `client_instance_id` 在 spike 中存 App 沙盒文件，并在代码里标注“spike：正式版改 Keychain/Keystore”。
+- [x] 设备私钥在 spike 中存 App 沙盒文件，并在代码里标注“spike：正式版改 Keychain/Keystore”。
 - [ ] 手动测试只连开发 Host（`scripts/run-dev-app.sh`），不连正式 profile：配对会留下受信设备，接管会抢走电脑上的终端。每轮手测结束后在开发 Host 上撤销测试设备，并在本计划里记一笔。
 - [x] 终端一律以 Observer 附加；只有用户点“接管”时才发 `TakeTerminalController`。
 
@@ -36,7 +41,7 @@
 
 - [x] `rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-linux-android`（不改仓库文件）。
 - [x] Android command-line tools（Homebrew cask `android-commandlinetools`，`ANDROID_HOME=/opt/homebrew/share/android-commandlinetools`）、`cargo-ndk`。
-- [ ] `sdkmanager`：`platform-tools`、`platforms;android-35`、`build-tools;35.0.0`、`ndk;28.2.13676358`、`emulator`、`system-images;android-35;google_apis;arm64-v8a`；用 `avdmanager` 建一个 arm64 模拟器。
+- [x] `sdkmanager`：`platform-tools`、`platforms;android-35`、`build-tools;35.0.0`、`ndk;28.2.13676358`、`emulator`、`system-images;android-35;google_apis;arm64-v8a`；用 `avdmanager` 建一个 arm64 模拟器。
 
 # 1：`yttt-mobile-core` 骨架与交叉编译
 
@@ -45,7 +50,7 @@
 - [x] `yttt-transport-iroh` 的 iroh 依赖：`fast-apple-datapath`（私有 API，有 App Store 拒审风险）与 `portmapper`（UPnP 在 iOS 需要 multicast entitlement）都只在 `cfg(not(any(target_os = "ios", target_os = "android")))` 下启用，桌面三平台的 feature 集合保持不变。
 
 **验收：**
-- [ ] `cargo build -p yttt-mobile-core --release` 分别在 `--target aarch64-apple-ios-sim`、`aarch64-apple-ios` 与 `cargo ndk -t arm64-v8a` 下成功；记录 staticlib / `.so` 大小，以及依赖树里 ring 与 aws-lc、两个 reqwest 版本的占比。
+- [x] `cargo build -p yttt-mobile-core --release` 分别在 `--target aarch64-apple-ios-sim`、`aarch64-apple-ios` 与 `cargo ndk -t arm64-v8a` 下成功；记录 staticlib / `.so` 大小，以及依赖树里 ring 与 aws-lc、两个 reqwest 版本的占比。
 - [x] `cargo tree -p yttt --target aarch64-apple-darwin -e features -i iroh` 与改动前相同（桌面不受影响）。
 - [ ] 失败时记录具体依赖和修法；aws-lc-sys 编不过就改用 iroh 的 `tls-ring`。
 
@@ -73,8 +78,8 @@
 
 `crates/yttt-mobile-core/src/session.rs`，在自己的 tokio 运行时上运行：
 
-- `pair(code_text, device_label, device_secret, on_short_code) -> PairedHostRecord`：`PairingCode::decode` → `IrohEndpoint::bind` → `yttt_client_core::p2p::pair`。记录里带一个新生成的、按 Host 持久的 `client_instance_id`（前缀 `mobile-client-`）。记录序列化为字节，由调用方保存。
-- `connect(record, device_secret) -> MobileSession`：身份与凭据按 `src/remote_host.rs` 的 `connect_paired` 构造，但不含 relay 账号、ticket 续期、`HostStorage` 与配置绑定；`client_instance_id` 用记录里的值。`ClientCore::connect`。session 构造接受一个注入的 connector，供测试使用。
+- `pair(code_text, device_label, device_secret, on_short_code) -> PairedHostRecord`：`PairingCode::decode` → `IrohEndpoint::bind` → `yttt_client_core::p2p::pair`。记录序列化为字节，由调用方保存。
+- `connect(record, device_secret) -> MobileSession`：身份与凭据按 `src/remote_host.rs` 的 `connect_paired` 构造，但不含 relay 账号、ticket 续期、`HostStorage` 与配置绑定；**偏离：** `client_instance_id` 每次连接新生成（前缀 `mobile-client-`），不放进记录；原因见设计 §5。`ClientCore::connect`。session 构造接受一个注入的 connector，供测试使用。
 - `workspace()`：`WorkspaceRequest::List` → `Open` 标为 active 的那个；不发 `SetActive` 和任何视图 intent。
 - `terminals() -> Vec<TerminalInfo>`：来自 resource catalog。
 - `attach(id)`：以 **Observer** 发 `AttachTerminal`（不照抄 `pane.rs` 的 Interactive 附加）；`set_visible_terminals` 只含当前终端。
@@ -92,7 +97,7 @@
 **桌面冒烟程序** `crates/yttt-mobile-core/examples/mobile_tty.rs`：在 Mac 终端里配对开发 Host、列出终端、附加一个，以 60 Hz 调 `drain` 写到 stdout；`--control` 时进入 raw mode，把 stdin 字节交给 `send_input`。观察模式下本地终端比 Host 窄时右侧被截断（自动换行已关），启动时打印 Host 尺寸。
 
 **验收（手动，需要用户在开发 Host 上确认配对）：**
-- [ ] `mobile_tty` 显示的内容与桌面一致；`seq 1 200000` 时不卡死，记录 `drain` p95。
+- [x] `mobile_tty` 显示的内容与桌面一致；`seq 1 200000` 时不卡死，记录 `drain` p95。
 - [ ] `--control` 下能输入，vim / htop 可用；电脑上点接管后 `mobile_tty` 回到只读。
 - [ ] 结束后撤销测试设备。
 
@@ -115,7 +120,7 @@
 
 **验收（模拟器，连开发 Host）：**
 - [x] XCTest 通过。
-- [ ] 配对、连接、观察成功；内容与桌面一致（中文、颜色、光标）。
+- [x] 配对、连接、观察成功；内容与桌面一致（中文、颜色、光标）。
 - [ ] 接管后能在 shell 和一个 Agent CLI 里输入；方向键、Ctrl-C、粘贴可用。
 - [ ] `seq 1 200000` 期间界面不卡，记录帧率与 `drain` p95。
 - [ ] 若有真机：同一 Wi-Fi 下连一次（会弹本地网络权限），记录路径（直连 / Relay）。蜂窝网络只在 Host 用自建 relay 时能连；Host 用付费 relay 而手机没登录账号时连不上，属于预期。

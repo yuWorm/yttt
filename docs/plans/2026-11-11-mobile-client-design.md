@@ -74,7 +74,7 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 - 文件：`Project::ReadFile`（大文件 `ReadFileChunk`）读；`Project::SaveFile { mode: Check(fingerprint) }` 存，`Conflict` 时让用户选覆盖（`Force`）或重新加载。不使用文档 lease：`acquire_document` 要求文件已经 `OpenFile` 进工作区布局。工作区若显示该文件在电脑上有未保存草稿，打开时提示。
 - SSH 项目的文件走 `RemoteFile`：`Project::ReadFile` 在 SSH 项目上返回 NotFound。
 - 工作区：先 `WorkspaceRequest::List`，再 `Open` 其中标为 active 的那个；`Open` 一个未知 id 会得到空布局。不发 `SetActive`。
-- `client_instance_id` 按 Host 持久化：桌面每次启动换一个 uuid，App 被杀后重启就接不回原来的 lease。
+- `client_instance_id` 每次连接新生成（与桌面相同），不持久化。Host 把一个 ID 绑定到第一次使用它的认证会话（入口、凭据代数、session nonce、设备公钥），断开后保留 5 分钟（`CLIENT_SESSION_RETENTION`），期间拒绝其他会话使用这个 ID：持久化 ID 的 App 被杀后 5 分钟内重开会一直连不上。连 nonce 一起持久化也不行：Host 的请求日志按 `request_id` 回放，新进程从 1 重新编号会拿到旧响应。App 被杀后 lease 本来也不保留（断线后 60 s 转给别的 Client），重启只需重新附加。
 - 手机上的输入会把对应 Agent 标为由人驱动，并清空编排器待投递的消息（`agent_control.rs`），与桌面输入相同。
 - 首页数据：`AgentSnapshot` 概要（`view_state()`、`waiting_reason`、`waiting_message`、`task`、`current_action`、`state_started_at`），不订阅 board；`TerminalSessionId` 的 `{project}:{tab}:{pane}` 与工作区布局对应。
 

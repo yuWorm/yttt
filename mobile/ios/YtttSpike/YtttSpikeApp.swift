@@ -6,7 +6,7 @@ struct YtttSpikeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NavigationStack {
+            NavigationStack(path: $model.path) {
                 if model.record == nil {
                     PairView()
                 } else {
@@ -14,6 +14,11 @@ struct YtttSpikeApp: App {
                 }
             }
             .environmentObject(model)
+            .task {
+                if model.record == nil, let code = AppModel.autoPairCode {
+                    await model.pair(code: code)
+                }
+            }
         }
     }
 }
@@ -55,11 +60,9 @@ struct TerminalListView: View {
             if !model.status.isEmpty {
                 Text(model.status).foregroundStyle(.secondary)
             }
-            if let session = model.session {
+            if model.session != nil {
                 ForEach(model.terminals, id: \.sessionId) { terminal in
-                    NavigationLink {
-                        TerminalScreen(session: session, terminal: terminal)
-                    } label: {
+                    NavigationLink(value: terminal) {
                         VStack(alignment: .leading) {
                             Text(terminal.sessionId).font(.system(.body, design: .monospaced))
                             Text("\(terminal.cols)×\(terminal.rows) · \(terminal.projectId)")
@@ -70,6 +73,11 @@ struct TerminalListView: View {
             }
         }
         .navigationTitle(model.hostLabel)
+        .navigationDestination(for: TerminalInfo.self) { terminal in
+            if let session = model.session {
+                TerminalScreen(session: session, terminal: terminal)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {

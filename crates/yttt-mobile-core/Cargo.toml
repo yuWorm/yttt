@@ -9,8 +9,6 @@ description = "Core link of the yttt iOS and Android Clients, exported through U
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [dependencies]
-# Already in the tree through yttt-terminal-core; named here for `TermMode`.
-alacritty_terminal = "0.25.1"
 parking_lot = "0.12"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
@@ -21,11 +19,16 @@ uniffi = "=0.31.1"
 yttt-client-core = { path = "../yttt-client-core" }
 yttt-core = { path = "../yttt-core" }
 yttt-protocol = { path = "../yttt-protocol" }
-yttt-terminal-core = { path = "../yttt-terminal-core" }
 yttt-transport = { path = "../yttt-transport" }
 yttt-transport-iroh = { path = "../yttt-transport-iroh" }
 
 [dev-dependencies]
+# The encoder's reference terminal in tests and fixtures; not linked into the
+# apps (alacritty does not build for Android).
+alacritty_terminal = "0.25.1"
+yttt-terminal-core = { path = "../yttt-terminal-core" }
 libc = "0.2"
 tempfile = "3"
+tokio = { version = "1", features = ["signal"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 yttt-host = { path = "../yttt-host" }

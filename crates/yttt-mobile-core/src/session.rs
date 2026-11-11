@@ -78,8 +78,6 @@ impl RelayChoice {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairedHostRecord {
     pub host: PairedHost,
-    /// Kept per Host so a restarted app resumes the same Client identity.
-    pub client_instance_id: String,
 }
 
 impl PairedHostRecord {
@@ -119,11 +117,7 @@ pub async fn pair(
     let result = yttt_client_core::p2p::pair(&endpoint, &code, device_label, on_short_code).await;
     endpoint.close().await;
     let host = result.map_err(|error| MobileError::Pairing(error.to_string()))?;
-    let suffix: u64 = rand::random();
-    Ok(PairedHostRecord {
-        host,
-        client_instance_id: format!("mobile-client-{suffix:016x}"),
-    })
+    Ok(PairedHostRecord { host })
 }
 
 /// Terminals the Host runs.
@@ -209,7 +203,13 @@ impl MobileSession {
         record: &PairedHostRecord,
         credential: impl Into<yttt_transport::Credential>,
     ) -> Result<Self, MobileError> {
-        let client_id = ClientInstanceId::new(record.client_instance_id.clone());
+        // A fresh Client ID for every session, like the desktop. The Host binds
+        // an ID to the authenticated session that first used it and keeps that
+        // binding for 5 minutes after it disconnects, refusing any other
+        // session for the ID; and its request journal replays by request ID,
+        // which a new process starts again from 1.
+        let suffix: u64 = rand::random();
+        let client_id = ClientInstanceId::new(format!("mobile-client-{suffix:016x}"));
         let identity = ClientIdentity {
             expected_environment: Some(record.host.environment_id.clone()),
             credential_generation: 0,

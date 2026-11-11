@@ -47,6 +47,14 @@ final class AppModel: ObservableObject {
     @Published var busy = false
     @Published var session: HostSession?
     @Published var terminals: [TerminalInfo] = []
+    @Published var path: [TerminalInfo] = []
+
+    /// Spike-only automation for simulator runs, set through
+    /// `SIMCTL_CHILD_<name>`: pair with this code, open this terminal, then
+    /// take control and type this line.
+    static let autoPairCode = ProcessInfo.processInfo.environment["YTTT_SPIKE_PAIR_CODE"]
+    static let autoOpen = ProcessInfo.processInfo.environment["YTTT_SPIKE_OPEN"]
+    static let autoType = ProcessInfo.processInfo.environment["YTTT_SPIKE_TYPE"]
 
     init() {
         core = try! MobileCore()
@@ -98,6 +106,10 @@ final class AppModel: ObservableObject {
         guard let session else { return }
         do {
             terminals = try await session.terminals()
+            if path.isEmpty, let open = Self.autoOpen,
+               let terminal = terminals.first(where: { $0.sessionId == open }) {
+                path.append(terminal)
+            }
         } catch {
             status = "读取终端失败：\(error.localizedDescription)"
         }

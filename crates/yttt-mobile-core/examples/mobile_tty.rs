@@ -40,6 +40,13 @@ fn load() -> Result<(PairedHostRecord, [u8; 32]), String> {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), String> {
+    // `YTTT_LOG=yttt=debug,iroh=info` logs to stderr.
+    if let Ok(filter) = std::env::var("YTTT_LOG") {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+            .with_writer(std::io::stderr)
+            .init();
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("pair") => {

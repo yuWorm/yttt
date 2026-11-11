@@ -271,7 +271,6 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
         PairedHostRecord::from_bytes(&record.to_bytes()).unwrap(),
         record
     );
-    assert!(record.client_instance_id.starts_with("mobile-client-"));
 
     let terminal = desktop_terminal(&admin, temp.path()).await;
     let id = terminal.to_string();
@@ -312,7 +311,7 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     assert!(phone.in_control(&id));
     assert_eq!(
         controller(&admin).await.map(|id| id.to_string()),
-        Some(record.client_instance_id.clone())
+        Some(phone.client_instance_id().to_string())
     );
     phone.send_input(&id, b"hello\r".to_vec()).unwrap();
     let typed = drain_until(&phone, &id, "got:hello").await;
@@ -332,5 +331,22 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
 
     let stats = phone.drain_stats();
     assert!(stats.frames > 0 && stats.bytes > 0);
+    let first_id = phone.client_instance_id().to_string();
+    assert!(first_id.starts_with("mobile-client-"));
     phone.close().await;
+
+    // A restarted app connects again at once with the same record.
+    let again = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+        .await
+        .unwrap();
+    assert_ne!(again.client_instance_id(), first_id);
+    assert!(
+        again
+            .terminals()
+            .await
+            .unwrap()
+            .iter()
+            .any(|info| info.session_id == id)
+    );
+    again.close().await;
 }

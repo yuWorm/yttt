@@ -49,6 +49,18 @@ struct TerminalScreen: View {
         }
         .navigationTitle(terminal.sessionId)
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard let line = AppModel.autoType else { return }
+            try? await Task.sleep(for: .seconds(2))
+            do {
+                try await session.takeControl()
+                controlling = true
+                try await Task.sleep(for: .seconds(1))
+                try session.sendInput(sessionId: terminal.sessionId, bytes: Data((line + "\r").utf8))
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
         .alert("接管失败", isPresented: .constant(error != nil)) {
             Button("好") { error = nil }
         } message: { Text(error ?? "") }

@@ -14,14 +14,80 @@ use std::{
     io::Write as _,
 };
 
-use alacritty_terminal::term::TermMode;
+use wire::{
+    STYLE_BOLD, STYLE_DASHED_UNDERLINE, STYLE_DIM, STYLE_DOTTED_UNDERLINE, STYLE_DOUBLE_UNDERLINE,
+    STYLE_HIDDEN, STYLE_INVERSE, STYLE_ITALIC, STYLE_STRIKEOUT, STYLE_UNDERCURL, STYLE_UNDERLINE,
+    TermMode,
+};
 use yttt_protocol::terminal::{
     CursorShape, DynamicColor, SemanticColor, SemanticCursor, SemanticSpan, SemanticViewport,
 };
-use yttt_terminal_core::semantic::{
-    STYLE_BOLD, STYLE_DASHED_UNDERLINE, STYLE_DIM, STYLE_DOTTED_UNDERLINE, STYLE_DOUBLE_UNDERLINE,
-    STYLE_HIDDEN, STYLE_INVERSE, STYLE_ITALIC, STYLE_STRIKEOUT, STYLE_UNDERCURL, STYLE_UNDERLINE,
-};
+
+/// Bits the Host sends as they are: the style flags of `yttt-terminal-core`'s
+/// semantic capture and alacritty's `TermMode`. Named here so the mobile core
+/// needs neither crate (alacritty does not build for Android); a test checks
+/// they still match.
+mod wire {
+    pub const STYLE_INVERSE: u16 = 1 << 0;
+    pub const STYLE_BOLD: u16 = 1 << 1;
+    pub const STYLE_ITALIC: u16 = 1 << 2;
+    pub const STYLE_UNDERLINE: u16 = 1 << 3;
+    pub const STYLE_DIM: u16 = 1 << 4;
+    pub const STYLE_HIDDEN: u16 = 1 << 5;
+    pub const STYLE_STRIKEOUT: u16 = 1 << 6;
+    pub const STYLE_DOUBLE_UNDERLINE: u16 = 1 << 7;
+    pub const STYLE_UNDERCURL: u16 = 1 << 8;
+    pub const STYLE_DOTTED_UNDERLINE: u16 = 1 << 9;
+    pub const STYLE_DASHED_UNDERLINE: u16 = 1 << 10;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct TermMode(u32);
+
+    impl TermMode {
+        pub const APP_CURSOR: Self = Self(1 << 1);
+        pub const APP_KEYPAD: Self = Self(1 << 2);
+        pub const MOUSE_REPORT_CLICK: Self = Self(1 << 3);
+        pub const BRACKETED_PASTE: Self = Self(1 << 4);
+        pub const SGR_MOUSE: Self = Self(1 << 5);
+        pub const MOUSE_MOTION: Self = Self(1 << 6);
+        pub const FOCUS_IN_OUT: Self = Self(1 << 11);
+        pub const MOUSE_DRAG: Self = Self(1 << 13);
+        pub const MOUSE_MODE: Self =
+            Self(Self::MOUSE_REPORT_CLICK.0 | Self::MOUSE_MOTION.0 | Self::MOUSE_DRAG.0);
+
+        pub const fn from_bits_truncate(bits: u32) -> Self {
+            Self(bits)
+        }
+
+        pub const fn bits(self) -> u32 {
+            self.0
+        }
+
+        pub const fn contains(self, other: Self) -> bool {
+            self.0 & other.0 == other.0
+        }
+    }
+
+    impl std::ops::BitOr for TermMode {
+        type Output = Self;
+        fn bitor(self, other: Self) -> Self {
+            Self(self.0 | other.0)
+        }
+    }
+
+    impl std::ops::BitAnd for TermMode {
+        type Output = Self;
+        fn bitand(self, other: Self) -> Self {
+            Self(self.0 & other.0)
+        }
+    }
+
+    impl std::ops::BitOrAssign for TermMode {
+        fn bitor_assign(&mut self, other: Self) {
+            self.0 |= other.0;
+        }
+    }
+}
 
 /// Named color numbers of alacritty's `NamedColor`, which the Host sends as is.
 const NAMED_FOREGROUND: u16 = 256;
@@ -438,6 +504,42 @@ mod tests {
             }
         }
         rows
+    }
+
+    #[test]
+    fn wire_bits_match_the_host() {
+        use yttt_terminal_core::semantic as host;
+        for (local, host) in [
+            (wire::STYLE_INVERSE, host::STYLE_INVERSE),
+            (wire::STYLE_BOLD, host::STYLE_BOLD),
+            (wire::STYLE_ITALIC, host::STYLE_ITALIC),
+            (wire::STYLE_UNDERLINE, host::STYLE_UNDERLINE),
+            (wire::STYLE_DIM, host::STYLE_DIM),
+            (wire::STYLE_HIDDEN, host::STYLE_HIDDEN),
+            (wire::STYLE_STRIKEOUT, host::STYLE_STRIKEOUT),
+            (wire::STYLE_DOUBLE_UNDERLINE, host::STYLE_DOUBLE_UNDERLINE),
+            (wire::STYLE_UNDERCURL, host::STYLE_UNDERCURL),
+            (wire::STYLE_DOTTED_UNDERLINE, host::STYLE_DOTTED_UNDERLINE),
+            (wire::STYLE_DASHED_UNDERLINE, host::STYLE_DASHED_UNDERLINE),
+        ] {
+            assert_eq!(local, host);
+        }
+        for (local, host) in [
+            (wire::TermMode::APP_CURSOR, TermMode::APP_CURSOR),
+            (wire::TermMode::APP_KEYPAD, TermMode::APP_KEYPAD),
+            (
+                wire::TermMode::MOUSE_REPORT_CLICK,
+                TermMode::MOUSE_REPORT_CLICK,
+            ),
+            (wire::TermMode::BRACKETED_PASTE, TermMode::BRACKETED_PASTE),
+            (wire::TermMode::SGR_MOUSE, TermMode::SGR_MOUSE),
+            (wire::TermMode::MOUSE_MOTION, TermMode::MOUSE_MOTION),
+            (wire::TermMode::FOCUS_IN_OUT, TermMode::FOCUS_IN_OUT),
+            (wire::TermMode::MOUSE_DRAG, TermMode::MOUSE_DRAG),
+            (wire::TermMode::MOUSE_MODE, TermMode::MOUSE_MODE),
+        ] {
+            assert_eq!(local.bits(), host.bits());
+        }
     }
 
     #[test]
