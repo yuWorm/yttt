@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 远程窗口在上一个被强制结束后立即重开时不再要等约 40 秒：P2P 连接在客户端看来已建立、Host 却从未接受时，握手超时后会重新拨号，而不是在这条死连接上反复等待。
+- A remote window reopened right after the previous one was killed no longer waits about 40 seconds: when a P2P connection looks established to the client but the Host never accepted it, a handshake that times out now dials again instead of waiting on that dead connection.
+
+- 链路中断时不再弹出“终端写入错误：Host 终端连接尚未就绪”：终端在此期间自行产生的焦点报告等字节会被静默丢弃，链路提示已说明输入无法送达。
+- A dropped link no longer shows "Terminal write error: Host terminal connection is not ready": bytes the terminal emits on its own meanwhile, such as focus reports, are dropped quietly, as the link notice already says input cannot arrive.
+
 ## 0.5.5 - 2026-11-10
 
 - 远程窗口重连后终端尺寸不再先被 Host 拒绝（`ResizeTerminal` StaleEpoch）再补发：附着完成前不发送尺寸，附着后一次发出。
