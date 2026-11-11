@@ -431,8 +431,7 @@ pub(crate) async fn accept_loop(shared: P2pShared, mut context: ConnectionContex
     let handshakes = Arc::new(Semaphore::new(MAX_PENDING_HANDSHAKES));
     let mut stop = context.stop.clone();
     let mut connections = JoinSet::new();
-    // Accepting finishes the QUIC handshake, so the future must survive the
-    // other branches: dropping it mid-handshake would refuse that connection.
+    // One accept future across iterations, so the select never rebuilds it.
     let next = |endpoint: IrohEndpoint| Box::pin(async move { endpoint.accept().await });
     let mut accept = next(shared.endpoint.clone());
     loop {

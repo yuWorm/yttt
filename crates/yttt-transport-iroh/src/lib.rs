@@ -55,6 +55,9 @@ const SEND_WINDOW: u64 = 2 * STREAM_WINDOW as u64;
 /// and still carries about 200 KB/s at a 300 ms round trip.
 const RELAY_RECEIVE_WINDOW: u32 = 64 * 1024;
 
+/// Incoming handshakes finished at once; more wait for one to end.
+const MAX_ACCEPTING: usize = 32;
+
 /// The connection receive window for a connection whose selected path is
 /// (or is not) a relay.
 fn receive_window(relayed: bool) -> VarInt {
@@ -383,6 +386,9 @@ pub struct IrohEndpoint {
     gate: Arc<dyn PeerGate>,
     registry: Arc<PeerRegistry>,
     relay: Arc<tokio::sync::Mutex<Option<RelayUrl>>>,
+    /// Connections whose handshake finished, fed by an acceptor that starts
+    /// with the first `accept`, so an endpoint that only dials runs none.
+    accepted: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<Connection>>>>,
 }
 
 impl IrohEndpoint {
@@ -431,6 +437,7 @@ impl IrohEndpoint {
             gate: config.gate,
             registry,
             relay: Arc::new(tokio::sync::Mutex::new(relay_url)),
+            accepted: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -475,15 +482,14 @@ impl IrohEndpoint {
     }
 
     /// The next connection the gate admitted; `None` once the endpoint closed.
+    /// Cancel safe: a connection not yet taken waits for the next call.
     pub async fn accept(&self) -> Option<PeerConnection> {
-        loop {
-            let incoming = self.endpoint.accept().await?;
-            // A refused or failed handshake only ends that connection.
-            match incoming.await {
-                Ok(connection) => return Some(self.wrap(connection)),
-                Err(error) => tracing::debug!(%error, "an incoming connection failed"),
-            }
-        }
+        let mut accepted = self.accepted.lock().await;
+        let connection = accepted
+            .get_or_insert_with(|| spawn_acceptor(self.endpoint.clone()))
+            .recv()
+            .await?;
+        Some(self.wrap(connection))
     }
 
     pub async fn connect(
@@ -536,6 +542,44 @@ impl IrohEndpoint {
             gate: self.gate.clone(),
         }
     }
+}
+
+/// Finishes incoming handshakes side by side: one that stalls, as one from a
+/// peer the endpoint still holds a dead connection to can for its whole
+/// timeout, must not hold up the next. Stops once nobody takes connections.
+fn spawn_acceptor(endpoint: Endpoint) -> tokio::sync::mpsc::Receiver<Connection> {
+    let (sender, receiver) = tokio::sync::mpsc::channel(MAX_ACCEPTING);
+    tokio::spawn(async move {
+        let pending = Arc::new(tokio::sync::Semaphore::new(MAX_ACCEPTING));
+        loop {
+            let permit = tokio::select! {
+                () = sender.closed() => return,
+                permit = pending.clone().acquire_owned() => match permit {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                },
+            };
+            let incoming = tokio::select! {
+                () = sender.closed() => return,
+                incoming = endpoint.accept() => match incoming {
+                    Some(incoming) => incoming,
+                    None => return,
+                },
+            };
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                let _permit = permit;
+                // A refused or failed handshake only ends that connection.
+                match incoming.await {
+                    Ok(connection) => {
+                        let _ = sender.send(connection).await;
+                    }
+                    Err(error) => tracing::debug!(%error, "an incoming connection failed"),
+                }
+            });
+        }
+    });
+    receiver
 }
 
 pub struct PeerConnection {

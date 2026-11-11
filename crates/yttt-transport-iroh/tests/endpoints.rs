@@ -310,3 +310,60 @@ async fn a_connection_that_answered_once_survives_a_failed_handshake() {
     assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
     server.abort();
 }
+
+/// Admits everyone, but takes its time over one peer.
+struct SlowGate {
+    slow: EndpointKey,
+}
+
+impl PeerGate for SlowGate {
+    fn admit(&self, peer: EndpointKey, alpn: &[u8]) -> bool {
+        if peer == self.slow {
+            std::thread::sleep(Duration::from_secs(4));
+        }
+        alpn == ALPN
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_handshake_does_not_hold_up_another_peer() {
+    const OTHER_SECRET: [u8; 32] = [13; 32];
+    let host = IrohEndpoint::bind(EndpointConfig {
+        secret: HOST_SECRET,
+        relay: RelaySetup::Off,
+        alpns: vec![ALPN.to_vec()],
+        gate: Arc::new(SlowGate {
+            slow: endpoint_key(&CLIENT_SECRET),
+        }),
+        direct: DirectPaths::Bind("127.0.0.1:0".parse().unwrap()),
+    })
+    .await
+    .unwrap();
+    let address = address_of(&host);
+    let slow = IrohConnector::new(client().await, address.clone(), ALPN);
+    let other = IrohConnector::new(
+        IrohEndpoint::bind(EndpointConfig {
+            secret: OTHER_SECRET,
+            relay: RelaySetup::Off,
+            alpns: Vec::new(),
+            gate: Arc::new(OpenGate),
+            direct: DirectPaths::Bind("127.0.0.1:0".parse().unwrap()),
+        })
+        .await
+        .unwrap(),
+        address,
+        ALPN,
+    );
+    let accepting = tokio::spawn({
+        let host = host.clone();
+        async move { host.accept().await.map(|connection| connection.peer()) }
+    });
+    let _slow = tokio::spawn(async move { slow.connect().await.map(drop) });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _other = tokio::spawn(async move { other.connect().await.map(drop) });
+    let first = tokio::time::timeout(Duration::from_secs(2), accepting)
+        .await
+        .expect("the other peer waited for the slow handshake")
+        .unwrap();
+    assert_eq!(first, Some(endpoint_key(&OTHER_SECRET)));
+}
