@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -19,7 +19,7 @@ use crate::{
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
     },
     ui::{
-        i18n::{Locale, UiText, UiTextKey},
+        i18n::{UiText, UiTextKey},
         interaction::input_owner::TerminalInputGate,
         theme::{WorkbenchTheme, current_ui_style},
     },
@@ -241,7 +241,6 @@ struct HostTerminalWriter {
     /// This pane's own size, which the terminal returns to when this Client
     /// regains its lease after another one resized it.
     local_geometry: Arc<RwLock<TerminalGeometry>>,
-    locale: Arc<AtomicU8>,
 }
 
 fn next_mutation_context(
@@ -325,40 +324,39 @@ impl HostTerminalWriter {
             },
         );
     }
-
-    fn ui_text(&self) -> UiText {
-        UiText::new(match self.locale.load(Ordering::Relaxed) {
-            1 => Locale::Chinese,
-            _ => Locale::English,
-        })
-    }
 }
 
 impl Write for HostTerminalWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let text = self.ui_text();
+        // Keys are refused while the link is down, so what still arrives here
+        // is the terminal's own output (focus and mouse reports, replies) or
+        // input that waited out a stall. The link notice already says none
+        // of it reaches the Host; an error would only add a write-error toast.
+        let dropped = || {
+            tracing::debug!(
+                session = %self.session_id,
+                bytes = bytes.len(),
+                "dropped terminal input while the Host is unreachable"
+            );
+            Ok(bytes.len())
+        };
         if !matches!(self.runtime.state(), ConnectionState::Ready { .. }) {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                text.get(UiTextKey::TerminalI18nHostConnectionNotReady),
-            ));
+            return dropped();
         }
         let context = next_mutation_context(&self.mutation_context, &self.next_sequence, None);
-        self.runtime
-            .send_terminal_input(TerminalInput {
-                session_id: self.session_id.clone(),
-                context,
-                bytes: bytes.to_vec(),
-            })
-            .map_err(|error| {
-                let kind = match error {
-                    ClientCoreError::Backpressure => io::ErrorKind::WouldBlock,
-                    ClientCoreError::NotConnected => io::ErrorKind::NotConnected,
-                    _ => io::ErrorKind::BrokenPipe,
-                };
-                io::Error::new(kind, error.to_string())
-            })?;
-        Ok(bytes.len())
+        match self.runtime.send_terminal_input(TerminalInput {
+            session_id: self.session_id.clone(),
+            context,
+            bytes: bytes.to_vec(),
+        }) {
+            Ok(_) => Ok(bytes.len()),
+            Err(ClientCoreError::NotConnected) => dropped(),
+            Err(ClientCoreError::Backpressure) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                ClientCoreError::Backpressure.to_string(),
+            )),
+            Err(error) => Err(io::Error::new(io::ErrorKind::BrokenPipe, error.to_string())),
+        }
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -878,11 +876,6 @@ impl TerminalPaneView {
             host_geometry_epoch: Arc::new(AtomicU64::new(placement.geometry_epoch)),
             pending_geometry: pending_resize_geometry.clone(),
             local_geometry: Arc::new(RwLock::new(geometry)),
-            locale: Arc::new(AtomicU8::new(if ui_text.locale() == Locale::Chinese {
-                1
-            } else {
-                0
-            })),
         };
         self.control_writer = Some(writer.clone());
         let terminal_input_allowed = self.terminal_input_gate.shared_flag();
@@ -1754,16 +1747,6 @@ impl Render for TerminalPaneView {
         self.start_performance_probe(window.window_handle(), cx);
         let ui_style = current_ui_style(cx);
         let ui_text = UiText::current(cx);
-        if let Some(writer) = &self.control_writer {
-            writer.locale.store(
-                if ui_text.locale() == Locale::Chinese {
-                    1
-                } else {
-                    0
-                },
-                Ordering::Relaxed,
-            );
-        }
         let body = if let Some(terminal) = &self.terminal {
             let notice = self
                 .observes_another_controller(cx)

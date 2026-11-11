@@ -506,3 +506,39 @@ fn taking_control_back_after_another_client_resized_restores_input_and_size(
     });
     runtime.shutdown_client();
 }
+
+/// Bytes the terminal emits on its own while the Host is gone, such as a focus
+/// report, are dropped: the link notice already says input cannot arrive, and
+/// a write error would only add a misleading toast.
+#[test]
+fn a_write_while_the_host_is_unreachable_is_dropped_quietly() {
+    let host = RecoveryHost::start();
+    let runtime = host.client("writer");
+    let _root = host.stop();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while matches!(runtime.state(), ConnectionState::Ready { .. }) {
+        assert!(
+            Instant::now() < deadline,
+            "the Client never saw the Host go"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut writer = HostTerminalWriter {
+        runtime: runtime.clone(),
+        session_id: yttt_core::model::ids::TerminalSessionId::new("project:tab:pane"),
+        mutation_context: Arc::new(RwLock::new(TerminalMutationContext {
+            host_epoch: 1,
+            session_epoch: 1,
+            lease_epoch: 1,
+            geometry_epoch: 1,
+            client_sequence: 0,
+        })),
+        next_sequence: Arc::new(AtomicU64::new(1)),
+        next_geometry_epoch: Arc::new(AtomicU64::new(1)),
+        host_geometry_epoch: Arc::new(AtomicU64::new(1)),
+        pending_geometry: Arc::new(RwLock::new(None)),
+        local_geometry: Arc::new(RwLock::new(TerminalGeometry::default())),
+    };
+    assert_eq!(writer.write(b"\x1b[I").unwrap(), 3);
+    runtime.shutdown_client();
+}
