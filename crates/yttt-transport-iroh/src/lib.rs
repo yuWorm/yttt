@@ -8,7 +8,16 @@
 
 mod path_report;
 
-use std::{collections::HashMap, fmt, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt,
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use iroh::{
     Endpoint, EndpointAddr, PublicKey, RelayConfig, RelayMap, RelayMode, RelayUrl, SecretKey,
@@ -602,6 +611,8 @@ pub struct IrohConnector {
     peer: PeerAddr,
     alpn: Vec<u8>,
     connection: tokio::sync::Mutex<Option<Arc<PeerConnection>>>,
+    /// The cached connection has carried a handshake the Host answered.
+    answered: AtomicBool,
 }
 
 impl IrohConnector {
@@ -611,6 +622,7 @@ impl IrohConnector {
             peer,
             alpn: alpn.to_vec(),
             connection: tokio::sync::Mutex::new(None),
+            answered: AtomicBool::new(false),
         }
     }
 
@@ -638,6 +650,7 @@ impl IrohConnector {
             return Ok(connection.clone());
         }
         let connection = Arc::new(self.endpoint.connect(&self.peer, &self.alpn).await?);
+        self.answered.store(false, Ordering::SeqCst);
         *current = Some(connection.clone());
         Ok(connection)
     }
@@ -656,6 +669,26 @@ impl TransportConnector for IrohConnector {
                 }
             }
         })
+    }
+
+    fn handshake_settled(&self, answered: bool) {
+        if answered {
+            self.answered.store(true, Ordering::SeqCst);
+            return;
+        }
+        if self.answered.load(Ordering::SeqCst) {
+            // Other streams run on it; the heartbeat judges its health.
+            return;
+        }
+        // QUIC can look established to this side while the peer never
+        // finished accepting it, and every stream on it then goes unanswered
+        // until the idle timeout.
+        if let Ok(mut current) = self.connection.try_lock()
+            && let Some(connection) = current.take()
+        {
+            tracing::debug!(peer = %self.peer.key, "dropping a connection the Host never answered on");
+            connection.close();
+        }
     }
 
     fn link_profile(&self) -> LinkProfile {

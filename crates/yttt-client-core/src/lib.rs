@@ -1001,7 +1001,10 @@ async fn establish(
     let transport_millis = started.elapsed().as_millis() as u64;
     let host = client_handshake_with(&mut stream, identity, token)
         .await
-        .map_err(ConnectFailure::from)?;
+        .map_err(ConnectFailure::from);
+    // A refusal is an answer too; only silence condemns the connection.
+    connector.handshake_settled(!matches!(host, Err(ConnectFailure::Retry(_))));
+    let host = host?;
     tracing::debug!(
         channel = ?identity.channel,
         transport_millis,

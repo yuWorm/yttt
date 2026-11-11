@@ -235,3 +235,78 @@ async fn a_writer_stops_soon_after_the_peer_stops_reading() {
     );
     server.abort();
 }
+
+/// Serves streams on every admitted connection, but only answers on those
+/// after the first `silent` connections; returns the count of connections.
+fn serve_echo_after(
+    endpoint: IrohEndpoint,
+    silent: usize,
+) -> (
+    tokio::task::JoinHandle<()>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let count = accepted.clone();
+    let server = tokio::spawn(async move {
+        while let Some(connection) = endpoint.accept().await {
+            let answers = count.fetch_add(1, Ordering::SeqCst) >= silent;
+            tokio::spawn(async move {
+                let mut held = Vec::new();
+                while let Some(mut stream) = connection.accept_stream().await {
+                    if !answers {
+                        held.push(stream);
+                        continue;
+                    }
+                    tokio::spawn(async move {
+                        let mut buffer = [0_u8; 64];
+                        while let Ok(read) = stream.read(&mut buffer).await {
+                            if read == 0 || stream.write_all(&buffer[..read]).await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    });
+    (server, accepted)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_that_never_answered_a_handshake_is_dialed_anew() {
+    let gate = Arc::new(ListGate::default());
+    gate.allow(endpoint_key(&CLIENT_SECRET));
+    let host = host(gate).await;
+    let (server, accepted) = serve_echo_after(host.clone(), 1);
+    let connector = IrohConnector::new(client().await, address_of(&host), ALPN);
+
+    let mut silent = connector.connect().await.unwrap();
+    silent.write_all(b"hello").await.unwrap();
+    connector.handshake_settled(false);
+
+    let mut stream = connector.connect().await.unwrap();
+    assert_eq!(echo(&mut stream, b"again").await.unwrap(), b"again");
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_that_answered_once_survives_a_failed_handshake() {
+    let gate = Arc::new(ListGate::default());
+    gate.allow(endpoint_key(&CLIENT_SECRET));
+    let host = host(gate).await;
+    let (server, accepted) = serve_echo_after(host.clone(), 0);
+    let connector = IrohConnector::new(client().await, address_of(&host), ALPN);
+
+    let mut first = connector.connect().await.unwrap();
+    assert_eq!(echo(&mut first, b"one").await.unwrap(), b"one");
+    connector.handshake_settled(true);
+    connector.handshake_settled(false);
+
+    let mut second = connector.connect().await.unwrap();
+    assert_eq!(echo(&mut second, b"two").await.unwrap(), b"two");
+    assert_eq!(echo(&mut first, b"still").await.unwrap(), b"still");
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+    server.abort();
+}

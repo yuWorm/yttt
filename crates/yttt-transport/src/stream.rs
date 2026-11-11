@@ -51,6 +51,12 @@ impl LinkProfile {
 pub trait TransportConnector: Send + Sync + 'static {
     fn connect(&self) -> BoxFuture<'_, Result<TransportStream, TransportError>>;
 
+    /// Reports how the handshake on the stream `connect` last returned ended:
+    /// `answered` is false when the Host never replied. A connector that
+    /// reuses a connection across streams drops one that has never answered,
+    /// so the next attempt dials anew instead of waiting on a dead link.
+    fn handshake_settled(&self, _answered: bool) {}
+
     fn link_profile(&self) -> LinkProfile {
         LinkProfile::LOCAL
     }
@@ -59,6 +65,10 @@ pub trait TransportConnector: Send + Sync + 'static {
 impl<T: TransportConnector> TransportConnector for Arc<T> {
     fn connect(&self) -> BoxFuture<'_, Result<TransportStream, TransportError>> {
         (**self).connect()
+    }
+
+    fn handshake_settled(&self, answered: bool) {
+        (**self).handshake_settled(answered);
     }
 
     fn link_profile(&self) -> LinkProfile {
@@ -82,6 +92,10 @@ impl SharedConnector {
 impl TransportConnector for SharedConnector {
     fn connect(&self) -> BoxFuture<'_, Result<TransportStream, TransportError>> {
         self.inner.connect()
+    }
+
+    fn handshake_settled(&self, answered: bool) {
+        self.inner.handshake_settled(answered);
     }
 
     fn link_profile(&self) -> LinkProfile {

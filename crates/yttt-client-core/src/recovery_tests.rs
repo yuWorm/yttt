@@ -320,6 +320,51 @@ async fn handshake_timeout_is_retryable() {
     );
 }
 
+/// Hands out its inner connector's streams and records each reported handshake.
+struct SettleRecorder {
+    inner: yttt_transport::MemoryConnector,
+    settled: Arc<parking_lot::Mutex<Vec<bool>>>,
+}
+
+impl TransportConnector for SettleRecorder {
+    fn connect(
+        &self,
+    ) -> yttt_transport::BoxFuture<
+        '_,
+        Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+    > {
+        self.inner.connect()
+    }
+
+    fn handshake_settled(&self, answered: bool) {
+        self.settled.lock().push(answered);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_handshake_the_host_never_answers_is_reported_to_the_connector() {
+    let (listener, inner) = memory_pair();
+    let settled = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let server = tokio::spawn(async move {
+        let mut stream = listener.accept().await.unwrap();
+        receive_handshake(&mut stream).await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let connector = SettleRecorder {
+        inner,
+        settled: settled.clone(),
+    };
+    let result = establish(
+        &SharedConnector::new(connector),
+        &identity(),
+        &Credential::from(yttt_transport::AuthToken::from_bytes([7; 32])),
+    )
+    .await;
+    server.abort();
+    assert!(matches!(result, Err(ConnectFailure::Retry(_))));
+    assert_eq!(*settled.lock(), vec![false]);
+}
+
 #[tokio::test]
 async fn permanent_transport_rejection_is_fatal() {
     #[derive(Clone)]
