@@ -455,6 +455,24 @@ fn set_p2p_path(path: P2pPath) {
 /// through the relay; hole punching usually upgrades a session after it starts.
 const PATH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long opening a paired Host waits for the control plane's relay ticket
+/// before it falls back to the pairing relay. Its own request timeout is 20 s,
+/// which a network that cannot reach the control plane paid on every open.
+const TICKET_WAIT: Duration = Duration::from_secs(5);
+
+async fn within_ticket_wait<T, E: std::fmt::Display>(
+    lookup: impl std::future::Future<Output = Result<T, E>>,
+    wait: Duration,
+) -> Result<T, String> {
+    match tokio::time::timeout(wait, lookup).await {
+        Ok(result) => result.map_err(|error| error.to_string()),
+        Err(_) => Err(format!(
+            "the control plane did not answer within {} s",
+            wait.as_secs()
+        )),
+    }
+}
+
 fn connect_paired(
     launch: RemoteLaunch,
     host: yttt_client_core::p2p::PairedHost,
@@ -488,11 +506,9 @@ fn connect_paired(
     let mut host = host;
     let ticket = account.as_ref().and_then(|session| {
         let label = crate::relay_account::device_label(&label);
-        match runtime.block_on(crate::relay_account::ticket_for(
-            session,
-            &secret,
-            &label,
-            host.host.0,
+        match runtime.block_on(within_ticket_wait(
+            crate::relay_account::ticket_for(session, &secret, &label, host.host.0),
+            TICKET_WAIT,
         )) {
             Ok(ticket) => Some(ticket),
             Err(error) => {
@@ -1196,6 +1212,24 @@ fn read_server_bytes(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unreachable_control_plane_costs_the_ticket_wait_at_most() {
+        let started = tokio::time::Instant::now();
+        let result =
+            within_ticket_wait(std::future::pending::<Result<(), String>>(), TICKET_WAIT).await;
+        assert_eq!(
+            result,
+            Err("the control plane did not answer within 5 s".to_string())
+        );
+        assert_eq!(started.elapsed(), TICKET_WAIT);
+    }
+
+    #[tokio::test]
+    async fn a_control_plane_error_is_passed_on() {
+        let result = within_ticket_wait(async { Err::<(), _>("refused") }, TICKET_WAIT).await;
+        assert_eq!(result, Err("refused".to_string()));
+    }
 
     /// What one `open` of a scripted tunnel returns.
     #[derive(Clone, Copy)]
