@@ -13,21 +13,22 @@ use crate::session::{
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum MobileCoreError {
-    #[error("{message}")]
-    Failed { message: String },
+    // Not `message`: Kotlin exceptions already have one.
+    #[error("{reason}")]
+    Failed { reason: String },
 }
 
 impl From<MobileError> for MobileCoreError {
     fn from(error: MobileError) -> Self {
         Self::Failed {
-            message: error.to_string(),
+            reason: error.to_string(),
         }
     }
 }
 
 fn failed(message: impl Into<String>) -> MobileCoreError {
     MobileCoreError::Failed {
-        message: message.into(),
+        reason: message.into(),
     }
 }
 
@@ -187,7 +188,8 @@ impl HostSession {
             .map_err(Into::into)
     }
 
-    pub async fn close(&self) {
+    /// Not `close`: Kotlin's `AutoCloseable.close` would clash.
+    pub async fn disconnect(&self) {
         let session = self.session.clone();
         let _ = self
             .runtime

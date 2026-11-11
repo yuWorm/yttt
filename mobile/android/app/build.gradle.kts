@@ -1,0 +1,49 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Built by scripts/mobile/build-android.sh.
+val coreOut = rootProject.layout.projectDirectory.dir("../../target/mobile/android")
+
+android {
+    namespace = "dev.yttt.spike"
+    compileSdk = 37
+
+    defaultConfig {
+        applicationId = "dev.yttt.spike"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1-spike"
+        ndk { abiFilters += "arm64-v8a" }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures { compose = true }
+
+    sourceSets.getByName("main") {
+        kotlin.directories.add(coreOut.dir("kotlin").asFile.absolutePath)
+        jniLibs.directories.add(coreOut.dir("jniLibs").asFile.absolutePath)
+    }
+}
+
+kotlin {
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
+}
+
+dependencies {
+    implementation("org.connectbot:termlib:0.3.13")
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+}

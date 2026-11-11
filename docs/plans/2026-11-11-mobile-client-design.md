@@ -1,7 +1,7 @@
 # 移动端原生客户端设计
 
 - 日期：2026-11-11
-- 状态：设计已确认，spike 进行中（见 [`2026-11-11-mobile-spike-plan.md`](./2026-11-11-mobile-spike-plan.md)）
+- 状态：设计已确认，spike 已完成（见 [`2026-11-11-mobile-spike-plan.md`](./2026-11-11-mobile-spike-plan.md) 与 §8）
 - 依据：[`host-client-architecture.md`](../host-client-architecture.md)、[`p2p-relay-architecture.md`](../p2p-relay-architecture.md) §10、§13、§15.4
 
 ## 1. 定位
@@ -48,7 +48,7 @@ FFI 约束：
 
 ## 4. 终端
 
-组件：iOS 用 SwiftTerm（MIT）；Android 首选 Termux `terminal-emulator` + `terminal-view`（许可证选型时核实；备选 ConnectBot termlib）。
+组件：iOS 用 SwiftTerm（MIT）；Android 用 ConnectBot termlib（Apache-2.0，Compose）。Termux 的组件 spike 后放弃，见 §8。
 
 Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带样式的 span，另有光标、模式位、调色板），组件只吃 VT 字节。Rust 核心把镜像状态重新编码为重绘序列：
 
@@ -88,10 +88,35 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 2. **协议版本锁步。** 两端都用 `ProtocolRange::exact`。商店审核会让手机版落后于桌面版，桌面一升协议手机就连不上。需要决定：Host 支持一个版本范围，或两端同步发布。
 3. **iOS 上架限制。** `yttt-transport-iroh` 无条件启用 iroh 的 `fast-apple-datapath`，用到私有 API `sendmsg_x`/`recvmsg_x`，有被 App Store 拒审的风险，需要改为按 target 启用。portmapper 的 UPnP 在 iOS 上需要 multicast entitlement，移动端关掉。局域网直连需要 `NSLocalNetworkUsageDescription`。
 4. 网络变化：`IrohEndpoint` 没有封装 iroh 的 `network_change`，`link_watch` 在桌面 bin 里，需要新接口。
-5. Termux 组件接远程数据源的方式（自写 session 还是 fork）。
 6. iOS 推送：APNs 只能由 App 发布者发送，需要官方推送网关，暂缓。
 7. Relay 账号登录：现有 OAuth 回调只到 loopback，手机先用设备码流程。不登录账号时，配对得到的 relay 提示只对自建 relay 有效。
 
-## 8. Spike 结论
+## 8. Spike 结论（2026-11-12）
 
-（spike 完成后填写。）
+三个问题的答案都是“可以”，Android 的终端组件换了一个。
+
+**1. 编译与连接。** `yttt-mobile-core`（client-core + iroh + UniFFI）能编译到 iOS（真机与模拟器）和 Android arm64，iOS 模拟器与 Android 模拟器（NAT 之后）都经真实 P2P 配对并连上 Mac 上的 Host。需要的改动：
+
+- iroh 的 `fast-apple-datapath`、`portmapper` 只在桌面启用（§7 问题 3 已落地）。
+- iOS：`IPHONEOS_DEPLOYMENT_TARGET` 必须与 C 依赖一致（17.0），否则链接缺 `___chkstk_darwin`。
+- Android：vendor 的 alacritty 用了 Android libc 没有的 `shm_open`。核心只需要它的样式位和模式位常量，改为本地常量加一致性测试，alacritty 与 terminal-core 不再进 App。
+- 体积：Android `.so` strip 后 18.4 MB（gzip 约 7.1 MB）；iOS staticlib 80 MB（未 strip，App 里 dead-strip 后的体积未测）。依赖树里 ring 与 aws-lc、reqwest 0.12 与 0.13 并存，有裁剪空间。
+
+**2. VT 重绘。** 正确且足够快。
+
+- 正确性：Rust 往返与字节级测试 18 项；SwiftTerm 的 XCTest 用共享夹具（`mobile/fixtures/vt-fixtures.json`）逐格比较文字、宽字符、光标、颜色、样式，通过；两个模拟器上截图确认颜色、中文、emoji、实时刷新、接管后的输入与 PTY 改为手机尺寸。
+- 性能：`seq 1 200000`（Host 上 0.75 s）在客户端只合成 49 帧、244 KB，drain p50 56 µs、p95 102 µs、max 323 µs（release，桌面）。iOS 模拟器 60 fps、drain p95 约 30 µs；Android 模拟器 60 fps、drain p95 83–190 µs（debug）。
+- 按屏幕刷新拉取的方式成立：空闲时每帧只比较一次 sequence。
+
+**3. Termux 组件不适合。** `TerminalSession` 是 `final`，其 `initializeEmulator` 必定经 JNI 启动本地子进程，`TerminalView` 只接受 `TerminalSession`，接远程数据源必须 fork；且 termux-app 为 GPLv3 only，例外条款只说其中用了 jackpal 的 Apache 代码，Termux 自己的修改是否 Apache 不明。改用 **ConnectBot termlib**：Apache-2.0、Compose 原生、为 SSH 这类远程数据源设计（`writeInput` 喂字节，`onKeyboardInput` 回调按键），有 `forcedSize` 固定行列，不需要 fork。
+
+**对正式实现的修改与待办：**
+
+1. `client_instance_id` 每次连接新生成（§5）。审查时建议的“按 Host 持久化”会让 App 重启后 5 分钟内连不上，spike 中实际撞到。
+2. 控制权（§7 问题 1）与协议锁步（§7 问题 2）仍需另立协议计划。
+3. Android 观察模式用 `forcedSize` 时字号缩到很小，需要横向滚动或双指缩放；iOS 用横向 ScrollView 包住 Host 尺寸的视图可行。
+4. 接管后要等 resize 确认再放行输入：Android 上自动输入的第一条命令看到的仍是旧尺寸（`COLUMNS=80`），之后才变为 63×40。软键盘弹出导致的尺寸变化可用 termlib 的 `resizeSuspended` 合并。
+5. UniFFI 导出避开 `close`、`message` 这类名字：Kotlin 里与 `AutoCloseable.close`、`Throwable.message` 冲突。
+6. termlib 没有公开的屏幕读取 API，组件测试暂时只能截图；可向上游提或在 instrumented 测试里读无障碍语义。
+7. Android 上 iroh 经 reqwest 0.13 用 `rustls-platform-verifier`，使用 relay 或 HTTPS 前要做 JNI 初始化；spike 不走 relay，未做。
+8. 未验证：真机、蜂窝网络与 Relay、vim / htop 等全屏程序、方向键与 Ctrl-C 等按键栏按键、电脑取回控制权、Agent CLI、前后台切换。

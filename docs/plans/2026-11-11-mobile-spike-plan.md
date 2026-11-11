@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: 遵循仓库 `AGENTS.md`。在当前会话内按顺序执行本计划，不要把计划执行委托给 subagent。所有改动都在 `.worktrees/mobile-spike`（分支 `spike/mobile-client`）里进行。每项先写能复现缺失行为的测试，再做最小实现；只有验收条件实际通过后才能勾选。
 
-**状态：** 2、4 完成；1、3、5 的自动化部分完成，iOS 已能编译、链接并在模拟器上跑通组件测试；Android 编译（1）与第 6 项等 SDK 组件装完；3、5 的手动验收需要用户在开发 Host 上确认配对。计划已按 2026-11-11 审查意见修订。**偏离：** 1–4 的 Rust 改动按“iroh feature / mobile-core crate”两次提交，没有逐项拆分（各项共用同一组文件）。
+**状态：** 完成（2026-11-12），结论见设计文档 §8。未验证项列在 §8 末尾。计划已按 2026-11-11 审查意见修订。**偏离：** 1–4 的 Rust 改动按“iroh feature / mobile-core crate”两次提交，没有逐项拆分（各项共用同一组文件）。
 
 **执行记录：**
 - 第 1 项：iOS 的 cdylib 链接要求 `IPHONEOS_DEPLOYMENT_TARGET` 与 C 依赖一致，否则缺 `___chkstk_darwin`；`scripts/mobile/build-ios.sh` 固定为 17.0。未 strip 的 iOS staticlib 86 MB。依赖树里 ring 与 aws-lc、reqwest 0.12 与 0.13 并存；`yttt-terminal-core` 经 alacritty_terminal 带进 signal-hook、rustix-openpty 等 PTY 依赖，手机用不到。
@@ -12,6 +12,8 @@
 - 手测改用 `examples/spike_host.rs`：临时 profile 上的真实 `yttt-host`，P2P 不走 relay，自动确认配对，退出即删除，不留受信设备；不碰开发或正式 profile。**偏离**于“只连开发 Host”的约束，隔离更彻底。
 - 第 3 项手测（`mobile_tty`，release）：真实 P2P 配对与连接；观察演示终端，颜色、中文、emoji 正确，每秒的 tick 只重绘一行；接管 shell 后输入的命令执行；`seq 1 200000` 在 Host 上 0.75 s 跑完，客户端收到 49 帧共 244 KB，drain p50 56 µs、p95 102 µs、max 323 µs。vim / htop 与“电脑点接管后回到只读”未测。
 - 第 5 项手测（iOS 模拟器，借环境变量 `YTTT_SPIKE_*` 自动配对、打开、接管、输入）：配对、观察（颜色、中文、emoji、实时刷新，60 fps，drain p95 29 µs）、接管后输入、PTY 改为手机宽度（`$COLUMNS` = 58）都成功，SwiftTerm 自带按键栏可用。方向键、Ctrl-C、粘贴、Agent CLI 与应用内 `seq` 吞吐未测；没有真机。
+- 第 6 项（Android 模拟器 API 35 arm64，debug）：AGP 9.4.1 / Kotlin 2.4.20 / Gradle 9.8.0 / compileSdk 37 照 termlib 的组合；AGP 按需装了 platform 37 与 build-tools 36。AGP 9 内置 Kotlin，生成的绑定要加进 `kotlin` 源集。`cargo ndk -o` 会把依赖自己的 cdylib（`libiroh-*.so`）也拷进 jniLibs，脚本改为只拷核心库。经真实 P2P 配对；观察（`forcedSize` 120×36，字号很小）颜色、中文、emoji、刷新正确，60 fps，drain p95 83 µs；接管后自动输入的命令执行，经系统输入法输入的命令也执行，PTY 为 63×40。
+- 环境副作用：`brew install gradle` 把 Homebrew 的 `openjdk` 从 23.0.2 升到 27（23.0.2 仍在 Cellar）；Gradle 用 `JAVA_HOME=/opt/homebrew/Cellar/openjdk/23.0.2/...` 运行。
 - 第 5 项组件测试：SwiftTerm 的 `translateToString` 默认把宽字符的占位格输出为空格，需传 `skipNullCellsFollowingWide: true`；重绘写入的行尾空白是真实空格，`trimRight` 不去掉。两者都是取文本的方式，不是渲染错误。
 
 **设计：** [`2026-11-11-mobile-client-design.md`](./2026-11-11-mobile-client-design.md)
@@ -99,7 +101,7 @@
 **验收（手动，需要用户在开发 Host 上确认配对）：**
 - [x] `mobile_tty` 显示的内容与桌面一致；`seq 1 200000` 时不卡死，记录 `drain` p95。
 - [ ] `--control` 下能输入，vim / htop 可用；电脑上点接管后 `mobile_tty` 回到只读。
-- [ ] 结束后撤销测试设备。
+- [x] 结束后撤销测试设备。（spike Host 的临时 profile 退出即删除，没有留下受信设备。）
 
 # 4：UniFFI 绑定与 iOS 打包
 
@@ -124,20 +126,22 @@
 - [ ] 接管后能在 shell 和一个 Agent CLI 里输入；方向键、Ctrl-C、粘贴可用。
 - [ ] `seq 1 200000` 期间界面不卡，记录帧率与 `drain` p95。
 - [ ] 若有真机：同一 Wi-Fi 下连一次（会弹本地网络权限），记录路径（直连 / Relay）。蜂窝网络只在 Host 用自建 relay 时能连；Host 用付费 relay 而手机没登录账号时连不上，属于预期。
-- [ ] 结束后撤销测试设备。
+- [x] 结束后撤销测试设备。（spike Host 的临时 profile 退出即删除，没有留下受信设备。）
 
 # 6：Android spike App
+
+> **偏离：** 第 6 项改用 ConnectBot termlib 0.3.13。Termux 的 `TerminalSession` 是 `final`，必定经 JNI 起本地进程，接远程数据源须 fork，且许可证不明（设计 §8）。下面 Termux 相关的条目作废；termlib 没有公开的屏幕读取 API，组件侧测试改为模拟器截图检查。
 
 `mobile/android/`，Gradle（Kotlin DSL）+ Compose，`cargo-ndk` 编出 `arm64-v8a` 的 `.so`，UniFFI 生成 Kotlin 绑定。
 
 - [ ] iroh 经 reqwest 0.13 依赖 `rustls-platform-verifier`，在 Android 上要在启动时做 JNI 初始化，并引入它的 Maven 组件。
 - [ ] 引入 Termux `terminal-emulator` / `terminal-view`（JitPack 固定版本），先核实许可证。
 - [ ] 实现远程数据源：不启动本地进程，把 `drain` 字节写进 `TerminalEmulator`，把 `TerminalView` 产生的按键字节交给 `send_input`。记录是否需要 fork。
-- [ ] 页面与 iOS 相同（配对文本、终端列表、终端），`Choreographer` 每帧 `drain`，`AndroidView` 包装。
+- [x] 页面与 iOS 相同（配对文本、终端列表、终端），`Choreographer` 每帧 `drain`，`AndroidView` 包装。
 - [ ] 组件侧测试（instrumented 或 JVM 单测）：与第 5 项相同的几组输入喂给 `TerminalEmulator`，逐格比较。
 
 **验收（arm64 模拟器，连开发 Host）：** 与第 5 项相同；另记录 `.so` 大小。
 
 # 7：结论
 
-- [ ] 在设计文档 §8 写下：三个问题的答案、测得的数据、遇到的坑和绕法、对正式实现的修改建议。
+- [x] 在设计文档 §8 写下：三个问题的答案、测得的数据、遇到的坑和绕法、对正式实现的修改建议。

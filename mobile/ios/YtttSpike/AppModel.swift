@@ -116,7 +116,7 @@ final class AppModel: ObservableObject {
     }
 
     func forget() async {
-        await session?.close()
+        await session?.disconnect()
         session = nil
         terminals = []
         Storage.save("host.json", nil)
