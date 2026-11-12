@@ -77,6 +77,10 @@ final class AppModel: ObservableObject {
     /// `SIMCTL_CHILD_<name>`: pair with this code, open this terminal, then
     /// take control and type this line.
     static let autoPairCode = ProcessInfo.processInfo.environment["YTTT_SPIKE_PAIR_CODE"]
+        ?? ProcessInfo.processInfo.environment["YTTT_SPIKE_QR_IMAGE"].flatMap { path in
+            // Pair from a QR code image, through the same reader as the photo picker.
+            UIImage(contentsOfFile: path)?.cgImage.flatMap(pairingCode(in:))
+        }
     static let autoOpen = ProcessInfo.processInfo.environment["YTTT_SPIKE_OPEN"]
     static let autoType = ProcessInfo.processInfo.environment["YTTT_SPIKE_TYPE"]
     /// Open this project (and tab, pane) once the overview has it, and

@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 @main
@@ -34,9 +35,25 @@ struct YtttSpikeApp: App {
 struct PairView: View {
     @EnvironmentObject private var model: AppModel
     @State private var code = ""
+    @State private var scanning = false
+    @State private var photo: PhotosPickerItem?
+    @State private var scanError: String?
 
     var body: some View {
         Form {
+            Section("扫码") {
+                Button { scanning = true } label: { Label("扫描电脑上的二维码", systemImage: "qrcode.viewfinder") }
+                    .disabled(!PairingScanner.available || model.busy)
+                if !PairingScanner.available {
+                    Text("这台设备不能用相机扫码，可以从照片识别或粘贴配对码。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                PhotosPicker(selection: $photo, matching: .images) {
+                    Label("从照片识别", systemImage: "photo")
+                }
+                .disabled(model.busy)
+                if let scanError { Text(scanError).font(.caption).foregroundStyle(.red) }
+            }
             Section("配对码") {
                 TextField("YTTT-PAIR:1:…", text: $code, axis: .vertical)
                     .font(.system(.footnote, design: .monospaced))
@@ -57,6 +74,28 @@ struct PairView: View {
             }
         }
         .navigationTitle("配对 Host")
+        .sheet(isPresented: $scanning) {
+            PairingScanner { found in
+                scanning = false
+                Task { await model.pair(code: found) }
+            }
+            .ignoresSafeArea()
+        }
+        .onChange(of: photo) { _, item in
+            guard let item else { return }
+            Task {
+                photo = nil
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data)?.cgImage,
+                      let found = pairingCode(in: image)
+                else {
+                    scanError = "这张照片里没有配对二维码"
+                    return
+                }
+                scanError = nil
+                await model.pair(code: found)
+            }
+        }
     }
 }
 

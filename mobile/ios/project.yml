@@ -44,6 +44,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSLocalNetworkUsageDescription: yttt connects directly to your computer on the local network.
+        NSCameraUsageDescription: yttt scans the pairing QR code your computer shows.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.yttt.spike
@@ -60,6 +61,7 @@ targets:
       - YtttSpike/ProjectPage.swift
       - YtttSpike/FileTree.swift
       - YtttSpike/SecretStore.swift
+      - YtttSpike/PairingScan.swift
       - path: ../../target/mobile/ios/swift
         group: Generated
     dependencies:
