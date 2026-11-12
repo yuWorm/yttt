@@ -13,6 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.runtime.collectAsState
 import androidx.core.content.ContextCompat
 import android.view.Choreographer
@@ -172,6 +175,9 @@ fun App(
     val linkStatus by link.status.collectAsState()
     var terminals by remember { mutableStateOf<List<TerminalInfo>>(emptyList()) }
     var root by remember { mutableStateOf<Root>(Root.Home) }
+    // A project file open full screen: (project, path).
+    var editing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val filesDrawer = rememberDrawerState(DrawerValue.Closed)
     var status by remember { mutableStateOf("") }
     var pairingDigits by remember { mutableStateOf<UInt?>(null) }
     val scope = rememberCoroutineScope()
@@ -230,8 +236,17 @@ fun App(
             }
         }
     }
-    BackHandler(enabled = root != Root.Home || drawer.isOpen) {
-        if (drawer.isOpen) scope.launch { drawer.close() } else root = Root.Home
+    BackHandler(enabled = editing == null && (root != Root.Home || drawer.isOpen || filesDrawer.isOpen)) {
+        when {
+            drawer.isOpen -> scope.launch { drawer.close() }
+            filesDrawer.isOpen -> scope.launch { filesDrawer.close() }
+            else -> root = Root.Home
+        }
+    }
+    val file = editing
+    if (file != null && session != null) {
+        EditorScreen(session!!, file.first, file.second) { editing = null }
+        return
     }
 
     val current = session
@@ -257,16 +272,36 @@ fun App(
     ) {
         when (val page = root) {
             is Root.Project -> if (current != null) {
-                ProjectScreen(
-                    session = current,
-                    link = link,
-                    overview = overview,
-                    terminals = terminals,
-                    place = page.place,
-                    autoType = autoType,
-                    onPlace = { root = Root.Project(it) },
-                    onMenu = { scope.launch { drawer.open() } },
-                )
+                // The right drawer: Compose has only a start-side drawer, so it
+                // lays out right to left around it and back inside.
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                    ModalNavigationDrawer(
+                        drawerState = filesDrawer,
+                        gesturesEnabled = filesDrawer.isOpen,
+                        drawerContent = {
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                FilesDrawer(current, page.place.projectId) { path ->
+                                    scope.launch { filesDrawer.close() }
+                                    editing = page.place.projectId to path
+                                }
+                            }
+                        },
+                    ) {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            ProjectScreen(
+                                session = current,
+                                link = link,
+                                overview = overview,
+                                terminals = terminals,
+                                place = page.place,
+                                autoType = autoType,
+                                onPlace = { root = Root.Project(it) },
+                                onMenu = { scope.launch { drawer.open() } },
+                                onFiles = { scope.launch { filesDrawer.open() } },
+                            )
+                        }
+                    }
+                }
             }
             is Root.Terminal -> if (current != null) {
                 TerminalPane(current, page.info, tipText(overview.agents.firstOrNull { it.sessionId == page.info.sessionId }),

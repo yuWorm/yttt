@@ -98,6 +98,7 @@ fun ProjectScreen(
     autoType: String?,
     onPlace: (Place) -> Unit,
     onMenu: () -> Unit,
+    onFiles: () -> Unit,
 ) {
     val project = overview.projects.firstOrNull { it.projectId == place.projectId }
     val tabs = project?.tabs.orEmpty()
@@ -107,7 +108,8 @@ fun ProjectScreen(
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onMenu) { Text("☰", style = MaterialTheme.typography.titleLarge) }
-            Text(project?.name ?: place.projectId, style = MaterialTheme.typography.titleLarge)
+            Text(project?.name ?: place.projectId, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            TextButton(onClick = onFiles) { Text("文件") }
         }
         if (tabs.isNotEmpty()) {
             ScrollableTabRow(selectedTabIndex = tabs.indexOf(tab).coerceAtLeast(0), edgePadding = 8.dp) {

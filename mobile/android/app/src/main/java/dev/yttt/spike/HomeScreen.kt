@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +47,22 @@ fun HomeScreen(
     val sections = HomeSections(overview)
     var showFinished by remember { mutableStateOf(false) }
     var showTerminals by remember { mutableStateOf(false) }
+    var showLicenses by remember { mutableStateOf(false) }
+    if (showLicenses) {
+        AlertDialog(
+            onDismissRequest = { showLicenses = false },
+            title = { Text("开源许可") },
+            text = {
+                Text(
+                    "sora-editor — LGPL-2.1，未修改，作为独立库使用\n" +
+                        "ConnectBot termlib — Apache-2.0\n" +
+                        "JNA — Apache-2.0 / LGPL-2.1\n" +
+                        "Jetpack Compose、AndroidX — Apache-2.0",
+                )
+            },
+            confirmButton = { TextButton(onClick = { showLicenses = false }) { Text("好") } },
+        )
+    }
     LazyColumn(Modifier.fillMaxWidth()) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
@@ -79,6 +97,12 @@ fun HomeScreen(
                 headlineContent = { Text("后台提醒") },
                 supportingContent = { Text("关闭本 App 的电池优化，后台更不容易被系统断开") },
                 modifier = Modifier.clickable(onClick = onBattery),
+            )
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("开源许可") },
+                modifier = Modifier.clickable { showLicenses = true },
             )
         }
         item {
