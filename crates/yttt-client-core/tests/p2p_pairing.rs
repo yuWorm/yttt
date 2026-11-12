@@ -217,6 +217,12 @@ async fn a_paired_device_works_until_it_is_revoked() {
     let (endpoint, paired) = pair_device(&admin, secret, DevicePreset::Full).await;
     assert_eq!(Some(paired.host), status(&admin).await.p2p.endpoint_id);
     assert_eq!(status(&admin).await.p2p.pairing, None);
+    // The device names the Host by its computer's name, not its environment id.
+    assert_eq!(
+        paired.host_label,
+        yttt_host::machine_name(&paired.environment_id)
+    );
+    assert_ne!(paired.host_label, paired.environment_id);
 
     let device = connect_device(endpoint, &paired, secret).await;
     device.request(Request::ListResources).await.unwrap();

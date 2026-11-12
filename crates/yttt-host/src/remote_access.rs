@@ -612,7 +612,7 @@ impl Manager {
                 preset,
             } => {
                 let devices = self.devices()?;
-                let host_label = self.context.identity.environment_id.clone();
+                let host_label = crate::machine_name(&self.context.identity.environment_id);
                 let mut pairing = self.pairing.lock();
                 let label = pairing
                     .claimed_label(endpoint_id, super::now_millis())

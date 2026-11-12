@@ -475,15 +475,7 @@ async fn prompt(question: &str) -> Result<String, ServerError> {
 /// The code as a QR code drawn with half-block characters, for a phone camera.
 /// This machine's name, for the console to show what is signing in.
 fn host_name() -> String {
-    let name = gethostname::gethostname()
-        .to_string_lossy()
-        .trim()
-        .to_owned();
-    if name.is_empty() {
-        "this machine".into()
-    } else {
-        name
-    }
+    yttt_host::machine_name("this machine")
 }
 
 fn qr_text(code: &str) -> String {

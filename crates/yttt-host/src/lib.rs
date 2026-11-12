@@ -21,6 +21,20 @@ mod token_usage;
 mod workspace;
 mod workspace_backups;
 mod workspace_objects;
+
+/// The name a Host gives paired devices: this computer's name, or
+/// `fallback` when it has none.
+pub fn machine_name(fallback: &str) -> String {
+    let name = gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    if name.is_empty() {
+        fallback.to_owned()
+    } else {
+        name
+    }
+}
 pub use workspace::WorkspaceService;
 
 use std::{
