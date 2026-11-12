@@ -8,7 +8,11 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.collectAsState
 import androidx.core.content.ContextCompat
 import android.view.Choreographer
@@ -147,6 +151,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** The root page: the overview, a project, or a single terminal (debugging). */
+sealed interface Root {
+    data object Home : Root
+    data class Project(val place: Place) : Root
+    data class Terminal(val info: TerminalInfo) : Root
+}
+
 @Composable
 fun App(
     link: Link,
@@ -160,10 +171,11 @@ fun App(
     val overview by link.overview.collectAsState()
     val linkStatus by link.status.collectAsState()
     var terminals by remember { mutableStateOf<List<TerminalInfo>>(emptyList()) }
-    var open by remember { mutableStateOf<TerminalInfo?>(null) }
+    var root by remember { mutableStateOf<Root>(Root.Home) }
     var status by remember { mutableStateOf("") }
     var pairingDigits by remember { mutableStateOf<UInt?>(null) }
     val scope = rememberCoroutineScope()
+    val drawer = rememberDrawerState(DrawerValue.Closed)
 
     suspend fun pair(code: String) {
         status = "正在连接 Host…"
@@ -183,13 +195,16 @@ fun App(
         }
     }
 
+    /** Opens the pane running terminal `sessionId`, or the terminal alone. */
     suspend fun openTerminal(sessionId: String) {
         val current = session ?: return
-        if (terminals.none { it.sessionId == sessionId }) {
-            runCatching { terminals = current.terminals() }
+        overview.placeOf(sessionId)?.let {
+            root = Root.Project(it)
+            return
         }
-        open = terminals.firstOrNull { it.sessionId == sessionId }
-        if (open == null) status = "这个 Agent 的终端已经不在了"
+        if (terminals.none { it.sessionId == sessionId }) runCatching { terminals = current.terminals() }
+        val info = terminals.firstOrNull { it.sessionId == sessionId }
+        if (info != null) root = Root.Terminal(info) else status = "这个终端已经不在了"
     }
 
     LaunchedEffect(Unit) {
@@ -201,8 +216,12 @@ fun App(
         terminals = connected.terminals()
         onConnected()
     }
+    // The terminals change as panes start and stop.
+    LaunchedEffect(session, overview.terminals) {
+        session?.let { current -> runCatching { terminals = current.terminals() } }
+    }
     // A tapped notification, or automation, names a terminal to open.
-    LaunchedEffect(session) {
+    LaunchedEffect(session, overview.projects.isNotEmpty()) {
         if (session == null) return@LaunchedEffect
         link.openRequest.collect { sessionId ->
             if (sessionId != null) {
@@ -211,22 +230,59 @@ fun App(
             }
         }
     }
+    BackHandler(enabled = root != Root.Home || drawer.isOpen) {
+        if (drawer.isOpen) scope.launch { drawer.close() } else root = Root.Home
+    }
 
     val current = session
-    val terminal = open
-    when {
-        record == null -> PairScreen(status, pairingDigits) { code -> scope.launch { pair(code) } }
-        current != null && terminal != null ->
-            TerminalScreen(current, terminal, autoType, link) { open = null }
-        else -> HomeScreen(
-            hostLabel = runCatching { link.core.hostLabel(record!!) }.getOrDefault(""),
-            status = status.ifEmpty { linkStatus },
-            overview = overview,
-            terminals = terminals,
-            onAgent = { agent -> scope.launch { openTerminal(agent.sessionId) } },
-            onTerminal = { open = it },
-            onBattery = onBattery,
-        )
+    val hostLabel = record?.let { runCatching { link.core.hostLabel(it) }.getOrNull() }.orEmpty()
+    if (record == null) {
+        PairScreen(status, pairingDigits) { code -> scope.launch { pair(code) } }
+        return
+    }
+    ModalNavigationDrawer(
+        drawerState = drawer,
+        // The terminal takes horizontal drags while observing; the menu button opens it.
+        gesturesEnabled = drawer.isOpen,
+        drawerContent = {
+            LeftDrawer(
+                hostLabel = hostLabel,
+                overview = overview,
+                current = (root as? Root.Project)?.place?.projectId,
+                onHome = { root = Root.Home; scope.launch { drawer.close() } },
+                onProject = { id -> root = Root.Project(overview.initialPlace(id)); scope.launch { drawer.close() } },
+                onForget = { scope.launch { drawer.close(); link.forget(); root = Root.Home } },
+            )
+        },
+    ) {
+        when (val page = root) {
+            is Root.Project -> if (current != null) {
+                ProjectScreen(
+                    session = current,
+                    link = link,
+                    overview = overview,
+                    terminals = terminals,
+                    place = page.place,
+                    autoType = autoType,
+                    onPlace = { root = Root.Project(it) },
+                    onMenu = { scope.launch { drawer.open() } },
+                )
+            }
+            is Root.Terminal -> if (current != null) {
+                TerminalPane(current, page.info, tipText(overview.agents.firstOrNull { it.sessionId == page.info.sessionId }),
+                    autoType, link) { root = Root.Home }
+            }
+            Root.Home -> HomeScreen(
+                hostLabel = hostLabel,
+                status = status.ifEmpty { linkStatus },
+                overview = overview,
+                terminals = terminals,
+                onAgent = { agent -> scope.launch { openTerminal(agent.sessionId) } },
+                onTerminal = { root = Root.Terminal(it) },
+                onBattery = onBattery,
+                onMenu = { scope.launch { drawer.open() } },
+            )
+        }
     }
 }
 
@@ -253,7 +309,14 @@ fun PairScreen(status: String, shortCode: UInt?, onPair: (String) -> Unit) {
  * it applied that size. Repaints are drained once per display frame.
  */
 @Composable
-fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, link: Link, onBack: () -> Unit) {
+fun TerminalPane(
+    session: HostSession,
+    info: TerminalInfo,
+    tip: String,
+    autoType: String?,
+    link: Link,
+    onBack: (() -> Unit)?,
+) {
     var controlling by remember { mutableStateOf(false) }
     // Laid out at the screen's size while a take is in flight.
     var fitting by remember { mutableStateOf(false) }
@@ -401,7 +464,9 @@ fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, 
             modifier = Modifier.align(Alignment.TopEnd).background(Color(0x99000000)).padding(4.dp),
         )
         Row(Modifier.align(Alignment.TopStart).padding(4.dp)) {
-            Text("‹ 返回", color = Color.White, modifier = Modifier.clickable(onClick = onBack).padding(8.dp))
+            if (onBack != null) {
+                Text("‹ 返回", color = Color.White, modifier = Modifier.clickable(onClick = onBack).padding(8.dp))
+            }
             if (controlling) {
                 Text(
                     "交还电脑",
@@ -424,7 +489,7 @@ fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, 
         } else if (!controlling && !fitting) {
             ExtendedFloatingActionButton(
                 onClick = { scope.launch { takeControl() } },
-                text = { Text("接管终端") },
+                text = { Text(tip) },
                 icon = {},
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             )

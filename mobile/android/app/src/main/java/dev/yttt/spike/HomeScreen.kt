@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,13 +40,19 @@ fun HomeScreen(
     onAgent: (AgentSummary) -> Unit,
     onTerminal: (TerminalInfo) -> Unit,
     onBattery: () -> Unit,
+    onMenu: () -> Unit,
 ) {
     val sections = HomeSections(overview)
     var showFinished by remember { mutableStateOf(false) }
     var showTerminals by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxWidth()) {
         item {
-            Text(hostLabel, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
+                IconButton(onClick = onMenu) { Text("☰", style = MaterialTheme.typography.titleLarge) }
+                Text("总控", style = MaterialTheme.typography.titleLarge)
+            }
+            Text(hostLabel, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp))
             if (status.isNotEmpty()) Text(status, Modifier.padding(horizontal = 16.dp))
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 Count(sections.projects, "项目")

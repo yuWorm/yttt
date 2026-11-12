@@ -109,6 +109,14 @@ class Link(context: Context) {
         }
     }
 
+    /** Forgets the paired Host: disconnects and deletes the record. */
+    suspend fun forget() {
+        disconnect()
+        storage.save("host.json", null)
+        record.value = null
+        overview.value = Overview(emptyList(), emptyList(), 0u)
+    }
+
     suspend fun disconnect() {
         val current = connecting.withLock { session.value.also { session.value = null } } ?: return
         runCatching { current.disconnect() }
