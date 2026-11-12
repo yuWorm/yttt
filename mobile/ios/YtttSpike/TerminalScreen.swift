@@ -139,6 +139,8 @@ final class TerminalContainer: UIView, TerminalViewDelegate {
     private var controlling = false
     /// Sized to the screen while a take is in flight.
     private var fitting = false
+    /// Direct or relayed, refreshed with the stats.
+    private var pathLabel = "—"
     /// One character cell of the current font.
     private var cell = CGSize(width: 7, height: 14)
     private var frames = 0
@@ -248,8 +250,15 @@ final class TerminalContainer: UIView, TerminalViewDelegate {
             let stats = session.drainStats()
             let fps = Double(frames) / (now - lastReport)
             let rate = Double(fedBytes) / (now - lastReport) / 1024
-            onStats(String(format: "%.0f fps · %.0f KiB/s · drain p95 %llu µs max %llu µs",
-                           fps, rate, stats.p95Micros, stats.maxMicros))
+            onStats(String(format: "%@ · %.0f fps · %.0f KiB/s · drain p95 %llu µs",
+                           pathLabel, fps, rate, stats.p95Micros))
+            Task { @MainActor in
+                switch await session.path() {
+                case .direct: pathLabel = "直连"
+                case .relay: pathLabel = "经 relay"
+                case .unknown: pathLabel = "—"
+                }
+            }
             frames = 0
             fedBytes = 0
             lastReport = now

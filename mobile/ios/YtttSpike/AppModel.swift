@@ -56,6 +56,8 @@ final class AppModel: ObservableObject {
     static let autoPairCode = ProcessInfo.processInfo.environment["YTTT_SPIKE_PAIR_CODE"]
     static let autoOpen = ProcessInfo.processInfo.environment["YTTT_SPIKE_OPEN"]
     static let autoType = ProcessInfo.processInfo.environment["YTTT_SPIKE_TYPE"]
+    /// Keep off direct paths: everything goes through the Host's relay.
+    static let relayOnly = ProcessInfo.processInfo.environment["YTTT_SPIKE_RELAY_ONLY"] == "1"
 
     init() {
         core = try! MobileCore()
@@ -80,7 +82,8 @@ final class AppModel: ObservableObject {
             }
         }
         do {
-            let record = try await core.pair(code: code, deviceLabel: "iOS spike", deviceSecret: secret, listener: listener)
+            let record = try await core.pair(code: code, deviceLabel: "iOS spike", deviceSecret: secret,
+                                            relayOnly: Self.relayOnly, listener: listener)
             Storage.save("host.json", record)
             self.record = record
             status = ""
@@ -95,7 +98,7 @@ final class AppModel: ObservableObject {
         status = "正在连接…"
         defer { busy = false }
         do {
-            session = try await core.connect(record: record, deviceSecret: secret)
+            session = try await core.connect(record: record, deviceSecret: secret, relayOnly: Self.relayOnly)
             status = ""
             await refresh()
         } catch {

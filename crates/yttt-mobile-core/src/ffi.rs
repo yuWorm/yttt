@@ -39,6 +39,14 @@ fn failed(message: impl Into<String>) -> MobileCoreError {
     }
 }
 
+fn relay_choice(relay_only: bool) -> RelayChoice {
+    if relay_only {
+        RelayChoice::OnlyFromHost
+    } else {
+        RelayChoice::FromHost
+    }
+}
+
 fn secret(bytes: &[u8]) -> Result<[u8; 32], MobileCoreError> {
     bytes
         .try_into()
@@ -70,11 +78,13 @@ impl MobileCore {
     }
 
     /// Pairs with the Host in `code` and returns the record to store.
+    /// `relay_only` keeps the device off direct paths (a diagnostic setting).
     pub async fn pair(
         &self,
         code: String,
         device_label: String,
         device_secret: Vec<u8>,
+        relay_only: bool,
         listener: Arc<dyn PairingListener>,
     ) -> Result<Vec<u8>, MobileCoreError> {
         let device_secret = secret(&device_secret)?;
@@ -83,7 +93,7 @@ impl MobileCore {
                 &code,
                 &device_label,
                 device_secret,
-                RelayChoice::FromHost,
+                relay_choice(relay_only),
                 move |short_code| listener.on_short_code(short_code),
             )
             .await
@@ -101,11 +111,12 @@ impl MobileCore {
         &self,
         record: Vec<u8>,
         device_secret: Vec<u8>,
+        relay_only: bool,
     ) -> Result<Arc<HostSession>, MobileCoreError> {
         let record = PairedHostRecord::from_bytes(&record)?;
         let device_secret = secret(&device_secret)?;
         let work = self.runtime.spawn(async move {
-            MobileSession::connect(&record, device_secret, RelayChoice::FromHost).await
+            MobileSession::connect(&record, device_secret, relay_choice(relay_only)).await
         });
         let session = work.await.map_err(|error| failed(error.to_string()))??;
         Ok(Arc::new(HostSession {

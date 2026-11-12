@@ -51,6 +51,7 @@ import org.connectbot.terminal.Terminal
 import org.connectbot.terminal.TerminalEmulatorFactory
 import uniffi.yttt_mobile_core.HostSession
 import uniffi.yttt_mobile_core.MobileCore
+import uniffi.yttt_mobile_core.LinkPath
 import uniffi.yttt_mobile_core.MobileCoreException
 import uniffi.yttt_mobile_core.PairingListener
 import uniffi.yttt_mobile_core.TerminalInfo
@@ -96,10 +97,12 @@ class MainActivity : ComponentActivity() {
         val autoPair = intent.getStringExtra("pair")
         val autoOpen = intent.getStringExtra("open")
         val autoType = intent.getStringExtra("type")
+        // Keep off direct paths: everything goes through the Host's relay.
+        val relayOnly = intent.getBooleanExtra("relayOnly", false)
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
-                    App(storage, core, holder, autoPair, autoOpen, autoType)
+                    App(storage, core, holder, autoPair, autoOpen, autoType, relayOnly)
                 }
             }
         }
@@ -114,6 +117,7 @@ fun App(
     autoPair: String?,
     autoOpen: String?,
     autoType: String?,
+    relayOnly: Boolean,
 ) {
     var record by remember { mutableStateOf(storage.load("host.json")) }
     var session by remember { mutableStateOf<HostSession?>(null) }
@@ -135,7 +139,7 @@ fun App(
             }
         }
         try {
-            val bytes = core.pair(code.trim(), "Android spike", secret, listener)
+            val bytes = core.pair(code.trim(), "Android spike", secret, relayOnly, listener)
             storage.save("host.json", bytes)
             record = bytes
             status = ""
@@ -151,7 +155,7 @@ fun App(
         val stored = record ?: return@LaunchedEffect
         status = "正在连接…"
         try {
-            val connected = core.connect(stored, secret)
+            val connected = core.connect(stored, secret, relayOnly)
             session = connected
             holder.session = connected
             terminals = connected.terminals()
@@ -250,6 +254,7 @@ fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, 
         var fed = 0L
         var last = System.nanoTime()
         var running = true
+        var pathLabel = "—"
         val callback = object : Choreographer.FrameCallback {
             override fun doFrame(frameTimeNanos: Long) {
                 if (!running) return
@@ -264,9 +269,16 @@ fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, 
                 val seconds = (now - last) / 1e9
                 if (seconds >= 0.5) {
                     val drain = session.drainStats()
-                    stats = "%.0f fps · %.0f KiB/s · drain p95 %d µs max %d µs".format(
-                        frames / seconds, fed / seconds / 1024, drain.p95Micros.toLong(), drain.maxMicros.toLong(),
+                    stats = "%s · %.0f fps · %.0f KiB/s · drain p95 %d µs".format(
+                        pathLabel, frames / seconds, fed / seconds / 1024, drain.p95Micros.toLong(),
                     )
+                    scope.launch {
+                        pathLabel = when (session.path()) {
+                            LinkPath.DIRECT -> "直连"
+                            LinkPath.RELAY -> "经 relay"
+                            LinkPath.UNKNOWN -> "—"
+                        }
+                    }
                     frames = 0
                     fed = 0
                     last = now

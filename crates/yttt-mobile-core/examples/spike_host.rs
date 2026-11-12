@@ -1,11 +1,11 @@
 //! Spike: a throwaway Host for trying the mobile link end to end without the
 //! desktop app or a real profile. It runs `yttt-host` on a temporary profile,
-//! turns P2P on without a relay, prints pairing codes and confirms every device
-//! that asks, and starts two terminals: a clean zsh and a demo that prints
-//! colors and CJK text.
+//! turns P2P on (without a relay unless given one), prints pairing codes and
+//! confirms every device that asks, and starts two terminals: a clean zsh and
+//! a demo that prints colors and CJK text.
 //!
 //! ```text
-//! cargo run -p yttt-mobile-core --example spike_host
+//! cargo run -p yttt-mobile-core --example spike_host [-- --relay http://<LAN IP>:3341]
 //! ```
 //!
 //! The current pairing code is also written to
@@ -118,6 +118,17 @@ async fn spawn(admin: &ClientCore, id: &str, program: &str, args: &[&str]) {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
+    // `--relay <url>`: the Host uses this relay and names it in pairing codes.
+    // Give an address both the Host and the phone reach, such as the Mac's
+    // LAN address for an emulator.
+    let args = std::env::args().collect::<Vec<_>>();
+    let relay_url = args
+        .iter()
+        .position(|arg| arg == "--relay")
+        .and_then(|at| args.get(at + 1).cloned());
+    if let Some(url) = &relay_url {
+        println!("relay: {url}");
+    }
     let state = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/mobile-spike-host");
     let _ = fs::remove_dir_all(&state);
     fs::create_dir_all(&state).unwrap();
@@ -154,7 +165,7 @@ async fn main() {
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url: None,
+            relay_url: relay_url.clone(),
         },
     )
     .await;
