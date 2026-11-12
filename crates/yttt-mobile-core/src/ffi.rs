@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use crate::files::{FileEntry, OpenedFile, SaveOutcome, SessionEntry};
+use crate::keys::TerminalKey;
 use crate::overview::Overview;
 use crate::session::{
     DrainStats, LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, TerminalInfo,
@@ -320,6 +321,11 @@ impl HostSession {
 
     pub fn in_control(&self, session_id: String) -> bool {
         self.session.in_control(&session_id)
+    }
+
+    /// A key-bar key, encoded for the program's cursor-key mode.
+    pub fn send_key(&self, session_id: String, key: TerminalKey) -> Result<(), MobileCoreError> {
+        Ok(self.session.send_key(&session_id, key)?)
     }
 
     pub fn send_input(&self, session_id: String, bytes: Vec<u8>) -> Result<(), MobileCoreError> {

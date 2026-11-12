@@ -31,6 +31,7 @@ use yttt_transport_iroh::{
 
 use crate::{
     files::{FileEntry, OpenedFile, SESSION_PROVIDERS, SaveOutcome, SessionEntry},
+    keys::TerminalKey,
     overview::Overview,
     vt::VtEncoder,
 };
@@ -591,6 +592,19 @@ impl MobileSession {
                 bytes,
             })
             .map_err(|error| MobileError::Transport(error.to_string()))
+    }
+
+    /// Whether the program in the terminal wants application cursor keys.
+    pub fn app_cursor(&self, session_id: &str) -> bool {
+        self.client
+            .terminal_snapshot(&TerminalSessionId::new(session_id))
+            .is_some_and(|viewport| crate::vt::app_cursor(viewport.modes.bits))
+    }
+
+    /// Sends a key-bar key as the program expects it; only while in control.
+    pub fn send_key(&self, session_id: &str, key: TerminalKey) -> Result<(), MobileError> {
+        let bytes = crate::keys::encode(key, self.app_cursor(session_id));
+        self.send_input(session_id, bytes.to_vec())
     }
 
     /// Resizes the PTY to this device's screen; only while in control.

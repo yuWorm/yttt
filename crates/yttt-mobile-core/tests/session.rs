@@ -18,6 +18,7 @@ use yttt_core::model::{
     project::{ProjectDescriptor, ProjectLocation},
 };
 use yttt_mobile_core::files::{FileKind, SaveOutcome};
+use yttt_mobile_core::keys::TerminalKey;
 use yttt_mobile_core::overview::{AgentState, Overview, WaitingKind};
 use yttt_mobile_core::session::{
     LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
@@ -179,6 +180,22 @@ async fn desktop_terminals(
     root: &Path,
     names: &[&str],
 ) -> Vec<TerminalSessionId> {
+    desktop_terminals_running(
+        admin,
+        root,
+        names,
+        "printf 'desktop-ready'; IFS= read -r line; printf '\\ngot:%s\\n' \"$line\"; sleep 30",
+    )
+    .await
+}
+
+/// Like `desktop_terminals`, each running `script` under `/bin/sh -c`.
+async fn desktop_terminals_running(
+    admin: &ClientCore,
+    root: &Path,
+    names: &[&str],
+    script: &str,
+) -> Vec<TerminalSessionId> {
     let project_root = root.join("project");
     fs::create_dir_all(&project_root).unwrap();
     let project_id = ProjectId::new("project");
@@ -194,42 +211,38 @@ async fn desktop_terminals(
     for name in names {
         let session_id = TerminalSessionId::new(*name);
         let Response::TerminalSpawned { .. } = admin
-        .request(Request::SpawnTerminal {
-            spec: TerminalSpawnSpec {
-                session_id: session_id.clone(),
-                project_id: project_id.clone(),
-                cwd: yttt_protocol::ProjectRelativePath::root(),
-                execution: TerminalExecutionSpec::Command {
-                    shell: "/bin/sh".to_string(),
-                    program: "/bin/sh".to_string(),
-                    args: vec![
-                        "-c".to_string(),
-                        "printf 'desktop-ready'; IFS= read -r line; printf '\\ngot:%s\\n' \"$line\"; sleep 30"
-                            .to_string(),
-                    ],
-                    return_to_shell: false,
+            .request(Request::SpawnTerminal {
+                spec: TerminalSpawnSpec {
+                    session_id: session_id.clone(),
+                    project_id: project_id.clone(),
+                    cwd: yttt_protocol::ProjectRelativePath::root(),
+                    execution: TerminalExecutionSpec::Command {
+                        shell: "/bin/sh".to_string(),
+                        program: "/bin/sh".to_string(),
+                        args: vec!["-c".to_string(), script.to_string()],
+                        return_to_shell: false,
+                    },
+                    geometry: TerminalGeometry {
+                        cols: 100,
+                        rows: 30,
+                        cell_width: 8,
+                        cell_height: 16,
+                    },
+                    geometry_epoch: 1,
+                    query_palette: Vec::new(),
+                    palette_revision: 1,
+                    scrollback_limit: 1_000,
+                    environment: Vec::new(),
+                    removed_environment: Vec::new(),
                 },
-                geometry: TerminalGeometry {
-                    cols: 100,
-                    rows: 30,
-                    cell_width: 8,
-                    cell_height: 16,
-                },
-                geometry_epoch: 1,
-                query_palette: Vec::new(),
-                palette_revision: 1,
-                scrollback_limit: 1_000,
-                environment: Vec::new(),
-                removed_environment: Vec::new(),
-            },
-            start_id: format!("mobile-session-start-{name}"),
-            expected_host_epoch: admin.host_epoch().unwrap(),
-        })
-        .await
-        .unwrap()
-    else {
-        panic!("unexpected spawn response");
-    };
+                start_id: format!("mobile-session-start-{name}"),
+                expected_host_epoch: admin.host_epoch().unwrap(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("unexpected spawn response");
+        };
         terminals.push(session_id);
     }
     terminals
@@ -792,5 +805,47 @@ async fn a_phone_reads_edits_and_saves_a_project_file() {
 
     // No Agent has worked here.
     assert!(phone.agent_sessions("site").await.unwrap().is_empty());
+    phone.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_reach_the_program_as_it_expects_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path(), None).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+    // Reads a key raw and prints its bytes, then turns on application cursor
+    // keys (as vim and full-screen CLIs do) and does it again.
+    let terminal = desktop_terminals_running(
+        &admin,
+        temp.path(),
+        &["project:tab:keys"],
+        concat!(
+            "stty raw -echo; printf 'ready\\r\\n'; ",
+            "a=$(dd bs=1 count=3 2>/dev/null | od -An -tx1 | tr -s ' '); printf 'first:%s\\r\\n' \"$a\"; ",
+            "printf '\\033[?1h'; ",
+            "b=$(dd bs=1 count=3 2>/dev/null | od -An -tx1 | tr -s ' '); printf 'second:%s\\r\\n' \"$b\"; ",
+            "sleep 30"
+        ),
+    )
+    .await;
+    let id = terminal[0].to_string();
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+        .await
+        .unwrap();
+    phone.attach(&id).await.unwrap();
+    drain_until(&phone, &id, "ready").await;
+    // Only while in control.
+    assert!(phone.send_key(&id, TerminalKey::Up).is_err());
+    phone.take_control(&id, 60, 20).await.unwrap();
+    assert!(!phone.app_cursor(&id));
+
+    phone.send_key(&id, TerminalKey::Up).unwrap();
+    drain_until(&phone, &id, "first: 1b 5b 41").await;
+    eventually("application cursor keys", async || {
+        phone.app_cursor(&id).then_some(())
+    })
+    .await;
+    phone.send_key(&id, TerminalKey::Up).unwrap();
+    drain_until(&phone, &id, "second: 1b 4f 41").await;
     phone.close().await;
 }

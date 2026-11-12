@@ -177,7 +177,11 @@ async fn main() {
     )
     .unwrap();
     fs::create_dir_all(project.join("src")).unwrap();
-    fs::write(project.join("src/app.js"), "export function greet(name) {\n  return `hello ${name}`;\n}\n").unwrap();
+    fs::write(
+        project.join("src/app.js"),
+        "export function greet(name) {\n  return `hello ${name}`;\n}\n",
+    )
+    .unwrap();
     println!("project files: {}", project.display());
     // The Host starts each eager tab's pane, as for a project the desktop opens.
     let layout: ProjectLayout = toml::from_str(

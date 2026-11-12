@@ -107,6 +107,12 @@ const INPUT_MODES: [(TermMode, &str, &str); 2] = [
     (TermMode::APP_CURSOR, "\x1b[?1h", "\x1b[?1l"),
     (TermMode::BRACKETED_PASTE, "\x1b[?2004h", "\x1b[?2004l"),
 ];
+/// Whether the program set application cursor keys (DECCKM), from a
+/// viewport's mode bits.
+pub(crate) fn app_cursor(bits: u32) -> bool {
+    TermMode::from_bits_truncate(bits).contains(TermMode::APP_CURSOR)
+}
+
 /// Reporting modes, synced only while the user controls the terminal.
 /// Resets come before sets: the mouse tracking modes replace one another.
 const REPORT_MODES: [(TermMode, &str, &str); 5] = [
