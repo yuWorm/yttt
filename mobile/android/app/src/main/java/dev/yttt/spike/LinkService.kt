@@ -25,6 +25,8 @@ import kotlinx.coroutines.launch
 
 private const val LINK_CHANNEL = "link"
 private const val WAITING_CHANNEL = "agent-waiting"
+/** The same notifications while the app is on screen: in the shade, no banner. */
+private const val QUIET_WAITING_CHANNEL = "agent-waiting-quiet"
 private const val ACTION_STOP = "dev.yttt.spike.STOP_LINK"
 
 /**
@@ -57,8 +59,9 @@ class LinkService : Service() {
         if (watching == null) {
             watching = scope.launch {
                 link.connect()
-                combine(link.overview, link.viewing) { overview, viewing -> overview to viewing }
-                    .collect { (overview, viewing) -> apply(notifier.update(overview, viewing)) }
+                combine(link.overview, link.viewing, link.foreground) { overview, viewing, foreground ->
+                    Triple(overview, viewing, foreground)
+                }.collect { (overview, viewing, foreground) -> apply(notifier.update(overview, viewing, foreground)) }
             }
         }
         return START_STICKY
@@ -95,13 +98,13 @@ class LinkService : Service() {
                     )
                     manager.notify(
                         id,
-                        NotificationCompat.Builder(this, WAITING_CHANNEL)
+                        NotificationCompat.Builder(this, if (change.quiet) QUIET_WAITING_CHANNEL else WAITING_CHANNEL)
                             .setSmallIcon(android.R.drawable.stat_notify_chat)
                             .setContentTitle(change.title)
                             .setContentText(change.text)
                             .setStyle(NotificationCompat.BigTextStyle().bigText(change.text))
                             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                            .setPriority(NotificationCompat.PRIORITY_HIGH)
+                            .setPriority(if (change.quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
                             .setContentIntent(open)
                             .setAutoCancel(true)
                             .build(),
@@ -143,6 +146,9 @@ class LinkService : Service() {
             )
             manager.createNotificationChannel(
                 NotificationChannel(WAITING_CHANNEL, "Agent 需要处理", NotificationManager.IMPORTANCE_HIGH),
+            )
+            manager.createNotificationChannel(
+                NotificationChannel(QUIET_WAITING_CHANNEL, "Agent 需要处理（App 在前台时）", NotificationManager.IMPORTANCE_LOW),
             )
         }
     }

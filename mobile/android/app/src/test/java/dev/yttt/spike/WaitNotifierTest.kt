@@ -104,6 +104,26 @@ class WaitNotifierTest {
     }
 
     @Test
+    fun withTheAppOnScreenAWaitIsPostedQuietlyWithoutABanner() {
+        val notifier = WaitNotifier()
+        val post = notifier.update(
+            overview(agent("a", AgentState.WAITING, WaitingKind.APPROVAL, since = 5)), viewing = null, foreground = true,
+        ).single() as NotificationChange.Post
+        assertTrue(post.quiet)
+        // In the background, a banner.
+        val loud = notifier.update(
+            overview(
+                agent("a", AgentState.WAITING, WaitingKind.APPROVAL, since = 5),
+                agent("b", AgentState.WAITING, WaitingKind.APPROVAL, since = 6),
+            ),
+            viewing = null,
+            foreground = false,
+        ).single() as NotificationChange.Post
+        assertEquals("b", loud.sessionId)
+        assertTrue(!loud.quiet)
+    }
+
+    @Test
     fun notificationIdsAreStablePerAgent() {
         assertEquals(WaitNotifier.notificationId("web:build:codex"), WaitNotifier.notificationId("web:build:codex"))
         assertTrue(WaitNotifier.notificationId("a") != WaitNotifier.notificationId("b"))

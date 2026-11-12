@@ -8,7 +8,9 @@ import uniffi.yttt_mobile_core.WaitingKind
 const val LINK_NOTIFICATION_ID = 1
 
 sealed interface NotificationChange {
-    data class Post(val sessionId: String, val title: String, val text: String) : NotificationChange
+    /** `quiet`: posted while the app is on screen, to the shade without a banner. */
+    data class Post(val sessionId: String, val title: String, val text: String, val quiet: Boolean = false) :
+        NotificationChange
     data class Cancel(val sessionId: String) : NotificationChange
 }
 
@@ -17,7 +19,9 @@ sealed interface NotificationChange {
  * post and which to take back. One wait is one Agent in `WAITING` since one
  * `stateStartedAtMs`: it is notified at most once, not at all if the user is
  * looking at that terminal when it starts (they have seen it), and the
- * notification goes when the wait ends. Failures are not notified. Not
+ * notification goes when the wait ends. While the app is on screen it is
+ * posted quietly: the home screen already shows it, and a banner would cover
+ * the top bar. Failures are not notified. Not
  * thread-safe: call from one coroutine.
  */
 class WaitNotifier {
@@ -26,7 +30,7 @@ class WaitNotifier {
 
     private data class Wait(val since: ULong, val posted: Boolean)
 
-    fun update(overview: Overview, viewing: String?): List<NotificationChange> {
+    fun update(overview: Overview, viewing: String?, foreground: Boolean = false): List<NotificationChange> {
         val changes = mutableListOf<NotificationChange>()
         val waiting = overview.agents.filter { it.state == AgentState.WAITING }.associateBy { it.sessionId }
         for ((sessionId, wait) in waits.toMap()) {
@@ -51,6 +55,7 @@ class WaitNotifier {
                 sessionId = sessionId,
                 title = "${overview.projectName(agent.projectId)} · ${overview.tabTitle(agent.projectId, agent.tabId)}",
                 text = if (detail != null) "$what：$detail" else what,
+                quiet = foreground,
             )
         }
         return changes
