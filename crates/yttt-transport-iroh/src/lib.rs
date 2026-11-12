@@ -476,6 +476,14 @@ impl IrohEndpoint {
         }
     }
 
+    /// Tells the endpoint the network may have changed, as when the device
+    /// moves between Wi-Fi and cellular: it rereads its interfaces and, if they
+    /// changed, rebinds, reconnects its relay and looks for paths again, rather
+    /// than waiting to notice by itself. Harmless to repeat, and after `close`.
+    pub async fn network_change(&self) {
+        self.endpoint.network_change().await;
+    }
+
     /// Waits until the endpoint can be reached through its relay, if it has one.
     pub async fn online(&self) {
         self.endpoint.online().await;

@@ -164,6 +164,14 @@ impl HostSession {
         self.session.drain_stats()
     }
 
+    /// Call when the device's network changes (path monitor, connectivity
+    /// callback). Returns at once; the check runs in the background.
+    pub fn network_changed(&self) {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.network_changed().await });
+    }
+
     /// Whether data goes straight to the Host or through the relay, for the
     /// connection status the app shows.
     pub async fn path(&self) -> LinkPath {

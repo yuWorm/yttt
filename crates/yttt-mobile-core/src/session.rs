@@ -433,6 +433,17 @@ impl MobileSession {
         }
     }
 
+    /// The device's network changed (the app watches for that): iroh rereads
+    /// the interfaces, and the session checks at once that it still reaches
+    /// the Host, replacing a connection that went quiet instead of waiting
+    /// for the liveness timeout. Opens no new session, so the Client ID stays.
+    pub async fn network_changed(&self) {
+        if let Some(endpoint) = &self.endpoint {
+            endpoint.network_change().await;
+        }
+        self.client.probe_now();
+    }
+
     /// Whether data goes straight to the Host or through the relay.
     pub async fn path(&self) -> LinkPath {
         let Some(connector) = &self.connector else {

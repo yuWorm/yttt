@@ -4,7 +4,7 @@
 
 use std::{fs, path::Path, time::Duration};
 
-use yttt_client_core::ClientCore;
+use yttt_client_core::{ClientCore, ConnectionState};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId};
 use yttt_mobile_core::session::{
     LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
@@ -483,6 +483,24 @@ async fn a_phone_works_through_the_relay_alone() {
         .expect("the phone on the relay")
         .relayed_bytes;
     assert!(relayed > 0, "the phone sent nothing through the relay");
+
+    // A network change re-checks the link at once; a healthy session answers
+    // the probe and is kept.
+    let reconnects = phone.client().diagnostics().reconnects;
+    tokio::time::timeout(Duration::from_secs(1), phone.network_changed())
+        .await
+        .expect("network_changed returns at once");
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(phone.client().diagnostics().reconnects, reconnects);
+    assert!(matches!(
+        phone.client().state(),
+        ConnectionState::Ready { .. }
+    ));
+    assert_eq!(phone.path().await, LinkPath::Relay);
     phone.close().await;
+    // After closing it is a no-op.
+    tokio::time::timeout(Duration::from_secs(1), phone.network_changed())
+        .await
+        .expect("network_changed after close returns at once");
     relay.shutdown().await;
 }
