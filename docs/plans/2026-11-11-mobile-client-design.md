@@ -82,6 +82,14 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 
 前台服务（类型 `specialUse`；`dataSync` 在 Android 15 每天限 6 小时）保持连接，只订阅 Agent 概要、所有终端不可见。Agent 进入 Waiting 时发本地通知，按 Agent generation 与状态去重，正在查看该 Agent 时不发，点通知打开对应项目、tab、pane。不接 FCM：无需推送服务器，自建 Relay 可用，没有 Google 服务的手机也能用。需引导用户关闭电池优化。
 
+**已实现（2026-11-12，spike App，见 `docs/plans/2026-11-12-android-notifications-plan.md`）：**
+
+- 连接从 Activity 移到进程级的 `Link`（Application 持有），Activity 与 `LinkService`（`specialUse` 前台服务）共用。概览经 Kotlin `StateFlow` 分发，Rust 侧每个会话仍只有一个监听者。Activity 进后台时 detach 终端，Host 只再推 Agent 状态。
+- 去重用 `sessionId` + `stateStartedAtMs`（一次等待），代替 generation：`AgentSummary` 没有 generation，而重新进入等待时开始时间必然变化。失败不通知。
+- 服务停止时撤掉它发过的所有通知，否则等待结束后通知还留在通知栏（模拟器上实测发现）。
+- 模拟器验证：后台时 Agent 进入等待即收到高优先级通知（“Spike · Build / 等批准：Fix the failing build”），等待结束约 17 s 后撤销；点通知打开该 Agent 的终端；正在看某个终端时它不再通知，其他 Agent 照常；后台 5.5 分钟后仍能收到；点常驻通知的“停止”后服务退出、通知全部撤掉。
+- 未验证：模拟器接着电源、没有进入 Doze；真机熄屏后的保活、厂商后台限制与电池优化豁免的效果需要真机测。
+
 ## 7. 未决问题
 
 1. **终端控制权（已解决，2026-11-12）。** 原先 `TakeTerminalController` 会把所有 lease 移给接管方，也没有交还请求，与 `p2p-relay-architecture.md` §10.4 相矛盾。master 已改为按终端分配（`docs/plans/2026-11-12-terminal-control-per-session-design.md`）：`TakeTerminal { session_id }` 只接管一个终端，Host 记住交还给谁；`ReturnTerminals { session_ids }`（空列表 = 本设备单独接管的全部）交还。手机接管当前 pane、点“交还电脑”、进后台时交还全部（iOS 在 `beginBackgroundTask` 内，Android 在 `onStop`）；进程被杀来不及发时由 Host 的 60 s 宽限期兜底。主控不变，只观察的手机也不会在继任时被动成为主控。
