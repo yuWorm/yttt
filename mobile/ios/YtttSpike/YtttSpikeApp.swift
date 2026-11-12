@@ -72,7 +72,9 @@ struct RootPage: View {
             SideDrawer(edge: .trailing, isOpen: $model.drawerFilesOpen) {
                 NavigationStack { ProjectView(place: place) }
             } drawer: {
-                FilesDrawerView(projectId: place.projectId)
+                // A new project starts a new tree; the same project keeps its own
+                // while a file is open.
+                FilesDrawerView(projectId: place.projectId).id(place.projectId)
             }
             .fullScreenCover(item: $model.editing) { file in
                 EditorView(file: file).environmentObject(model)

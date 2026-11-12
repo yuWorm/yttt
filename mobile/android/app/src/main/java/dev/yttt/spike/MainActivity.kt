@@ -177,6 +177,8 @@ fun App(
     var root by remember { mutableStateOf<Root>(Root.Home) }
     // A project file open full screen: (project, path).
     var editing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // Each project's right drawer, kept while a file is open.
+    val filesStates = remember { HashMap<String, FilesState>() }
     val filesDrawer = rememberDrawerState(DrawerValue.Closed)
     var status by remember { mutableStateOf("") }
     var pairingDigits by remember { mutableStateOf<UInt?>(null) }
@@ -280,7 +282,11 @@ fun App(
                         gesturesEnabled = filesDrawer.isOpen,
                         drawerContent = {
                             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                                FilesDrawer(current, page.place.projectId) { path ->
+                                FilesDrawer(
+                                    current,
+                                    page.place.projectId,
+                                    filesStates.getOrPut(page.place.projectId) { FilesState() },
+                                ) { path ->
                                     scope.launch { filesDrawer.close() }
                                     editing = page.place.projectId to path
                                 }

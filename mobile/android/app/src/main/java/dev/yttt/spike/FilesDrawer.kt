@@ -31,27 +31,45 @@ import uniffi.yttt_mobile_core.SessionEntry
 import java.text.DateFormat
 import java.util.Date
 
+/**
+ * One project's right drawer: kept above the drawer, which leaves the
+ * screen while a file is open, so the tree is as the user left it.
+ */
+class FilesState {
+    val tree = FileTree()
+    var version by mutableIntStateOf(0)
+    var section by mutableIntStateOf(0)
+    var sessions by mutableStateOf<List<SessionEntry>?>(null)
+    var error by mutableStateOf<String?>(null)
+    var rootRead = false
+}
+
 /** The right drawer: the project's files, a directory at a time, and its Agent sessions. */
 @Composable
-fun FilesDrawer(session: HostSession, projectId: String, onOpenFile: (String) -> Unit) {
-    var section by remember { mutableIntStateOf(0) }
-    val tree = remember(projectId) { FileTree() }
-    var version by remember(projectId) { mutableIntStateOf(0) }
-    var error by remember(projectId) { mutableStateOf<String?>(null) }
-    var sessions by remember(projectId) { mutableStateOf<List<SessionEntry>?>(null) }
+fun FilesDrawer(session: HostSession, projectId: String, state: FilesState, onOpenFile: (String) -> Unit) {
+    val tree = state.tree
+    val version = state.version
+    val section = state.section
+    val error = state.error
+    val sessions = state.sessions
     val scope = rememberCoroutineScope()
 
     suspend fun read(directory: String) {
         runCatching { session.listDirectory(projectId, directory) }
-            .onSuccess { tree.loaded(directory, it); version++ }
-            .onFailure { error = it.message }
+            .onSuccess { tree.loaded(directory, it); state.version++ }
+            .onFailure { state.error = it.message }
     }
 
-    LaunchedEffect(projectId) { read("") }
+    LaunchedEffect(projectId) {
+        if (!state.rootRead) {
+            state.rootRead = true
+            read("")
+        }
+    }
     LaunchedEffect(projectId, section) {
-        if (section == 1 && sessions == null) {
-            sessions = runCatching { session.agentSessions(projectId) }
-                .onFailure { error = it.message }
+        if (section == 1 && state.sessions == null) {
+            state.sessions = runCatching { session.agentSessions(projectId) }
+                .onFailure { state.error = it.message }
                 .getOrDefault(emptyList())
         }
     }
@@ -62,7 +80,7 @@ fun FilesDrawer(session: HostSession, projectId: String, onOpenFile: (String) ->
                 listOf("文件", "会话").forEachIndexed { index, label ->
                     SegmentedButton(
                         selected = section == index,
-                        onClick = { section = index },
+                        onClick = { state.section = index },
                         shape = SegmentedButtonDefaults.itemShape(index, 2),
                     ) { Text(label) }
                 }
@@ -87,7 +105,7 @@ fun FilesDrawer(session: HostSession, projectId: String, onOpenFile: (String) ->
                                 .clickable {
                                     if (row.entry.isDirectory) {
                                         val toRead = tree.toggle(row.entry.path)
-                                        version++
+                                        state.version++
                                         if (toRead != null) scope.launch { read(toRead) }
                                     } else {
                                         onOpenFile(row.entry.path)
