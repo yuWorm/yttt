@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use crate::files::{FileEntry, OpenedFile, SaveOutcome, SessionEntry};
 use crate::overview::Overview;
 use crate::session::{
     DrainStats, LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, TerminalInfo,
@@ -156,6 +157,64 @@ impl HostSession {
             .await
             .map_err(|error| failed(error.to_string()))?
             .map(|summary| summary.map(|summary| summary.name))
+            .map_err(Into::into)
+    }
+
+    /// One directory of a project, `""` for its root.
+    pub async fn list_directory(
+        &self,
+        project_id: String,
+        directory: String,
+    ) -> Result<Vec<FileEntry>, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.list_directory(&project_id, &directory).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// Reads a file to edit; `save_file` then checks it is unchanged.
+    pub async fn open_file(
+        &self,
+        project_id: String,
+        path: String,
+    ) -> Result<OpenedFile, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.open_file(&project_id, &path).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// Saves an opened file; `Conflict` when it changed on the Host, unless
+    /// `force`.
+    pub async fn save_file(
+        &self,
+        project_id: String,
+        path: String,
+        text: String,
+        force: bool,
+    ) -> Result<SaveOutcome, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.save_file(&project_id, &path, text, force).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// The Agent sessions the Host has for a project.
+    pub async fn agent_sessions(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<SessionEntry>, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.agent_sessions(&project_id).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
             .map_err(Into::into)
     }
 
