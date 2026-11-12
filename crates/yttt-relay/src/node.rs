@@ -415,13 +415,19 @@ impl AccessControl for Gate {
     }
 }
 
+/// The account a self-hosted node keeps for `endpoint`: one per endpoint,
+/// apart from any account the control plane issues.
+pub fn open_account_id(endpoint: &[u8; 32]) -> u64 {
+    let mut id = [0_u8; 8];
+    id.copy_from_slice(&endpoint[..8]);
+    u64::from_be_bytes(id) | (1 << 63)
+}
+
 /// What a self-hosted node admits an endpoint with: an account of its own, so
 /// one busy device cannot use up another's rate.
 fn open_ticket(endpoint: &[u8; 32], rate: Rate) -> yttt_relay_ticket::Ticket {
-    let mut id = [0_u8; 8];
-    id.copy_from_slice(&endpoint[..8]);
     yttt_relay_ticket::Ticket {
-        account_id: u64::from_be_bytes(id) | (1 << 63),
+        account_id: open_account_id(endpoint),
         endpoint_id: *endpoint,
         node_id: String::new(),
         rate_bps: rate.bytes_per_second,

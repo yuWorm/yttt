@@ -21,7 +21,8 @@ use yttt_protocol::{
 };
 use yttt_transport::{ClientIdentity, TransportConnector};
 use yttt_transport_iroh::{
-    DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelaySetup, RelayTarget,
+    DirectPaths, EndpointConfig, IrohConnector, IrohEndpoint, OpenGate, PathKind, RelaySetup,
+    RelayTarget,
 };
 
 use crate::vt::VtEncoder;
@@ -56,19 +57,34 @@ pub enum RelayChoice {
     FromHost,
     /// None: direct paths only (tests, LAN).
     Off,
+    /// The Host's relay and nothing else: no direct paths, and the device
+    /// reveals no address. For diagnosing a link, and for tests that must
+    /// go through the relay.
+    OnlyFromHost,
 }
 
 impl RelayChoice {
-    fn setup(self, hint: Option<&str>) -> RelaySetup {
-        match self {
-            Self::Off => RelaySetup::Off,
-            Self::FromHost => hint
-                .map(|url| RelayTarget {
-                    url: url.to_string(),
-                    token: None,
-                })
-                .into(),
-        }
+    /// The endpoint's relay and direct paths, given the Host's relay `hint`.
+    fn setup(self, hint: Option<&str>) -> Result<(RelaySetup, DirectPaths), MobileError> {
+        let relay = || {
+            hint.map(|url| RelayTarget {
+                url: url.to_string(),
+                token: None,
+            })
+        };
+        Ok(match self {
+            Self::Off => (RelaySetup::Off, DirectPaths::Any),
+            Self::FromHost => (relay().into(), DirectPaths::Any),
+            // Without a relay such an endpoint reaches nothing; say so now
+            // rather than after the connect timeout.
+            Self::OnlyFromHost => (
+                RelaySetup::Use(
+                    relay()
+                        .ok_or_else(|| MobileError::Transport("the Host has no relay".into()))?,
+                ),
+                DirectPaths::Off,
+            ),
+        })
     }
 }
 
@@ -89,13 +105,16 @@ impl PairedHostRecord {
     }
 }
 
-async fn bind(secret: [u8; 32], relay: RelaySetup) -> Result<IrohEndpoint, MobileError> {
+async fn bind(
+    secret: [u8; 32],
+    (relay, direct): (RelaySetup, DirectPaths),
+) -> Result<IrohEndpoint, MobileError> {
     IrohEndpoint::bind(EndpointConfig {
         secret,
         relay,
         alpns: Vec::new(),
         gate: Arc::new(OpenGate),
-        direct: DirectPaths::Any,
+        direct,
     })
     .await
     .map_err(|error| MobileError::Transport(error.to_string()))
@@ -112,7 +131,7 @@ pub async fn pair(
 ) -> Result<PairedHostRecord, MobileError> {
     let code = PairingCode::decode(code_text.trim())
         .map_err(|error| MobileError::InvalidCode(format!("{error:?}")))?;
-    let endpoint = bind(device_secret, relay.setup(code.relay_url.as_deref())).await?;
+    let endpoint = bind(device_secret, relay.setup(code.relay_url.as_deref())?).await?;
     let result = yttt_client_core::p2p::pair(&endpoint, &code, device_label, on_short_code).await;
     endpoint.close().await;
     let host = result.map_err(|error| MobileError::Pairing(error.to_string()))?;
@@ -170,6 +189,19 @@ pub struct MobileSession {
     shared: Arc<Shared>,
     events: tokio::task::JoinHandle<()>,
     endpoint: Option<IrohEndpoint>,
+    /// The P2P connector, which knows the path in use.
+    connector: Option<Arc<IrohConnector>>,
+}
+
+/// The path a P2P session's data takes now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum LinkPath {
+    /// Straight to the Host.
+    Direct,
+    /// Through the relay.
+    Relay,
+    /// Not known yet, or not a P2P session.
+    Unknown,
 }
 
 impl MobileSession {
@@ -179,13 +211,22 @@ impl MobileSession {
         device_secret: [u8; 32],
         relay: RelayChoice,
     ) -> Result<Self, MobileError> {
-        let endpoint = bind(device_secret, relay.setup(record.host.relay_url.as_deref())).await?;
-        let connector = record.host.connector(endpoint.clone());
-        let session =
-            Self::connect_with(connector, record, record.host.credential(device_secret)).await;
+        let endpoint = bind(
+            device_secret,
+            relay.setup(record.host.relay_url.as_deref())?,
+        )
+        .await?;
+        let connector = Arc::new(record.host.connector(endpoint.clone()));
+        let session = Self::connect_with(
+            connector.clone(),
+            record,
+            record.host.credential(device_secret),
+        )
+        .await;
         match session {
             Ok(mut session) => {
                 session.endpoint = Some(endpoint);
+                session.connector = Some(connector);
                 Ok(session)
             }
             Err(error) => {
@@ -246,6 +287,7 @@ impl MobileSession {
             shared,
             events,
             endpoint: None,
+            connector: None,
         })
     }
 
@@ -388,6 +430,18 @@ impl MobileSession {
         {
             terminal.encoder.reset();
             terminal.encoded = None;
+        }
+    }
+
+    /// Whether data goes straight to the Host or through the relay.
+    pub async fn path(&self) -> LinkPath {
+        let Some(connector) = &self.connector else {
+            return LinkPath::Unknown;
+        };
+        match connector.path_kind().await {
+            PathKind::Direct => LinkPath::Direct,
+            PathKind::Relay => LinkPath::Relay,
+            PathKind::Unknown => LinkPath::Unknown,
         }
     }
 

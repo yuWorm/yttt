@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use yttt_relay_ticket::{TicketVerifier, api::AccountStanding};
 
 pub use config::{AcmeSettings, ControlConfig, NodeConfig, OpenConfig, TlsFiles};
-pub use node::AccountSnapshot;
+pub use node::{AccountSnapshot, open_account_id};
 
 const PRUNE_TICK: Duration = Duration::from_secs(10);
 

@@ -32,3 +32,5 @@ tempfile = "3"
 tokio = { version = "1", features = ["signal"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 yttt-host = { path = "../yttt-host" }
+# A self-hosted relay node, for the relay-only test.
+yttt-relay = { path = "../yttt-relay" }

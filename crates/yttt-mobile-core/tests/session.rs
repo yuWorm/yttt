@@ -6,7 +6,9 @@ use std::{fs, path::Path, time::Duration};
 
 use yttt_client_core::ClientCore;
 use yttt_core::model::ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId};
-use yttt_mobile_core::session::{MobileSession, PairedHostRecord, RelayChoice, pair};
+use yttt_mobile_core::session::{
+    LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
+};
 use yttt_protocol::{
     BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
     p2p::{DevicePreset, PairingCode},
@@ -15,7 +17,9 @@ use yttt_protocol::{
     terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalLeaseMode, TerminalSpawnSpec},
     workspace::WorkspaceProjectConfig,
 };
+use yttt_relay::{NodeConfig, OpenConfig, RelayNode, open_account_id};
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
+use yttt_transport_iroh::endpoint_key;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -52,9 +56,9 @@ fn bootstrap(root: &Path) -> yttt_host::HostBootstrap {
     }
 }
 
-/// Starts a Host with P2P on and returns its local administrator, which
-/// plays the desktop.
-async fn start_host(root: &Path) -> ClientCore {
+/// Starts a Host with P2P on, through `relay_url` when given, and returns its
+/// local administrator, which plays the desktop.
+async fn start_host(root: &Path, relay_url: Option<String>) -> ClientCore {
     let bootstrap = bootstrap(root);
     let (listener, connector) = memory_pair();
     let ready = bootstrap.ready_file();
@@ -91,7 +95,7 @@ async fn start_host(root: &Path) -> ClientCore {
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url: None,
+            relay_url,
         },
     )
     .await;
@@ -113,7 +117,7 @@ async fn status(admin: &ClientCore) -> RemoteAccessStatus {
 }
 
 /// Pairs the device the way the app does, the desktop user confirming.
-async fn pair_device(admin: &ClientCore) -> PairedHostRecord {
+async fn pair_device(admin: &ClientCore, relay: RelayChoice) -> PairedHostRecord {
     let RemoteAccessResponse::PairingInvitation { code, .. } =
         remote_access(admin, RemoteAccessRequest::StartPairing).await
     else {
@@ -123,15 +127,9 @@ async fn pair_device(admin: &ClientCore) -> PairedHostRecord {
     let (shown, shown_rx) = tokio::sync::oneshot::channel();
     let text = code.0.clone();
     let pairing = tokio::spawn(async move {
-        pair(
-            &text,
-            "phone",
-            SECRET,
-            RelayChoice::Off,
-            move |short_code| {
-                let _ = shown.send(short_code);
-            },
-        )
+        pair(&text, "phone", SECRET, relay, move |short_code| {
+            let _ = shown.send(short_code);
+        })
         .await
     });
     let (endpoint_id, short_code) = tokio::time::timeout(Duration::from_secs(20), async {
@@ -288,8 +286,8 @@ async fn geometry(admin: &ClientCore, id: &TerminalSessionId) -> TerminalGeometr
 #[tokio::test(flavor = "multi_thread")]
 async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path()).await;
-    let record = pair_device(&admin).await;
+    let admin = start_host(temp.path(), None).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
     assert_eq!(
         PairedHostRecord::from_bytes(&record.to_bytes()).unwrap(),
         record
@@ -303,6 +301,17 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     .await;
     let terminal = terminals[0].clone();
     let other = terminals[1].clone();
+    // Asked to use only a relay the Host does not have, the phone says so at
+    // once rather than after the connect timeout.
+    assert!(matches!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost),
+        )
+        .await
+        .expect("an immediate answer"),
+        Err(MobileError::Transport(_))
+    ));
     let id = terminal.to_string();
     let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
         .await
@@ -414,4 +423,66 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
             .any(|info| info.session_id == id)
     );
     again.close().await;
+}
+
+/// Waits until `probe` yields a value.
+async fn eventually<T>(what: &str, mut probe: impl AsyncFnMut() -> Option<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(value) = probe().await {
+                return value;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_phone_works_through_the_relay_alone() {
+    let mut config = NodeConfig::local("mobile-relay", "127.0.0.1:0".parse().unwrap(), &[]);
+    config.open = Some(OpenConfig {
+        rate_bps: 50_000_000,
+        burst_bytes: 10_000_000,
+    });
+    let relay = RelayNode::spawn(config).await.unwrap();
+    let relay_url = format!("http://{}", relay.addr());
+
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path(), Some(relay_url.clone())).await;
+    let host_key = status(&admin).await.p2p.endpoint_id.unwrap().0;
+    eventually("the Host on the relay", async || {
+        relay
+            .account(open_account_id(&host_key))
+            .filter(|account| account.connections > 0)
+    })
+    .await;
+
+    let record = pair_device(&admin, RelayChoice::OnlyFromHost).await;
+    assert_eq!(record.host.relay_url.as_deref(), Some(relay_url.as_str()));
+    let terminal = desktop_terminals(&admin, temp.path(), &["project:tab:relay"]).await;
+    let id = terminal[0].to_string();
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost)
+        .await
+        .unwrap();
+    phone.attach(&id).await.unwrap();
+    drain_until(&phone, &id, "desktop-ready").await;
+    phone.take_control(&id, 50, 20).await.unwrap();
+    phone.send_input(&id, b"relayed\r".to_vec()).unwrap();
+    drain_until(&phone, &id, "got:relayed").await;
+
+    // Long enough for hole punching, which on one machine succeeds within
+    // moments: with no direct path of its own the phone stays on the relay.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(phone.path().await, LinkPath::Relay);
+    // And what the phone sent went through it.
+    let phone_key = endpoint_key(&SECRET).0;
+    let relayed = relay
+        .account(open_account_id(&phone_key))
+        .expect("the phone on the relay")
+        .relayed_bytes;
+    assert!(relayed > 0, "the phone sent nothing through the relay");
+    phone.close().await;
+    relay.shutdown().await;
 }

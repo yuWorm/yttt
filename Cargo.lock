@@ -13877,6 +13877,7 @@ dependencies = [
  "yttt-core",
  "yttt-host",
  "yttt-protocol",
+ "yttt-relay",
  "yttt-terminal-core",
  "yttt-transport",
  "yttt-transport-iroh",

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::session::{
-    DrainStats, MobileError, MobileSession, PairedHostRecord, RelayChoice, TerminalInfo,
+    DrainStats, LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, TerminalInfo,
 };
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -162,6 +162,16 @@ impl HostSession {
 
     pub fn drain_stats(&self) -> DrainStats {
         self.session.drain_stats()
+    }
+
+    /// Whether data goes straight to the Host or through the relay, for the
+    /// connection status the app shows.
+    pub async fn path(&self) -> LinkPath {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.path().await })
+            .await
+            .unwrap_or(LinkPath::Unknown)
     }
 
     /// The next `drain` repaints the whole terminal; call it after the view
