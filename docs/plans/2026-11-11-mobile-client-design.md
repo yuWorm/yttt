@@ -87,7 +87,7 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 1. **终端控制权（已解决，2026-11-12）。** 原先 `TakeTerminalController` 会把所有 lease 移给接管方，也没有交还请求，与 `p2p-relay-architecture.md` §10.4 相矛盾。master 已改为按终端分配（`docs/plans/2026-11-12-terminal-control-per-session-design.md`）：`TakeTerminal { session_id }` 只接管一个终端，Host 记住交还给谁；`ReturnTerminals { session_ids }`（空列表 = 本设备单独接管的全部）交还。手机接管当前 pane、点“交还电脑”、进后台时交还全部（iOS 在 `beginBackgroundTask` 内，Android 在 `onStop`）；进程被杀来不及发时由 Host 的 60 s 宽限期兜底。主控不变，只观察的手机也不会在继任时被动成为主控。
 2. **协议版本锁步（无需改协议）。** v22 起追加不升版本（`docs/wire-evolution.md`），旧端对不认识的请求回 `Unsupported` 而不断线，必须升版本时 Host 同时服务新旧版本。落后几个桌面版本的手机照样能连。移动端的约定：每个新请求都处理 `Unsupported`，隐藏或降级对应功能；例如旧 Host 不认识 `TakeTerminal` 时，`take_control` 返回 `HostTooOld`，App 提示升级电脑上的 yttt，不退回全部接管。
 3. **iOS 上架限制。** `yttt-transport-iroh` 无条件启用 iroh 的 `fast-apple-datapath`，用到私有 API `sendmsg_x`/`recvmsg_x`，有被 App Store 拒审的风险，需要改为按 target 启用。portmapper 的 UPnP 在 iOS 上需要 multicast entitlement，移动端关掉。局域网直连需要 `NSLocalNetworkUsageDescription`。
-4. 网络变化：`IrohEndpoint` 没有封装 iroh 的 `network_change`，`link_watch` 在桌面 bin 里，需要新接口。
+4. **网络变化（已接，2026-11-12，见 `docs/plans/2026-11-12-mobile-link-plan.md`）。** `HostSession.network_changed()` 让 iroh 重读网卡（`IrohEndpoint::network_change`）并让 ClientCore 立即探测连接（`probe_now`，与桌面 `link_watch` 相同）。原生侧只在网络**变为可用**时调用（Android `onAvailable`/`onLinkPropertiesChanged`，iOS 路径 `.satisfied`），去抖 500 ms。断网时不调用：探测得不到回音会换掉本来能撑过短暂断网的 QUIC 连接，模拟器上实测因此更慢。Android 上 SELinux 不让 App 读 netlink 与 `/sys/class/net`，iroh 自己看不到网卡变化，只能靠原生回调与 `probe_now`；Wi-Fi 与蜂窝之间换 IP 的情形需要真机验证。正式 App 里这个入口应放在 `MobileCore` 上，转给所有 endpoint。
 6. iOS 推送：APNs 只能由 App 发布者发送，需要官方推送网关，暂缓。
 7. Relay 账号登录：现有 OAuth 回调只到 loopback，手机先用设备码流程。不登录账号时，配对得到的 relay 提示只对自建 relay 有效。
 
@@ -118,7 +118,8 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 4. ~~接管后要等 resize 确认再放行输入~~（已做）：`take_control(session, cols, rows)` 在 Host 应用手机尺寸后才返回，两个模拟器上第一条命令已看到新尺寸（iOS 58×53、Android 63×64）。软键盘弹出导致的尺寸变化可用 termlib 的 `resizeSuspended` 合并（未做）。
 5. UniFFI 导出避开 `close`、`message` 这类名字：Kotlin 里与 `AutoCloseable.close`、`Throwable.message` 冲突。
 6. termlib 没有公开的屏幕读取 API，组件测试暂时只能截图；可向上游提或在 instrumented 测试里读无障碍语义。
-7. Android 上 iroh 经 reqwest 0.13 用 `rustls-platform-verifier`，使用 relay 或 HTTPS 前要做 JNI 初始化；spike 不走 relay，未做。
-8. 未验证：真机、蜂窝网络与 Relay、vim / htop 等全屏程序、方向键与 Ctrl-C 等按键栏按键、Agent CLI。电脑取回控制权由 `yttt-mobile-core` 集成测试覆盖（电脑发 `TakeTerminal` 后手机失去控制）；前后台切换已在两个模拟器上验证（进后台后回到观察状态）。
+7. ~~Android 上要做 `rustls-platform-verifier` 的 JNI 初始化~~（不需要）：`yttt-transport-iroh` 构建 iroh 时没开 `platform-verifier`，iroh 与 reqwest 都用内置的 webpki-roots，验证器链接进来但从不调用。Android 模拟器只经 iroh 公共 HTTPS relay（`aps1-1.relay.n0.iroh.link`）完成了配对、接管与输入。代价：不认用户自装或企业 CA，私有 CA 的自建 relay 在桌面和手机上都连不上；要支持时再开 `platform-verifier` 并做 JNI 初始化（坑见链路计划附注）。
+8. 未验证：真机、蜂窝网络（Wi-Fi 与蜂窝之间换 IP）、vim / htop 等全屏程序、方向键与 Ctrl-C 等按键栏按键、Agent CLI。已验证：只经 relay 的连接（集成测试用进程内自建 relay 并断言路径始终为 relay、手机流量经过 relay；Android 模拟器经公共 HTTPS relay）；电脑取回控制权（集成测试）；前后台切换与断网恢复（模拟器）。
+11. **经远处 relay 配对很慢。** 经 `aps1-1` relay（往返约 0.5 s）配对用了约一分钟，局域网直连只要几秒；连接建立后操作正常。需要在真机上量一次，找出耗时在哪一步。
 9. **本地 geometry epoch 只增不减。** 修复前 `drain` 用收到的 viewport 覆盖本地 geometry epoch：接管后的 resize 请求还在路上时，显示刷新把旧 viewport 再编码一次，epoch 退回旧值，之后的输入被 Host 当作过期而静默丢弃（输入是单向消息，手机收不到拒绝）。现在同一 session 内取较大值，集成测试在 `take_control` 期间每毫秒 drain 一次来覆盖。
 10. **termlib 改变固定尺寸会清屏。** 从控制回到观察（`forcedSize` 改回 Host 尺寸）后画面变空，直到下一次输出。核心新增 `repaint(session)`，Android 在控制状态变化两帧后调用，下一次 drain 整屏重绘。SwiftTerm 不清屏，iOS 不需要。

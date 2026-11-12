@@ -99,3 +99,33 @@
   - 依赖坐标是 `rustls:rustls-platform-verifier`，group 是 `rustls`，不是 README 里写的 `org.rustls`；
   - `Cargo.lock` 相对 app 模块在 `../../../`。
 - JNI 函数名必须与 Kotlin 类的完整类名一致，类要放在 App 的包里。
+
+## 执行记录（2026-11-12）
+
+审查子代理读过初版计划后发现两处事实错误，已改入上文：Android 不需要 TLS 的 JNI 初始化；`network_changed` 还要调 `probe_now`。
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1 只经 relay | 2b354b5 | `RelayChoice::OnlyFromHost`、`MobileSession::path()`（FFI `path()`，供界面显示“直连／经 relay”）。集成测试起进程内开放 relay，断言 2 s 后路径仍为 relay、手机经 relay 发送的字节数大于 0。只断言字节数不够：把 `OnlyFromHost` 改成允许直连，iroh 先经 relay 再打洞，字节数照样大于 0；加上路径断言后，这个变异 3 次全部失败。 |
+| 2 网络变化 | c50a5b8 | `IrohEndpoint::network_change`、`MobileSession::network_changed`（iroh 重读网卡 + `probe_now`）、FFI 同步调用后台执行。测试：立即返回，健康会话不因探测重连，`close()` 后调用无害。 |
+| 3 spike 工具 | 1869435 | `spike_host --relay`，FFI `pair`/`connect` 的 `relay_only`，两个 App 显示路径。 |
+| 4 Android TLS | — | 不改代码。Android 模拟器只经公共 HTTPS relay 配对、接管、输入成功，没有 JNI 初始化。第一次配对失败（`InvitationClosed`）：spike_host 确认设备后立刻发新邀请，关掉了还没把确认结果送到设备的旧邀请；改为确认后等 5 s（在 5fdf6e5 里）。 |
+| 5 App 网络回调 | 5fdf6e5 | 见下方数据。 |
+
+### 断网恢复（Android 模拟器，只经 aps1-1 relay，飞行模式 10 s）
+
+从关闭飞行模式到 demo 终端（每秒输出一次）恢复输出：
+
+| 做法 | 各次耗时 | 说明 |
+|---|---|---|
+| 不接网络回调 | 16 s、11 s、11 s | 3 次中 2 次 QUIC 连接撑过了断网，没有重连 |
+| 断网和恢复时都调用 | 10 s、14 s、8 s、20 s | 每次断网后 5 s 内会话都被换掉，恢复后要经 relay 重建 |
+| 只在网络可用时调用（采用） | 10 s、14 s、9 s | 两次仍被换掉：第一个可用事件来得早，网络还没真正通 |
+
+模拟器恢复 Wi-Fi 本身要 2–7 s，波动大，三种做法的差别在噪声以内。能确定的只有一点：断网时探测是负作用，所以不在断网时调用。网络回调真正有用的情形（Wi-Fi 与蜂窝之间换 IP、旧路径立即失效）只能在真机上测。
+
+### 其他发现
+
+- Android 日志里有 SELinux 拒绝：App 读不了 `/sys/class/net`，也读不了 netlink 路由（`nlmsg_readpriv`）。iroh 的 netwatch 在 Android 上看不到网卡变化，`network_change` 多半什么也不做，起作用的是 `probe_now`。
+- 经远处 relay 配对约一分钟（设计 §8 第 11 条）。
+- iOS 只验证了编译；模拟器无法切换网络。
