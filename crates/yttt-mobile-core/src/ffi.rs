@@ -11,7 +11,8 @@ use crate::files::{FileEntry, OpenedFile, SaveOutcome, SessionEntry};
 use crate::keys::TerminalKey;
 use crate::overview::Overview;
 use crate::session::{
-    DrainStats, LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, TerminalInfo,
+    DrainStats, HostInfo, LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice,
+    TerminalInfo,
 };
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -112,9 +113,9 @@ impl MobileCore {
         Ok(record.to_bytes())
     }
 
-    /// The label of the Host a stored record names.
-    pub fn host_label(&self, record: Vec<u8>) -> Result<String, MobileCoreError> {
-        Ok(PairedHostRecord::from_bytes(&record)?.host.host_label)
+    /// Which Host a stored record names, and what it is called.
+    pub fn host_info(&self, record: Vec<u8>) -> Result<HostInfo, MobileCoreError> {
+        Ok(PairedHostRecord::from_bytes(&record)?.info())
     }
 
     pub async fn connect(

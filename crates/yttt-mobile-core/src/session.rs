@@ -120,6 +120,50 @@ impl PairedHostRecord {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, MobileError> {
         serde_json::from_slice(bytes).map_err(|error| MobileError::Record(error.to_string()))
     }
+
+    pub fn info(&self) -> HostInfo {
+        HostInfo {
+            id: self.host.host.to_string(),
+            label: self.host.host_label.clone(),
+        }
+    }
+}
+
+/// Who a stored record names: `id` stays the same when the phone pairs with
+/// the same Host again, so the phone keeps one entry per Host.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct HostInfo {
+    pub id: String,
+    pub label: String,
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+    use yttt_core::model::ids::ProfileId;
+    use yttt_protocol::EndpointKey;
+
+    fn record(key: u8, label: &str) -> PairedHostRecord {
+        PairedHostRecord {
+            host: PairedHost {
+                host: EndpointKey([key; 32]),
+                environment_id: format!("environment-{key}"),
+                profile_id: ProfileId::new("default"),
+                host_label: label.into(),
+                relay_url: None,
+                direct_addrs: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_host_keeps_its_id_through_storage_and_hosts_differ() {
+        let stored = PairedHostRecord::from_bytes(&record(1, "mac").to_bytes()).unwrap();
+        assert_eq!(stored.info(), record(1, "mac").info());
+        assert_eq!(stored.info().label, "mac");
+        assert!(!stored.info().id.is_empty());
+        assert_ne!(record(1, "mac").info().id, record(2, "mac").info().id);
+    }
 }
 
 async fn bind(
