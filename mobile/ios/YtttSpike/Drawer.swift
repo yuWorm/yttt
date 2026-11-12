@@ -87,9 +87,6 @@ struct LeftDrawerView: View {
                     }
                 }
             }
-            Section {
-                Button("忘记这台 Host", role: .destructive) { Task { await model.forget() } }
-            }
         }
         .foregroundStyle(.primary)
     }

@@ -3,29 +3,14 @@ import Network
 import UIKit
 import Security
 
-/// Spike storage: files in Application Support. The real app keeps the
-/// device secret in the Keychain.
+/// App-private storage: the paired Hosts in Application Support (see
+/// `HostStore`), the device secret in the Keychain.
 enum Storage {
     static var directory: URL {
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("yttt-spike", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
-    }
-
-    static func load(_ name: String) -> Data? {
-        try? Data(contentsOf: directory.appendingPathComponent(name))
-    }
-
-    /// Saved app-private and left out of backups: the record names the
-    /// Host this phone pairs with, and is no use on another phone.
-    static func save(_ name: String, _ data: Data?) {
-        var url = directory.appendingPathComponent(name)
-        guard let data else { try? FileManager.default.removeItem(at: url); return }
-        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try? url.setResourceValues(values)
     }
 
     /// The device's 32-byte secret, in the Keychain.
@@ -57,7 +42,13 @@ enum Root: Equatable {
 final class AppModel: ObservableObject {
     let core: MobileCore
     let secret: Data
+    /// The current Host's record.
     @Published var record: Data?
+    /// The paired Hosts; the link is with the current one.
+    @Published var hosts: HostList
+    /// Pairing with one more Host while connected to another.
+    @Published var addingHost = false
+    private let hostStore: HostStore
     @Published var shortCode: UInt32?
     @Published var status = ""
     @Published var busy = false
@@ -97,14 +88,50 @@ final class AppModel: ObservableObject {
     static let relayOnly = ProcessInfo.processInfo.environment["YTTT_SPIKE_RELAY_ONLY"] == "1"
 
     init() {
-        core = try! MobileCore()
+        let core = try! MobileCore()
+        self.core = core
         secret = Storage.deviceSecret()
-        record = Storage.load("host.json")
+        hostStore = HostStore(directory: Storage.directory) { (try? core.hostInfo(record: $0).id) ?? "" }
+        let hosts = hostStore.load()
+        self.hosts = hosts
+        record = hosts.currentRecord
     }
 
-    var hostLabel: String {
-        guard let record else { return "" }
-        return (try? core.hostInfo(record: record).label) ?? ""
+    /// Each Host's name, told apart when two share one.
+    var hostNames: [(id: String, name: String)] {
+        hosts.names { (try? core.hostInfo(record: $0).label) ?? "Host" }
+    }
+
+    var hostLabel: String { hostNames.first { $0.id == hosts.current }?.name ?? "" }
+
+    /// Connects to another paired Host instead.
+    func switchTo(_ id: String) async {
+        guard id != hosts.current else { return }
+        await changeHosts(hosts.selected(id))
+    }
+
+    /// Forgets the current Host; the link moves to the first one left, if any.
+    func forget() async {
+        guard let current = hosts.current else { return }
+        await changeHosts(hosts.removed(current))
+    }
+
+    /// Drops the link and everything the old Host showed, stores the list,
+    /// then connects to the new current Host.
+    private func changeHosts(_ list: HostList) async {
+        await session?.disconnect()
+        session = nil
+        terminals = []
+        overview = Overview(projects: [], agents: [], terminals: 0)
+        path = []
+        root = .home
+        drawerOpen = false
+        drawerFilesOpen = false
+        editing = nil
+        hostStore.save(list)
+        hosts = list
+        record = list.currentRecord
+        await connect()
     }
 
     func pair(code: String) async {
@@ -121,9 +148,11 @@ final class AppModel: ObservableObject {
         do {
             let record = try await core.pair(code: code, deviceLabel: "iOS spike", deviceSecret: secret,
                                             relayOnly: Self.relayOnly, listener: listener)
-            Storage.save("host.json", record)
-            self.record = record
+            let id = try core.hostInfo(record: record).id
             status = ""
+            shortCode = nil
+            addingHost = false
+            await changeHosts(hosts.added(id, record))
         } catch {
             status = "配对失败：\(error.localizedDescription)"
         }
@@ -152,8 +181,14 @@ final class AppModel: ObservableObject {
         pathMonitor.start(queue: .main)
     }
 
+    /// Whether a connect is under way: the home screen and a Host change
+    /// both ask, and only one link should come of it.
+    private var connecting = false
+
     func connect() async {
-        guard session == nil, let record else { return }
+        guard session == nil, !connecting, let record else { return }
+        connecting = true
+        defer { connecting = false }
         if pathMonitor.pathUpdateHandler == nil { watchNetwork() }
         busy = true
         status = "正在连接…"
@@ -245,13 +280,4 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func forget() async {
-        await session?.disconnect()
-        session = nil
-        terminals = []
-        Storage.save("host.json", nil)
-        record = nil
-        root = .home
-        drawerOpen = false
-    }
 }

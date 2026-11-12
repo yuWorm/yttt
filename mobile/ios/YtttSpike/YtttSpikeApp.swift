@@ -17,6 +17,9 @@ struct YtttSpikeApp: App {
                     } drawer: {
                         LeftDrawerView()
                     }
+                    .sheet(isPresented: $model.addingHost) {
+                        NavigationStack { PairView() }.environmentObject(model)
+                    }
                 }
             }
             .environmentObject(model)
@@ -73,7 +76,14 @@ struct PairView: View {
                 Section { Text(model.status).foregroundStyle(.secondary) }
             }
         }
-        .navigationTitle("配对 Host")
+        .navigationTitle(model.record == nil ? "配对 Host" : "添加 Host")
+        .toolbar {
+            if model.record != nil {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { model.addingHost = false }.disabled(model.busy)
+                }
+            }
+        }
         .sheet(isPresented: $scanning) {
             PairingScanner { found in
                 scanning = false
@@ -128,11 +138,13 @@ struct TerminalListView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showFinished = false
     @State private var showTerminals = false
+    @State private var confirmForget = false
 
     var body: some View {
         let sections = HomeSections(model.overview)
         List {
             Section {
+                hostMenu
                 if !model.status.isEmpty {
                     Text(model.status).foregroundStyle(.secondary)
                 }
@@ -186,12 +198,37 @@ struct TerminalListView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("刷新") { Task { await model.refresh() } }
-                    Button("忘记这台 Host", role: .destructive) { Task { await model.forget() } }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
         }
         .task { await model.connect() }
         .refreshable { await model.refresh() }
+    }
+
+    /// The current Host; the menu switches, adds and forgets Hosts.
+    private var hostMenu: some View {
+        Menu {
+            ForEach(model.hostNames, id: \.id) { host in
+                Button { Task { await model.switchTo(host.id) } } label: {
+                    if host.id == model.hosts.current { Label(host.name, systemImage: "checkmark") } else { Text(host.name) }
+                }
+            }
+            Divider()
+            Button { model.addingHost = true } label: { Label("添加 Host", systemImage: "plus") }
+            Button(role: .destructive) { confirmForget = true } label: { Label("忘记这台 Host", systemImage: "trash") }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "desktopcomputer")
+                Text(model.hostLabel).lineLimit(1)
+                Image(systemName: "chevron.down").font(.caption)
+            }
+            .font(.subheadline)
+        }
+        .confirmationDialog("忘记 \(model.hostLabel)？", isPresented: $confirmForget, titleVisibility: .visible) {
+            Button("忘记", role: .destructive) { Task { await model.forget() } }
+        } message: {
+            Text("这台手机不再连接它。要再用，需要在电脑上重新配对。")
+        }
     }
 
     private func count(_ value: Int, _ label: String) -> some View {

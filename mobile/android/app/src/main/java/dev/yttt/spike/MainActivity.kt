@@ -81,16 +81,9 @@ import uniffi.yttt_mobile_core.TerminalInfo
 import java.io.File
 import java.security.SecureRandom
 
-/** App-private files; the device secret is encrypted with a Keystore key. */
+/** App-private files: the paired Hosts (`HostStore`), the device secret encrypted with a Keystore key. */
 class Storage(context: Context) {
     val dir = File(context.filesDir, "yttt-spike").apply { mkdirs() }
-
-    fun load(name: String): ByteArray? = File(dir, name).takeIf { it.exists() }?.readBytes()
-
-    fun save(name: String, data: ByteArray?) {
-        val file = File(dir, name)
-        if (data == null) file.delete() else file.writeBytes(data)
-    }
 
     /** Encrypted with a key that never leaves the Android Keystore. */
     fun deviceSecret(): ByteArray = SecretStore(dir, SecretStore::keystoreKey).deviceSecret()
