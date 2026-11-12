@@ -518,7 +518,7 @@ async fn a_returned_terminal_goes_back_to_whoever_had_it() {
 
     // Returning again, or returning what it does not hold, changes nothing.
     runtime.return_terminals(&phone, &[]);
-    runtime.return_terminals(&phone, &[b.clone()]);
+    runtime.return_terminals(&phone, std::slice::from_ref(&b));
     assert!(sent(&mut events).is_empty());
     assert!(holds(&runtime, &b, &desktop));
     runtime.terminate(&a).unwrap();
@@ -662,7 +662,7 @@ async fn a_terminal_taken_several_times_returns_to_its_first_holder() {
     runtime.take_terminal(&a, &tablet).unwrap();
     assert!(holds(&runtime, &a, &tablet));
 
-    runtime.return_terminals(&tablet, &[a.clone()]);
+    runtime.return_terminals(&tablet, std::slice::from_ref(&a));
     assert!(holds(&runtime, &a, &desktop));
     // The controller taking one back simply has it again.
     runtime.take_terminal(&a, &phone).unwrap();

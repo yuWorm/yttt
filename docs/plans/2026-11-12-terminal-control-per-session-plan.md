@@ -92,3 +92,23 @@
 ## 之后（不在本分支）
 
 - `spike/mobile-client`：`take_control(session)` 改用 `TakeTerminal`，加交还和进后台交还，`Unsupported` 时隐藏接管；更新移动端设计 §7 第 1、2 条（设计 §6）。
+
+## 执行记录（2026-11-12）
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1 协议 | 4f33b4e | 两个请求追加到 `Request`，wire 样本只多出这两个变体；Host 暂回 `Unsupported`，在任务 3 换成实现。 |
+| 2 运行时 | dfe6e21 | `terminal_runtime` 新增 7 个测试并修改继任测试，23 项通过。用变异验证过：去掉“隐式移交跳过单独接管”或“继任只选写过的 Client”，各有 2 项失败。 |
+| 3 分发 | 80bf744 | `host_roundtrip::a_client_takes_one_terminal_and_gives_it_back` 通过；`yttt-host`、`yttt-client-core` 全部通过。 |
+| 4 pane | 561e009 | 先加断言“pane 接管后主控仍是 laptop”，确认失败后实现；`recovery_tests` 5 项通过。 |
+| 5 状态栏 | 2c2dae8 | 删除 `src/ui/workbench/terminal_control.rs`；pane 在只读状态变化时发 `ControlChanged`，测试断言发了两次（变只读、取回）。 |
+| 6 验证 | 本提交 | fmt、CI clippy 包集通过（修了两处测试里的 `cloned_ref_to_slice_refs` 和一处 `items_after_test_module`）。CI 测试包集：整组运行在 `control_connection` 卡住（下述已知问题）被超时终止，此前 58 个目标 1449 项全部通过；之后补跑其余 8 个包（19 个目标 305 项）和 `yttt-host` 的其余目标，全部通过，`control_connection` 单独 5 项通过。 |
+
+### 偏差
+
+- **任务 3**：计划里写“需要时在 `ReturnTerminals` 分支同步把 attachment 改回 Observer”。实际不需要：`TerminalInput`、`ResizeTerminal` 除了看 attachment 还会调 `runtime.validate_lease`，交还后的输入立刻被拒；attachment 由随后的 lease 事件更新。写过这段代码，变异检查显示它没有作用，已删。`TakeTerminal` 则需要在应答时同步更新 attachment（与 `RequestTerminalControl` 同一映射），否则应答之后马上发出的输入可能早于事件被处理而遭拒。
+- **任务 2**：`acquire_lease` 遇到别的 Client 单独接管的 lease 时返回 `LeaseConflict`，不再转移。设计 §5 已写明（重连后的隐式申请不推翻显式接管），计划里没单列。
+- **任务 2**：`hand_control_locked` 遇到主控本来就持有、但带 `taken` 标记的 lease（交还到非主控 Client 后，它又成了主控）会清掉标记，否则下次隐式移交会错误地跳过它。
+- **归还目标**：设计写“`returns_to` 仍是已知 Client（在线或挂起）”。实现上 `release_client` 会清掉指向离开者的 `returns_to`，所以只要还留着就有效，不再单独查在线状态。
+- **手测**：没有启动桌面 GUI 手测。开发版桌面会连开发 profile 的 Host，避免动到你的环境；同样的流程由 `host_roundtrip`（真 Host、两个 Client）和 pane 的 GPUI 测试（真 Host、真 pane）覆盖。
+- `control_connection::a_slow_agent_history_scan_does_not_hold_up_the_sessions_other_requests` 在整组运行时又卡住过一次，单独重跑 5 项 0.5 s 通过。已有的时序问题，与本分支无关。

@@ -1231,6 +1231,18 @@ fn remote_host_epoch(runtime: &crate::host_runtime::DesktopHostRuntime) -> Optio
     }
 }
 
+impl WorkbenchView {
+    /// Running terminal panes of this window that are read-only because
+    /// another Client holds their terminal.
+    fn terminals_observed_elsewhere(&self, cx: &App) -> usize {
+        self.terminal
+            .terminal_panes
+            .values()
+            .filter(|pane| pane.read(cx).observes_another_controller(cx))
+            .count()
+    }
+}
+
 #[cfg(test)]
 mod outage_notice_tests {
     use super::*;
@@ -1296,17 +1308,5 @@ mod outage_notice_tests {
             host_link_notice(Some(outage(Some(1))), 100, None, false),
             None
         );
-    }
-}
-
-impl WorkbenchView {
-    /// Running terminal panes of this window that are read-only because
-    /// another Client holds their terminal.
-    fn terminals_observed_elsewhere(&self, cx: &App) -> usize {
-        self.terminal
-            .terminal_panes
-            .values()
-            .filter(|pane| pane.read(cx).observes_another_controller(cx))
-            .count()
     }
 }
