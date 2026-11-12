@@ -2,10 +2,22 @@
 //! terminal without disturbing the desktop, then take control and type.
 //! The Host fixture follows `yttt-client-core/tests/p2p_pairing.rs`.
 
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    io::{Read as _, Write as _},
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use yttt_client_core::{ClientCore, ConnectionState};
-use yttt_core::model::ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId};
+use yttt_core::model::{
+    host_workspace::{ProjectPanel, WorkspaceIntent},
+    ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId},
+    layout::ProjectLayout,
+    project::{ProjectDescriptor, ProjectLocation},
+};
+use yttt_mobile_core::overview::{AgentState, Overview, WaitingKind};
 use yttt_mobile_core::session::{
     LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
 };
@@ -15,7 +27,7 @@ use yttt_protocol::{
     project::ProjectRequest,
     remote_access::{PairingState, RemoteAccessRequest, RemoteAccessResponse, RemoteAccessStatus},
     terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalLeaseMode, TerminalSpawnSpec},
-    workspace::WorkspaceProjectConfig,
+    workspace::{WorkspaceId, WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_relay::{NodeConfig, OpenConfig, RelayNode, open_account_id};
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
@@ -503,4 +515,147 @@ async fn a_phone_works_through_the_relay_alone() {
         .await
         .expect("network_changed after close returns at once");
     relay.shutdown().await;
+}
+
+/// Sends one Agent hook event the way an Agent CLI's hook does.
+fn post_hook(environment: &[String], event: &str, payload: &str) {
+    let endpoint = environment[0].strip_prefix("http://").unwrap();
+    let body = format!(r#"{{"event":"{event}","payload":{payload}}}"#);
+    let mut stream = std::net::TcpStream::connect(endpoint).unwrap();
+    write!(
+        stream,
+        "POST /hook/codex HTTP/1.1\r\nContent-Length: {}\r\nx-yttt-agent-hook-token: {}\r\nx-yttt-agent-hook-scope: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+        environment[1],
+        environment[2],
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 204"), "{event}: {response}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_overview_follows_an_agent_into_waiting() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path(), None).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+
+    // The desktop opens a project whose Agent pane the Host starts; the pane
+    // writes the hook address the Host gave it, as an Agent CLI would read it.
+    let project_root = temp.path().join("web");
+    fs::create_dir_all(&project_root).unwrap();
+    let environment_file = temp.path().join("agent-environment");
+    let layout: ProjectLayout = toml::from_str(&format!(
+        r#"
+        [project]
+        name = "Website"
+
+        [[tabs]]
+        id = "agents"
+        title = "Agents"
+        startup = "eager"
+        layout = {{ type = "pane", id = "codex", title = "Codex", command = "printf '%s\\n%s\\n%s\\n' \"$YTTT_AGENT_HOOK_ENDPOINT\" \"$YTTT_AGENT_HOOK_TOKEN\" \"$YTTT_AGENT_HOOK_SCOPE\" > '{}'; sleep 60" }}
+        "#,
+        environment_file.display()
+    ))
+    .unwrap();
+    let Response::Workspace(WorkspaceResponse::Applied { .. }) = admin
+        .request(Request::Workspace(WorkspaceRequest::Apply {
+            workspace_id: WorkspaceId::new("mobile-overview").unwrap(),
+            intent: WorkspaceIntent::OpenProject {
+                descriptor: ProjectDescriptor::new(
+                    ProjectId::new("web"),
+                    ProjectLocation::local(&project_root),
+                ),
+                layout,
+                panel: ProjectPanel {
+                    visible: true,
+                    width: 240.0,
+                },
+            },
+            expected_revision: None,
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("workspace apply");
+    };
+    // The desktop window shows it, which makes it the active workspace.
+    admin
+        .request(Request::Workspace(WorkspaceRequest::SetActive {
+            workspace_id: WorkspaceId::new("mobile-overview").unwrap(),
+        }))
+        .await
+        .unwrap();
+
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+        .await
+        .unwrap();
+    assert!(phone.open_active_workspace().await.unwrap().is_some());
+    let seen = Arc::new(Mutex::new(Vec::<Overview>::new()));
+    phone.watch_overview({
+        let seen = seen.clone();
+        move |overview| seen.lock().unwrap().push(overview)
+    });
+    let first = eventually("the first overview", async || {
+        seen.lock().unwrap().first().cloned()
+    })
+    .await;
+    assert_eq!(first.projects.len(), 1);
+    assert_eq!(first.projects[0].name, "Website");
+    assert_eq!(first.projects[0].tabs[0].title, "Agents");
+
+    let environment = eventually("the Agent pane's hook address", async || {
+        let contents = fs::read_to_string(&environment_file).ok()?;
+        let values = contents.lines().map(str::to_string).collect::<Vec<_>>();
+        (values.len() == 3 && values.iter().all(|value| !value.is_empty())).then_some(values)
+    })
+    .await;
+    let before = seen.lock().unwrap().len();
+    post_hook(&environment, "SessionStart", r#"{"session_id":"codex-1"}"#);
+    post_hook(
+        &environment,
+        "UserPromptSubmit",
+        r#"{"session_id":"codex-1","prompt":"Add a login page"}"#,
+    );
+    post_hook(
+        &environment,
+        "PermissionRequest",
+        r#"{"session_id":"codex-1","tool_name":"Bash","tool_input":{"command":"npm install"}}"#,
+    );
+
+    let agent = eventually("the Agent waiting in the overview", async || {
+        seen.lock()
+            .unwrap()
+            .last()
+            .and_then(|overview| overview.agents.first().cloned())
+            .filter(|agent| agent.state == AgentState::Waiting)
+    })
+    .await;
+    assert_eq!(agent.session_id, "web:agents:codex");
+    assert_eq!(
+        (agent.project_id.as_str(), agent.tab_id.as_str()),
+        ("web", "agents")
+    );
+    assert_eq!(agent.provider, "codex");
+    assert_eq!(agent.waiting, Some(WaitingKind::Approval));
+    assert_eq!(agent.task.as_deref(), Some("Add a login page"));
+    // Three changes in quick succession reach the app as a few snapshots.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let pushed = seen.lock().unwrap().len() - before;
+    assert!(pushed <= 3, "{pushed} overviews for three quick changes");
+    // Over the network the Host leaves boards out.
+    assert!(
+        phone
+            .client()
+            .agent_snapshots()
+            .iter()
+            .all(|update| update.board_omitted)
+    );
+    assert_eq!(
+        phone.overview().agents,
+        seen.lock().unwrap().last().unwrap().agents
+    );
+    phone.close().await;
 }

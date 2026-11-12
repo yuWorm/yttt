@@ -128,11 +128,12 @@ pub fn build(
         .map(|update| {
             let snapshot = &update.snapshot;
             let state = AgentState::from(snapshot.view_state());
+            let (project_id, tab_id, pane_id) = locate(layout, update);
             AgentSummary {
                 session_id: update.terminal_session_id.to_string(),
-                project_id: update.scope.project_id.clone(),
-                tab_id: update.scope.tab_id.clone(),
-                pane_id: update.scope.pane_id.clone(),
+                project_id,
+                tab_id,
+                pane_id,
                 provider: snapshot.provider_id.as_str().to_string(),
                 state,
                 waiting: (state == AgentState::Waiting)
@@ -157,6 +158,48 @@ pub fn build(
         agents,
         terminals: terminals as u32,
     }
+}
+
+/// The project, tab and pane an Agent runs in. The Host names a pane's
+/// terminal `{project}:{tab}:{pane}`, as the desktop keys its panes; the
+/// hook scope carries the project but not always the tab and pane (for a
+/// pane the Host starts, both are the whole terminal name).
+fn locate(
+    layout: Option<&HostWorkspaceState>,
+    update: &AgentSnapshotUpdate,
+) -> (String, String, String) {
+    let session = update.terminal_session_id.as_str();
+    let in_layout = layout.and_then(|layout| {
+        layout.workspace.opened_projects.iter().find_map(|project| {
+            project.tab_states.iter().find_map(|tab| {
+                tab.pane_states.iter().find_map(|pane| {
+                    (session == format!("{}:{}:{}", project.id, tab.tab_id, pane.pane_id)).then(
+                        || {
+                            (
+                                project.id.to_string(),
+                                tab.tab_id.clone(),
+                                pane.pane_id.clone(),
+                            )
+                        },
+                    )
+                })
+            })
+        })
+    });
+    let scope = &update.scope;
+    in_layout
+        .or_else(|| {
+            let rest = session.strip_prefix(&format!("{}:", scope.project_id))?;
+            let (tab, pane) = rest.split_once(':')?;
+            Some((scope.project_id.clone(), tab.to_string(), pane.to_string()))
+        })
+        .unwrap_or_else(|| {
+            (
+                scope.project_id.clone(),
+                scope.tab_id.clone(),
+                scope.pane_id.clone(),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -251,10 +294,12 @@ mod tests {
         snapshot.state_started_at = 2_000;
         snapshot.updated_at = 3_000;
         AgentSnapshotUpdate {
+            // As the Host scopes a pane it starts: the tab and pane are the
+            // whole terminal name.
             scope: AgentHookScope {
                 project_id: project.to_string(),
-                tab_id: tab.to_string(),
-                pane_id: pane.to_string(),
+                tab_id: format!("{project}:{tab}:{pane}"),
+                pane_id: format!("{project}:{tab}:{pane}"),
                 generation: 1,
             },
             terminal_session_id: TerminalSessionId::new(format!("{project}:{tab}:{pane}")),
@@ -330,7 +375,15 @@ mod tests {
     fn agents_outside_the_open_workspace_or_before_it_opened_are_listed() {
         let elsewhere = waiting_agent("other", "tab", "pane");
         let overview = build(Some(&layout()), std::slice::from_ref(&elsewhere), 1);
-        assert_eq!(overview.agents[0].project_id, "other");
+        let agent = &overview.agents[0];
+        assert_eq!(
+            (
+                agent.project_id.as_str(),
+                agent.tab_id.as_str(),
+                agent.pane_id.as_str()
+            ),
+            ("other", "tab", "pane")
+        );
         let overview = build(None, &[elsewhere], 0);
         assert!(overview.projects.is_empty());
         assert_eq!(overview.agents.len(), 1);

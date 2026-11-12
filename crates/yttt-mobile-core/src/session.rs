@@ -1,7 +1,11 @@
 //! A mobile Client's link to one paired Host: pairing, the `ClientCore`
 //! session, observing terminals, and taking control to type.
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -17,7 +21,7 @@ use yttt_protocol::{
         AttachTerminal, ResizeTerminal, TerminalGeometry, TerminalInput, TerminalLeaseMode,
         TerminalMutationContext,
     },
-    workspace::{WorkspaceRequest, WorkspaceResponse, WorkspaceSummary},
+    workspace::{WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary},
 };
 use yttt_transport::{ClientIdentity, TransportConnector};
 use yttt_transport_iroh::{
@@ -25,7 +29,8 @@ use yttt_transport_iroh::{
     RelayTarget,
 };
 
-use crate::vt::VtEncoder;
+use crate::{overview::Overview, vt::VtEncoder};
+use yttt_core::model::host_workspace::HostWorkspaceState;
 
 /// The visibility scope this Client reports; it has one screen.
 const VISIBILITY_SCOPE: u64 = 1;
@@ -180,6 +185,9 @@ struct DrainTimes {
 struct Shared {
     attached: Mutex<HashMap<TerminalSessionId, Attached>>,
     times: Mutex<DrainTimes>,
+    /// The workspace `open_active_workspace` opened, kept current with the
+    /// Host's layout updates.
+    workspace: Mutex<Option<(WorkspaceId, HostWorkspaceState)>>,
 }
 
 /// A connected session with one Host.
@@ -191,6 +199,8 @@ pub struct MobileSession {
     endpoint: Option<IrohEndpoint>,
     /// The P2P connector, which knows the path in use.
     connector: Option<Arc<IrohConnector>>,
+    /// The task calling back with overviews, replaced by each `watch_overview`.
+    overview_watch: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// The path a P2P session's data takes now.
@@ -275,6 +285,7 @@ impl MobileSession {
         let shared = Arc::new(Shared {
             attached: Mutex::new(HashMap::new()),
             times: Mutex::new(DrainTimes::default()),
+            workspace: Mutex::new(None),
         });
         let events = tokio::spawn(follow_events(
             client.subscribe_events(),
@@ -288,6 +299,7 @@ impl MobileSession {
             events,
             endpoint: None,
             connector: None,
+            overview_watch: Mutex::new(None),
         })
     }
 
@@ -313,10 +325,17 @@ impl MobileSession {
         let Some(active) = workspaces.into_iter().find(|workspace| workspace.active) else {
             return Ok(None);
         };
-        self.request(Request::Workspace(WorkspaceRequest::Open {
-            workspace_id: active.workspace_id.clone(),
-        }))
-        .await?;
+        let Response::Workspace(WorkspaceResponse::Opened { layout, .. }) = self
+            .request(Request::Workspace(WorkspaceRequest::Open {
+                workspace_id: active.workspace_id.clone(),
+            }))
+            .await?
+        else {
+            return Err(MobileError::Host(
+                "unexpected workspace open response".into(),
+            ));
+        };
+        *self.shared.workspace.lock() = Some((active.workspace_id.clone(), layout));
         Ok(Some(active))
     }
 
@@ -612,8 +631,46 @@ impl MobileSession {
             .map_err(|error| MobileError::Host(error.to_string()))
     }
 
+    /// The home screen's data as it is now.
+    pub fn overview(&self) -> Overview {
+        current_overview(&self.client, &self.shared)
+    }
+
+    /// Calls `callback` with the overview now and after each change: Agent
+    /// states, the workspace layout, the terminals, a reconnect. Changes
+    /// within [`OVERVIEW_DEBOUNCE`] arrive as one call. Replaces the callback
+    /// of an earlier call; ends with `close`.
+    pub fn watch_overview(&self, callback: impl Fn(Overview) + Send + Sync + 'static) {
+        let client = self.client.clone();
+        let shared = self.shared.clone();
+        let mut events = client.subscribe_events();
+        let task = tokio::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            callback(current_overview(&client, &shared));
+            loop {
+                match events.recv().await {
+                    Ok(event) if !changes_overview(&event) => continue,
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => return,
+                }
+                tokio::time::sleep(OVERVIEW_DEBOUNCE).await;
+                // Whatever came meanwhile is in the overview about to be sent.
+                while let Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) =
+                    events.try_recv()
+                {}
+                callback(current_overview(&client, &shared));
+            }
+        });
+        if let Some(previous) = self.overview_watch.lock().replace(task) {
+            previous.abort();
+        }
+    }
+
     pub async fn close(&self) {
         self.events.abort();
+        if let Some(watch) = self.overview_watch.lock().take() {
+            watch.abort();
+        }
         self.client.shutdown().await;
         if let Some(endpoint) = &self.endpoint {
             endpoint.close().await;
@@ -623,6 +680,32 @@ impl MobileSession {
     pub fn client_instance_id(&self) -> &str {
         self.client_id.as_str()
     }
+}
+
+/// How long the overview waits for more changes before it is sent.
+pub const OVERVIEW_DEBOUNCE: Duration = Duration::from_millis(250);
+
+fn current_overview(client: &ClientCore, shared: &Shared) -> Overview {
+    let workspace = shared.workspace.lock();
+    crate::overview::build(
+        workspace.as_ref().map(|(_, layout)| layout),
+        &client.agent_snapshots(),
+        client
+            .resource_catalog()
+            .map_or(0, |catalog| catalog.terminals.len()),
+    )
+}
+
+fn changes_overview(event: &ClientEvent) -> bool {
+    matches!(
+        event,
+        ClientEvent::AgentSnapshotUpdated(_)
+            | ClientEvent::AgentSnapshotsReset { .. }
+            | ClientEvent::AgentStateCleared(_)
+            | ClientEvent::ResourceCatalogUpdated(_)
+            | ClientEvent::WorkspaceLayoutChanged(_)
+            | ClientEvent::Connection(_)
+    )
 }
 
 /// Observers ask for no geometry; the Host keeps the PTY's own.
@@ -695,6 +778,14 @@ async fn follow_events(
                 }
                 _ => {}
             },
+            ClientEvent::WorkspaceLayoutChanged(update) => {
+                let mut workspace = shared.workspace.lock();
+                if let Some((id, layout)) = workspace.as_mut()
+                    && *id == update.workspace_id
+                {
+                    *layout = update.layout;
+                }
+            }
             ClientEvent::Connection(ConnectionState::Ready { .. }) => {
                 // A new connection: leases are granted again, the view repaints.
                 for terminal in shared.attached.lock().values_mut() {
