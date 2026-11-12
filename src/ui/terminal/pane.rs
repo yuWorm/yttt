@@ -32,7 +32,7 @@ use parking_lot::RwLock;
 use yttt_client_core::{ClientCoreError, ClientEvent, ConnectionState, TerminalMirrorMetadata};
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
-    Request, Response, ServerEvent, TerminalPlacement,
+    FailureCode, Request, Response, ServerEvent, TerminalPlacement,
     terminal::{
         AttachTerminal, ResizeTerminal, ScrollTerminal, TerminalGeometry, TerminalInput,
         TerminalLeaseMode, TerminalMutationContext, TerminalProcessState, TerminationMode,
@@ -179,7 +179,7 @@ pub struct TerminalPaneView {
     window_handle: Option<AnyWindowHandle>,
     lifecycle: PaneLifecycle,
     terminal_error: Option<String>,
-    /// A `TakeTerminalController` sent from this pane's read-only notice.
+    /// A `TakeTerminal` sent from this pane's read-only notice.
     taking_control: bool,
     take_control_error: Option<String>,
     /// A lease the Host granted that waits for its current geometry epoch
@@ -1342,8 +1342,9 @@ impl TerminalPaneView {
                 .is_some_and(|terminal| terminal.read(cx).is_read_only())
     }
 
-    /// Takes control of every terminal; the leases the Host then grants make
-    /// this pane writable.
+    /// Takes back this pane's terminal only, or every terminal from a Host
+    /// that cannot hand out one; the lease the Host then grants makes this
+    /// pane writable.
     fn take_terminal_control(&mut self, cx: &mut Context<Self>) {
         let Some(runtime) = self.host_runtime.clone() else {
             return;
@@ -1354,13 +1355,23 @@ impl TerminalPaneView {
         self.taking_control = true;
         self.take_control_error = None;
         cx.notify();
-        let response = runtime.request(Request::TakeTerminalController);
+        let take_one = runtime.request(Request::TakeTerminal {
+            session_id: self.session_id(),
+        });
         cx.spawn(async move |this, cx| {
-            let result = response.recv_async().await;
+            let mut result = take_one.recv_async().await;
+            if let Ok(Err(ClientCoreError::Protocol(failure))) = &result
+                && failure.code == FailureCode::Unsupported
+            {
+                result = runtime
+                    .request(Request::TakeTerminalController)
+                    .recv_async()
+                    .await;
+            }
             let _ = this.update(cx, |pane, cx| {
                 pane.taking_control = false;
                 let detail = match result {
-                    Ok(Ok(Response::TerminalController(_))) => None,
+                    Ok(Ok(Response::TerminalLease(_) | Response::TerminalController(_))) => None,
                     Ok(Ok(response)) => Some(format!("{response:?}")),
                     Ok(Err(error)) => Some(error.to_string()),
                     Err(error) => Some(error.to_string()),

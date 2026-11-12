@@ -447,6 +447,13 @@ fn a_pane_another_client_took_offers_to_take_control_back(cx: &mut TestAppContex
     pump_until(cx, "input after taking control", |_| {
         received_input_count(host.root.path(), "x") == 1
     });
+    // The pane took back only its own terminal: the laptop still controls
+    // the rest.
+    assert!(matches!(
+        runtime.request_blocking_typed(Request::ReadTerminalController),
+        Ok(Response::TerminalController(state))
+            if state.controller == Some(laptop.client_id())
+    ));
     laptop.shutdown_client();
     runtime.shutdown_client();
 }
