@@ -59,6 +59,7 @@ targets:
       - YtttSpike/HomeSections.swift
       - YtttSpike/ProjectPage.swift
       - YtttSpike/FileTree.swift
+      - YtttSpike/SecretStore.swift
       - path: ../../target/mobile/ios/swift
         group: Generated
     dependencies:
@@ -68,10 +69,14 @@ targets:
       - sdk: SystemConfiguration.framework
       - sdk: Security.framework
       - sdk: Network.framework
+      # Hosted by the app: the Keychain needs an app's entitlements.
+      - target: YtttSpike
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
         OTHER_LDFLAGS: ["-lc++"]
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/YtttSpike.app/YtttSpike"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   YtttSpike:
     build:

@@ -17,19 +17,22 @@ enum Storage {
         try? Data(contentsOf: directory.appendingPathComponent(name))
     }
 
+    /// Saved app-private and left out of backups: the record names the
+    /// Host this phone pairs with, and is no use on another phone.
     static func save(_ name: String, _ data: Data?) {
-        let url = directory.appendingPathComponent(name)
-        if let data { try? data.write(to: url, options: .atomic) } else { try? FileManager.default.removeItem(at: url) }
+        var url = directory.appendingPathComponent(name)
+        guard let data else { try? FileManager.default.removeItem(at: url); return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
     }
 
-    /// The device's 32-byte secret, created on first use.
+    /// The device's 32-byte secret, in the Keychain.
     static func deviceSecret() -> Data {
-        if let secret = load("device-secret"), secret.count == 32 { return secret }
-        var bytes = [UInt8](repeating: 0, count: 32)
-        precondition(SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess)
-        let secret = Data(bytes)
-        save("device-secret", secret)
-        return secret
+        let store = SecretStore(service: "dev.yttt.spike", account: "device-secret",
+                                legacyFile: directory.appendingPathComponent("device-secret"))
+        do { return try store.deviceSecret() } catch { fatalError("device secret: \(error)") }
     }
 }
 
