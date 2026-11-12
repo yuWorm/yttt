@@ -75,7 +75,7 @@ import uniffi.yttt_mobile_core.TerminalInfo
 import java.io.File
 import java.security.SecureRandom
 
-/** Spike storage: app-private files. The real app keeps the secret in the Keystore. */
+/** App-private files; the device secret is encrypted with a Keystore key. */
 class Storage(context: Context) {
     private val dir = File(context.filesDir, "yttt-spike").apply { mkdirs() }
 
@@ -86,9 +86,8 @@ class Storage(context: Context) {
         if (data == null) file.delete() else file.writeBytes(data)
     }
 
-    fun deviceSecret(): ByteArray =
-        load("device-secret")?.takeIf { it.size == 32 }
-            ?: ByteArray(32).also { SecureRandom().nextBytes(it); save("device-secret", it) }
+    /** Encrypted with a key that never leaves the Android Keystore. */
+    fun deviceSecret(): ByteArray = SecretStore(dir, SecretStore::keystoreKey).deviceSecret()
 }
 
 class MainActivity : ComponentActivity() {
