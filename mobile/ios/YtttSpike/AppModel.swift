@@ -39,6 +39,12 @@ final class ShortCodeListener: PairingListener, @unchecked Sendable {
     func onShortCode(shortCode: UInt32) { onCode(shortCode) }
 }
 
+final class OverviewSink: OverviewListener, @unchecked Sendable {
+    private let onOverview: @Sendable (Overview) -> Void
+    init(_ onOverview: @escaping @Sendable (Overview) -> Void) { self.onOverview = onOverview }
+    func onOverview(overview: Overview) { onOverview(overview) }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     let core: MobileCore
@@ -49,6 +55,7 @@ final class AppModel: ObservableObject {
     @Published var busy = false
     @Published var session: HostSession?
     @Published var terminals: [TerminalInfo] = []
+    @Published var overview = Overview(projects: [], agents: [], terminals: 0)
     @Published var path: [TerminalInfo] = []
 
     /// Spike-only automation for simulator runs, set through
@@ -125,6 +132,10 @@ final class AppModel: ObservableObject {
         do {
             session = try await core.connect(record: record, deviceSecret: secret, relayOnly: Self.relayOnly)
             status = ""
+            _ = try? await session?.openActiveWorkspace()
+            session?.watchOverview(listener: OverviewSink { overview in
+                Task { @MainActor in self.overview = overview }
+            })
             await refresh()
         } catch {
             status = "连接失败：\(error.localizedDescription)"
@@ -155,6 +166,16 @@ final class AppModel: ObservableObject {
         Task {
             try? await session.giveBack(sessionIds: [])
             UIApplication.shared.endBackgroundTask(task)
+        }
+    }
+
+    /// Opens the terminal an Agent runs in.
+    func open(agent: AgentSummary) async {
+        if !terminals.contains(where: { $0.sessionId == agent.sessionId }) { await refresh() }
+        if let terminal = terminals.first(where: { $0.sessionId == agent.sessionId }) {
+            path.append(terminal)
+        } else {
+            status = "这个 Agent 的终端已经不在了"
         }
     }
 

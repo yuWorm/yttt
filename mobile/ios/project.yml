@@ -50,11 +50,21 @@ targets:
       - YtttSpikeTests
       - path: ../fixtures/vt-fixtures.json
         buildPhase: resources
+      # The home screen's sorting, tested on its own with the core's types.
+      - YtttSpike/HomeSections.swift
+      - path: ../../target/mobile/ios/swift
+        group: Generated
     dependencies:
       - package: SwiftTerm
+      - framework: ../../target/mobile/ios/YtttMobileCore.xcframework
+        embed: false
+      - sdk: SystemConfiguration.framework
+      - sdk: Security.framework
+      - sdk: Network.framework
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        OTHER_LDFLAGS: ["-lc++"]
 schemes:
   YtttSpike:
     build:

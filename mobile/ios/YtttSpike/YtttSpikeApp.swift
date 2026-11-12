@@ -56,21 +56,49 @@ struct PairView: View {
     }
 }
 
+/// The home screen: counts, then what needs the user, what runs and what
+/// ended; tapping an Agent opens its terminal.
 struct TerminalListView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var showFinished = false
+    @State private var showTerminals = false
 
     var body: some View {
+        let sections = HomeSections(model.overview)
         List {
-            if !model.status.isEmpty {
-                Text(model.status).foregroundStyle(.secondary)
+            Section {
+                if !model.status.isEmpty {
+                    Text(model.status).foregroundStyle(.secondary)
+                }
+                HStack {
+                    count(sections.projects, "项目")
+                    count(sections.tabs, "Tab")
+                    count(sections.terminals, "终端")
+                    count(sections.agents, "Agent")
+                }
             }
-            if model.session != nil {
-                ForEach(model.terminals, id: \.sessionId) { terminal in
-                    NavigationLink(value: terminal) {
-                        VStack(alignment: .leading) {
-                            Text(terminal.sessionId).font(.system(.body, design: .monospaced))
-                            Text("\(terminal.cols)×\(terminal.rows) · \(terminal.projectId)")
-                                .font(.caption).foregroundStyle(.secondary)
+            if !sections.attention.isEmpty {
+                Section("需要处理") { ForEach(sections.attention, id: \.sessionId, content: row) }
+            }
+            if !sections.running.isEmpty {
+                Section("运行中") { ForEach(sections.running, id: \.sessionId, content: row) }
+            }
+            if !sections.finished.isEmpty {
+                Section {
+                    DisclosureGroup("已结束（\(sections.finished.count)）", isExpanded: $showFinished) {
+                        ForEach(sections.finished, id: \.sessionId, content: row)
+                    }
+                }
+            }
+            Section {
+                DisclosureGroup("所有终端（\(model.terminals.count)）", isExpanded: $showTerminals) {
+                    ForEach(model.terminals, id: \.sessionId) { terminal in
+                        NavigationLink(value: terminal) {
+                            VStack(alignment: .leading) {
+                                Text(terminal.sessionId).font(.system(.body, design: .monospaced))
+                                Text("\(terminal.cols)×\(terminal.rows) · \(terminal.projectId)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -92,5 +120,36 @@ struct TerminalListView: View {
         }
         .task { await model.connect() }
         .refreshable { await model.refresh() }
+    }
+
+    private func count(_ value: Int, _ label: String) -> some View {
+        VStack {
+            Text("\(value)").font(.title2.monospacedDigit())
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func row(_ agent: AgentSummary) -> some View {
+        Button {
+            Task { await model.open(agent: agent) }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text("\(model.overview.projectName(agent.projectId)) · \(model.overview.tabTitle(project: agent.projectId, tab: agent.tabId))")
+                        .font(.headline)
+                    Spacer()
+                    Text(agent.stateLabel)
+                        .font(.caption.bold())
+                        .foregroundStyle(agent.state == .waiting || agent.state == .failed ? .orange : .secondary)
+                }
+                if let text = agent.task ?? agent.waitingMessage {
+                    Text(text).font(.subheadline).lineLimit(2)
+                }
+                Text("\(agent.provider) · \(agent.elapsed())\(agent.currentAction.map { " · " + $0 } ?? "")")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .foregroundStyle(.primary)
     }
 }

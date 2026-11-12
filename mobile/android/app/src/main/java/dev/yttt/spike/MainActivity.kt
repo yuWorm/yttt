@@ -59,6 +59,8 @@ import uniffi.yttt_mobile_core.HostSession
 import uniffi.yttt_mobile_core.MobileCore
 import uniffi.yttt_mobile_core.LinkPath
 import uniffi.yttt_mobile_core.MobileCoreException
+import uniffi.yttt_mobile_core.Overview
+import uniffi.yttt_mobile_core.OverviewListener
 import uniffi.yttt_mobile_core.PairingListener
 import uniffi.yttt_mobile_core.TerminalInfo
 import java.io.File
@@ -167,6 +169,7 @@ fun App(
     var open by remember { mutableStateOf<TerminalInfo?>(null) }
     var status by remember { mutableStateOf("") }
     var pairingDigits by remember { mutableStateOf<UInt?>(null) }
+    var homeOverview by remember { mutableStateOf(Overview(emptyList(), emptyList(), 0u)) }
     val scope = rememberCoroutineScope()
     val secret = remember { storage.deviceSecret() }
 
@@ -200,6 +203,12 @@ fun App(
             val connected = core.connect(stored, secret, relayOnly)
             session = connected
             holder.session = connected
+            runCatching { connected.openActiveWorkspace() }
+            connected.watchOverview(object : OverviewListener {
+                override fun onOverview(overview: Overview) {
+                    scope.launch { homeOverview = overview }
+                }
+            })
             terminals = connected.terminals()
             status = ""
             if (autoOpen != null) open = terminals.firstOrNull { it.sessionId == autoOpen }
@@ -214,23 +223,22 @@ fun App(
         record == null -> PairScreen(status, pairingDigits) { code -> scope.launch { pair(code) } }
         current != null && terminal != null ->
             TerminalScreen(current, terminal, autoType) { open = null }
-        else -> Column(Modifier.fillMaxSize()) {
-            Text(
-                runCatching { core.hostLabel(record!!) }.getOrDefault(""),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(16.dp),
-            )
-            if (status.isNotEmpty()) Text(status, Modifier.padding(horizontal = 16.dp))
-            LazyColumn {
-                items(terminals, key = { it.sessionId }) { info ->
-                    ListItem(
-                        headlineContent = { Text(info.sessionId, fontFamily = FontFamily.Monospace) },
-                        supportingContent = { Text("${info.cols}×${info.rows} · ${info.projectId}") },
-                        modifier = Modifier.clickable { open = info },
-                    )
+        else -> HomeScreen(
+            hostLabel = runCatching { core.hostLabel(record!!) }.getOrDefault(""),
+            status = status,
+            overview = homeOverview,
+            terminals = terminals,
+            onAgent = { agent ->
+                scope.launch {
+                    if (terminals.none { it.sessionId == agent.sessionId }) {
+                        runCatching { terminals = current!!.terminals() }
+                    }
+                    open = terminals.firstOrNull { it.sessionId == agent.sessionId }
+                    if (open == null) status = "这个 Agent 的终端已经不在了"
                 }
-            }
-        }
+            },
+            onTerminal = { open = it },
+        )
     }
 }
 
