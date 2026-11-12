@@ -26,6 +26,8 @@
 - 抽屉两端都从侧边滑出。iOS 没有系统抽屉，容器自写，内容用系统组件；Android 左侧 `ModalNavigationDrawer`，右侧同一组件外层改为 RTL、内容恢复 LTR。终端可横向滚动时，右抽屉只响应屏幕边缘约 20pt 内开始的拖动。
 - 未接管的终端在底部悬浮“接管终端”提示；Agent 等待时提示改为“等批准，接管后回复”。接管后提示换成按键栏（Esc、Tab、Ctrl、方向键、回车、键盘）和“交还电脑”。
 
+**已实现（2026-11-12，spike App，见 `docs/plans/2026-11-12-mobile-project-page-plan.md`）：** 首页与项目页为平级根页面，左抽屉切换（iOS 自写侧滑容器，Android `ModalNavigationDrawer`）；项目页有终端 tab、多 pane 时的 ◀ n/m ▶、终端与随 Agent 等待变化的接管提示；进入项目打开电脑选中的 tab 与其聚焦 pane；首页点 Agent、点通知都定位到它所在的 pane。右抽屉（文件 / 会话）与文件编辑尚未做。Android 的抽屉手势只在打开后生效（观察终端时横向拖动留给终端），由顶栏按钮打开。
+
 ## 3. 分层
 
 Rust 只做核心链路，其余交给原生。
