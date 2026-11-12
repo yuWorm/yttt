@@ -119,7 +119,7 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 5. UniFFI 导出避开 `close`、`message` 这类名字：Kotlin 里与 `AutoCloseable.close`、`Throwable.message` 冲突。
 6. termlib 没有公开的屏幕读取 API，组件测试暂时只能截图；可向上游提或在 instrumented 测试里读无障碍语义。
 7. ~~Android 上要做 `rustls-platform-verifier` 的 JNI 初始化~~（不需要）：`yttt-transport-iroh` 构建 iroh 时没开 `platform-verifier`，iroh 与 reqwest 都用内置的 webpki-roots，验证器链接进来但从不调用。Android 模拟器只经 iroh 公共 HTTPS relay（`aps1-1.relay.n0.iroh.link`）完成了配对、接管与输入。代价：不认用户自装或企业 CA，私有 CA 的自建 relay 在桌面和手机上都连不上；要支持时再开 `platform-verifier` 并做 JNI 初始化（坑见链路计划附注）。
-8. 未验证：真机、蜂窝网络（Wi-Fi 与蜂窝之间换 IP）、vim / htop 等全屏程序、方向键与 Ctrl-C 等按键栏按键、Agent CLI。已验证：只经 relay 的连接（集成测试用进程内自建 relay 并断言路径始终为 relay、手机流量经过 relay；Android 模拟器经公共 HTTPS relay）；电脑取回控制权（集成测试）；前后台切换与断网恢复（模拟器）。
-11. **经远处 relay 配对很慢。** 经 `aps1-1` relay（往返约 0.5 s）配对用了约一分钟，局域网直连只要几秒；连接建立后操作正常。需要在真机上量一次，找出耗时在哪一步。
+8. 未验证：真机、蜂窝网络（Wi-Fi 与蜂窝之间换 IP）、vim / htop 等全屏程序、方向键与 Ctrl-C 等按键栏按键、Agent CLI。已验证：只经 relay 的连接（集成测试用进程内自建 relay 并断言路径始终为 relay、手机流量经过 relay；iOS 模拟器与 Android 模拟器各经本机自建 relay 与公共 HTTPS relay；默认模式下两者在局域网内都转为直连）；电脑取回控制权（集成测试）；前后台切换与断网恢复（模拟器）。
+11. ~~经远处 relay 配对很慢~~（未复现）：第一次经 `aps1-1` relay 配对用了约一分钟，之后复测四次（本机 relay 与公共 HTTPS relay，iOS 与 Android 各一次）都在 2–6 s 内完成。那一次紧跟在一次 `InvitationClosed` 失败之后，原因未查明；真机上留意。
 9. **本地 geometry epoch 只增不减。** 修复前 `drain` 用收到的 viewport 覆盖本地 geometry epoch：接管后的 resize 请求还在路上时，显示刷新把旧 viewport 再编码一次，epoch 退回旧值，之后的输入被 Host 当作过期而静默丢弃（输入是单向消息，手机收不到拒绝）。现在同一 session 内取较大值，集成测试在 `take_control` 期间每毫秒 drain 一次来覆盖。
 10. **termlib 改变固定尺寸会清屏。** 从控制回到观察（`forcedSize` 改回 Host 尺寸）后画面变空，直到下一次输出。核心新增 `repaint(session)`，Android 在控制状态变化两帧后调用，下一次 drain 整屏重绘。SwiftTerm 不清屏，iOS 不需要。

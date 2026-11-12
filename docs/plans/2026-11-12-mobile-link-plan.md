@@ -129,3 +129,16 @@
 - Android 日志里有 SELinux 拒绝：App 读不了 `/sys/class/net`，也读不了 netlink 路由（`nlmsg_readpriv`）。iroh 的 netwatch 在 Android 上看不到网卡变化，`network_change` 多半什么也不做，起作用的是 `probe_now`。
 - 经远处 relay 配对约一分钟（设计 §8 第 11 条）。
 - iOS 只验证了编译；模拟器无法切换网络。
+
+### relay 复测（2026-11-12 下午，iOS 与 Android）
+
+spike_host 分别接本机自建 relay（`yttt-relay --config packaging/relay-selfhost/relay.toml`，`http://192.168.1.36:3341`）和公共 HTTPS relay（`https://aps1-1.relay.n0.iroh.link`）；App 每次重新安装后只经 relay 配对、打开 shell、接管、输入。配对耗时从启动 App 算到 App 写下 `host.json`：
+
+| relay | 平台 | Host 确认 | 配对完成 | 结果 |
+|---|---|---|---|---|
+| 本机 HTTP | iOS 模拟器 | +2.0 s | +2.0 s | 经 relay；第一条命令看到手机尺寸 |
+| 本机 HTTP | Android 模拟器 | +3.0 s | +3.0 s | 经 relay；`cols=63`；从 iOS 手里接管同一终端 |
+| 公共 HTTPS | iOS 模拟器 | +5.1 s | +5.6 s | 经 relay |
+| 公共 HTTPS | Android 模拟器 | +5.6 s | +6.2 s | 经 relay；Android 无 TLS 初始化 |
+
+再以默认模式（`FromHost`，不只走 relay）打开 demo 终端：两边都显示“直连”，tick 同步。之前“经远处 relay 配对约一分钟”没有复现（设计 §8 第 11 条）。
