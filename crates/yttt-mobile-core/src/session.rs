@@ -29,8 +29,19 @@ use yttt_transport_iroh::{
     RelayTarget,
 };
 
-use crate::{overview::Overview, vt::VtEncoder};
+use crate::{
+    files::{FileEntry, OpenedFile, SESSION_PROVIDERS, SaveOutcome, SessionEntry},
+    overview::Overview,
+    vt::VtEncoder,
+};
 use yttt_core::model::host_workspace::HostWorkspaceState;
+use yttt_core::model::ids::ProjectId;
+use yttt_protocol::{
+    HostPath, ProjectRelativePath,
+    project::{
+        ProjectFileFingerprint, ProjectRequest, ProjectResponse, ProjectSaveMode, ProjectSaveResult,
+    },
+};
 
 /// The visibility scope this Client reports; it has one screen.
 const VISIBILITY_SCOPE: u64 = 1;
@@ -188,6 +199,9 @@ struct Shared {
     /// The workspace `open_active_workspace` opened, kept current with the
     /// Host's layout updates.
     workspace: Mutex<Option<(WorkspaceId, HostWorkspaceState)>>,
+    /// Each file opened to edit, by project and path: what it looked like
+    /// when last read or saved, to save against.
+    opened_files: Mutex<HashMap<(String, String), ProjectFileFingerprint>>,
 }
 
 /// A connected session with one Host.
@@ -286,6 +300,7 @@ impl MobileSession {
             attached: Mutex::new(HashMap::new()),
             times: Mutex::new(DrainTimes::default()),
             workspace: Mutex::new(None),
+            opened_files: Mutex::new(HashMap::new()),
         });
         let events = tokio::spawn(follow_events(
             client.subscribe_events(),
@@ -631,6 +646,139 @@ impl MobileSession {
             .map_err(|error| MobileError::Host(error.to_string()))
     }
 
+    /// One directory of a project, `""` for its root, without hidden entries.
+    pub async fn list_directory(
+        &self,
+        project_id: &str,
+        directory: &str,
+    ) -> Result<Vec<FileEntry>, MobileError> {
+        let Response::Project(ProjectResponse::Directory(listing)) = self
+            .request(Request::Project(ProjectRequest::ScanDirectory {
+                project_id: ProjectId::new(project_id),
+                relative_directory: relative(directory)?,
+                show_hidden: false,
+            }))
+            .await?
+        else {
+            return Err(MobileError::Host("unexpected directory response".into()));
+        };
+        listing
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let path = entry
+                    .relative_path
+                    .to_utf8()
+                    .map_err(|error| MobileError::Host(error.to_string()))?;
+                Ok(FileEntry {
+                    name: path.rsplit('/').next().unwrap_or(&path).to_string(),
+                    path,
+                    kind: entry.kind.into(),
+                })
+            })
+            .collect()
+    }
+
+    /// Reads a file to edit; the next `save_file` checks it is unchanged.
+    pub async fn open_file(&self, project_id: &str, path: &str) -> Result<OpenedFile, MobileError> {
+        let Response::Project(ProjectResponse::File(file)) = self
+            .request(Request::Project(ProjectRequest::ReadFile {
+                project_id: ProjectId::new(project_id),
+                relative_path: relative(path)?,
+            }))
+            .await?
+        else {
+            return Err(MobileError::Host("unexpected file response".into()));
+        };
+        self.shared
+            .opened_files
+            .lock()
+            .insert((project_id.to_string(), path.to_string()), file.fingerprint);
+        Ok(OpenedFile {
+            path: path.to_string(),
+            text: file.text,
+        })
+    }
+
+    /// Saves an opened file. Unless `force`, only if it is as it was when
+    /// opened or last saved; otherwise `Conflict` and nothing is written.
+    pub async fn save_file(
+        &self,
+        project_id: &str,
+        path: &str,
+        text: String,
+        force: bool,
+    ) -> Result<SaveOutcome, MobileError> {
+        let key = (project_id.to_string(), path.to_string());
+        let mode =
+            if force {
+                ProjectSaveMode::Force
+            } else {
+                let fingerprint = self.shared.opened_files.lock().get(&key).cloned();
+                ProjectSaveMode::Check(fingerprint.ok_or_else(|| {
+                    MobileError::Host(format!("{path} was not opened before saving"))
+                })?)
+            };
+        let Response::Project(ProjectResponse::Save(result)) = self
+            .request(Request::Project(ProjectRequest::SaveFile {
+                project_id: ProjectId::new(project_id),
+                relative_path: relative(path)?,
+                text,
+                mode,
+            }))
+            .await?
+        else {
+            return Err(MobileError::Host("unexpected save response".into()));
+        };
+        Ok(match result {
+            ProjectSaveResult::Saved(fingerprint) => {
+                self.shared.opened_files.lock().insert(key, fingerprint);
+                SaveOutcome::Saved
+            }
+            ProjectSaveResult::Conflict(_) => SaveOutcome::Conflict,
+        })
+    }
+
+    /// The Agent sessions the Host has for a project of the open workspace.
+    pub async fn agent_sessions(&self, project_id: &str) -> Result<Vec<SessionEntry>, MobileError> {
+        let root = {
+            let workspace = self.shared.workspace.lock();
+            let project = workspace.as_ref().and_then(|(_, layout)| {
+                layout
+                    .workspace
+                    .opened_projects
+                    .iter()
+                    .find(|project| project.id.as_str() == project_id)
+            });
+            let path = project
+                .and_then(|project| project.location.local_path().cloned())
+                .ok_or_else(|| MobileError::Host(format!("{project_id} has no local root")))?;
+            HostPath::from_path(&path).map_err(|error| MobileError::Host(error.to_string()))?
+        };
+        let Response::Workspace(WorkspaceResponse::AgentSessions { sessions, .. }) = self
+            .request(Request::Workspace(WorkspaceRequest::AgentSessions {
+                providers: SESSION_PROVIDERS
+                    .iter()
+                    .map(|provider| provider.to_string())
+                    .collect(),
+                project_root: root,
+            }))
+            .await?
+        else {
+            return Err(MobileError::Host("unexpected session response".into()));
+        };
+        Ok(sessions
+            .into_iter()
+            .map(|session| SessionEntry {
+                provider: session.provider,
+                id: session.id,
+                title: session.title,
+                model: session.model,
+                updated_at_ms: session.updated_at_ms,
+            })
+            .collect())
+    }
+
     /// The home screen's data as it is now.
     pub fn overview(&self) -> Overview {
         current_overview(&self.client, &self.shared)
@@ -680,6 +828,10 @@ impl MobileSession {
     pub fn client_instance_id(&self) -> &str {
         self.client_id.as_str()
     }
+}
+
+fn relative(path: &str) -> Result<ProjectRelativePath, MobileError> {
+    ProjectRelativePath::from_utf8(path).map_err(|error| MobileError::Host(error.to_string()))
 }
 
 /// How long the overview waits for more changes before it is sent.

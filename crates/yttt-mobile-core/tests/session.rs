@@ -17,6 +17,7 @@ use yttt_core::model::{
     layout::ProjectLayout,
     project::{ProjectDescriptor, ProjectLocation},
 };
+use yttt_mobile_core::files::{FileKind, SaveOutcome};
 use yttt_mobile_core::overview::{AgentState, Overview, WaitingKind};
 use yttt_mobile_core::session::{
     LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
@@ -657,5 +658,139 @@ async fn the_overview_follows_an_agent_into_waiting() {
         phone.overview().agents,
         seen.lock().unwrap().last().unwrap().agents
     );
+    phone.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_phone_reads_edits_and_saves_a_project_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path(), None).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+
+    let project_root = temp.path().join("site");
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("README.md"), "hello\n").unwrap();
+    fs::write(project_root.join("src/app.js"), "console.log(1)\n").unwrap();
+    let layout: ProjectLayout = toml::from_str(
+        r#"
+        [project]
+        name = "Site"
+
+        [[tabs]]
+        id = "shell"
+        title = "Shell"
+        layout = { type = "pane", id = "1", title = "zsh", command = "sleep 60" }
+        "#,
+    )
+    .unwrap();
+    let workspace_id = WorkspaceId::new("mobile-files").unwrap();
+    admin
+        .request(Request::Workspace(WorkspaceRequest::Apply {
+            workspace_id: workspace_id.clone(),
+            intent: WorkspaceIntent::OpenProject {
+                descriptor: ProjectDescriptor::new(
+                    ProjectId::new("site"),
+                    ProjectLocation::local(&project_root),
+                ),
+                layout,
+                panel: ProjectPanel {
+                    visible: true,
+                    width: 240.0,
+                },
+            },
+            expected_revision: None,
+        }))
+        .await
+        .unwrap();
+    admin
+        .request(Request::Workspace(WorkspaceRequest::SetActive {
+            workspace_id,
+        }))
+        .await
+        .unwrap();
+
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+        .await
+        .unwrap();
+    phone.open_active_workspace().await.unwrap();
+
+    // The tree, a directory at a time.
+    let root = phone.list_directory("site", "").await.unwrap();
+    let names = root
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.path.as_str(), entry.kind))
+        .collect::<Vec<_>>();
+    assert!(
+        names.contains(&("README.md", "README.md", FileKind::File)),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&("src", "src", FileKind::Directory)),
+        "{names:?}"
+    );
+    let src = phone.list_directory("site", "src").await.unwrap();
+    assert_eq!(src[0].path, "src/app.js");
+
+    // Open, edit, save.
+    let opened = phone.open_file("site", "README.md").await.unwrap();
+    assert_eq!(opened.text, "hello\n");
+    assert_eq!(
+        phone
+            .save_file("site", "README.md", "hello from the phone\n".into(), false)
+            .await
+            .unwrap(),
+        SaveOutcome::Saved
+    );
+    assert_eq!(
+        fs::read_to_string(project_root.join("README.md")).unwrap(),
+        "hello from the phone\n"
+    );
+
+    // The desktop changed it meanwhile: saving again conflicts, forcing wins.
+    fs::write(project_root.join("README.md"), "edited on the desktop\n").unwrap();
+    assert_eq!(
+        phone
+            .save_file("site", "README.md", "phone again\n".into(), false)
+            .await
+            .unwrap(),
+        SaveOutcome::Conflict
+    );
+    assert_eq!(
+        fs::read_to_string(project_root.join("README.md")).unwrap(),
+        "edited on the desktop\n"
+    );
+    assert_eq!(
+        phone
+            .save_file("site", "README.md", "phone again\n".into(), true)
+            .await
+            .unwrap(),
+        SaveOutcome::Saved
+    );
+    assert_eq!(
+        fs::read_to_string(project_root.join("README.md")).unwrap(),
+        "phone again\n"
+    );
+    // Reloading takes the file as it is now; saving then does not conflict.
+    assert_eq!(
+        phone.open_file("site", "README.md").await.unwrap().text,
+        "phone again\n"
+    );
+    assert_eq!(
+        phone
+            .save_file("site", "README.md", "last\n".into(), false)
+            .await
+            .unwrap(),
+        SaveOutcome::Saved
+    );
+    // Saving a file never opened is refused.
+    assert!(
+        phone
+            .save_file("site", "src/app.js", "x".into(), false)
+            .await
+            .is_err()
+    );
+
+    // No Agent has worked here.
+    assert!(phone.agent_sessions("site").await.unwrap().is_empty());
     phone.close().await;
 }
