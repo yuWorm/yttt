@@ -737,7 +737,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceStatusRestoring => " · 正在恢复",
         UiTextKey::WorkspaceStatusSaving => " · 正在保存",
         UiTextKey::WorkspaceStatusHistory => "工作区历史…",
-        UiTextKey::WorkspaceStatusTerminalsControlledElsewhere => " · 终端由另一个客户端控制",
+        UiTextKey::WorkspaceStatusTerminalsControlledElsewhere => " · {count} 个终端由其他设备控制",
         UiTextKey::WorkspaceStatusTakeTerminalControl => "接管终端",
         UiTextKey::WorkspaceStatusTakeTerminalControlFailed => "接管终端失败：{detail}",
         UiTextKey::PersistenceDocumentSyncFailed => "无法把 {path} 的未保存修改存到 Host：{error}",

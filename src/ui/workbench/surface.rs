@@ -2035,7 +2035,8 @@ impl WorkbenchView {
             }
             TerminalPaneEvent::AgentStatusFrame { .. } => {}
             TerminalPaneEvent::TitleChanged { .. }
-            | TerminalPaneEvent::ViewportSizeChanged { .. } => {
+            | TerminalPaneEvent::ViewportSizeChanged { .. }
+            | TerminalPaneEvent::ControlChanged => {
                 cx.notify();
             }
             TerminalPaneEvent::RestartRequested(request) => {

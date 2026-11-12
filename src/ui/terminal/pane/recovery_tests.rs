@@ -1,5 +1,6 @@
 use super::*;
 use gpui::{EntityInputHandler, TestAppContext, VisualTestContext};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -430,6 +431,16 @@ fn a_pane_another_client_took_offers_to_take_control_back(cx: &mut TestAppContex
         cx.read(|app| pane.read(app).is_running()) && !observes(cx)
     });
     let session_id = catalog(&runtime).terminals.remove(0).session_id;
+    // The workbench counts read-only panes when a pane says its control changed.
+    let control_changes = Arc::new(AtomicUsize::new(0));
+    let _subscription = cx.update(|_window, cx| {
+        let control_changes = control_changes.clone();
+        cx.subscribe(&pane, move |_, event: &TerminalPaneEvent, _| {
+            if matches!(event, TerminalPaneEvent::ControlChanged) {
+                control_changes.fetch_add(1, AtomicOrdering::SeqCst);
+            }
+        })
+    });
 
     let laptop = host.client("laptop");
     assert!(matches!(
@@ -440,9 +451,11 @@ fn a_pane_another_client_took_offers_to_take_control_back(cx: &mut TestAppContex
         Ok(Response::TerminalLease(_))
     ));
     pump_until(cx, "control notice", observes);
+    assert_eq!(control_changes.load(AtomicOrdering::SeqCst), 1);
 
     cx.update(|_window, cx| pane.update(cx, |pane, cx| pane.take_terminal_control(cx)));
     pump_until(cx, "control taken back", |cx| !observes(cx));
+    assert_eq!(control_changes.load(AtomicOrdering::SeqCst), 2);
     send_input(&pane, cx);
     pump_until(cx, "input after taking control", |_| {
         received_input_count(host.root.path(), "x") == 1

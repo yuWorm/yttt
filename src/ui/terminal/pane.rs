@@ -69,6 +69,9 @@ pub enum TerminalPaneEvent {
     ViewportSizeChanged {
         pane_id: String,
     },
+    /// The pane became read-only because another Client holds its terminal,
+    /// or writable again.
+    ControlChanged,
     IoError {
         pane_id: String,
         message: String,
@@ -676,9 +679,12 @@ impl TerminalPaneView {
             writer.mutation_context.write().lease_epoch = lease_epoch;
         }
         if let Some(terminal) = &self.terminal {
-            terminal.update(cx, |terminal, cx| {
-                terminal.set_read_only(lease_epoch == 0, cx)
-            });
+            let read_only = lease_epoch == 0;
+            let changed = terminal.read(cx).is_read_only() != read_only;
+            terminal.update(cx, |terminal, cx| terminal.set_read_only(read_only, cx));
+            if changed {
+                cx.emit(TerminalPaneEvent::ControlChanged);
+            }
         }
     }
 
@@ -1328,8 +1334,8 @@ impl TerminalPaneView {
     }
 
     /// Whether this running pane only observes because another Client
-    /// controls the terminals.
-    fn observes_another_controller(&self, cx: &gpui::App) -> bool {
+    /// holds its terminal.
+    pub(crate) fn observes_another_controller(&self, cx: &gpui::App) -> bool {
         self.lifecycle == PaneLifecycle::Running
             && !self.attaching
             && self

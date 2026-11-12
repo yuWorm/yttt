@@ -377,10 +377,11 @@ impl WorkbenchView {
         } else {
             ""
         };
-        let observing = self.terminals_controlled_elsewhere();
-        let control = observing.then(|| {
+        let observed = self.terminals_observed_elsewhere(cx);
+        let control = (observed > 0).then(|| {
             self.ui_text
                 .get(UiTextKey::WorkspaceStatusTerminalsControlledElsewhere)
+                .replace("{count}", &observed.to_string())
         });
         div()
             .flex()
@@ -390,20 +391,6 @@ impl WorkbenchView {
             .text_sm()
             .debug_selector(|| "workspace-status".to_string())
             .child(format!("{identity}{state}{}", control.unwrap_or_default()))
-            .when(observing, |banner| {
-                banner.child(
-                    yttt_button(
-                        "take-terminal-control",
-                        self.ui_text
-                            .get(UiTextKey::WorkspaceStatusTakeTerminalControl),
-                        YtttButtonVariant::Primary,
-                        appearance.ui,
-                        appearance.style,
-                    )
-                    .disabled(self.terminal_control_taking())
-                    .on_click(cx.listener(|root, _, _window, cx| root.take_terminal_control(cx))),
-                )
-            })
             .child(
                 yttt_button(
                     "workspace-history",
@@ -1309,5 +1296,17 @@ mod outage_notice_tests {
             host_link_notice(Some(outage(Some(1))), 100, None, false),
             None
         );
+    }
+}
+
+impl WorkbenchView {
+    /// Running terminal panes of this window that are read-only because
+    /// another Client holds their terminal.
+    fn terminals_observed_elsewhere(&self, cx: &App) -> usize {
+        self.terminal
+            .terminal_panes
+            .values()
+            .filter(|pane| pane.read(cx).observes_another_controller(cx))
+            .count()
     }
 }

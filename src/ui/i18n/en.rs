@@ -918,7 +918,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::WorkspaceStatusSaving => " · Saving",
         UiTextKey::WorkspaceStatusHistory => "Workspace history…",
         UiTextKey::WorkspaceStatusTerminalsControlledElsewhere => {
-            " · Another client is controlling the terminals"
+            " · Terminals controlled on another device: {count}"
         }
         UiTextKey::WorkspaceStatusTakeTerminalControl => "Take control",
         UiTextKey::WorkspaceStatusTakeTerminalControlFailed => {
