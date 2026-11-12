@@ -8,7 +8,12 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.platform.LocalContext
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
@@ -99,7 +104,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Spike-only automation for emulator runs (adb shell am start -e ...).
+        // `qrImage`: a picture in the app's files to pair from, read as the
+        // image picker reads one.
         val autoPair = intent.getStringExtra("pair")
+            ?: intent.getStringExtra("qrImage")?.let { name ->
+                BitmapFactory.decodeFile(java.io.File(filesDir, name).path)
+                    ?.let { decodePairingCode(it.luminance(), it.width, it.height) }
+            }
         autoType = intent.getStringExtra("type")
         link.relayOnly = intent.getBooleanExtra("relayOnly", false)
         takeOpenRequest(intent)
@@ -329,8 +340,28 @@ fun App(
 @Composable
 fun PairScreen(status: String, shortCode: UInt?, onPair: (String) -> Unit) {
     var code by remember { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
+    var scanError by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val bitmap = context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+        val found = bitmap?.let { decodePairingCode(it.luminance(), it.width, it.height) }
+        if (found != null) { scanError = null; onPair(found) } else scanError = "这张图片里没有配对二维码"
+    }
+    if (scanning) {
+        PairingScanner(onCode = { found -> scanning = false; onPair(found) }, onClose = { scanning = false })
+        return
+    }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("配对 Host", style = MaterialTheme.typography.titleLarge)
+        Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("扫描电脑上的二维码") }
+        OutlinedButton(
+            onClick = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("从图片识别") }
+        scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Text("或粘贴配对码", style = MaterialTheme.typography.labelLarge)
         OutlinedTextField(
             value = code,
             onValueChange = { code = it },

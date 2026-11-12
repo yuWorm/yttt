@@ -42,6 +42,11 @@ dependencies {
     implementation("org.connectbot:termlib:0.3.13")
     // The file editor. LGPL-2.1: used as a separate, unmodified library.
     implementation("io.github.Rosemoe.sora-editor:editor:0.23.6")
+    // Pairing QR codes: ZXing decodes the camera's frames (no Google services).
+    implementation("com.google.zxing:core:3.5.4")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
     implementation("net.java.dev.jna:jna:5.17.0@aar")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.core:core-ktx:1.19.1")
