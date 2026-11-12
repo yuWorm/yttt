@@ -1,19 +1,17 @@
 //! A mobile Client's link to one paired Host: pairing, the `ClientCore`
 //! session, observing terminals, and taking control to type.
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use yttt_client_core::{ClientCore, ClientEvent, ConnectionState, p2p::PairedHost};
+use yttt_client_core::{
+    ClientCore, ClientCoreError, ClientEvent, ConnectionState, p2p::PairedHost,
+};
 use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
 use yttt_protocol::{
-    BuildIdentity, ConnectionChannel, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
-    ServerEvent,
+    BuildIdentity, ConnectionChannel, FailureCode, ProtocolRange, RESOURCE_PROTOCOL_VERSION,
+    Request, Response, ServerEvent, TerminalLease,
     p2p::PairingCode,
     terminal::{
         AttachTerminal, ResizeTerminal, TerminalGeometry, TerminalInput, TerminalLeaseMode,
@@ -30,7 +28,6 @@ use crate::vt::VtEncoder;
 
 /// The visibility scope this Client reports; it has one screen.
 const VISIBILITY_SCOPE: u64 = 1;
-const CONTROL_GRANT_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum MobileError {
@@ -48,6 +45,8 @@ pub enum MobileError {
     NotAttached,
     #[error("this device does not control the terminal")]
     NotInControl,
+    #[error("the Host is too old to hand over a single terminal; update yttt on the computer")]
+    HostTooOld,
 }
 
 /// Which relay the endpoint uses.
@@ -162,7 +161,6 @@ struct DrainTimes {
 struct Shared {
     attached: Mutex<HashMap<TerminalSessionId, Attached>>,
     times: Mutex<DrainTimes>,
-    grants: tokio::sync::Notify,
 }
 
 /// A connected session with one Host.
@@ -236,7 +234,6 @@ impl MobileSession {
         let shared = Arc::new(Shared {
             attached: Mutex::new(HashMap::new()),
             times: Mutex::new(DrainTimes::default()),
-            grants: tokio::sync::Notify::new(),
         });
         let events = tokio::spawn(follow_events(
             client.subscribe_events(),
@@ -392,28 +389,68 @@ impl MobileSession {
         }
     }
 
-    /// Takes terminal control for this device. The Host moves every terminal's
-    /// lease here (see the design's open question 1); returns once the lease
-    /// of each attached terminal arrived.
-    pub async fn take_control(&self) -> Result<(), MobileError> {
-        self.request(Request::TakeTerminalController).await?;
-        tokio::time::timeout(CONTROL_GRANT_WAIT, async {
-            loop {
-                let granted = self.shared.grants.notified();
-                if self
-                    .shared
-                    .attached
-                    .lock()
-                    .values()
-                    .all(|terminal| terminal.lease_epoch != 0)
-                {
-                    return;
-                }
-                granted.await;
+    /// Takes this one attached terminal for this device and sizes its PTY
+    /// to `cols`×`rows`. Returns once the Host applied the size, so the first
+    /// key typed already sees it. Other terminals, and the computer's
+    /// control of them, are left alone. A Host that cannot hand over a single
+    /// terminal answers `HostTooOld`; this never falls back to taking every
+    /// terminal.
+    pub async fn take_control(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), MobileError> {
+        let id = TerminalSessionId::new(session_id);
+        if !self.shared.attached.lock().contains_key(&id) {
+            return Err(MobileError::NotAttached);
+        }
+        let lease = match self
+            .client
+            .request(Request::TakeTerminal {
+                session_id: id.clone(),
+            })
+            .await
+        {
+            Ok(Response::TerminalLease(lease)) => lease,
+            Ok(other) => return Err(MobileError::Host(format!("unexpected answer {other:?}"))),
+            Err(ClientCoreError::Protocol(failure)) if failure.code == FailureCode::Unsupported => {
+                return Err(MobileError::HostTooOld);
             }
-        })
-        .await
-        .map_err(|_| MobileError::Host("the Host did not grant the terminal leases".into()))
+            Err(error) => return Err(MobileError::Host(error.to_string())),
+        };
+        if let Some(terminal) = self.shared.attached.lock().get_mut(&id) {
+            grant(terminal, &lease);
+        }
+        self.resize(session_id, cols, rows).await
+    }
+
+    /// Gives terminals back to whoever controlled them before this device
+    /// took them: the listed ones, or with an empty list every one it took.
+    /// Safe to repeat, as on each move to the background.
+    pub async fn give_back(&self, session_ids: Vec<String>) -> Result<(), MobileError> {
+        let ids = session_ids
+            .into_iter()
+            .map(TerminalSessionId::new)
+            .collect::<Vec<_>>();
+        // Stop sending keys before the Host has answered.
+        for (id, terminal) in self.shared.attached.lock().iter_mut() {
+            if ids.is_empty() || ids.contains(id) {
+                lose(terminal);
+            }
+        }
+        match self
+            .client
+            .request(Request::ReturnTerminals { session_ids: ids })
+            .await
+        {
+            Ok(_) => Ok(()),
+            // A Host this old never handed this device a single terminal.
+            Err(ClientCoreError::Protocol(failure)) if failure.code == FailureCode::Unsupported => {
+                Ok(())
+            }
+            Err(error) => Err(MobileError::Host(error.to_string())),
+        }
     }
 
     pub fn in_control(&self, session_id: &str) -> bool {
@@ -512,6 +549,31 @@ fn checkpoint_geometry() -> TerminalGeometry {
     }
 }
 
+/// Records an Interactive lease. The answer to `TakeTerminal` and the grant
+/// event that follows carry the same lease: only a new one restarts the input
+/// sequence, or keys sent in between would be refused as stale.
+fn grant(terminal: &mut Attached, lease: &TerminalLease) {
+    if lease.mode != TerminalLeaseMode::Interactive {
+        return lose(terminal);
+    }
+    if terminal.lease_epoch == lease.lease_epoch {
+        return;
+    }
+    terminal.lease_epoch = lease.lease_epoch;
+    terminal.client_sequence = 0;
+    terminal.encoder.set_interactive(true);
+    terminal.dirty = true;
+}
+
+fn lose(terminal: &mut Attached) {
+    if terminal.lease_epoch == 0 {
+        return;
+    }
+    terminal.lease_epoch = 0;
+    terminal.encoder.set_interactive(false);
+    terminal.dirty = true;
+}
+
 /// Tracks lease grants and losses so input carries the right epoch, and the
 /// encoder syncs mouse modes only while this device is in control.
 async fn follow_events(
@@ -528,23 +590,21 @@ async fn follow_events(
         };
         match event {
             ClientEvent::Server(event) => match event.body {
-                ServerEvent::TerminalControlGranted { lease } => {
+                ServerEvent::TerminalControlGranted { lease } if lease.owner == me => {
                     if let Some(terminal) = shared.attached.lock().get_mut(&lease.session_id) {
-                        let interactive = lease.mode == TerminalLeaseMode::Interactive;
-                        terminal.lease_epoch = if interactive { lease.lease_epoch } else { 0 };
-                        terminal.client_sequence = 0;
-                        terminal.encoder.set_interactive(interactive);
-                        terminal.dirty = true;
+                        grant(terminal, &lease);
                     }
-                    shared.grants.notify_waiters();
                 }
-                ServerEvent::TerminalControllerChanged(controller)
-                    if controller.controller.as_ref() != Some(&me) =>
-                {
-                    for terminal in shared.attached.lock().values_mut() {
-                        terminal.lease_epoch = 0;
-                        terminal.encoder.set_interactive(false);
-                        terminal.dirty = true;
+                ServerEvent::TerminalLeaseRevoked {
+                    session_id,
+                    previous_owner,
+                }
+                | ServerEvent::TerminalLeaseReleased {
+                    session_id,
+                    previous_owner,
+                } if previous_owner == me => {
+                    if let Some(terminal) = shared.attached.lock().get_mut(&session_id) {
+                        lose(terminal);
                     }
                 }
                 _ => {}

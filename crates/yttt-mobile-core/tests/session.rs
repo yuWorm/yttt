@@ -12,7 +12,7 @@ use yttt_protocol::{
     p2p::{DevicePreset, PairingCode},
     project::ProjectRequest,
     remote_access::{PairingState, RemoteAccessRequest, RemoteAccessResponse, RemoteAccessStatus},
-    terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec},
+    terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalLeaseMode, TerminalSpawnSpec},
     workspace::WorkspaceProjectConfig,
 };
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
@@ -161,8 +161,13 @@ async fn pair_device(admin: &ClientCore) -> PairedHostRecord {
     pairing.await.unwrap().unwrap()
 }
 
-/// The desktop opens a project and starts a shell-like terminal in it.
-async fn desktop_terminal(admin: &ClientCore, root: &Path) -> TerminalSessionId {
+/// The desktop opens a project and starts a shell-like terminal in it for
+/// each of `names`.
+async fn desktop_terminals(
+    admin: &ClientCore,
+    root: &Path,
+    names: &[&str],
+) -> Vec<TerminalSessionId> {
     let project_root = root.join("project");
     fs::create_dir_all(&project_root).unwrap();
     let project_id = ProjectId::new("project");
@@ -174,12 +179,14 @@ async fn desktop_terminal(admin: &ClientCore, root: &Path) -> TerminalSessionId 
         }))
         .await
         .unwrap();
-    let session_id = TerminalSessionId::new("project:tab:pane");
-    let Response::TerminalSpawned { .. } = admin
+    let mut terminals = Vec::new();
+    for name in names {
+        let session_id = TerminalSessionId::new(*name);
+        let Response::TerminalSpawned { .. } = admin
         .request(Request::SpawnTerminal {
             spec: TerminalSpawnSpec {
                 session_id: session_id.clone(),
-                project_id,
+                project_id: project_id.clone(),
                 cwd: yttt_protocol::ProjectRelativePath::root(),
                 execution: TerminalExecutionSpec::Command {
                     shell: "/bin/sh".to_string(),
@@ -204,7 +211,7 @@ async fn desktop_terminal(admin: &ClientCore, root: &Path) -> TerminalSessionId 
                 environment: Vec::new(),
                 removed_environment: Vec::new(),
             },
-            start_id: "mobile-session-start".to_string(),
+            start_id: format!("mobile-session-start-{name}"),
             expected_host_epoch: admin.host_epoch().unwrap(),
         })
         .await
@@ -212,7 +219,9 @@ async fn desktop_terminal(admin: &ClientCore, root: &Path) -> TerminalSessionId 
     else {
         panic!("unexpected spawn response");
     };
-    session_id
+        terminals.push(session_id);
+    }
+    terminals
 }
 
 /// Drains until the accumulated repaints contain `needle`.
@@ -250,6 +259,20 @@ async fn controller(admin: &ClientCore) -> Option<ClientInstanceId> {
     }
 }
 
+/// Whether the desktop holds `id`'s Interactive lease: asking again for one
+/// it holds returns it, and one another Client took is refused.
+async fn desktop_holds(admin: &ClientCore, id: &TerminalSessionId) -> bool {
+    matches!(
+        admin
+            .request(Request::AcquireTerminalLease {
+                session_id: id.clone(),
+                mode: TerminalLeaseMode::Interactive,
+            })
+            .await,
+        Ok(Response::TerminalLease(lease)) if lease.mode == TerminalLeaseMode::Interactive
+    )
+}
+
 async fn geometry(admin: &ClientCore, id: &TerminalSessionId) -> TerminalGeometry {
     let Response::Resources(catalog) = admin.request(Request::ListResources).await.unwrap() else {
         panic!("expected resources");
@@ -272,7 +295,14 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
         record
     );
 
-    let terminal = desktop_terminal(&admin, temp.path()).await;
+    let terminals = desktop_terminals(
+        &admin,
+        temp.path(),
+        &["project:tab:pane", "project:tab:other"],
+    )
+    .await;
+    let terminal = terminals[0].clone();
+    let other = terminals[1].clone();
     let id = terminal.to_string();
     let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
         .await
@@ -307,12 +337,25 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     assert!(!phone.in_control(&id));
     assert!(phone.send_input(&id, b"x".to_vec()).is_err());
 
-    phone.take_control().await.unwrap();
+    // Taking control takes this one terminal, at the phone's size, before
+    // any key goes out.
+    phone.take_control(&id, 50, 20).await.unwrap();
     assert!(phone.in_control(&id));
     assert_eq!(
-        controller(&admin).await.map(|id| id.to_string()),
-        Some(phone.client_instance_id().to_string())
+        (
+            geometry(&admin, &terminal).await.cols,
+            geometry(&admin, &terminal).await.rows
+        ),
+        (50, 20)
     );
+    assert_eq!(
+        controller(&admin).await,
+        Some(ClientInstanceId::new("desktop"))
+    );
+    assert!(desktop_holds(&admin, &other).await);
+    assert!(!desktop_holds(&admin, &terminal).await);
+    // The new size repaints everything once.
+    drain_until(&phone, &id, "\x1b[2J").await;
     phone.send_input(&id, b"hello\r".to_vec()).unwrap();
     let typed = drain_until(&phone, &id, "got:hello").await;
     assert!(
@@ -320,14 +363,27 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
         "later drains repaint rows only"
     );
 
-    phone.resize(&id, 50, 20).await.unwrap();
+    // Giving it back hands it to the desktop.
+    phone.give_back(Vec::new()).await.unwrap();
+    assert!(!phone.in_control(&id));
+    assert!(phone.send_input(&id, b"x".to_vec()).is_err());
+    assert!(desktop_holds(&admin, &terminal).await);
+
+    // The desktop taking it back ends the phone's control.
+    phone.take_control(&id, 50, 20).await.unwrap();
+    admin
+        .request(Request::TakeTerminal {
+            session_id: terminal.clone(),
+        })
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while geometry(&admin, &terminal).await.cols != 50 {
+        while phone.in_control(&id) {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("the PTY took the phone's size");
+    .expect("the phone saw the desktop take the terminal back");
 
     let stats = phone.drain_stats();
     assert!(stats.frames > 0 && stats.bytes > 0);

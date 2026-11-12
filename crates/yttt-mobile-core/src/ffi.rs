@@ -16,12 +16,19 @@ pub enum MobileCoreError {
     // Not `message`: Kotlin exceptions already have one.
     #[error("{reason}")]
     Failed { reason: String },
+    /// The Host cannot hand over a single terminal: hide taking control and
+    /// suggest updating yttt on the computer.
+    #[error("the Host needs a newer yttt")]
+    HostTooOld,
 }
 
 impl From<MobileError> for MobileCoreError {
     fn from(error: MobileError) -> Self {
-        Self::Failed {
-            reason: error.to_string(),
+        match error {
+            MobileError::HostTooOld => Self::HostTooOld,
+            error => Self::Failed {
+                reason: error.to_string(),
+            },
         }
     }
 }
@@ -157,10 +164,28 @@ impl HostSession {
         self.session.drain_stats()
     }
 
-    pub async fn take_control(&self) -> Result<(), MobileCoreError> {
+    /// Takes this one terminal at the device's size; input is accepted once
+    /// it returns.
+    pub async fn take_control(
+        &self,
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), MobileCoreError> {
         let session = self.session.clone();
         self.runtime
-            .spawn(async move { session.take_control().await })
+            .spawn(async move { session.take_control(&session_id, cols, rows).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// Gives terminals back to the computer; an empty list gives back every
+    /// one this device took. Call it whenever the app leaves the foreground.
+    pub async fn give_back(&self, session_ids: Vec<String>) -> Result<(), MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.give_back(session_ids).await })
             .await
             .map_err(|error| failed(error.to_string()))?
             .map_err(Into::into)

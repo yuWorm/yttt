@@ -130,16 +130,11 @@ async fn watch(session: MobileSession, id: String, control: bool) -> Result<(), 
         }
     });
     if control {
+        let (cols, rows) = local_size().unwrap_or(host_size);
         session
-            .take_control()
+            .take_control(&id, cols, rows)
             .await
             .map_err(|error| error.to_string())?;
-        if let Some((cols, rows)) = local_size() {
-            session
-                .resize(&id, cols, rows)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
     }
     let mut frame = tokio::time::interval(Duration::from_millis(16));
     let quit = loop {
@@ -162,6 +157,9 @@ async fn watch(session: MobileSession, id: String, control: bool) -> Result<(), 
             }
         }
     };
+    if control {
+        let _ = session.give_back(Vec::new()).await;
+    }
     let _ = stdout.write_all(b"\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l");
     let _ = stdout.flush();
     drop(raw);
