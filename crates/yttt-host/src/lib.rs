@@ -1819,7 +1819,9 @@ async fn process_control_request(
         | Request::ReleaseTerminalControl { session_id } => {
             Some((session_id.clone(), TerminalLeaseMode::Observer, true))
         }
-        Request::RequestTerminalControl { session_id } => {
+        // The lease in the answer makes the attachment Interactive at once,
+        // so input sent right after it is accepted.
+        Request::RequestTerminalControl { session_id } | Request::TakeTerminal { session_id } => {
             Some((session_id.clone(), TerminalLeaseMode::Observer, false))
         }
         Request::RequestCheckpoint { session_id, .. } => {
@@ -2756,9 +2758,16 @@ async fn handle_request(
             Ok(Response::Applied)
         })()
         .map_err(runtime_failure),
-        Request::TakeTerminal { .. } | Request::ReturnTerminals { .. } => Err(
-            ProtocolFailure::new(FailureCode::Unsupported, "not served yet", false),
-        ),
+        Request::TakeTerminal { session_id } => runtime
+            .take_terminal(&session_id, client_id)
+            .map(Response::TerminalLease)
+            .map_err(runtime_failure),
+        // Input checks the runtime's lease, so a returned terminal refuses
+        // it at once; the lease events update the attachments.
+        Request::ReturnTerminals { session_ids } => {
+            runtime.return_terminals(client_id, &session_ids);
+            Ok(Response::Applied)
+        }
         Request::TerminalInput(input) => (|| {
             let terminal = runtime
                 .terminal(&input.session_id)

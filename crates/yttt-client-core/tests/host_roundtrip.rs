@@ -2783,6 +2783,197 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         .unwrap();
 }
 
+async fn wait_for_server_event(
+    events: &mut tokio::sync::broadcast::Receiver<ClientEvent>,
+    mut predicate: impl FnMut(&ServerEvent) -> bool,
+) -> ServerEvent {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ClientEvent::Server(event) = events.recv().await.unwrap()
+                && predicate(&event.body)
+            {
+                return event.body;
+            }
+        }
+    })
+    .await
+    .expect("server event timeout")
+}
+
+async fn send_line(
+    client: &ClientCore,
+    session_id: &TerminalSessionId,
+    context: TerminalMutationContext,
+    line: &str,
+) -> Result<Response, ClientCoreError> {
+    client
+        .request(Request::TerminalInput(TerminalInput {
+            session_id: session_id.clone(),
+            context,
+            bytes: format!("{line}\r").into_bytes(),
+        }))
+        .await
+}
+
+#[tokio::test]
+async fn a_client_takes_one_terminal_and_gives_it_back() {
+    let host = RunningHost::start().await;
+    let desktop = host.client("take-one-desktop").await;
+    let mut desktop_events = desktop.subscribe_events();
+    let mut terminals = Vec::new();
+    for name in ["take-one-a", "take-one-b"] {
+        let mut spec = spawn_spec();
+        spec.session_id = TerminalSessionId::new(name);
+        spec.execution = TerminalExecutionSpec::Command {
+            shell: "/bin/sh".to_string(),
+            program: "/bin/sh".to_string(),
+            args: vec![
+                "-lc".to_string(),
+                "while IFS= read -r line; do printf 'got:%s\\n' \"$line\"; done".to_string(),
+            ],
+            return_to_shell: false,
+        };
+        let session_id = spec.session_id.clone();
+        let Response::TerminalSpawned {
+            lease,
+            session_epoch,
+        } = desktop
+            .request(spawn_request(spec, host.host_epoch()))
+            .await
+            .unwrap()
+        else {
+            panic!("unexpected spawn response");
+        };
+        terminals.push((session_id, session_epoch, lease));
+    }
+    let (a, a_epoch, desktop_a) = terminals[0].clone();
+    let (b, b_epoch, desktop_b) = terminals[1].clone();
+
+    let phone = host.client("take-one-phone").await;
+    let attached = phone
+        .request(Request::AttachTerminal(AttachTerminal {
+            session_id: a.clone(),
+            known_session_epoch: Some(a_epoch),
+            after_sequence: None,
+            mode: TerminalLeaseMode::Observer,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+            geometry: geometry(),
+            geometry_epoch: 1,
+        }))
+        .await
+        .unwrap();
+    assert!(matches!(
+        attached,
+        Response::TerminalAttached { ref lease, .. } if lease.mode == TerminalLeaseMode::Observer
+    ));
+
+    let Response::TerminalLease(phone_a) = phone
+        .request(Request::TakeTerminal {
+            session_id: a.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected take response");
+    };
+    assert_eq!(phone_a.mode, TerminalLeaseMode::Interactive);
+    assert_eq!(phone_a.owner, *phone.client_id());
+    // The answer alone lets the phone write.
+    assert!(matches!(
+        send_line(
+            &phone,
+            &a,
+            mutation_context(&phone, a_epoch, phone_a.lease_epoch, 1, 1),
+            "from-phone",
+        )
+        .await,
+        Ok(Response::TerminalInputAccepted { .. })
+    ));
+
+    // The desktop loses only the terminal the phone took.
+    wait_for_server_event(&mut desktop_events, |event| {
+        matches!(event, ServerEvent::TerminalLeaseRevoked { session_id, .. } if *session_id == a)
+    })
+    .await;
+    assert!(
+        send_line(
+            &desktop,
+            &a,
+            mutation_context(&desktop, a_epoch, desktop_a.lease_epoch, 1, 1),
+            "from-desktop",
+        )
+        .await
+        .is_err()
+    );
+    assert!(matches!(
+        send_line(
+            &desktop,
+            &b,
+            mutation_context(&desktop, b_epoch, desktop_b.lease_epoch, 1, 1),
+            "still-mine",
+        )
+        .await,
+        Ok(Response::TerminalInputAccepted { .. })
+    ));
+    let Response::TerminalController(controller) = desktop
+        .request(Request::ReadTerminalController)
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected controller response");
+    };
+    assert_eq!(controller.controller, Some(desktop.client_id().clone()));
+
+    assert!(matches!(
+        phone
+            .request(Request::ReturnTerminals {
+                session_ids: Vec::new(),
+            })
+            .await,
+        Ok(Response::Applied)
+    ));
+    // Refused as soon as it is returned.
+    assert!(
+        send_line(
+            &phone,
+            &a,
+            mutation_context(&phone, a_epoch, phone_a.lease_epoch, 1, 2),
+            "too-late",
+        )
+        .await
+        .is_err()
+    );
+    let ServerEvent::TerminalControlGranted { lease: desktop_a } =
+        wait_for_server_event(&mut desktop_events, |event| {
+            matches!(event, ServerEvent::TerminalControlGranted { lease } if lease.session_id == a)
+        })
+        .await
+    else {
+        unreachable!();
+    };
+    assert_eq!(desktop_a.owner, *desktop.client_id());
+    assert!(matches!(
+        send_line(
+            &desktop,
+            &a,
+            mutation_context(&desktop, a_epoch, desktop_a.lease_epoch, 1, 1),
+            "back-home",
+        )
+        .await,
+        Ok(Response::TerminalInputAccepted { .. })
+    ));
+    // Returning again is harmless.
+    assert!(matches!(
+        phone
+            .request(Request::ReturnTerminals {
+                session_ids: Vec::new(),
+            })
+            .await,
+        Ok(Response::Applied)
+    ));
+}
+
 #[tokio::test]
 async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
     let host = RunningHost::start().await;
