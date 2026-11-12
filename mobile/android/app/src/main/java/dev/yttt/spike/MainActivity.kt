@@ -1,7 +1,13 @@
 package dev.yttt.spike
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.Choreographer
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -74,6 +80,8 @@ class Storage(context: Context) {
             ?: ByteArray(32).also { SecureRandom().nextBytes(it); save("device-secret", it) }
 }
 
+private const val TAG = "yttt-spike"
+
 /** The connected session, so the activity can give terminals back on stop. */
 class SessionHolder {
     @Volatile var session: HostSession? = null
@@ -81,6 +89,35 @@ class SessionHolder {
 
 class MainActivity : ComponentActivity() {
     private val holder = SessionHolder()
+    private val main = Handler(Looper.getMainLooper())
+    private val notifyNetwork = Runnable {
+        Log.i(TAG, "network changed")
+        holder.session?.networkChanged()
+    }
+
+    /**
+     * Tells the core when a network becomes usable, debounced: iroh cannot
+     * watch the interfaces itself here (SELinux keeps apps out of netlink and
+     * /sys/class/net). Not on losing one: a probe then finds no answer and
+     * replaces a connection that would have outlived a short outage.
+     * Capability changes are left out; signal strength alone fires them.
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = changed()
+        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = changed()
+
+        private fun changed() {
+            main.removeCallbacks(notifyNetwork)
+            main.postDelayed(notifyNetwork, 500)
+        }
+    }
+
+    override fun onDestroy() {
+        runCatching {
+            getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
+        }
+        super.onDestroy()
+    }
 
     /** Leaving the foreground gives every terminal back to the computer. */
     override fun onStop() {
@@ -91,6 +128,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Spike-only: `--ez noNetworkWatch true` leaves the core to notice by
+        // itself, to compare recovery times.
+        if (!intent.getBooleanExtra("noNetworkWatch", false)) {
+            getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
+        }
         val storage = Storage(this)
         val core = MobileCore()
         // Spike-only automation for emulator runs (adb shell am start -e ...).
@@ -255,15 +297,27 @@ fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, 
         var last = System.nanoTime()
         var running = true
         var pathLabel = "—"
+        var ready = true
+        var lastOutput = System.nanoTime()
         val callback = object : Choreographer.FrameCallback {
             override fun doFrame(frameTimeNanos: Long) {
                 if (!running) return
                 frames++
                 // The computer took the terminal back, or the connection dropped.
                 if (controlling && !session.inControl(id)) controlling = false
+                // Logged with timestamps, to time recovery after a network change.
+                val nowReady = session.isReady()
+                if (nowReady != ready) {
+                    ready = nowReady
+                    Log.i(TAG, if (nowReady) "session ready" else "session lost")
+                }
                 session.drain(id)?.let { bytes ->
                     fed += bytes.size
                     emulator.writeInput(bytes)
+                    // The demo ticks every second: a longer gap is an outage.
+                    val gap = (System.nanoTime() - lastOutput) / 1_000_000
+                    if (gap > 3000) Log.i(TAG, "output resumed after $gap ms")
+                    lastOutput = System.nanoTime()
                 }
                 val now = System.nanoTime()
                 val seconds = (now - last) / 1e9

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import UIKit
 import Security
 
@@ -92,8 +93,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private let pathMonitor = NWPathMonitor()
+    private var pathDebounce: Task<Void, Never>?
+
+    /// Tells the core when a usable network path appears or changes (Wi-Fi to
+    /// cellular, back after an outage), debounced, so the session re-checks
+    /// its link at once. Not when the path goes away: a probe then finds no
+    /// answer and replaces a connection that would have outlived the outage.
+    private func watchNetwork() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                self.pathDebounce?.cancel()
+                self.pathDebounce = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled else { return }
+                    self.session?.networkChanged()
+                }
+            }
+        }
+        pathMonitor.start(queue: .main)
+    }
+
     func connect() async {
         guard session == nil, let record else { return }
+        if pathMonitor.pathUpdateHandler == nil { watchNetwork() }
         busy = true
         status = "正在连接…"
         defer { busy = false }

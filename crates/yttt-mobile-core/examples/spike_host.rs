@@ -212,6 +212,10 @@ async fn main() {
                     },
                 )
                 .await;
+                // A new invitation closes this one; give the device time to
+                // hear that it was confirmed, which over a distant relay can
+                // take a while.
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
             None => new_invitation(&admin, &code_file).await,
             _ => {}
