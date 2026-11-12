@@ -5,6 +5,7 @@
 uniffi::setup_scaffolding!();
 
 mod ffi;
+pub mod overview;
 pub mod session;
 pub mod vt;
 
