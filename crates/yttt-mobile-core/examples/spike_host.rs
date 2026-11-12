@@ -1,8 +1,12 @@
 //! Spike: a throwaway Host for trying the mobile link end to end without the
 //! desktop app or a real profile. It runs `yttt-host` on a temporary profile,
 //! turns P2P on (without a relay unless given one), prints pairing codes and
-//! confirms every device that asks, and starts two terminals: a clean zsh and
-//! a demo that prints colors and CJK text.
+//! confirms every device that asks, and opens a project "Spike" in the active
+//! workspace with a clean zsh (`spike:shell:1`), a demo that prints colors and
+//! CJK text (`spike:demo:1`), and two fake Agents that keep cycling through
+//! working, waiting for approval and finishing, so the home screen has
+//! something to show (`spike:review:codex`, `spike:build:codex`). The fakes
+//! post Codex hook events with `curl`.
 //!
 //! ```text
 //! cargo run -p yttt-mobile-core --example spike_host [-- --relay http://<LAN IP>:3341]
@@ -14,14 +18,17 @@
 use std::{fs, path::Path, time::Duration};
 
 use yttt_client_core::ClientCore;
-use yttt_core::model::ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId};
+use yttt_core::model::{
+    host_workspace::{ProjectPanel, WorkspaceIntent},
+    ids::{ClientInstanceId, ProfileId, ProjectId},
+    layout::ProjectLayout,
+    project::{ProjectDescriptor, ProjectLocation},
+};
 use yttt_protocol::{
     BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
     p2p::DevicePreset,
-    project::ProjectRequest,
     remote_access::{PairingState, RemoteAccessRequest, RemoteAccessResponse},
-    terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec},
-    workspace::WorkspaceProjectConfig,
+    workspace::{WorkspaceId, WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
 };
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
 
@@ -31,6 +38,33 @@ const PROFILE: &str = "mobile-spike-host";
 const DEMO: &str = r#"printf '\033[1;32mspike host\033[0m  \033[33m黄色\033[0m \033[38;5;208m208\033[0m \033[38;2;80;160;255mrgb\033[0m\n'
 printf '中文宽字符：终端镜像 ✓  emoji 😀\n'
 i=0; while true; do i=$((i+1)); printf '\r\033[2Ktick %d  %s' "$i" "$(date +%T)"; sleep 1; done"#;
+
+/// A fake Agent: `sh agent.sh <session> <task> <seconds per step>` posts the
+/// hook events a Codex session would, over and over.
+const AGENT: &str = r#"post() {
+  curl -s -o /dev/null -X POST "$YTTT_AGENT_HOOK_ENDPOINT/hook/codex" \
+    -H "x-yttt-agent-hook-token: $YTTT_AGENT_HOOK_TOKEN" \
+    -H "x-yttt-agent-hook-scope: $YTTT_AGENT_HOOK_SCOPE" \
+    --data "{\"event\":\"$1\",\"payload\":$2}"
+}
+session="$1"; task="$2"; step="$3"
+post SessionStart "{\"session_id\":\"$session\"}"
+while true; do
+  echo "> $task"
+  post UserPromptSubmit "{\"session_id\":\"$session\",\"prompt\":\"$task\"}"
+  sleep "$step"
+  echo "running npm test"
+  post PreToolUse "{\"session_id\":\"$session\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm test\"}}"
+  sleep "$step"
+  post PostToolUse "{\"session_id\":\"$session\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm test\"}}"
+  echo "waiting for approval: npm install"
+  post PermissionRequest "{\"session_id\":\"$session\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm install\"}}"
+  sleep $((step * 2))
+  echo "done"
+  post Stop "{\"session_id\":\"$session\"}"
+  sleep "$step"
+done
+"#;
 
 fn bootstrap(root: &Path) -> yttt_host::HostBootstrap {
     let runtime_root = root.join("runtime");
@@ -76,44 +110,6 @@ async fn new_invitation(admin: &ClientCore, code_file: &Path) {
     };
     fs::write(code_file, &code.0).unwrap();
     println!("\npairing code:\n{}\n", code.0);
-}
-
-async fn spawn(admin: &ClientCore, id: &str, program: &str, args: &[&str]) {
-    let response = admin
-        .request(Request::SpawnTerminal {
-            spec: TerminalSpawnSpec {
-                session_id: TerminalSessionId::new(id),
-                project_id: ProjectId::new("spike"),
-                cwd: yttt_protocol::ProjectRelativePath::root(),
-                execution: TerminalExecutionSpec::Command {
-                    shell: "/bin/zsh".into(),
-                    program: program.into(),
-                    args: args.iter().map(|arg| arg.to_string()).collect(),
-                    return_to_shell: false,
-                },
-                geometry: TerminalGeometry {
-                    cols: 120,
-                    rows: 36,
-                    cell_width: 8,
-                    cell_height: 16,
-                },
-                geometry_epoch: 1,
-                query_palette: Vec::new(),
-                palette_revision: 1,
-                scrollback_limit: 5_000,
-                environment: vec![("TERM".into(), "xterm-256color".into())],
-                removed_environment: Vec::new(),
-            },
-            start_id: format!("spike-{id}"),
-            expected_host_epoch: admin.host_epoch().unwrap(),
-        })
-        .await
-        .unwrap();
-    assert!(
-        matches!(response, Response::TerminalSpawned { .. }),
-        "{response:?}"
-    );
-    println!("terminal {id}: {program} {}", args.join(" "));
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -172,16 +168,74 @@ async fn main() {
 
     let project = root.path().join("project");
     fs::create_dir_all(&project).unwrap();
-    admin
-        .request(Request::Project(ProjectRequest::Register {
-            view_id: "spike".into(),
-            project_id: ProjectId::new("spike"),
-            root: yttt_protocol::HostPath::from_path(&project).unwrap(),
+    fs::write(project.join("demo.sh"), DEMO).unwrap();
+    fs::write(project.join("agent.sh"), AGENT).unwrap();
+    // The Host starts each eager tab's pane, as for a project the desktop opens.
+    let layout: ProjectLayout = toml::from_str(
+        r#"
+        [project]
+        name = "Spike"
+
+        [[tabs]]
+        id = "shell"
+        title = "Shell"
+        startup = "eager"
+        layout = { type = "pane", id = "1", title = "zsh", command = "zsh -f -i" }
+
+        [[tabs]]
+        id = "demo"
+        title = "Demo"
+        startup = "eager"
+        layout = { type = "pane", id = "1", title = "Demo", command = "sh demo.sh" }
+
+        [[tabs]]
+        id = "review"
+        title = "Code review"
+        startup = "eager"
+        layout = { type = "pane", id = "codex", title = "Codex", command = "sh agent.sh review 'Review the login page' 5" }
+
+        [[tabs]]
+        id = "build"
+        title = "Build"
+        startup = "eager"
+        layout = { type = "pane", id = "codex", title = "Codex", command = "sh agent.sh build 'Fix the failing build' 8" }
+        "#,
+    )
+    .unwrap();
+    let workspace_id = WorkspaceId::new("spike").unwrap();
+    let response = admin
+        .request(Request::Workspace(WorkspaceRequest::Apply {
+            workspace_id: workspace_id.clone(),
+            intent: WorkspaceIntent::OpenProject {
+                descriptor: ProjectDescriptor::new(
+                    ProjectId::new("spike"),
+                    ProjectLocation::local(&project),
+                ),
+                layout,
+                panel: ProjectPanel {
+                    visible: true,
+                    width: 240.0,
+                },
+            },
+            expected_revision: None,
         }))
         .await
         .unwrap();
-    spawn(&admin, "spike:shell:1", "/bin/zsh", &["-f", "-i"]).await;
-    spawn(&admin, "spike:demo:1", "/bin/sh", &["-c", DEMO]).await;
+    assert!(
+        matches!(
+            response,
+            Response::Workspace(WorkspaceResponse::Applied { .. })
+        ),
+        "{response:?}"
+    );
+    // As the desktop window showing it would, which the phone opens.
+    admin
+        .request(Request::Workspace(WorkspaceRequest::SetActive {
+            workspace_id,
+        }))
+        .await
+        .unwrap();
+    println!("project Spike: spike:shell:1, spike:demo:1, spike:review:codex, spike:build:codex");
 
     let code_file = state.join("pairing-code");
     new_invitation(&admin, &code_file).await;

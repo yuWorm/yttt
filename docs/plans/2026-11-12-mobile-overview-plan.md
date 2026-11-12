@@ -90,3 +90,26 @@ spike App 的终端列表换成首页。只用系统组件：iOS 用 `List` 分�
 - Android 通知与前台服务（下一块，依赖本块的概览数据）。
 - 项目页、抽屉、文件（之后几块）。
 - 用 Agent 命令直接回答问题（`AgentCommand`），首版只跳到终端。
+
+## 执行记录（2026-11-12）
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1 概览模型 | 09a3df3 | 单元测试 4 项；去掉“等待原因只在 Waiting 时算”后对应测试失败（变异检查）。 |
+| 2 会话接线 | 7769e8c | 集成测试：真 Host 打开项目、Host 启动 Agent pane，经它的 hook 地址发 Codex 的 `SessionStart`、`UserPromptSubmit`、`PermissionRequest`，回调给出等批准的 Agent 与任务，三次连续变化只推了不超过 3 次，快照都没有 board。 |
+| 3 FFI | 950b3e6 | `open_active_workspace`、`overview`、`watch_overview` + `OverviewListener`。 |
+| 4 首页 | 89fdfa5 | 两端首页；分组排序是原生代码，iOS XCTest 与 Android JVM 单元测试各 2 项。 |
+| 5 假 Agent 与验证 | 本提交 | 见下。 |
+
+### 偏差
+
+- **Agent 的 tab 与 pane 不能用 hook scope。** 集成测试发现，Host 自己启动的 pane 的 `AgentHookScope` 里 `tab_id` 与 `pane_id` 都是整个终端名（`web:agents:codex`）。改为先按布局里的 `{project}:{tab}:{pane}` 匹配终端名（与桌面按终端名找 pane 一致），找不到再去掉 `{project}:` 前缀按第一个冒号拆。单元测试的夹具也改成这种 scope。
+- 测试里的桌面端要发 `SetActive`，工作区才会成为 active；手机仍然不发。
+- iOS 测试 target 不依赖 App，`HomeSections.swift` 与生成的绑定一起编进测试 target。
+- spike_host 改为经工作区打开项目“Spike”（由 Host 启动 pane），终端名不变（`spike:shell:1`、`spike:demo:1`），另加两个用 `curl` 发 hook 的假 Agent（`spike:review:codex`、`spike:build:codex`）。
+
+### 模拟器验证
+
+- iOS：首页显示 1 项目、4 Tab、4 终端、2 Agent；状态随假 Agent 变化：Build 在“需要处理”显示“等批准 · Fix the failing build”，Code review 在“运行中”显示“工作中 · Bash npm test”，之后两个都进“已结束”。
+- Android：同样的数量与状态变化；用 uiautomator 找到“Spike · Build”这一行并点击，打开了它的终端（显示假 Agent 的输出）。
+- 编译用 `CARGO_PROFILE_DEV_DEBUG=line-tables-only`，本 worktree 的 `target` 为 8.4 GB（之前同类 worktree 20–51 GB）。
