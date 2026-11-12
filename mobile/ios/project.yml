@@ -52,6 +52,7 @@ targets:
         buildPhase: resources
       # The home screen's sorting, tested on its own with the core's types.
       - YtttSpike/HomeSections.swift
+      - YtttSpike/ProjectPage.swift
       - path: ../../target/mobile/ios/swift
         group: Generated
     dependencies:

@@ -25,7 +25,7 @@ class WaitNotifierTest {
     )
 
     private fun overview(vararg agents: AgentSummary) = Overview(
-        projects = listOf(ProjectSummary("web", "Website", listOf(TabSummary("build", "Build", 1u)))),
+        projects = listOf(ProjectSummary("web", "Website", listOf(TabSummary("build", "Build", emptyList(), null)), "build")),
         agents = agents.toList(),
         terminals = 1u,
     )

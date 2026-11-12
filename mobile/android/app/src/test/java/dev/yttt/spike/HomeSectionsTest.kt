@@ -21,8 +21,8 @@ class HomeSectionsTest {
     fun countsAndGroups() {
         val overview = Overview(
             projects = listOf(
-                ProjectSummary("p", "P", listOf(TabSummary("a", "A", 2u), TabSummary("b", "B", 1u))),
-                ProjectSummary("q", "Q", emptyList()),
+                ProjectSummary("p", "P", listOf(TabSummary("a", "A", emptyList(), null), TabSummary("b", "B", emptyList(), null)), "a"),
+                ProjectSummary("q", "Q", emptyList(), "main"),
             ),
             agents = listOf(
                 agent("failed", AgentState.FAILED, startedAt = 9),

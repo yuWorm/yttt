@@ -12,10 +12,10 @@ final class HomeSectionsTests: XCTestCase {
         let overview = Overview(
             projects: [
                 ProjectSummary(projectId: "p", name: "P", tabs: [
-                    TabSummary(tabId: "a", title: "A", panes: 2),
-                    TabSummary(tabId: "b", title: "B", panes: 1),
-                ]),
-                ProjectSummary(projectId: "q", name: "Q", tabs: []),
+                    TabSummary(tabId: "a", title: "A", panes: [], focusedPaneId: nil),
+                    TabSummary(tabId: "b", title: "B", panes: [], focusedPaneId: nil),
+                ], selectedTabId: "a"),
+                ProjectSummary(projectId: "q", name: "Q", tabs: [], selectedTabId: "main"),
             ],
             agents: [
                 agent("failed", .failed, startedAt: 9),
