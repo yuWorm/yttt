@@ -60,6 +60,16 @@ FFI 约束：
   - iOS 用 VisionKit 和 CoreImage；
   - Android 用 CameraX 和 ZXing，不依赖 Google 服务。
 
+**多台 Host（2026-11-12，`docs/plans/2026-11-12-mobile-multi-host-plan.md`）：**
+
+- 手机记住多台 Host（`hosts.json`，按添加顺序），同一时间只连当前那台。设备密钥一份，所有 Host 共用。
+- 首页顶部显示当前 Host 的名字，点开可以切换、添加、忘记。
+  - 重名时在名字后加 id 的末 4 位。
+  - 同一台 Host 重新配对，原位替换记录，不会多出一条。
+- Host 配对时把电脑名发给设备，以前发的是 `environment_id`（UUID）。桌面客户端也跟着显示电脑名。
+- 切换 Host 时，旧 Host 的等待通知随总控数据一起清掉；Android 的常驻通知显示当前 Host 的名字。
+- 不同时连多台：非当前 Host 的 Agent 等待不会通知。
+
 ## 4. 终端
 
 组件：iOS 用 SwiftTerm（MIT）；Android 用 ConnectBot termlib（Apache-2.0，Compose）。Termux 的组件 spike 后放弃，见 §8。

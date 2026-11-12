@@ -28,6 +28,11 @@ struct YtttSpikeApp: App {
                 if let code = AppModel.autoPairCode {
                     await model.pair(code: code)
                 }
+                if let suffix = AppModel.autoSwitch,
+                   let host = model.hosts.hosts.first(where: { $0.id.hasSuffix(suffix) }) {
+                    await model.switchTo(host.id)
+                }
+                if AppModel.autoForget { await model.forget() }
             }
         }
         .onChange(of: scenePhase) { _, phase in

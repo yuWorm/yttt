@@ -88,3 +88,43 @@
 - 同时连多台 Host，以及收到非当前 Host 的 Agent 等待通知。要做的话，每台 Host 各要一个连接和一份总控数据，前台服务也要同时维护几条连接，耗电和流量都会增加，等真机上量过单台的耗电再定。
 - 在手机上给 Host 改名。
 - 每台 Host 各用一份设备密钥。
+
+## 执行记录（2026-11-12）
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1 Host 用电脑名 | d1e0a4f | 配对测试加断言，桩下失败，实现后 `p2p_pairing` 全部通过。 |
+| 2 `hostInfo` | d273bfc | 单元测试（桩下失败）：读出的 id 稳定，不同 Host 的 id 不同。 |
+| 3 `HostList` | b1a68ef | Kotlin、Swift 各 6 项测试，桩下全部失败。Kotlin 测试加入真正的 `org.json`，因为 android.jar 里的只会抛异常。 |
+| 4 Android | a6b8934 | 首页 Host 菜单、添加 Host、忘记前确认；左抽屉里的“忘记”移除。 |
+| 5 iOS | 6c33da5 | 同上，“添加 Host”用 sheet；`connect` 加了防重入，首页和 Host 变更都会调用它。 |
+| 6 spike_host 与修复 | 9574a66 | `--name`；Android 切换时崩溃的修复；常驻通知跟随当前 Host。 |
+
+### 模拟器验证
+
+两台 spike Host（`--name A`、`--name B`）同时运行。它们在同一台 Mac 上，电脑名都是 `WormdeMac-mini.local`，所以菜单里显示为 `… · be6b` 和 `… · a6a3`。
+
+- **Android**：
+  1. 先装 master 的 APK，配对 A，存下的是 `host.json`。覆盖安装本分支后，它迁移成 `hosts.json` 里的一台 Host，不重新配对就连上了，A 上没有新的配对请求。
+  2. “添加 Host”页显示正常，有返回按钮。用 `adb shell input text` 粘贴 465 个字符的配对码，字符丢失：一次只到 12 个，分段输入也只到 264 个。所以改成由自动化参数 `pair` 在已有 Host 时添加一台，和“添加 Host”走同一个 `pair()`。
+  3. 添加 B 时 App 崩溃：刚连上 A 时正在取终端列表，配对 B 导致 A 断开，这个调用抛出 “Host is not connected”，异常逃出已取消的 `LaunchedEffect`，结束了进程。改为捕获，和其他会话调用一样。修复后：
+     - 添加 B，首页显示 `Spike B`；
+     - 菜单列出两台，当前那台打勾（截图 `scratchpad/hostmenu-s.png`）；
+     - 切回 A，显示 `Spike A`；
+     - 重启后仍连 A；
+     - 忘记 A：先确认，然后自动连上 B，通知里只剩 `Spike B` 的等待；
+     - 再次配对 B，列表里仍只有一台；
+     - 常驻通知标题跟着切换，在 `保持与 … · be6b 的连接` 和 `… · a6a3` 之间变化；
+     - 之后没有再崩溃。
+- **iOS**（模拟器不能点击，用自动化参数 `YTTT_SPIKE_PAIR_CODE`、`YTTT_SPIKE_SWITCH`、`YTTT_SPIKE_FORGET`，调用的是菜单用的同一组方法）：
+  - 配对 A，再添加 B，显示 `Spike B` 和 `… · a6a3`；
+  - 切换到 A，显示 `Spike A` 和 `… · be6b`；
+  - 重启后仍连 A；
+  - 忘记 A 后连上 B，名字恢复为不带后缀的 `WormdeMac-mini.local`；
+  - 再次配对 B，列表里仍只有一台。
+  - 菜单本身没有点开验证，只验证了首页上显示的那一行。
+
+### 未验证
+
+- iOS 的 Host 菜单交互和“添加 Host” sheet（模拟器不能点击）。
+- 两台 Host 在不同电脑上（这次两台都在同一台 Mac 上）。

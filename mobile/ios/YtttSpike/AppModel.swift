@@ -72,6 +72,10 @@ final class AppModel: ObservableObject {
             // Pair from a QR code image, through the same reader as the photo picker.
             UIImage(contentsOfFile: path)?.cgImage.flatMap(pairingCode(in:))
         }
+    /// Switch to the paired Host whose id ends so, or forget the current
+    /// one, as the Host menu does.
+    static let autoSwitch = ProcessInfo.processInfo.environment["YTTT_SPIKE_SWITCH"]
+    static let autoForget = ProcessInfo.processInfo.environment["YTTT_SPIKE_FORGET"] == "1"
     static let autoOpen = ProcessInfo.processInfo.environment["YTTT_SPIKE_OPEN"]
     static let autoType = ProcessInfo.processInfo.environment["YTTT_SPIKE_TYPE"]
     /// Open this project (and tab, pane) once the overview has it, and
