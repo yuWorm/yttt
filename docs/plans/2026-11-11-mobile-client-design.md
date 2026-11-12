@@ -49,6 +49,17 @@ FFI 约束：
 5. Rust 自带 tokio 运行时；FFI 调用不阻塞调用线程，回调到原生后切主线程。
 6. 大块数据（终端帧、文件内容）按字节数组传。
 
+**存储与配对（2026-11-12，`docs/plans/2026-11-12-mobile-secure-pairing-plan.md`）：**
+
+- 设备密钥：
+  - iOS 存 Keychain，`AfterFirstUnlockThisDeviceOnly`；
+  - Android 用 Keystore 里不可导出的 AES-256-GCM 密钥加密后存文件。
+  - 两端都会把 spike 留下的明文文件迁移进去，然后删除。
+- 配对记录不进备份。
+- 配对页可以扫电脑上的二维码，也可以从图片识别：
+  - iOS 用 VisionKit 和 CoreImage；
+  - Android 用 CameraX 和 ZXing，不依赖 Google 服务。
+
 ## 4. 终端
 
 组件：iOS 用 SwiftTerm（MIT）；Android 用 ConnectBot termlib（Apache-2.0，Compose）。Termux 的组件 spike 后放弃，见 §8。

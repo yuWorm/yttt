@@ -66,3 +66,27 @@
 - 不删除 spike 的自动化参数：它们是验证手段，正式 App 拆分时再按构建类型去掉。
 - 不做多台 Host（每台 Host 一条配对记录，下一步再做）。
 - 密钥不要求生物识别：后台通知要在锁屏后也能重连。
+
+## 执行记录（2026-11-12）
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1 iOS Keychain | 8c0cbe1 | 2 项测试（先桩后实现）。无宿主的测试 bundle 报 `-34018`（缺 entitlement），改为以 App 为宿主运行后通过。 |
+| 2 Android Keystore | 6afeb6d | 3 项 JVM 测试（软件 AES 密钥代替 Keystore）：往返、存的不是明文、迁移旧文件、篡改后拒绝。 |
+| 3 iOS 扫码 | 901c4ff | 识别函数 2 项测试（CoreImage 生成二维码）；VisionKit 扫描页、相册识别。 |
+| 4 Android 扫码 | 367e092 | 识别函数 2 项测试（ZXing 生成二维码）；CameraX 扫描页、图片识别。 |
+
+### 模拟器验证
+
+二维码图片由 `scratchpad/qrtool/qr.swift` 用 CoreImage 从 spike Host 当前的配对码生成，留白和电脑屏幕上的一样。
+
+- **iOS**：
+  - 用 `YTTT_SPIKE_QR_IMAGE` 从图片识别并配对成功，进入首页；
+  - App 目录里只有 `host.json`，没有明文密钥；
+  - 重启 App 后不重新配对就连上了，说明 Keychain 里的密钥是同一份。
+  - 模拟器没有相机，VisionKit 扫描页显示为不可用。
+- **Android**：
+  - 先写入一份旧格式的明文 `device-secret`，启动后它消失，变成 60 字节的 `device-secret.enc`（12 字节 IV + 32 字节密文 + 16 字节标签），权限 `rw-------`。这是真的 Keystore。
+  - 用 `qrImage` 从图片识别并配对成功；重启后不重新配对就连上了。
+  - 第一次用的二维码是 iOS 刚用过的邀请，Host 回 `InvitationClosed`，换成当前的邀请后成功。
+  - 相机扫描：模拟器的虚拟场景相机可以出画面（扫描页正常运行），但贴二维码的那面墙不在视野里，`adb` 也移动不了虚拟相机，没能用相机真的扫到。相机帧到解码这一段，要在真机上验证。
