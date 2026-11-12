@@ -170,6 +170,15 @@ async fn main() {
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("demo.sh"), DEMO).unwrap();
     fs::write(project.join("agent.sh"), AGENT).unwrap();
+    // Something to browse and edit in the right drawer.
+    fs::write(
+        project.join("README.md"),
+        "# Spike\n\nA throwaway project the mobile apps open.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(project.join("src/app.js"), "export function greet(name) {\n  return `hello ${name}`;\n}\n").unwrap();
+    println!("project files: {}", project.display());
     // The Host starts each eager tab's pane, as for a project the desktop opens.
     let layout: ProjectLayout = toml::from_str(
         r#"

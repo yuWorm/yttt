@@ -26,7 +26,7 @@
 - 抽屉两端都从侧边滑出。iOS 没有系统抽屉，容器自写，内容用系统组件；Android 左侧 `ModalNavigationDrawer`，右侧同一组件外层改为 RTL、内容恢复 LTR。终端可横向滚动时，右抽屉只响应屏幕边缘约 20pt 内开始的拖动。
 - 未接管的终端在底部悬浮“接管终端”提示；Agent 等待时提示改为“等批准，接管后回复”。接管后提示换成按键栏（Esc、Tab、Ctrl、方向键、回车、键盘）和“交还电脑”。
 
-**已实现（2026-11-12，spike App，见 `docs/plans/2026-11-12-mobile-project-page-plan.md`）：** 首页与项目页为平级根页面，左抽屉切换（iOS 自写侧滑容器，Android `ModalNavigationDrawer`）；项目页有终端 tab、多 pane 时的 ◀ n/m ▶、终端与随 Agent 等待变化的接管提示；进入项目打开电脑选中的 tab 与其聚焦 pane；首页点 Agent、点通知都定位到它所在的 pane。右抽屉（文件 / 会话）与文件编辑尚未做。Android 的抽屉手势只在打开后生效（观察终端时横向拖动留给终端），由顶栏按钮打开。
+**已实现（2026-11-12，spike App，见 `docs/plans/2026-11-12-mobile-project-page-plan.md`）：** 首页与项目页为平级根页面，左抽屉切换（iOS 自写侧滑容器，Android `ModalNavigationDrawer`）；项目页有终端 tab、多 pane 时的 ◀ n/m ▶、终端与随 Agent 等待变化的接管提示；进入项目打开电脑选中的 tab 与其聚焦 pane；首页点 Agent、点通知都定位到它所在的 pane。右抽屉（文件 / 会话）与全屏文件编辑已实现（`docs/plans/2026-11-12-mobile-files-plan.md`；编辑器 iOS Runestone、Android sora-editor）。Android 的抽屉手势只在打开后生效（观察终端时横向拖动留给终端），由顶栏按钮打开。
 
 ## 3. 分层
 
@@ -73,7 +73,7 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 ## 5. 与 Host 的约定
 
 - 导航只在本地：手机不发 `SelectProject`、`FocusPane`、`ActivateItem`、`OpenFile`，电脑上的视图不受影响。进入 tab 时默认显示 Host 共享视图里聚焦的 pane。
-- 文件：`Project::ReadFile`（大文件 `ReadFileChunk`）读；`Project::SaveFile { mode: Check(fingerprint) }` 存，`Conflict` 时让用户选覆盖（`Force`）或重新加载。不使用文档 lease：`acquire_document` 要求文件已经 `OpenFile` 进工作区布局。工作区若显示该文件在电脑上有未保存草稿，打开时提示。
+- 文件：`Project::ReadFile`（大文件 `ReadFileChunk`）读；`Project::SaveFile { mode: Check(fingerprint) }` 存，`Conflict` 时让用户选覆盖（`Force`）或重新加载。不使用文档 lease：`acquire_document` 要求文件已经 `OpenFile` 进工作区布局。工作区若显示该文件在电脑上有未保存草稿，打开时提示。 已实现：fingerprint 留在核心按 (项目, 路径) 记住，原生只拿文本；由工作区打开的项目无需手机再注册即可读写（集成测试确认）。
 - SSH 项目的文件走 `RemoteFile`：`Project::ReadFile` 在 SSH 项目上返回 NotFound。
 - 工作区：先 `WorkspaceRequest::List`，再 `Open` 其中标为 active 的那个；`Open` 一个未知 id 会得到空布局。不发 `SetActive`。
 - `client_instance_id` 每次连接新生成（与桌面相同），不持久化。Host 把一个 ID 绑定到第一次使用它的认证会话（入口、凭据代数、session nonce、设备公钥），断开后保留 5 分钟（`CLIENT_SESSION_RETENTION`），期间拒绝其他会话使用这个 ID：持久化 ID 的 App 被杀后 5 分钟内重开会一直连不上。连 nonce 一起持久化也不行：Host 的请求日志按 `request_id` 回放，新进程从 1 重新编号会拿到旧响应。App 被杀后 lease 本来也不保留（断线后 60 s 转给别的 Client），重启只需重新附加。
