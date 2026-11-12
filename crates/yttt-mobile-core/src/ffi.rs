@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use crate::overview::Overview;
 use crate::session::{
     DrainStats, LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, TerminalInfo,
 };
@@ -51,6 +52,13 @@ fn secret(bytes: &[u8]) -> Result<[u8; 32], MobileCoreError> {
     bytes
         .try_into()
         .map_err(|_| failed("the device secret must be 32 bytes"))
+}
+
+/// Receives the home screen's data after each change, on a Rust thread;
+/// switch to the main thread before touching the UI.
+#[uniffi::export(with_foreign)]
+pub trait OverviewListener: Send + Sync {
+    fn on_overview(&self, overview: Overview);
 }
 
 /// Receives the six-digit pairing code to show while the Host user decides.
@@ -137,6 +145,31 @@ pub struct HostSession {
 impl HostSession {
     pub fn is_ready(&self) -> bool {
         self.session.is_ready()
+    }
+
+    /// Opens the workspace the desktop shows, so the overview has its
+    /// projects and tabs; returns its name, or `None` when there is none.
+    pub async fn open_active_workspace(&self) -> Result<Option<String>, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.open_active_workspace().await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map(|summary| summary.map(|summary| summary.name))
+            .map_err(Into::into)
+    }
+
+    /// The home screen's data as it is now.
+    pub fn overview(&self) -> Overview {
+        self.session.overview()
+    }
+
+    /// Calls `listener` with the overview now and after each change,
+    /// debounced; replaces an earlier listener and ends on `disconnect`.
+    pub fn watch_overview(&self, listener: Arc<dyn OverviewListener>) {
+        let _runtime = self.runtime.enter();
+        self.session
+            .watch_overview(move |overview| listener.on_overview(overview));
     }
 
     pub async fn terminals(&self) -> Result<Vec<TerminalInfo>, MobileCoreError> {
