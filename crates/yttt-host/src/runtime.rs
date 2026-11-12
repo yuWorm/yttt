@@ -30,6 +30,16 @@ pub const EXIT_ACK_TTL: Duration = Duration::from_secs(10 * 60);
 struct LeaseState {
     holder: ClientInstanceId,
     lease_epoch: u64,
+    /// Set when `holder` took this one terminal on its own rather than as
+    /// the controller. Implicit hand-overs leave such a lease alone.
+    taken: Option<TakenLease>,
+}
+
+#[derive(Clone)]
+struct TakenLease {
+    /// Who gets the terminal back when `holder` returns it; cleared when
+    /// that Client is released.
+    returns_to: Option<ClientInstanceId>,
 }
 
 /// How many Clients that have written are remembered, so a long-lived Host
@@ -37,7 +47,8 @@ struct LeaseState {
 const REMEMBERED_WRITERS: usize = 1_024;
 
 struct ControlState {
-    /// Every lease is held by `controller`.
+    /// Held by `controller`, apart from those another Client took on its
+    /// own (`LeaseState::taken`).
     leases: HashMap<TerminalSessionId, LeaseState>,
     controller: Option<ClientInstanceId>,
     controller_epoch: u64,
@@ -398,13 +409,93 @@ impl HostRuntime {
         self.claim_locked(&mut control, &sessions, client_id)
     }
 
-    /// Makes `client_id` the controller, moving every lease to it.
+    /// Makes `client_id` the controller, moving every lease to it, including
+    /// those other Clients took on their own.
     pub fn take_terminal_control(&self, client_id: &ClientInstanceId) -> TerminalController {
         let sessions = self.terminal_ids();
         let mut control = self.control.lock();
         remember_writer(&mut control, client_id);
-        self.hand_control_locked(&mut control, &sessions, client_id.clone());
+        self.hand_control_locked(&mut control, &sessions, client_id.clone(), true);
         controller_state(&control)
+    }
+
+    /// Gives `client_id` this one terminal's Interactive lease without making
+    /// it the controller, remembering whom to give it back to. Taking a
+    /// terminal is not writing: it does not count as the Client's first ask.
+    pub fn take_terminal(
+        &self,
+        session_id: &TerminalSessionId,
+        client_id: &ClientInstanceId,
+    ) -> Result<TerminalLease, HostRuntimeError> {
+        if self.terminal(session_id).is_none() {
+            return Err(HostRuntimeError::NotFound(session_id.clone()));
+        }
+        let mut control = self.control.lock();
+        let current = control.leases.get(session_id).cloned();
+        if let Some(lease) = &current
+            && lease.holder == *client_id
+        {
+            return Ok(wire_lease(session_id, lease));
+        }
+        let taken = (control.controller.as_ref() != Some(client_id)).then(|| TakenLease {
+            // A terminal taken from one that was itself taken goes back to
+            // where it came from first.
+            returns_to: current
+                .as_ref()
+                .map(|lease| {
+                    lease
+                        .taken
+                        .as_ref()
+                        .and_then(|taken| taken.returns_to.clone())
+                        .unwrap_or_else(|| lease.holder.clone())
+                })
+                .filter(|returns_to| returns_to != client_id),
+        });
+        Ok(match current {
+            Some(lease) => self.transfer_lease_locked(
+                &mut control,
+                session_id,
+                client_id.clone(),
+                lease.holder,
+                taken,
+            ),
+            None => {
+                let lease =
+                    self.grant_lease_locked(&mut control, session_id, client_id.clone(), taken);
+                let _ = self.control_events.send(HostTerminalEvent::ControlGranted {
+                    session_id: session_id.clone(),
+                    lease: lease.clone(),
+                });
+                lease
+            }
+        })
+    }
+
+    /// Gives back terminals `client_id` holds: each listed one, or with an
+    /// empty list every one it took on its own. Terminals it does not hold
+    /// are skipped.
+    pub fn return_terminals(
+        &self,
+        client_id: &ClientInstanceId,
+        session_ids: &[TerminalSessionId],
+    ) {
+        let mut control = self.control.lock();
+        let returned = control
+            .leases
+            .iter()
+            .filter(|(session_id, lease)| {
+                lease.holder == *client_id
+                    && if session_ids.is_empty() {
+                        lease.taken.is_some()
+                    } else {
+                        session_ids.contains(session_id)
+                    }
+            })
+            .map(|(session_id, _)| session_id.clone())
+            .collect::<Vec<_>>();
+        for session_id in returned {
+            self.return_lease_locked(&mut control, &session_id, client_id);
+        }
     }
 
     pub fn acquire_lease(
@@ -439,6 +530,13 @@ impl HostRuntime {
         // A terminal spawned after `sessions` was read has no lease yet.
         Ok(match control.leases.get(session_id) {
             Some(lease) if lease.holder == *client_id => wire_lease(session_id, lease),
+            // Only an explicit take moves a terminal another Client took.
+            Some(lease) if lease.taken.is_some() => {
+                return Err(HostRuntimeError::LeaseConflict {
+                    session_id: session_id.clone(),
+                    holder: lease.holder.clone(),
+                });
+            }
             Some(lease) => {
                 let previous_owner = lease.holder.clone();
                 self.transfer_lease_locked(
@@ -446,9 +544,10 @@ impl HostRuntime {
                     session_id,
                     client_id.clone(),
                     previous_owner,
+                    None,
                 )
             }
-            None => self.grant_lease_locked(&mut control, session_id, client_id.clone()),
+            None => self.grant_lease_locked(&mut control, session_id, client_id.clone(), None),
         })
     }
 
@@ -515,10 +614,21 @@ impl HostRuntime {
             .leases
             .iter()
             .filter(|(_, lease)| lease.holder == *client_id)
-            .map(|(session_id, _)| session_id.clone())
+            .map(|(session_id, lease)| (session_id.clone(), lease.taken.is_some()))
             .collect::<Vec<_>>();
-        for session_id in held {
-            self.yield_lease_locked(&mut control, &session_id, client_id.clone());
+        for (session_id, taken) in held {
+            if taken {
+                self.return_lease_locked(&mut control, &session_id, client_id);
+            } else {
+                self.yield_lease_locked(&mut control, &session_id, client_id.clone());
+            }
+        }
+        for lease in control.leases.values_mut() {
+            if let Some(taken) = &mut lease.taken
+                && taken.returns_to.as_ref() == Some(client_id)
+            {
+                taken.returns_to = None;
+            }
         }
         drop(control);
         self.detach_client(client_id);
@@ -533,14 +643,16 @@ impl HostRuntime {
             .keys()
             .map(|(owner, _)| owner.clone())
             .collect::<HashSet<_>>();
+        // Only a Client that has written is offered control: one that only
+        // observes, such as a phone, does not become the controller unasked.
         match control
             .present
             .iter()
             .rev()
-            .find(|present| viewers.contains(*present))
+            .find(|present| viewers.contains(*present) && control.writers.contains(present))
             .cloned()
         {
-            Some(successor) => self.hand_control_locked(&mut control, &sessions, successor),
+            Some(successor) => self.hand_control_locked(&mut control, &sessions, successor, false),
             None => {
                 control.controller = None;
                 control.controller_epoch += 1;
@@ -615,35 +727,44 @@ impl HostRuntime {
                 Err(HostRuntimeError::NotTerminalController { controller })
             }
             _ => {
-                self.hand_control_locked(control, sessions, client_id.clone());
+                self.hand_control_locked(control, sessions, client_id.clone(), false);
                 Ok(())
             }
         }
     }
 
     /// Makes `controller` the controller and moves every lease to it,
-    /// granting one for each terminal in `sessions` that has none.
+    /// granting one for each terminal in `sessions` that has none. Leases
+    /// other Clients took on their own move only with `include_taken`.
     fn hand_control_locked(
         &self,
         control: &mut ControlState,
         sessions: &[TerminalSessionId],
         controller: ClientInstanceId,
+        include_taken: bool,
     ) {
-        if control.controller.as_ref() == Some(&controller) {
+        if control.controller.as_ref() == Some(&controller) && !include_taken {
             return;
         }
-        control.controller = Some(controller.clone());
-        control.controller_epoch += 1;
-        let _ = self
-            .control_events
-            .send(HostTerminalEvent::ControllerChanged(controller_state(
-                control,
-            )));
+        if control.controller.as_ref() != Some(&controller) {
+            control.controller = Some(controller.clone());
+            control.controller_epoch += 1;
+            let _ = self
+                .control_events
+                .send(HostTerminalEvent::ControllerChanged(controller_state(
+                    control,
+                )));
+        }
         let mut targets = sessions.iter().cloned().collect::<HashSet<_>>();
         targets.extend(control.leases.keys().cloned());
         for session_id in targets {
-            let lease = match control.leases.get(&session_id) {
-                Some(lease) if lease.holder == controller => continue,
+            let lease = match control.leases.get_mut(&session_id) {
+                Some(lease) if lease.holder == controller => {
+                    // Its own again, as the controller's.
+                    lease.taken = None;
+                    continue;
+                }
+                Some(lease) if lease.taken.is_some() && !include_taken => continue,
                 Some(lease) => {
                     let previous_owner = lease.holder.clone();
                     self.transfer_lease_locked(
@@ -651,10 +772,11 @@ impl HostRuntime {
                         &session_id,
                         controller.clone(),
                         previous_owner,
+                        None,
                     );
                     continue;
                 }
-                None => self.grant_lease_locked(control, &session_id, controller.clone()),
+                None => self.grant_lease_locked(control, &session_id, controller.clone(), None),
             };
             let _ = self.control_events.send(HostTerminalEvent::ControlGranted {
                 session_id: session_id.clone(),
@@ -668,10 +790,12 @@ impl HostRuntime {
         control: &mut ControlState,
         session_id: &TerminalSessionId,
         holder: ClientInstanceId,
+        taken: Option<TakenLease>,
     ) -> TerminalLease {
         let lease = LeaseState {
             holder,
             lease_epoch: self.next_lease_epoch.fetch_add(1, Ordering::Relaxed),
+            taken,
         };
         let wire = wire_lease(session_id, &lease);
         control.leases.insert(session_id.clone(), lease);
@@ -691,14 +815,44 @@ impl HostRuntime {
         });
     }
 
+    /// Gives a lease `holder` returns, or leaves on departing, to whoever it
+    /// came from, else to the controller, else to nobody.
+    fn return_lease_locked(
+        &self,
+        control: &mut ControlState,
+        session_id: &TerminalSessionId,
+        holder: &ClientInstanceId,
+    ) {
+        let Some(lease) = control.leases.get(session_id) else {
+            return;
+        };
+        let target = lease
+            .taken
+            .as_ref()
+            .and_then(|taken| taken.returns_to.clone())
+            .or_else(|| control.controller.clone())
+            .filter(|target| target != holder);
+        match target {
+            Some(target) => {
+                // Back with a Client that is not the controller, it stays
+                // apart from implicit hand-overs.
+                let taken = (control.controller.as_ref() != Some(&target))
+                    .then_some(TakenLease { returns_to: None });
+                self.transfer_lease_locked(control, session_id, target, holder.clone(), taken);
+            }
+            None => self.yield_lease_locked(control, session_id, holder.clone()),
+        }
+    }
+
     fn transfer_lease_locked(
         &self,
         control: &mut ControlState,
         session_id: &TerminalSessionId,
         new_holder: ClientInstanceId,
         previous_owner: ClientInstanceId,
+        taken: Option<TakenLease>,
     ) -> TerminalLease {
-        let lease = self.grant_lease_locked(control, session_id, new_holder);
+        let lease = self.grant_lease_locked(control, session_id, new_holder, taken);
         let _ = self.control_events.send(HostTerminalEvent::LeaseRevoked {
             session_id: session_id.clone(),
             previous_owner,

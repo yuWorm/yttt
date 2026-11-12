@@ -354,17 +354,23 @@ async fn a_departed_controller_hands_control_to_the_latest_present_viewer() {
     let controller = ClientInstanceId::new("controller");
     let older = ClientInstanceId::new("older-viewer");
     let newer = ClientInstanceId::new("newer-viewer");
+    let observer = ClientInstanceId::new("observer");
     let probe = ClientInstanceId::new("probe");
     let session_id = TerminalSessionId::new("departed");
-    for client in [&controller, &older, &newer, &probe] {
+    for client in [&controller, &older, &newer, &probe, &observer] {
         runtime.resume_client(client);
     }
-    runtime
-        .acquire_lease(&session_id, &controller, TerminalLeaseMode::Interactive)
-        .unwrap();
-    // A Client that renders no terminal (a probe) is not offered control.
+    // Each Client that has written takes control in turn.
+    for client in [&older, &newer, &controller] {
+        runtime
+            .acquire_lease(&session_id, client, TerminalLeaseMode::Interactive)
+            .unwrap();
+    }
+    // A Client that renders no terminal (a probe) is not offered control,
+    // nor is one that only ever observed, however recently it connected.
     runtime.register_attachment(&session_id, &older);
     runtime.register_attachment(&session_id, &newer);
+    runtime.register_attachment(&session_id, &observer);
 
     runtime.suspend_client(&controller);
     runtime.release_client(&controller);
@@ -388,6 +394,283 @@ async fn a_departed_controller_hands_control_to_the_latest_present_viewer() {
         .unwrap();
     assert_eq!(runtime.terminal_controller().controller, Some(probe));
     runtime.terminate(&session_id).unwrap();
+}
+
+fn sent(
+    events: &mut tokio::sync::broadcast::Receiver<HostTerminalEvent>,
+) -> Vec<HostTerminalEvent> {
+    let mut sent = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        sent.push(event);
+    }
+    sent
+}
+
+fn revoked(
+    session_id: &TerminalSessionId,
+    from: &ClientInstanceId,
+    sent: &[HostTerminalEvent],
+) -> bool {
+    sent.iter().any(|event| {
+        matches!(
+            event,
+            HostTerminalEvent::LeaseRevoked { session_id: revoked, previous_owner }
+                if revoked == session_id && previous_owner == from
+        )
+    })
+}
+
+fn granted(
+    session_id: &TerminalSessionId,
+    to: &ClientInstanceId,
+    sent: &[HostTerminalEvent],
+) -> bool {
+    sent.iter().any(|event| {
+        matches!(
+            event,
+            HostTerminalEvent::ControlGranted { session_id: granted, lease }
+                if granted == session_id && lease.owner == *to
+        )
+    })
+}
+
+fn holds(runtime: &HostRuntime, session_id: &TerminalSessionId, client: &ClientInstanceId) -> bool {
+    runtime.validate_lease(session_id, client).is_ok()
+}
+
+/// Two running terminals, both held by `controller`.
+fn two_terminals(
+    runtime: &std::sync::Arc<HostRuntime>,
+    name: &str,
+    controller: &ClientInstanceId,
+) -> (TerminalSessionId, TerminalSessionId) {
+    let a = TerminalSessionId::new(format!("{name}-a"));
+    let b = TerminalSessionId::new(format!("{name}-b"));
+    for session_id in [&a, &b] {
+        runtime
+            .spawn(spec(session_id.as_str(), "sleep 30"))
+            .unwrap();
+        runtime
+            .acquire_lease(session_id, controller, TerminalLeaseMode::Interactive)
+            .unwrap();
+    }
+    (a, b)
+}
+
+#[tokio::test]
+async fn taking_one_terminal_leaves_the_others_and_the_controller_alone() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&desktop, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "take-one", &desktop);
+    let controller_epoch = runtime.terminal_controller().epoch;
+    let mut events = runtime.subscribe_control();
+
+    let lease = runtime.take_terminal(&a, &phone).unwrap();
+    assert_eq!(lease.owner, phone);
+    assert_eq!(lease.mode, TerminalLeaseMode::Interactive);
+    assert!(holds(&runtime, &a, &phone));
+    assert!(!holds(&runtime, &a, &desktop));
+    assert!(holds(&runtime, &b, &desktop));
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(desktop.clone())
+    );
+    assert_eq!(runtime.terminal_controller().epoch, controller_epoch);
+    let sent = sent(&mut events);
+    assert!(revoked(&a, &desktop, &sent));
+    assert!(granted(&a, &phone, &sent));
+    assert!(!revoked(&b, &desktop, &sent));
+    assert!(
+        !sent
+            .iter()
+            .any(|event| matches!(event, HostTerminalEvent::ControllerChanged(_)))
+    );
+    assert!(matches!(
+        runtime.take_terminal(&TerminalSessionId::new("missing"), &phone),
+        Err(HostRuntimeError::NotFound(_))
+    ));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn a_returned_terminal_goes_back_to_whoever_had_it() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&desktop, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "give-back", &desktop);
+    runtime.take_terminal(&a, &phone).unwrap();
+    let mut events = runtime.subscribe_control();
+
+    runtime.return_terminals(&phone, &[]);
+    assert!(holds(&runtime, &a, &desktop));
+    assert!(!holds(&runtime, &a, &phone));
+    let sent_now = sent(&mut events);
+    assert!(revoked(&a, &phone, &sent_now));
+    assert!(granted(&a, &desktop, &sent_now));
+
+    // Returning again, or returning what it does not hold, changes nothing.
+    runtime.return_terminals(&phone, &[]);
+    runtime.return_terminals(&phone, &[b.clone()]);
+    assert!(sent(&mut events).is_empty());
+    assert!(holds(&runtime, &b, &desktop));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn a_departing_client_gives_back_the_terminals_it_took() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&desktop, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "depart-take", &desktop);
+    runtime.take_terminal(&a, &phone).unwrap();
+
+    // Within the grace period the phone keeps the terminal.
+    runtime.suspend_client(&phone);
+    assert!(holds(&runtime, &a, &phone));
+    let mut events = runtime.subscribe_control();
+    runtime.release_client(&phone);
+    assert!(holds(&runtime, &a, &desktop));
+    assert!(granted(&a, &desktop, &sent(&mut events)));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn a_terminal_whose_previous_holder_left_goes_to_the_controller_or_nobody() {
+    let runtime = HostRuntime::new();
+    let first = ClientInstanceId::new("first-desktop");
+    let second = ClientInstanceId::new("second-desktop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&first, &second, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "left", &first);
+    runtime.take_terminal(&a, &phone).unwrap();
+    // A second desktop's first write takes control, but not the phone's
+    // terminal.
+    runtime
+        .acquire_lease(&b, &second, TerminalLeaseMode::Interactive)
+        .unwrap();
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(second.clone())
+    );
+    assert!(holds(&runtime, &a, &phone));
+
+    runtime.release_client(&first);
+    runtime.return_terminals(&phone, &[]);
+    assert!(holds(&runtime, &a, &second));
+
+    // With nobody in control, a returned terminal is left unheld.
+    runtime.take_terminal(&a, &phone).unwrap();
+    runtime.release_client(&second);
+    assert_eq!(runtime.terminal_controller().controller, None);
+    let mut events = runtime.subscribe_control();
+    runtime.return_terminals(&phone, &[]);
+    assert!(!holds(&runtime, &a, &phone));
+    assert!(sent(&mut events).iter().any(|event| matches!(
+        event,
+        HostTerminalEvent::LeaseReleased { session_id, previous_owner }
+            if *session_id == a && *previous_owner == phone
+    )));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn implicit_hand_overs_skip_a_terminal_taken_on_its_own() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let laptop = ClientInstanceId::new("laptop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&desktop, &laptop, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "implicit", &desktop);
+    runtime.take_terminal(&a, &phone).unwrap();
+    runtime.register_attachment(&a, &phone);
+    runtime.register_attachment(&b, &desktop);
+
+    runtime
+        .acquire_lease(&b, &laptop, TerminalLeaseMode::Interactive)
+        .unwrap();
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(laptop.clone())
+    );
+    assert!(holds(&runtime, &a, &phone));
+    assert!(holds(&runtime, &b, &laptop));
+
+    // The departing controller's successor is the desktop, not the phone
+    // that only took a terminal, and the phone keeps it.
+    runtime.release_client(&laptop);
+    assert_eq!(
+        runtime.terminal_controller().controller,
+        Some(desktop.clone())
+    );
+    assert!(holds(&runtime, &a, &phone));
+    assert!(holds(&runtime, &b, &desktop));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn taking_every_terminal_includes_one_taken_on_its_own() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&desktop, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "take-all", &desktop);
+    runtime.take_terminal(&a, &phone).unwrap();
+    let mut events = runtime.subscribe_control();
+
+    // Already the controller, the desktop still collects the phone's terminal.
+    runtime.take_terminal_control(&desktop);
+    assert!(holds(&runtime, &a, &desktop));
+    assert!(granted(&a, &desktop, &sent(&mut events)));
+    runtime.return_terminals(&phone, &[]);
+    assert!(holds(&runtime, &a, &desktop));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn a_terminal_taken_several_times_returns_to_its_first_holder() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let phone = ClientInstanceId::new("phone");
+    let tablet = ClientInstanceId::new("tablet");
+    for client in [&desktop, &phone, &tablet] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "chain", &desktop);
+    runtime.take_terminal(&a, &phone).unwrap();
+    runtime.take_terminal(&a, &tablet).unwrap();
+    assert!(holds(&runtime, &a, &tablet));
+
+    runtime.return_terminals(&tablet, &[a.clone()]);
+    assert!(holds(&runtime, &a, &desktop));
+    // The controller taking one back simply has it again.
+    runtime.take_terminal(&a, &phone).unwrap();
+    runtime.take_terminal(&a, &desktop).unwrap();
+    runtime.return_terminals(&desktop, &[]);
+    assert!(holds(&runtime, &a, &desktop));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
 }
 
 #[tokio::test]
