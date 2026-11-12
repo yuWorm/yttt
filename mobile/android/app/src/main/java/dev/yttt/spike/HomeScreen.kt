@@ -38,6 +38,7 @@ fun HomeScreen(
     terminals: List<TerminalInfo>,
     onAgent: (AgentSummary) -> Unit,
     onTerminal: (TerminalInfo) -> Unit,
+    onBattery: () -> Unit,
 ) {
     val sections = HomeSections(overview)
     var showFinished by remember { mutableStateOf(false) }
@@ -65,6 +66,13 @@ fun HomeScreen(
                 )
             }
             if (showFinished) agentRows(sections.finished, overview, onAgent)
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("后台提醒") },
+                supportingContent = { Text("关闭本 App 的电池优化，后台更不容易被系统断开") },
+                modifier = Modifier.clickable(onClick = onBattery),
+            )
         }
         item {
             ListItem(

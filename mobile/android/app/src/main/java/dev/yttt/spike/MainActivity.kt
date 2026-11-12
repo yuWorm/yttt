@@ -1,13 +1,16 @@
 package dev.yttt.spike
 
+import android.Manifest
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.LinkProperties
-import android.net.Network
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.provider.Settings
 import android.util.Log
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
+import androidx.core.content.ContextCompat
 import android.view.Choreographer
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,7 +49,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -82,96 +84,86 @@ class Storage(context: Context) {
             ?: ByteArray(32).also { SecureRandom().nextBytes(it); save("device-secret", it) }
 }
 
-private const val TAG = "yttt-spike"
-
-/** The connected session, so the activity can give terminals back on stop. */
-class SessionHolder {
-    @Volatile var session: HostSession? = null
-}
-
 class MainActivity : ComponentActivity() {
-    private val holder = SessionHolder()
-    private val main = Handler(Looper.getMainLooper())
-    private val notifyNetwork = Runnable {
-        Log.i(TAG, "network changed")
-        holder.session?.networkChanged()
-    }
+    private var autoType: String? = null
 
-    /**
-     * Tells the core when a network becomes usable, debounced: iroh cannot
-     * watch the interfaces itself here (SELinux keeps apps out of netlink and
-     * /sys/class/net). Not on losing one: a probe then finds no answer and
-     * replaces a connection that would have outlived a short outage.
-     * Capability changes are left out; signal strength alone fires them.
-     */
-    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = changed()
-        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = changed()
+    private val askNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { LinkService.start(this) }
 
-        private fun changed() {
-            main.removeCallbacks(notifyNetwork)
-            main.postDelayed(notifyNetwork, 500)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Spike-only automation for emulator runs (adb shell am start -e ...).
+        val autoPair = intent.getStringExtra("pair")
+        autoType = intent.getStringExtra("type")
+        link.relayOnly = intent.getBooleanExtra("relayOnly", false)
+        takeOpenRequest(intent)
+        setContent {
+            MaterialTheme {
+                Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    App(link, autoPair, autoType, onConnected = ::startLinkService, onBattery = ::openBatterySettings)
+                }
+            }
         }
     }
 
-    override fun onDestroy() {
-        runCatching {
-            getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
-        }
-        super.onDestroy()
+    /** A notification for a waiting Agent was tapped. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        takeOpenRequest(intent)
+    }
+
+    private fun takeOpenRequest(intent: Intent) {
+        intent.getStringExtra("open")?.let { link.openRequest.value = it }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        link.foreground.value = true
     }
 
     /** Leaving the foreground gives every terminal back to the computer. */
     override fun onStop() {
         super.onStop()
-        val session = holder.session ?: return
-        lifecycleScope.launch { runCatching { session.giveBack(emptyList()) } }
+        link.foreground.value = false
+        val session = link.session.value ?: return
+        link.scope.launch { runCatching { session.giveBack(emptyList()) } }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        // Spike-only: `--ez noNetworkWatch true` leaves the core to notice by
-        // itself, to compare recovery times.
-        if (!intent.getBooleanExtra("noNetworkWatch", false)) {
-            getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
+    /** Keeps the link in the background, asking to notify first (Android 13+). */
+    private fun startLinkService() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            LinkService.start(this)
         }
-        val storage = Storage(this)
-        val core = MobileCore()
-        // Spike-only automation for emulator runs (adb shell am start -e ...).
-        val autoPair = intent.getStringExtra("pair")
-        val autoOpen = intent.getStringExtra("open")
-        val autoType = intent.getStringExtra("type")
-        // Keep off direct paths: everything goes through the Host's relay.
-        val relayOnly = intent.getBooleanExtra("relayOnly", false)
-        setContent {
-            MaterialTheme {
-                Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
-                    App(storage, core, holder, autoPair, autoOpen, autoType, relayOnly)
-                }
-            }
-        }
+    }
+
+    private fun openBatterySettings() {
+        runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
     }
 }
 
 @Composable
 fun App(
-    storage: Storage,
-    core: MobileCore,
-    holder: SessionHolder,
+    link: Link,
     autoPair: String?,
-    autoOpen: String?,
     autoType: String?,
-    relayOnly: Boolean,
+    onConnected: () -> Unit,
+    onBattery: () -> Unit,
 ) {
-    var record by remember { mutableStateOf(storage.load("host.json")) }
-    var session by remember { mutableStateOf<HostSession?>(null) }
+    val record by link.record.collectAsState()
+    val session by link.session.collectAsState()
+    val overview by link.overview.collectAsState()
+    val linkStatus by link.status.collectAsState()
     var terminals by remember { mutableStateOf<List<TerminalInfo>>(emptyList()) }
     var open by remember { mutableStateOf<TerminalInfo?>(null) }
     var status by remember { mutableStateOf("") }
     var pairingDigits by remember { mutableStateOf<UInt?>(null) }
-    var homeOverview by remember { mutableStateOf(Overview(emptyList(), emptyList(), 0u)) }
     val scope = rememberCoroutineScope()
-    val secret = remember { storage.deviceSecret() }
 
     suspend fun pair(code: String) {
         status = "正在连接 Host…"
@@ -184,36 +176,39 @@ fun App(
             }
         }
         try {
-            val bytes = core.pair(code.trim(), "Android spike", secret, relayOnly, listener)
-            storage.save("host.json", bytes)
-            record = bytes
+            link.savePairing(link.core.pair(code.trim(), "Android spike", link.secret, link.relayOnly, listener))
             status = ""
         } catch (error: Exception) {
             status = "配对失败：${error.message}"
         }
     }
 
+    suspend fun openTerminal(sessionId: String) {
+        val current = session ?: return
+        if (terminals.none { it.sessionId == sessionId }) {
+            runCatching { terminals = current.terminals() }
+        }
+        open = terminals.firstOrNull { it.sessionId == sessionId }
+        if (open == null) status = "这个 Agent 的终端已经不在了"
+    }
+
     LaunchedEffect(Unit) {
         if (record == null && autoPair != null) pair(autoPair)
     }
     LaunchedEffect(record) {
-        val stored = record ?: return@LaunchedEffect
-        status = "正在连接…"
-        try {
-            val connected = core.connect(stored, secret, relayOnly)
-            session = connected
-            holder.session = connected
-            runCatching { connected.openActiveWorkspace() }
-            connected.watchOverview(object : OverviewListener {
-                override fun onOverview(overview: Overview) {
-                    scope.launch { homeOverview = overview }
-                }
-            })
-            terminals = connected.terminals()
-            status = ""
-            if (autoOpen != null) open = terminals.firstOrNull { it.sessionId == autoOpen }
-        } catch (error: Exception) {
-            status = "连接失败：${error.message}"
+        if (record == null) return@LaunchedEffect
+        val connected = link.connect() ?: return@LaunchedEffect
+        terminals = connected.terminals()
+        onConnected()
+    }
+    // A tapped notification, or automation, names a terminal to open.
+    LaunchedEffect(session) {
+        if (session == null) return@LaunchedEffect
+        link.openRequest.collect { sessionId ->
+            if (sessionId != null) {
+                openTerminal(sessionId)
+                link.openRequest.value = null
+            }
         }
     }
 
@@ -222,22 +217,15 @@ fun App(
     when {
         record == null -> PairScreen(status, pairingDigits) { code -> scope.launch { pair(code) } }
         current != null && terminal != null ->
-            TerminalScreen(current, terminal, autoType) { open = null }
+            TerminalScreen(current, terminal, autoType, link) { open = null }
         else -> HomeScreen(
-            hostLabel = runCatching { core.hostLabel(record!!) }.getOrDefault(""),
-            status = status,
-            overview = homeOverview,
+            hostLabel = runCatching { link.core.hostLabel(record!!) }.getOrDefault(""),
+            status = status.ifEmpty { linkStatus },
+            overview = overview,
             terminals = terminals,
-            onAgent = { agent ->
-                scope.launch {
-                    if (terminals.none { it.sessionId == agent.sessionId }) {
-                        runCatching { terminals = current!!.terminals() }
-                    }
-                    open = terminals.firstOrNull { it.sessionId == agent.sessionId }
-                    if (open == null) status = "这个 Agent 的终端已经不在了"
-                }
-            },
+            onAgent = { agent -> scope.launch { openTerminal(agent.sessionId) } },
             onTerminal = { open = it },
+            onBattery = onBattery,
         )
     }
 }
@@ -265,7 +253,7 @@ fun PairScreen(status: String, shortCode: UInt?, onPair: (String) -> Unit) {
  * it applied that size. Repaints are drained once per display frame.
  */
 @Composable
-fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, onBack: () -> Unit) {
+fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, link: Link, onBack: () -> Unit) {
     var controlling by remember { mutableStateOf(false) }
     // Laid out at the screen's size while a take is in flight.
     var fitting by remember { mutableStateOf(false) }
@@ -297,8 +285,20 @@ fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, 
         )
     }
 
+    // Attached while on screen: in the background only the Agent overview
+    // stays, so the Host stops sending this terminal's frames.
+    val foreground by link.foreground.collectAsState()
+    LaunchedEffect(id, foreground) {
+        if (foreground) {
+            runCatching { session.attach(id) }.onFailure { stats = "attach failed: ${it.message}" }
+            link.viewing.value = id
+        } else {
+            link.viewing.value = null
+            runCatching { session.detach(id) }
+        }
+    }
+
     DisposableEffect(id) {
-        scope.launch { runCatching { session.attach(id) }.onFailure { stats = "attach failed: ${it.message}" } }
         val choreographer = Choreographer.getInstance()
         var frames = 0
         var fed = 0L
@@ -351,7 +351,9 @@ fun TerminalScreen(session: HostSession, info: TerminalInfo, autoType: String?, 
         choreographer.postFrameCallback(callback)
         onDispose {
             running = false
-            scope.launch { runCatching { session.detach(id) } }
+            link.viewing.value = null
+            // Not the screen's scope: it ends with the screen.
+            link.scope.launch { runCatching { session.detach(id) } }
         }
     }
 
