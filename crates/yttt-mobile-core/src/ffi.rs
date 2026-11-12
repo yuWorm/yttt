@@ -164,6 +164,12 @@ impl HostSession {
         self.session.drain_stats()
     }
 
+    /// The next `drain` repaints the whole terminal; call it after the view
+    /// changed its grid size and cleared itself.
+    pub fn repaint(&self, session_id: String) {
+        self.session.repaint(&session_id);
+    }
+
     /// Takes this one terminal at the device's size; input is accepted once
     /// it returns.
     pub async fn take_control(

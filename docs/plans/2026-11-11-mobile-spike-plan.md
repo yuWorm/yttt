@@ -145,3 +145,11 @@
 # 7：结论
 
 - [x] 在设计文档 §8 写下：三个问题的答案、测得的数据、遇到的坑和绕法、对正式实现的修改建议。
+
+# 8：按终端接管（2026-11-12，master 合入按终端分配之后）
+
+- [x] 分支 rebase 到 master 842d35a（无冲突）。
+- [x] `yttt-mobile-core`：`take_control(session, cols, rows)` 发 `TakeTerminal` 并在 Host 应用尺寸后返回；`give_back(session_ids)` 发 `ReturnTerminals`；失去控制改跟 `TerminalLeaseRevoked`/`Released`；`Unsupported` → `HostTooOld`；`repaint(session)`。修复 drain 覆盖本地 geometry epoch 导致接管后输入被静默丢弃（设计 §8 第 9 条）。集成测试改为两个桌面终端：手机只拿走一个、交还、电脑取回，并在接管期间持续 drain。
+- [x] iOS：接管前按屏幕算出行列（SwiftTerm 在 iOS 上不公开 `terminal`，用 `getOptimalFrameSize()` 得到字符格大小）；每帧查 `inControl`，失去时回到观察；“交还电脑”按钮；进后台在 `beginBackgroundTask` 内交还全部；Host 太旧时提示。模拟器：第一条命令 `cols=58 rows=53`，进后台再回来回到观察状态。
+- [x] Android：接管时先放开 `forcedSize`，等 termlib 的 `onResize` 报出行列再接管；同样的 `inControl` 检查、交还按钮、`onStop` 交还全部、Host 太旧提示；控制状态变化后调用 `repaint`（设计 §8 第 10 条）。模拟器：第一条命令 `cols=63 rows=64`，Home 键再回来回到观察且画面完整。
+- 未做：真机、Relay、软键盘尺寸合并（`resizeSuspended`）。

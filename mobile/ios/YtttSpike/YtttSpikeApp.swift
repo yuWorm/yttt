@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct YtttSpikeApp: App {
     @StateObject private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -19,6 +20,9 @@ struct YtttSpikeApp: App {
                     await model.pair(code: code)
                 }
             }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { model.enterBackground() }
         }
     }
 }

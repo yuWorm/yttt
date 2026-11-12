@@ -84,8 +84,8 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 
 ## 7. 未决问题
 
-1. **终端控制权需要改协议。** 现状：`take_terminal_control` 把所有 lease 移给接管方（`yttt-host/src/runtime.rs`）；第一次申请写入的 Client 不需要 Take 就成为 controller（`claim_locked`）；没有“交还”请求，`ReleaseTerminalControl` 只放一个 lease，controller 不变；断线或进后台后控制权保留 60 s，再交给最近连接的 Client。这与 `p2p-relay-architecture.md` §10.4 不采用全局抢占的原则相矛盾。“只接管当前 pane”“交还电脑”“进后台自动交还”需要：按 session 的 controller、显式交还请求、后台时立即交还。spike 期间“交还”只能由电脑点接管完成。
-2. **协议版本锁步。** 两端都用 `ProtocolRange::exact`。商店审核会让手机版落后于桌面版，桌面一升协议手机就连不上。需要决定：Host 支持一个版本范围，或两端同步发布。
+1. **终端控制权（已解决，2026-11-12）。** 原先 `TakeTerminalController` 会把所有 lease 移给接管方，也没有交还请求，与 `p2p-relay-architecture.md` §10.4 相矛盾。master 已改为按终端分配（`docs/plans/2026-11-12-terminal-control-per-session-design.md`）：`TakeTerminal { session_id }` 只接管一个终端，Host 记住交还给谁；`ReturnTerminals { session_ids }`（空列表 = 本设备单独接管的全部）交还。手机接管当前 pane、点“交还电脑”、进后台时交还全部（iOS 在 `beginBackgroundTask` 内，Android 在 `onStop`）；进程被杀来不及发时由 Host 的 60 s 宽限期兜底。主控不变，只观察的手机也不会在继任时被动成为主控。
+2. **协议版本锁步（无需改协议）。** v22 起追加不升版本（`docs/wire-evolution.md`），旧端对不认识的请求回 `Unsupported` 而不断线，必须升版本时 Host 同时服务新旧版本。落后几个桌面版本的手机照样能连。移动端的约定：每个新请求都处理 `Unsupported`，隐藏或降级对应功能；例如旧 Host 不认识 `TakeTerminal` 时，`take_control` 返回 `HostTooOld`，App 提示升级电脑上的 yttt，不退回全部接管。
 3. **iOS 上架限制。** `yttt-transport-iroh` 无条件启用 iroh 的 `fast-apple-datapath`，用到私有 API `sendmsg_x`/`recvmsg_x`，有被 App Store 拒审的风险，需要改为按 target 启用。portmapper 的 UPnP 在 iOS 上需要 multicast entitlement，移动端关掉。局域网直连需要 `NSLocalNetworkUsageDescription`。
 4. 网络变化：`IrohEndpoint` 没有封装 iroh 的 `network_change`，`link_watch` 在桌面 bin 里，需要新接口。
 6. iOS 推送：APNs 只能由 App 发布者发送，需要官方推送网关，暂缓。
@@ -115,8 +115,10 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 1. `client_instance_id` 每次连接新生成（§5）。审查时建议的“按 Host 持久化”会让 App 重启后 5 分钟内连不上，spike 中实际撞到。
 2. 控制权（§7 问题 1）与协议锁步（§7 问题 2）仍需另立协议计划。
 3. Android 观察模式用 `forcedSize` 时字号缩到很小，需要横向滚动或双指缩放；iOS 用横向 ScrollView 包住 Host 尺寸的视图可行。
-4. 接管后要等 resize 确认再放行输入：Android 上自动输入的第一条命令看到的仍是旧尺寸（`COLUMNS=80`），之后才变为 63×40。软键盘弹出导致的尺寸变化可用 termlib 的 `resizeSuspended` 合并。
+4. ~~接管后要等 resize 确认再放行输入~~（已做）：`take_control(session, cols, rows)` 在 Host 应用手机尺寸后才返回，两个模拟器上第一条命令已看到新尺寸（iOS 58×53、Android 63×64）。软键盘弹出导致的尺寸变化可用 termlib 的 `resizeSuspended` 合并（未做）。
 5. UniFFI 导出避开 `close`、`message` 这类名字：Kotlin 里与 `AutoCloseable.close`、`Throwable.message` 冲突。
 6. termlib 没有公开的屏幕读取 API，组件测试暂时只能截图；可向上游提或在 instrumented 测试里读无障碍语义。
 7. Android 上 iroh 经 reqwest 0.13 用 `rustls-platform-verifier`，使用 relay 或 HTTPS 前要做 JNI 初始化；spike 不走 relay，未做。
-8. 未验证：真机、蜂窝网络与 Relay、vim / htop 等全屏程序、方向键与 Ctrl-C 等按键栏按键、电脑取回控制权、Agent CLI、前后台切换。
+8. 未验证：真机、蜂窝网络与 Relay、vim / htop 等全屏程序、方向键与 Ctrl-C 等按键栏按键、Agent CLI。电脑取回控制权由 `yttt-mobile-core` 集成测试覆盖（电脑发 `TakeTerminal` 后手机失去控制）；前后台切换已在两个模拟器上验证（进后台后回到观察状态）。
+9. **本地 geometry epoch 只增不减。** 修复前 `drain` 用收到的 viewport 覆盖本地 geometry epoch：接管后的 resize 请求还在路上时，显示刷新把旧 viewport 再编码一次，epoch 退回旧值，之后的输入被 Host 当作过期而静默丢弃（输入是单向消息，手机收不到拒绝）。现在同一 session 内取较大值，集成测试在 `take_control` 期间每毫秒 drain 一次来覆盖。
+10. **termlib 改变固定尺寸会清屏。** 从控制回到观察（`forcedSize` 改回 Host 尺寸）后画面变空，直到下一次输出。核心新增 `repaint(session)`，Android 在控制状态变化两帧后调用，下一次 drain 整屏重绘。SwiftTerm 不清屏，iOS 不需要。

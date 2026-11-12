@@ -360,14 +360,35 @@ impl MobileSession {
         let viewport = self.client.terminal_snapshot(&session_id)?;
         terminal.encoded = Some((viewport.session_epoch, viewport.sequence));
         terminal.dirty = false;
+        // A resize this device sent is ahead of the viewports still arriving
+        // from before it: going back to theirs would make every key after it
+        // stale, and the Host drops stale keys silently.
+        terminal.geometry_epoch = if terminal.session_epoch == viewport.session_epoch {
+            terminal.geometry_epoch.max(viewport.geometry_epoch)
+        } else {
+            viewport.geometry_epoch
+        };
         terminal.session_epoch = viewport.session_epoch;
-        terminal.geometry_epoch = viewport.geometry_epoch;
         let bytes = terminal.encoder.encode(&viewport);
         drop(attached);
         let mut times = self.shared.times.lock();
         times.bytes += bytes.len() as u64;
         times.micros.push(started.elapsed().as_micros() as u64);
         (!bytes.is_empty()).then_some(bytes)
+    }
+
+    /// Makes the next `drain` repaint the whole terminal, for a view that
+    /// cleared itself, as termlib does when its grid changes size.
+    pub fn repaint(&self, session_id: &str) {
+        if let Some(terminal) = self
+            .shared
+            .attached
+            .lock()
+            .get_mut(&TerminalSessionId::new(session_id))
+        {
+            terminal.encoder.reset();
+            terminal.encoded = None;
+        }
     }
 
     pub fn drain_stats(&self) -> DrainStats {

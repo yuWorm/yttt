@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Security
 
 /// Spike storage: files in Application Support. The real app keeps the
@@ -112,6 +113,20 @@ final class AppModel: ObservableObject {
             }
         } catch {
             status = "读取终端失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// Leaving the foreground gives every terminal back to the computer, in
+    /// the time iOS grants a task started on the way out.
+    func enterBackground() {
+        guard let session else { return }
+        var task = UIBackgroundTaskIdentifier.invalid
+        task = UIApplication.shared.beginBackgroundTask(withName: "give-back") {
+            UIApplication.shared.endBackgroundTask(task)
+        }
+        Task {
+            try? await session.giveBack(sessionIds: [])
+            UIApplication.shared.endBackgroundTask(task)
         }
     }
 

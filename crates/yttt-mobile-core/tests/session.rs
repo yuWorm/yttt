@@ -323,6 +323,9 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
         "first drain repaints all"
     );
     assert_eq!(phone.drain(&id), None, "nothing changed since");
+    // A view that cleared itself, as when it changes size, asks for it all.
+    phone.repaint(&id);
+    assert!(String::from_utf8_lossy(&phone.drain(&id).expect("a repaint")).contains("\x1b[2J"));
     assert_eq!(
         controller(&admin).await,
         Some(ClientInstanceId::new("desktop"))
@@ -338,8 +341,20 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     assert!(phone.send_input(&id, b"x".to_vec()).is_err());
 
     // Taking control takes this one terminal, at the phone's size, before
-    // any key goes out.
-    phone.take_control(&id, 50, 20).await.unwrap();
+    // any key goes out. The display keeps draining meanwhile, as on a phone:
+    // repainting the view at its old size must not make the keys stale.
+    {
+        let take = phone.take_control(&id, 50, 20);
+        tokio::pin!(take);
+        loop {
+            tokio::select! {
+                taken = &mut take => break taken.unwrap(),
+                _ = tokio::time::sleep(Duration::from_millis(1)) => {
+                    phone.drain(&id);
+                }
+            }
+        }
+    }
     assert!(phone.in_control(&id));
     assert_eq!(
         (
@@ -354,14 +369,8 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     );
     assert!(desktop_holds(&admin, &other).await);
     assert!(!desktop_holds(&admin, &terminal).await);
-    // The new size repaints everything once.
-    drain_until(&phone, &id, "\x1b[2J").await;
     phone.send_input(&id, b"hello\r".to_vec()).unwrap();
-    let typed = drain_until(&phone, &id, "got:hello").await;
-    assert!(
-        !String::from_utf8_lossy(&typed).contains("\x1b[2J"),
-        "later drains repaint rows only"
-    );
+    drain_until(&phone, &id, "got:hello").await;
 
     // Giving it back hands it to the desktop.
     phone.give_back(Vec::new()).await.unwrap();
