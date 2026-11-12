@@ -367,12 +367,20 @@ fun TerminalPane(
     val id = info.sessionId
     // The grid termlib fits to the screen, reported once laid out unforced.
     val fitted = remember(id) { MutableStateFlow<Pair<Int, Int>?>(null) }
+    // The key bar's one-shot Ctrl applies to the next key typed.
+    val ctrl = remember(id) { CtrlKey() }
+    var ctrlArmed by remember(id) { mutableStateOf(false) }
+    var keyboardShown by remember(id) { mutableStateOf(true) }
     val emulator = remember(id) {
         TerminalEmulatorFactory.create(
             initialRows = info.rows.toInt(),
             initialCols = info.cols.toInt(),
             onKeyboardInput = { bytes ->
-                if (session.inControl(id)) runCatching { session.sendInput(id, bytes) }
+                if (session.inControl(id)) {
+                    val sent = ctrl.apply(bytes)
+                    ctrlArmed = ctrl.armed
+                    runCatching { session.sendInput(id, sent) }
+                }
             },
             onResize = { dimensions ->
                 if (dimensions.columns > 0 && dimensions.rows > 0) {
@@ -490,11 +498,12 @@ fun TerminalPane(
         if (controlling) runCatching { session.sendInput(id, (line + "\r").toByteArray()) }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black).imePadding()) {
+    Column(Modifier.fillMaxSize().background(Color.Black).imePadding()) {
+    Box(Modifier.weight(1f).fillMaxWidth()) {
         Terminal(
             terminalEmulator = emulator,
             modifier = Modifier.fillMaxSize(),
-            keyboardEnabled = controlling,
+            keyboardEnabled = controlling && keyboardShown,
             forcedSize = if (controlling || fitting) null else info.rows.toInt() to info.cols.toInt(),
         )
         Text(
@@ -535,5 +544,15 @@ fun TerminalPane(
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             )
         }
+    }
+    if (controlling) {
+        KeyBar(
+            ctrlArmed = ctrlArmed,
+            keyboardShown = keyboardShown,
+            onKey = { key -> runCatching { session.sendKey(id, key) } },
+            onCtrl = { ctrl.toggle(); ctrlArmed = ctrl.armed },
+            onKeyboard = { keyboardShown = !keyboardShown },
+        )
+    }
     }
 }
