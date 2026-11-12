@@ -65,6 +65,10 @@ final class AppModel: ObservableObject {
     /// The root page, switched from the left drawer.
     @Published var root: Root = .home
     @Published var drawerOpen = false
+    /// The right drawer of the project page: files and sessions.
+    @Published var drawerFilesOpen = false
+    /// A project file open full screen.
+    @Published var editing: EditingFile?
 
     /// Spike-only automation for simulator runs, set through
     /// `SIMCTL_CHILD_<name>`: pair with this code, open this terminal, then
@@ -78,6 +82,9 @@ final class AppModel: ObservableObject {
     static let autoTab = ProcessInfo.processInfo.environment["YTTT_SPIKE_TAB"]
     static let autoPane = ProcessInfo.processInfo.environment["YTTT_SPIKE_PANE"]
     static let autoDrawer = ProcessInfo.processInfo.environment["YTTT_SPIKE_DRAWER"] == "1"
+    /// Show the right drawer, or open this file, in the automated project.
+    static let autoFiles = ProcessInfo.processInfo.environment["YTTT_SPIKE_FILES"] == "1"
+    static let autoEdit = ProcessInfo.processInfo.environment["YTTT_SPIKE_EDIT"]
     private var automated = false
     /// Keep off direct paths: everything goes through the Host's relay.
     static let relayOnly = ProcessInfo.processInfo.environment["YTTT_SPIKE_RELAY_ONLY"] == "1"
@@ -197,6 +204,8 @@ final class AppModel: ObservableObject {
             if let pane = Self.autoPane { place = Place(projectId: project, tabId: place.tabId, paneId: pane) }
             root = .project(place)
             drawerOpen = Self.autoDrawer
+            drawerFilesOpen = Self.autoFiles
+            if let path = Self.autoEdit { editing = EditingFile(projectId: project, path: path) }
         }
     }
 

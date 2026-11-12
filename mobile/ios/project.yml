@@ -9,6 +9,10 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: 1.99.1
+  # The file editor (MIT).
+  Runestone:
+    url: https://github.com/simonbs/Runestone
+    exactVersion: 0.5.2
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -24,6 +28,7 @@ targets:
         group: Generated
     dependencies:
       - package: SwiftTerm
+      - package: Runestone
       - framework: ../../target/mobile/ios/YtttMobileCore.xcframework
         embed: false
       - sdk: SystemConfiguration.framework
@@ -53,6 +58,7 @@ targets:
       # The home screen's sorting, tested on its own with the core's types.
       - YtttSpike/HomeSections.swift
       - YtttSpike/ProjectPage.swift
+      - YtttSpike/FileTree.swift
       - path: ../../target/mobile/ios/swift
         group: Generated
     dependencies:

@@ -57,6 +57,9 @@ struct ProjectView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { model.drawerOpen = true } label: { Image(systemName: "line.3.horizontal") }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { model.drawerFilesOpen = true } label: { Image(systemName: "folder") }
+            }
         }
     }
 

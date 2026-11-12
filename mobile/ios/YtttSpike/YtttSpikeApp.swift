@@ -69,7 +69,14 @@ struct RootPage: View {
         case .home:
             NavigationStack(path: $model.path) { TerminalListView() }
         case .project(let place):
-            NavigationStack { ProjectView(place: place) }
+            SideDrawer(edge: .trailing, isOpen: $model.drawerFilesOpen) {
+                NavigationStack { ProjectView(place: place) }
+            } drawer: {
+                FilesDrawerView(projectId: place.projectId)
+            }
+            .fullScreenCover(item: $model.editing) { file in
+                EditorView(file: file).environmentObject(model)
+            }
         }
     }
 }
