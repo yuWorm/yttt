@@ -2,7 +2,11 @@
 //! and every Agent's state, without boards. Native code counts and sorts it.
 
 use yttt_agent_core::{AgentViewState, WaitingReason};
-use yttt_core::model::host_workspace::HostWorkspaceState;
+use yttt_core::model::{
+    host_workspace::HostWorkspaceState,
+    layout::{LayoutNode, PaneConfig},
+    workspace::PaneProcessState,
+};
 use yttt_protocol::agent::AgentSnapshotUpdate;
 
 #[derive(Clone, Debug, Default, PartialEq, uniffi::Record)]
@@ -18,13 +22,36 @@ pub struct ProjectSummary {
     pub project_id: String,
     pub name: String,
     pub tabs: Vec<TabSummary>,
+    /// The tab the desktop shows, which the phone opens first.
+    pub selected_tab_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct TabSummary {
     pub tab_id: String,
     pub title: String,
-    pub panes: u32,
+    /// In layout order: left (or top) before right (or bottom).
+    pub panes: Vec<PaneSummary>,
+    /// The pane the desktop has focused, shown first.
+    pub focused_pane_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct PaneSummary {
+    pub pane_id: String,
+    pub title: String,
+    /// `{project}:{tab}:{pane}`, the terminal this pane runs.
+    pub session_id: String,
+    pub state: PaneState,
+}
+
+/// Whether the Host runs a pane's process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum PaneState {
+    /// Not started yet, as a lazy tab before it is opened.
+    Idle,
+    Running,
+    Exited,
 }
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
@@ -91,6 +118,27 @@ impl From<WaitingReason> for WaitingKind {
     }
 }
 
+impl From<PaneProcessState> for PaneState {
+    fn from(state: PaneProcessState) -> Self {
+        match state {
+            PaneProcessState::Idle => Self::Idle,
+            PaneProcessState::Running => Self::Running,
+            PaneProcessState::Exited => Self::Exited,
+        }
+    }
+}
+
+/// The panes of a tab's layout, left (or top) first.
+fn collect_panes<'a>(node: &'a LayoutNode, panes: &mut Vec<&'a PaneConfig>) {
+    match node {
+        LayoutNode::Pane(pane) => panes.push(pane),
+        LayoutNode::Split(split) => {
+            collect_panes(&split.left, panes);
+            collect_panes(&split.right, panes);
+        }
+    }
+}
+
 /// The overview from the open workspace's `layout` (none before it opened),
 /// the Agent snapshots and the number of terminals, in the Host's order.
 pub fn build(
@@ -111,14 +159,40 @@ pub fn build(
                         .layout
                         .tabs
                         .iter()
-                        .map(|tab| TabSummary {
-                            tab_id: tab.id.clone(),
-                            title: tab.title.clone(),
-                            panes: project
-                                .tab_state(&tab.id)
-                                .map_or(0, |state| state.pane_states.len() as u32),
+                        .map(|tab| {
+                            let state = project.tab_state(&tab.id);
+                            let mut panes = Vec::new();
+                            collect_panes(&tab.layout, &mut panes);
+                            TabSummary {
+                                tab_id: tab.id.clone(),
+                                title: tab.title.clone(),
+                                panes: panes
+                                    .into_iter()
+                                    .map(|pane| PaneSummary {
+                                        pane_id: pane.id.clone(),
+                                        title: pane.title.clone(),
+                                        session_id: format!(
+                                            "{}:{}:{}",
+                                            project.id, tab.id, pane.id
+                                        ),
+                                        state: state
+                                            .and_then(|state| {
+                                                state
+                                                    .pane_states
+                                                    .iter()
+                                                    .find(|known| known.pane_id == pane.id)
+                                            })
+                                            .map_or(PaneState::Idle, |known| {
+                                                PaneState::from(known.process_state)
+                                            }),
+                                    })
+                                    .collect(),
+                                focused_pane_id: state
+                                    .and_then(|state| state.focused_pane_id.clone()),
+                            }
                         })
                         .collect(),
+                    selected_tab_id: project.selected_tab_id.clone(),
                 })
                 .collect()
         })
@@ -229,7 +303,13 @@ mod tests {
             [[tabs]]
             id = "dev"
             title = "Dev server"
-            layout = { type = "pane", id = "server", title = "Server", command = "npm run dev" }
+
+            [tabs.layout]
+            type = "split"
+            direction = "horizontal"
+            ratio = 0.5
+            left = { type = "pane", id = "server", title = "Server", command = "npm run dev" }
+            right = { type = "pane", id = "logs", title = "Logs", command = "tail -f log" }
 
             [[tabs]]
             id = "agents"
@@ -251,20 +331,16 @@ mod tests {
                     instance_id: ProjectInstanceId::random(),
                     location: ProjectLocation::local("/tmp/web"),
                     layout: project,
-                    selected_tab_id: "dev".to_string(),
+                    selected_tab_id: "agents".to_string(),
                     tab_states: vec![
                         TabState {
                             tab_id: "dev".to_string(),
                             start_state: TabStartState::Started,
-                            focused_pane_id: Some("server".to_string()),
-                            pane_states: vec![pane("server"), pane("logs")],
+                            focused_pane_id: Some("logs".to_string()),
+                            // As the Host keeps them, not in layout order.
+                            pane_states: vec![pane("logs"), pane("server")],
                         },
-                        TabState {
-                            tab_id: "agents".to_string(),
-                            start_state: TabStartState::Started,
-                            focused_pane_id: Some("claude".to_string()),
-                            pane_states: vec![pane("claude")],
-                        },
+                        // "agents" has not started: no state for its pane.
                     ],
                 }],
                 selected_project_id: Some(ProjectId::new("web")),
@@ -314,6 +390,12 @@ mod tests {
     fn projects_and_tabs_come_from_the_layout() {
         let overview = build(Some(&layout()), &[], 3);
         assert_eq!(overview.terminals, 3);
+        let pane = |id: &str, title: &str, tab: &str, state| PaneSummary {
+            pane_id: id.to_string(),
+            title: title.to_string(),
+            session_id: format!("web:{tab}:{id}"),
+            state,
+        };
         assert_eq!(
             overview.projects,
             vec![ProjectSummary {
@@ -323,14 +405,30 @@ mod tests {
                     TabSummary {
                         tab_id: "dev".to_string(),
                         title: "Dev server".to_string(),
-                        panes: 2,
+                        panes: vec![
+                            pane(
+                                "server",
+                                "Server",
+                                "dev",
+                                crate::overview::PaneState::Running
+                            ),
+                            pane("logs", "Logs", "dev", crate::overview::PaneState::Running),
+                        ],
+                        focused_pane_id: Some("logs".to_string()),
                     },
                     TabSummary {
                         tab_id: "agents".to_string(),
                         title: "Agents".to_string(),
-                        panes: 1,
+                        panes: vec![pane(
+                            "claude",
+                            "Claude",
+                            "agents",
+                            crate::overview::PaneState::Idle
+                        )],
+                        focused_pane_id: None,
                     },
                 ],
+                selected_tab_id: "agents".to_string(),
             }]
         );
         assert!(overview.agents.is_empty());
