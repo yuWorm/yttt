@@ -189,6 +189,18 @@ async fn main() {
         layout = { type = "pane", id = "1", title = "Demo", command = "sh demo.sh" }
 
         [[tabs]]
+        id = "server"
+        title = "Server"
+        startup = "eager"
+
+        [tabs.layout]
+        type = "split"
+        direction = "horizontal"
+        ratio = 0.5
+        left = { type = "pane", id = "app", title = "App", command = "sh demo.sh" }
+        right = { type = "pane", id = "logs", title = "Logs", command = "zsh -f -i" }
+
+        [[tabs]]
         id = "review"
         title = "Code review"
         startup = "eager"
@@ -235,7 +247,10 @@ async fn main() {
         }))
         .await
         .unwrap();
-    println!("project Spike: spike:shell:1, spike:demo:1, spike:review:codex, spike:build:codex");
+    println!(
+        "project Spike: spike:shell:1, spike:demo:1, spike:server:app + spike:server:logs (split), \
+         spike:review:codex, spike:build:codex"
+    );
 
     let code_file = state.join("pairing-code");
     new_invitation(&admin, &code_file).await;

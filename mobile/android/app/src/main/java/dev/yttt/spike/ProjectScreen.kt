@@ -63,7 +63,12 @@ fun LeftDrawer(
                         badge?.failed?.takeIf { it > 0 }?.let {
                             Badge(containerColor = MaterialTheme.colorScheme.errorContainer) { Text("败 $it") }
                         }
-                        badge?.running?.takeIf { it > 0 }?.let { Badge { Text("运行 $it") } }
+                        badge?.running?.takeIf { it > 0 }?.let {
+                            Badge(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            ) { Text("运行 $it") }
+                        }
                     }
                 },
                 modifier = Modifier.padding(horizontal = 12.dp),
