@@ -114,9 +114,12 @@ class LinkService : Service() {
         }
     }
 
+    private fun currentHostName(): String? =
+        link.hostNames(link.hosts.value).firstOrNull { it.first == link.hosts.value.current }?.second
+
     private fun ongoing() = NotificationCompat.Builder(this, LINK_CHANNEL)
         .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-        .setContentTitle("保持与 Host 的连接")
+        .setContentTitle(currentHostName()?.let { "保持与 $it 的连接" } ?: "保持与 Host 的连接")
         .setContentText("Agent 需要处理时会通知你")
         .setOngoing(true)
         .setContentIntent(

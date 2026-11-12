@@ -35,7 +35,6 @@ fun LeftDrawer(
     current: String?,
     onHome: () -> Unit,
     onProject: (String) -> Unit,
-    onForget: () -> Unit,
 ) {
     val badges = overview.badges()
     ModalDrawerSheet {
@@ -74,13 +73,6 @@ fun LeftDrawer(
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
         }
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        NavigationDrawerItem(
-            label = { Text("忘记这台 Host") },
-            selected = false,
-            onClick = onForget,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
     }
 }
 

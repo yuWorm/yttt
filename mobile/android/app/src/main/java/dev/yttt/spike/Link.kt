@@ -43,7 +43,11 @@ class Link(context: Context) {
     /** Spike automation: keep off direct paths. */
     @Volatile var relayOnly = false
 
-    val record = MutableStateFlow(storage.load("host.json"))
+    private val hostStore = HostStore(storage.dir) { core.hostInfo(it).id }
+    /** The paired Hosts; the link is with the current one. */
+    val hosts = MutableStateFlow(hostStore.load())
+    /** The current Host's record. */
+    val record = MutableStateFlow(hosts.value.currentRecord)
     val session = MutableStateFlow<HostSession?>(null)
     val overview = MutableStateFlow(Overview(emptyList(), emptyList(), 0u))
     val status = MutableStateFlow("")
@@ -82,9 +86,36 @@ class Link(context: Context) {
         app.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
     }
 
-    fun savePairing(record: ByteArray) {
-        storage.save("host.json", record)
-        this.record.value = record
+    /** Each Host's name, told apart when two share one. */
+    fun hostNames(list: HostList): List<Pair<String, String>> =
+        list.names { runCatching { core.hostInfo(it).label }.getOrDefault("Host") }
+
+    /** Keeps a newly paired Host (or a Host paired again) and makes it current. */
+    suspend fun savePairing(record: ByteArray) = changeHosts(hosts.value.added(core.hostInfo(record).id, record))
+
+    /** Connects to another paired Host instead. */
+    suspend fun switchTo(id: String) {
+        if (id != hosts.value.current) changeHosts(hosts.value.selected(id))
+    }
+
+    /** Forgets the current Host; the link moves to the first one left, if any. */
+    suspend fun forget() {
+        val current = hosts.value.current ?: return
+        changeHosts(hosts.value.removed(current))
+    }
+
+    /**
+     * Drops the link and what the old Host said (its wait notifications go
+     * with its overview), then stores the list; screens connect to the new
+     * current Host as `record` changes.
+     */
+    private suspend fun changeHosts(list: HostList) {
+        disconnect()
+        overview.value = Overview(emptyList(), emptyList(), 0u)
+        viewing.value = null
+        hostStore.save(list)
+        hosts.value = list
+        record.value = list.currentRecord
     }
 
     /** Connects once, however many screens and services ask at the same time. */
@@ -107,14 +138,6 @@ class Link(context: Context) {
             status.value = "连接失败：${error.message}"
             null
         }
-    }
-
-    /** Forgets the paired Host: disconnects and deletes the record. */
-    suspend fun forget() {
-        disconnect()
-        storage.save("host.json", null)
-        record.value = null
-        overview.value = Overview(emptyList(), emptyList(), 0u)
     }
 
     suspend fun disconnect() {

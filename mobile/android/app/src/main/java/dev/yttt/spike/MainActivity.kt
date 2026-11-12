@@ -13,6 +13,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.DrawerValue
@@ -82,7 +83,7 @@ import java.security.SecureRandom
 
 /** App-private files; the device secret is encrypted with a Keystore key. */
 class Storage(context: Context) {
-    private val dir = File(context.filesDir, "yttt-spike").apply { mkdirs() }
+    val dir = File(context.filesDir, "yttt-spike").apply { mkdirs() }
 
     fun load(name: String): ByteArray? = File(dir, name).takeIf { it.exists() }?.readBytes()
 
@@ -180,6 +181,9 @@ fun App(
     onBattery: () -> Unit,
 ) {
     val record by link.record.collectAsState()
+    val hosts by link.hosts.collectAsState()
+    // Pairing with one more Host while connected to another.
+    var addingHost by remember { mutableStateOf(false) }
     val session by link.session.collectAsState()
     val overview by link.overview.collectAsState()
     val linkStatus by link.status.collectAsState()
@@ -208,6 +212,9 @@ fun App(
         try {
             link.savePairing(link.core.pair(code.trim(), "Android spike", link.secret, link.relayOnly, listener))
             status = ""
+            pairingDigits = null
+            addingHost = false
+            root = Root.Home
         } catch (error: Exception) {
             status = "配对失败：${error.message}"
         }
@@ -248,8 +255,9 @@ fun App(
             }
         }
     }
-    BackHandler(enabled = editing == null && (root != Root.Home || drawer.isOpen || filesDrawer.isOpen)) {
+    BackHandler(enabled = editing == null && (addingHost || root != Root.Home || drawer.isOpen || filesDrawer.isOpen)) {
         when {
+            addingHost -> addingHost = false
             drawer.isOpen -> scope.launch { drawer.close() }
             filesDrawer.isOpen -> scope.launch { filesDrawer.close() }
             else -> root = Root.Home
@@ -262,9 +270,14 @@ fun App(
     }
 
     val current = session
-    val hostLabel = record?.let { runCatching { link.core.hostInfo(it).label }.getOrNull() }.orEmpty()
-    if (record == null) {
-        PairScreen(status, pairingDigits) { code -> scope.launch { pair(code) } }
+    val hostNames = link.hostNames(hosts)
+    val hostLabel = hostNames.firstOrNull { it.first == hosts.current }?.second.orEmpty()
+    if (record == null || addingHost) {
+        PairScreen(
+            status,
+            pairingDigits,
+            onBack = if (record != null) ({ addingHost = false; status = ""; pairingDigits = null }) else null,
+        ) { code -> scope.launch { pair(code) } }
         return
     }
     ModalNavigationDrawer(
@@ -278,7 +291,6 @@ fun App(
                 current = (root as? Root.Project)?.place?.projectId,
                 onHome = { root = Root.Home; scope.launch { drawer.close() } },
                 onProject = { id -> root = Root.Project(overview.initialPlace(id)); scope.launch { drawer.close() } },
-                onForget = { scope.launch { drawer.close(); link.forget(); root = Root.Home } },
             )
         },
     ) {
@@ -325,6 +337,13 @@ fun App(
             }
             Root.Home -> HomeScreen(
                 hostLabel = hostLabel,
+                hosts = HostMenu(
+                    names = hostNames,
+                    current = hosts.current,
+                    onSwitch = { id -> scope.launch { link.switchTo(id) } },
+                    onAdd = { status = ""; addingHost = true },
+                    onForget = { scope.launch { link.forget() } },
+                ),
                 status = status.ifEmpty { linkStatus },
                 overview = overview,
                 terminals = terminals,
@@ -338,7 +357,7 @@ fun App(
 }
 
 @Composable
-fun PairScreen(status: String, shortCode: UInt?, onPair: (String) -> Unit) {
+fun PairScreen(status: String, shortCode: UInt?, onBack: (() -> Unit)? = null, onPair: (String) -> Unit) {
     var code by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     var scanError by remember { mutableStateOf<String?>(null) }
@@ -354,7 +373,10 @@ fun PairScreen(status: String, shortCode: UInt?, onPair: (String) -> Unit) {
         return
     }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("配对 Host", style = MaterialTheme.typography.titleLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) TextButton(onClick = onBack) { Text("返回") }
+            Text(if (onBack != null) "添加 Host" else "配对 Host", style = MaterialTheme.typography.titleLarge)
+        }
         Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("扫描电脑上的二维码") }
         OutlinedButton(
             onClick = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },

@@ -16,6 +16,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,10 +35,20 @@ import uniffi.yttt_mobile_core.AgentSummary
 import uniffi.yttt_mobile_core.Overview
 import uniffi.yttt_mobile_core.TerminalInfo
 
+/** The paired Hosts, for the menu under the home screen's title. */
+class HostMenu(
+    val names: List<Pair<String, String>>,
+    val current: String?,
+    val onSwitch: (String) -> Unit,
+    val onAdd: () -> Unit,
+    val onForget: () -> Unit,
+)
+
 /** The home screen: counts, then what needs the user, what runs and what ended. */
 @Composable
 fun HomeScreen(
     hostLabel: String,
+    hosts: HostMenu,
     status: String,
     overview: Overview,
     terminals: List<TerminalInfo>,
@@ -48,6 +61,19 @@ fun HomeScreen(
     var showFinished by remember { mutableStateOf(false) }
     var showTerminals by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
+    var hostMenu by remember { mutableStateOf(false) }
+    var confirmForget by remember { mutableStateOf(false) }
+    if (confirmForget) {
+        AlertDialog(
+            onDismissRequest = { confirmForget = false },
+            title = { Text("忘记 $hostLabel？") },
+            text = { Text("这台手机不再连接它。要再用，需要在电脑上重新配对。") },
+            confirmButton = {
+                TextButton(onClick = { confirmForget = false; hosts.onForget() }) { Text("忘记") }
+            },
+            dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("取消") } },
+        )
+    }
     if (showLicenses) {
         AlertDialog(
             onDismissRequest = { showLicenses = false },
@@ -69,8 +95,25 @@ fun HomeScreen(
                 IconButton(onClick = onMenu) { Text("☰", style = MaterialTheme.typography.titleLarge) }
                 Text("总控", style = MaterialTheme.typography.titleLarge)
             }
-            Text(hostLabel, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 16.dp))
+            Box(Modifier.padding(horizontal = 16.dp)) {
+                Text("$hostLabel ▾", style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.clickable { hostMenu = true })
+                DropdownMenu(expanded = hostMenu, onDismissRequest = { hostMenu = false }) {
+                    for ((id, name) in hosts.names) {
+                        DropdownMenuItem(
+                            text = { Text(name) },
+                            leadingIcon = { Text(if (id == hosts.current) "✓" else "  ") },
+                            onClick = { hostMenu = false; hosts.onSwitch(id) },
+                        )
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("添加 Host") }, onClick = { hostMenu = false; hosts.onAdd() })
+                    DropdownMenuItem(
+                        text = { Text("忘记这台 Host", color = MaterialTheme.colorScheme.error) },
+                        onClick = { hostMenu = false; confirmForget = true },
+                    )
+                }
+            }
             if (status.isNotEmpty()) Text(status, Modifier.padding(horizontal = 16.dp))
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 Count(sections.projects, "项目")
