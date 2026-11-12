@@ -63,3 +63,18 @@ pub fn encode(key: TerminalKey, app_cursor: bool) -> &'static [u8]
 ## 任务 6：结论
 
 更新移动端设计 §2、§4，在本文末尾写执行记录。
+
+## 执行记录（2026-11-12）
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1、2 编码与 FFI | 5efdbf6 | 单元测试 2 项（先桩后实现）。集成测试连跑 3 次通过：程序先收到 `1b 5b 41`，进入应用光标模式后收到 `1b 4f 41`。把 `send_key` 改成忽略光标模式后，测试失败（变异检查）。 |
+| 3 Android 按键栏 | 7aaaa76 | `CtrlKey` 单元测试 3 项（桩下 2 项失败）。 |
+| 4 iOS | — | 不改代码，沿用 SwiftTerm 的按键栏（之前的截图里接管后可见）。模拟器不能点击和输入，iOS 上的实际按键未验证。 |
+
+### 模拟器验证（Android，spike Host 的 zsh）
+
+- 接管后，软键盘上方出现 Esc、Tab、Ctrl、←、↓、↑、→（其余可以横向滚动）。
+- `echo abc`，按两次 ←，输入 `X`，回车：命令为 `echo aXbc`，输出 `aXbc`。
+- `sleep 30`，回车，点 Ctrl（亮起）再输入 `c`：显示 `^C`，提示符回来，Ctrl 自动熄灭。
+- `cat RE` 加 Tab：补全为 `cat README.md`。
