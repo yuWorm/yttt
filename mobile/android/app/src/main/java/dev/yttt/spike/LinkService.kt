@@ -66,6 +66,8 @@ class LinkService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        // Nothing would take them back once the service is gone.
+        NotificationManagerCompat.from(this).cancelAll()
         super.onDestroy()
     }
 
