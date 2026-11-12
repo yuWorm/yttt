@@ -45,6 +45,11 @@ final class OverviewSink: OverviewListener, @unchecked Sendable {
     func onOverview(overview: Overview) { onOverview(overview) }
 }
 
+enum Root: Equatable {
+    case home
+    case project(Place)
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     let core: MobileCore
@@ -57,6 +62,9 @@ final class AppModel: ObservableObject {
     @Published var terminals: [TerminalInfo] = []
     @Published var overview = Overview(projects: [], agents: [], terminals: 0)
     @Published var path: [TerminalInfo] = []
+    /// The root page, switched from the left drawer.
+    @Published var root: Root = .home
+    @Published var drawerOpen = false
 
     /// Spike-only automation for simulator runs, set through
     /// `SIMCTL_CHILD_<name>`: pair with this code, open this terminal, then
@@ -64,6 +72,13 @@ final class AppModel: ObservableObject {
     static let autoPairCode = ProcessInfo.processInfo.environment["YTTT_SPIKE_PAIR_CODE"]
     static let autoOpen = ProcessInfo.processInfo.environment["YTTT_SPIKE_OPEN"]
     static let autoType = ProcessInfo.processInfo.environment["YTTT_SPIKE_TYPE"]
+    /// Open this project (and tab, pane) once the overview has it, and
+    /// optionally show the drawer, for screenshots.
+    static let autoProject = ProcessInfo.processInfo.environment["YTTT_SPIKE_PROJECT"]
+    static let autoTab = ProcessInfo.processInfo.environment["YTTT_SPIKE_TAB"]
+    static let autoPane = ProcessInfo.processInfo.environment["YTTT_SPIKE_PANE"]
+    static let autoDrawer = ProcessInfo.processInfo.environment["YTTT_SPIKE_DRAWER"] == "1"
+    private var automated = false
     /// Keep off direct paths: everything goes through the Host's relay.
     static let relayOnly = ProcessInfo.processInfo.environment["YTTT_SPIKE_RELAY_ONLY"] == "1"
 
@@ -134,7 +149,7 @@ final class AppModel: ObservableObject {
             status = ""
             _ = try? await session?.openActiveWorkspace()
             session?.watchOverview(listener: OverviewSink { overview in
-                Task { @MainActor in self.overview = overview }
+                Task { @MainActor in self.apply(overview) }
             })
             await refresh()
         } catch {
@@ -169,8 +184,43 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Opens the terminal an Agent runs in.
+    private func apply(_ overview: Overview) {
+        let terminalsChanged = overview.terminals != self.overview.terminals
+        self.overview = overview
+        // The terminals change as panes start and stop.
+        if terminalsChanged { Task { await refresh() } }
+        if !automated, let project = Self.autoProject,
+           overview.projects.contains(where: { $0.projectId == project }) {
+            automated = true
+            var place = overview.initialPlace(project)
+            if let tab = Self.autoTab { place = overview.placeIn(project, tab) }
+            if let pane = Self.autoPane { place = Place(projectId: project, tabId: place.tabId, paneId: pane) }
+            root = .project(place)
+            drawerOpen = Self.autoDrawer
+        }
+    }
+
+    var currentProject: String? {
+        if case .project(let place) = root { return place.projectId }
+        return nil
+    }
+
+    func goHome() {
+        root = .home
+        drawerOpen = false
+    }
+
+    func openProject(_ projectId: String) {
+        root = .project(overview.initialPlace(projectId))
+        drawerOpen = false
+    }
+
+    /// Opens the pane an Agent runs in, or its terminal alone.
     func open(agent: AgentSummary) async {
+        if let place = overview.placeOf(agent.sessionId) {
+            root = .project(place)
+            return
+        }
         if !terminals.contains(where: { $0.sessionId == agent.sessionId }) { await refresh() }
         if let terminal = terminals.first(where: { $0.sessionId == agent.sessionId }) {
             path.append(terminal)
@@ -185,5 +235,7 @@ final class AppModel: ObservableObject {
         terminals = []
         Storage.save("host.json", nil)
         record = nil
+        root = .home
+        drawerOpen = false
     }
 }

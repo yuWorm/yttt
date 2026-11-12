@@ -10,6 +10,8 @@ final class TerminalHandle {
 struct TerminalScreen: View {
     let session: HostSession
     let terminal: TerminalInfo
+    /// What the take-control button says, such as what a waiting Agent wants.
+    var tip = "接管终端"
     @State private var controlling = false
     @State private var hostTooOld = false
     @State private var stats = ""
@@ -53,7 +55,7 @@ struct TerminalScreen: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("接管终端") { Task { await takeControl() } }
+                    Button(tip) { Task { await takeControl() } }
                     .buttonStyle(.borderedProminent)
                 }
                 .padding()
@@ -70,8 +72,6 @@ struct TerminalScreen: View {
                 .padding(8)
                 .allowsHitTesting(false)
         }
-        .navigationTitle(terminal.sessionId)
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if controlling {
                 ToolbarItem(placement: .topBarTrailing) {

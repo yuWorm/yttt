@@ -7,11 +7,15 @@ struct YtttSpikeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NavigationStack(path: $model.path) {
+            Group {
                 if model.record == nil {
-                    PairView()
+                    NavigationStack { PairView() }
                 } else {
-                    TerminalListView()
+                    SideDrawer(isOpen: $model.drawerOpen) {
+                        RootPage()
+                    } drawer: {
+                        LeftDrawerView()
+                    }
                 }
             }
             .environmentObject(model)
@@ -53,6 +57,20 @@ struct PairView: View {
             }
         }
         .navigationTitle("配对 Host")
+    }
+}
+
+/// The overview or a project, the two root pages the drawer switches.
+struct RootPage: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        switch model.root {
+        case .home:
+            NavigationStack(path: $model.path) { TerminalListView() }
+        case .project(let place):
+            NavigationStack { ProjectView(place: place) }
+        }
     }
 }
 
@@ -104,13 +122,19 @@ struct TerminalListView: View {
                 }
             }
         }
-        .navigationTitle(model.hostLabel)
+        .navigationTitle("总控")
         .navigationDestination(for: TerminalInfo.self) { terminal in
             if let session = model.session {
-                TerminalScreen(session: session, terminal: terminal)
+                TerminalScreen(session: session, terminal: terminal,
+                               tip: tipText(model.overview.agents.first { $0.sessionId == terminal.sessionId }))
+                    .navigationTitle(terminal.sessionId)
+                    .navigationBarTitleDisplayMode(.inline)
             }
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { model.drawerOpen = true } label: { Image(systemName: "line.3.horizontal") }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("刷新") { Task { await model.refresh() } }
