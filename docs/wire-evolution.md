@@ -48,6 +48,14 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   以 `Response::TerminalController(TerminalController { controller, epoch })` 回复,事件
   `ServerEvent::TerminalControllerChanged(TerminalController)`。所有 Interactive lease 归同一个
   controller;新会话首次请求写入即接管,失去控制的会话只能显式 `TakeTerminalController`。
+  之后追加(未升版本):单独接管终端。请求 `TakeTerminal { session_id }` 只把这一个终端的
+  Interactive lease 移给请求方(回 `TerminalLease`),不改 controller,Host 记住交还给谁;
+  `ReturnTerminals { session_ids }`(空列表 = 本 Client 单独接管的全部,未持有的跳过,回 `Applied`)
+  把 lease 交还给接管前的持有者,其已离开时交给 controller,都没有则放掉。第一次写入与 controller
+  继任不移动单独接管的 lease,`TakeTerminalController` 仍移动全部;继任者只从请求过写入的 Client 中选。
+  事件沿用 `TerminalLeaseRevoked`、`TerminalLeaseReleased`、`TerminalControlGranted`。旧 Host 回
+  `Unsupported`:新桌面退回 `TakeTerminalController`,手机只观察;旧桌面不发新请求,手机接管某个终端时
+  它的那个 pane 收到 `TerminalLeaseRevoked` 变只读,点接管仍拿回全部。
   `RequestTerminalControl` 不再排队,Host 不再发送 `TerminalControlRequested`、`TerminalControlDenied`、
   `TerminalLeaseExpired` 与 `TerminalControlPending`(名称保留不复用)。旧 Host 对两个新请求回复
   `Unsupported`,Client 隐藏接管入口;旧 Client 跳过新事件,失去控制后仍按 lease 事件变为只读。

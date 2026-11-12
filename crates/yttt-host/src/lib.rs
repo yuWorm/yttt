@@ -2756,6 +2756,9 @@ async fn handle_request(
             Ok(Response::Applied)
         })()
         .map_err(runtime_failure),
+        Request::TakeTerminal { .. } | Request::ReturnTerminals { .. } => Err(
+            ProtocolFailure::new(FailureCode::Unsupported, "not served yet", false),
+        ),
         Request::TerminalInput(input) => (|| {
             let terminal = runtime
                 .terminal(&input.session_id)

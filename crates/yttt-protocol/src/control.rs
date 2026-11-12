@@ -242,6 +242,21 @@ pub enum Request {
     SetAgentBoardInterest {
         watch: bool,
     },
+    /// Takes this one terminal's Interactive lease without becoming the
+    /// terminal controller; the Host remembers whom to give it back to.
+    /// Answered with `TerminalLease`; a Host that predates it answers
+    /// `Unsupported`.
+    TakeTerminal {
+        session_id: TerminalSessionId,
+    },
+    /// Gives terminals this Client holds back to whoever held them before it
+    /// took them, or else to the terminal controller; with neither the lease
+    /// is left unheld. An empty list returns every terminal this Client took
+    /// on its own, and terminals it does not hold are skipped. Answered with
+    /// `Applied`.
+    ReturnTerminals {
+        session_ids: Vec<TerminalSessionId>,
+    },
 }
 
 /// Whether requests of `kind` (see [`Request::kind`]) are ones a Client
@@ -291,6 +306,8 @@ impl Request {
             Self::ReadTerminalController => "ReadTerminalController",
             Self::TakeTerminalController => "TakeTerminalController",
             Self::SetAgentBoardInterest { .. } => "SetAgentBoardInterest",
+            Self::TakeTerminal { .. } => "TakeTerminal",
+            Self::ReturnTerminals { .. } => "ReturnTerminals",
         }
     }
 }
@@ -321,6 +338,8 @@ impl Request {
             | Self::RequestTerminalControl { .. }
             | Self::ReleaseTerminalControl { .. }
             | Self::TakeTerminalController
+            | Self::TakeTerminal { .. }
+            | Self::ReturnTerminals { .. }
             | Self::ReleaseTerminalLease { .. }
             | Self::TerminateMany { .. } => Some(Capability::TerminalInteractive),
             Self::AttachTerminal(attach) => (attach.mode == TerminalLeaseMode::Interactive)
@@ -378,6 +397,7 @@ impl Request {
             | Self::ReleaseTerminalLease { session_id }
             | Self::RequestTerminalControl { session_id }
             | Self::ReleaseTerminalControl { session_id }
+            | Self::TakeTerminal { session_id }
             | Self::RequestCheckpoint { session_id, .. }
             | Self::AcknowledgeTerminalExit { session_id, .. }
             | Self::TerminateTerminal { session_id, .. } => session_id.to_string(),
@@ -404,6 +424,11 @@ impl Request {
             Self::TerminateMany { requests } => requests
                 .iter()
                 .map(|request| request.session_id.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            Self::ReturnTerminals { session_ids } => session_ids
+                .iter()
+                .map(|session_id| session_id.as_str())
                 .collect::<Vec<_>>()
                 .join(","),
             Self::Ping { .. }
@@ -729,6 +754,12 @@ mod capability_tests {
                 session_id: session(),
             },
             Request::TakeTerminalController,
+            Request::TakeTerminal {
+                session_id: session(),
+            },
+            Request::ReturnTerminals {
+                session_ids: Vec::new(),
+            },
             Request::TerminateTerminal {
                 session_id: session(),
                 host_epoch: 1,

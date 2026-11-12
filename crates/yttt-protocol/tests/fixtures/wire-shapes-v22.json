@@ -1253,6 +1253,9 @@
       "session_id"
     ],
     "ResizeTerminal": [],
+    "ReturnTerminals": [
+      "session_ids"
+    ],
     "ScrollTerminal": [],
     "SearchTerminal": [],
     "SetAgentBoardInterest": [
@@ -1274,6 +1277,9 @@
     "SshConnect": [],
     "SshDisconnect": [
       "connection_id"
+    ],
+    "TakeTerminal": [
+      "session_id"
     ],
     "TakeTerminalController": [],
     "TerminalInput": [],
