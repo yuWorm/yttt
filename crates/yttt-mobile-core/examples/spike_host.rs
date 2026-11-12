@@ -9,11 +9,14 @@
 //! post Codex hook events with `curl`.
 //!
 //! ```text
-//! cargo run -p yttt-mobile-core --example spike_host [-- --relay http://<LAN IP>:3341]
+//! cargo run -p yttt-mobile-core --example spike_host [-- --relay http://<LAN IP>:3341] [--name A]
 //! ```
 //!
 //! The current pairing code is also written to
 //! `target/mobile-spike-host/pairing-code`. Everything is deleted on exit.
+//!
+//! `--name A` runs one of several spike Hosts side by side: its pairing code
+//! goes to `target/mobile-spike-host-A/` and its project is "Spike A".
 
 use std::{fs, path::Path, time::Duration};
 
@@ -125,7 +128,17 @@ async fn main() {
     if let Some(url) = &relay_url {
         println!("relay: {url}");
     }
-    let state = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/mobile-spike-host");
+    let name = args
+        .iter()
+        .position(|arg| arg == "--name")
+        .and_then(|at| args.get(at + 1).cloned());
+    let (state_dir, project_name) = match &name {
+        Some(name) => (format!("mobile-spike-host-{name}"), format!("Spike {name}")),
+        None => ("mobile-spike-host".to_owned(), "Spike".to_owned()),
+    };
+    let state = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(state_dir);
     let _ = fs::remove_dir_all(&state);
     fs::create_dir_all(&state).unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -185,9 +198,9 @@ async fn main() {
     println!("project files: {}", project.display());
     // The Host starts each eager tab's pane, as for a project the desktop opens.
     let layout: ProjectLayout = toml::from_str(
-        r#"
+        &r#"
         [project]
-        name = "Spike"
+        name = "{project}"
 
         [[tabs]]
         id = "shell"
@@ -224,7 +237,8 @@ async fn main() {
         title = "Build"
         startup = "eager"
         layout = { type = "pane", id = "codex", title = "Codex", command = "sh agent.sh build 'Fix the failing build' 8" }
-        "#,
+        "#
+        .replace("{project}", &project_name),
     )
     .unwrap();
     let workspace_id = WorkspaceId::new("spike").unwrap();

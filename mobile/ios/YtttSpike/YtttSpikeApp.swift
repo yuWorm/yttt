@@ -24,7 +24,8 @@ struct YtttSpikeApp: App {
             }
             .environmentObject(model)
             .task {
-                if model.record == nil, let code = AppModel.autoPairCode {
+                // With a Host paired already, adds one more, as "添加 Host" does.
+                if let code = AppModel.autoPairCode {
                     await model.pair(code: code)
                 }
             }

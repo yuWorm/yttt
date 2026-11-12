@@ -21,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 private const val LINK_CHANNEL = "link"
@@ -57,6 +58,16 @@ class LinkService : Service() {
             if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0,
         )
         if (watching == null) {
+            // The ongoing notification names the current Host.
+            scope.launch {
+                link.hosts.drop(1).collect {
+                    if (ContextCompat.checkSelfPermission(this@LinkService, Manifest.permission.POST_NOTIFICATIONS) ==
+                        PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < 33
+                    ) {
+                        NotificationManagerCompat.from(this@LinkService).notify(LINK_NOTIFICATION_ID, ongoing())
+                    }
+                }
+            }
             watching = scope.launch {
                 link.connect()
                 combine(link.overview, link.viewing, link.foreground) { overview, viewing, foreground ->

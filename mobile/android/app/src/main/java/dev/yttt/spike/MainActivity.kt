@@ -99,8 +99,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Spike-only automation for emulator runs (adb shell am start -e ...).
         // `qrImage`: a picture in the app's files to pair from, read as the
-        // image picker reads one.
-        val autoPair = intent.getStringExtra("pair")
+        // image picker reads one. With a Host paired already, it adds one
+        // more, as "添加 Host" does. Once per launch, not on recreation.
+        val autoPair = if (savedInstanceState != null) null else intent.getStringExtra("pair")
             ?: intent.getStringExtra("qrImage")?.let { name ->
                 BitmapFactory.decodeFile(java.io.File(filesDir, name).path)
                     ?.let { decodePairingCode(it.luminance(), it.width, it.height) }
@@ -226,12 +227,14 @@ fun App(
     }
 
     LaunchedEffect(Unit) {
-        if (record == null && autoPair != null) pair(autoPair)
+        if (autoPair != null) pair(autoPair)
     }
     LaunchedEffect(record) {
         if (record == null) return@LaunchedEffect
         val connected = link.connect() ?: return@LaunchedEffect
-        terminals = connected.terminals()
+        // A Host change can drop this link while the call is out; its error
+        // must not escape the cancelled effect and end the app.
+        terminals = runCatching { connected.terminals() }.getOrDefault(emptyList())
         onConnected()
     }
     // The terminals change as panes start and stop.
