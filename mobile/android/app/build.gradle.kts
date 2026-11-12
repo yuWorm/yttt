@@ -54,4 +54,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     testImplementation("junit:junit:4.13.2")
+    // The real org.json: the android.jar one only throws in JVM tests.
+    testImplementation("org.json:json:20250517")
 }

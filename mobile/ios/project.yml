@@ -62,6 +62,7 @@ targets:
       - YtttSpike/FileTree.swift
       - YtttSpike/SecretStore.swift
       - YtttSpike/PairingScan.swift
+      - YtttSpike/HostList.swift
       - path: ../../target/mobile/ios/swift
         group: Generated
     dependencies:

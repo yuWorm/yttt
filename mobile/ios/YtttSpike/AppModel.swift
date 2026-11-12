@@ -104,7 +104,7 @@ final class AppModel: ObservableObject {
 
     var hostLabel: String {
         guard let record else { return "" }
-        return (try? core.hostLabel(record: record)) ?? ""
+        return (try? core.hostInfo(record: record).label) ?? ""
     }
 
     func pair(code: String) async {

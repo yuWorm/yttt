@@ -262,7 +262,7 @@ fun App(
     }
 
     val current = session
-    val hostLabel = record?.let { runCatching { link.core.hostLabel(it) }.getOrNull() }.orEmpty()
+    val hostLabel = record?.let { runCatching { link.core.hostInfo(it).label }.getOrNull() }.orEmpty()
     if (record == null) {
         PairScreen(status, pairingDigits) { code -> scope.launch { pair(code) } }
         return
