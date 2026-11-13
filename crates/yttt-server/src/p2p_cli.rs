@@ -337,6 +337,8 @@ struct Summary {
     relay_account: Option<String>,
     /// The node the Host relays through, with a relay account.
     node: Option<String>,
+    /// Why the Host relays through no node until someone runs `p2p node <id>`.
+    choose_node: Option<String>,
     error: Option<String>,
     /// Remote clients connected now, by their device key or client ID.
     clients: Vec<String>,
@@ -364,6 +366,10 @@ impl Summary {
             node: relay_account
                 .as_ref()
                 .and_then(|account| account.node_id.clone()),
+            choose_node: relay_account
+                .as_ref()
+                .and_then(|account| account.placement_needed.as_ref())
+                .map(choose_node_hint),
             error: error.clone(),
             clients: status
                 .clients
@@ -374,6 +380,27 @@ impl Summary {
                 })
                 .collect(),
         }
+    }
+}
+
+/// What to tell the person at this terminal when the Host's node needs them.
+fn choose_node_hint(needed: &yttt_control_client::PlacementNeeded) -> String {
+    use yttt_control_client::PlacementReason;
+    let current = needed
+        .current
+        .as_ref()
+        .map_or("its node", |current| current.placement.node_id.as_str());
+    let why = match needed.reason {
+        PlacementReason::Missing => "the Host has not chosen a relay node".to_owned(),
+        PlacementReason::NodeUnavailable => format!("{current} is no longer available"),
+        PlacementReason::AddressChanged => format!("{current} has a new address"),
+    };
+    match &needed.suggested {
+        Some(node) => format!(
+            "{why}; run `yttt-server p2p node {}` (or see `p2p nodes`)",
+            node.id
+        ),
+        None => format!("{why}; see `yttt-server p2p nodes`"),
     }
 }
 

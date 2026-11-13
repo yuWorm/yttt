@@ -545,14 +545,16 @@ fn connect_paired(
             *secret,
             yttt_control_client::DeviceKind::Client { host: host.host.0 },
             endpoint.clone(),
-            ticket,
-            |_| {},
-            move |error| {
-                crate::connection_log::note(
-                    &label,
-                    &format!("relay ticket renewal failed: {error}"),
-                );
-            },
+            Some(ticket),
+            yttt_control_client::ticket_events(
+                |_| {},
+                move |error| {
+                    crate::connection_log::note(
+                        &label,
+                        &format!("relay ticket renewal failed: {error}"),
+                    );
+                },
+            ),
         ));
     }
     let connector = Arc::new(host.connector(endpoint));

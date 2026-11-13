@@ -336,10 +336,17 @@ impl WorkbenchView {
             );
         }
         let state = &self.ssh.relay_account;
+        let needed = p2p
+            .relay_account
+            .as_ref()
+            .and_then(|account| account.placement_needed.clone());
+        // While the Host waits for a choice, every node, its old one included,
+        // can be chosen.
         let current = p2p
             .relay_account
             .as_ref()
             .and_then(|account| account.node_id.clone())
+            .filter(|_| needed.is_none())
             .unwrap_or_default();
         let nodes = state.nodes.clone().unwrap_or_default();
         let name_of = |id: &str| {
@@ -390,6 +397,26 @@ impl WorkbenchView {
                         )
                     }),
             );
+        if let Some(needed) = &needed {
+            use yttt_control_client::PlacementReason;
+            let node = needed
+                .current
+                .as_ref()
+                .map(|current| name_of(&current.placement.node_id))
+                .unwrap_or_default();
+            let key = match needed.reason {
+                PlacementReason::Missing => UiTextKey::RelayAccountNodeMissing,
+                PlacementReason::NodeUnavailable => UiTextKey::RelayAccountNodeUnavailable,
+                PlacementReason::AddressChanged => UiTextKey::RelayAccountNodeMoved,
+            };
+            section = section.child(
+                div()
+                    .debug_selector(|| "relay-account-node-needed".into())
+                    .text_xs()
+                    .text_color(theme.danger)
+                    .child(text.get(key).replace("{node}", &node)),
+            );
+        }
         if !state.choosing_node {
             return section;
         }

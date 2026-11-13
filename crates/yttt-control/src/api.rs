@@ -11,7 +11,8 @@ use yttt_relay_ticket::{
     api::{
         AccountCreated, AccountStanding, AccountView, CreateAccount, DeviceEntry, DeviceList,
         DeviceProofBody, DeviceRole, Login, RegisterDevice, Revocation, SessionGranted,
-        SetSuspended, Standing, TicketGranted, TicketRequest, UsageReply, UsageReport,
+        SetSuspended, Standing, TicketGranted, TicketOutcome, TicketRequest, UsageReply,
+        UsageReport,
     },
 };
 
@@ -229,7 +230,7 @@ pub(crate) async fn issue_ticket(
     State(state): Shared,
     session: Session,
     Json(request): Json<TicketRequest>,
-) -> AppResult<Json<TicketGranted>> {
+) -> AppResult<Json<TicketOutcome>> {
     let endpoint_id = proven_device(&request.proof, ProofPurpose::IssueTicket, &session)?;
     let host = request
         .host
@@ -240,7 +241,14 @@ pub(crate) async fn issue_ticket(
         })
         .transpose()?;
     let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
-    let node_id = placement::ticket_node(&mut tx, session.account_id, &endpoint_id, host).await?;
+    let (node_id, host_placement) =
+        match placement::ticket_node(&mut tx, session.account_id, &endpoint_id, host).await? {
+            placement::TicketNode::Node(node_id, placement) => (node_id, placement),
+            placement::TicketNode::Needed(needed) => {
+                tx.commit().await?;
+                return Ok(Json(TicketOutcome::PlacementNeeded(needed)));
+            }
+        };
     let row = sqlx::query(
         "SELECT a.suspended, n.url, p.rate_bps, p.burst_bytes, p.monthly_bytes,
                 p.throttled_rate_bps, COALESCE(u.upstream_bytes, 0) AS used
@@ -280,11 +288,14 @@ pub(crate) async fn issue_ticket(
         issued_unix,
         expires_unix,
     });
-    Ok(Json(TicketGranted {
-        token,
-        node_id,
-        relay_url: row.get("url"),
-        expires_unix,
+    Ok(Json(TicketOutcome::Granted {
+        ticket: TicketGranted {
+            token,
+            node_id,
+            relay_url: row.get("url"),
+            expires_unix,
+        },
+        host_placement: Some(host_placement),
     }))
 }
 

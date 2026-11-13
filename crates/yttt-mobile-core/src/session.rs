@@ -630,9 +630,11 @@ impl MobileSession {
                             key,
                             yttt_client_core::control::DeviceKind::Client { host: host.host.0 },
                             endpoint.clone(),
-                            ticket,
-                            |_| {},
-                            |error| tracing::warn!(%error, "relay ticket renewal failed"),
+                            Some(ticket),
+                            yttt_client_core::control::ticket_events(
+                                |_| {},
+                                |error| tracing::warn!(%error, "relay ticket renewal failed"),
+                            ),
                         )));
                 }
                 session.relay_source = relay_source;

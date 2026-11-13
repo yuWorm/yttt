@@ -1,11 +1,12 @@
 //! Which node each device relays through.
 //!
-//! A Host chooses its node; a Client key relays through the node of the one
-//! Host it connects to, so a Host and its Clients always share a node. The
-//! account's node is the default for new Hosts and for devices registered by
-//! versions that did not say what they are. A device that leaves a node is
-//! written to `node_revocations`, which that node keeps refusing even after
-//! it restarts.
+//! A Host chooses its node and signs that choice (a [`SignedPlacement`]); the
+//! control plane stores the newest one and never moves a Host itself. A Client
+//! key relays through the node of the one Host it connects to, so a Host and
+//! its Clients always share a node. When a Host's node is disabled, leaves the
+//! plan or changes its address, the Host gets no ticket until its user
+//! chooses again. A device that leaves a node is written to
+//! `node_revocations`, which that node keeps refusing even after it restarts.
 
 use std::sync::Arc;
 
@@ -16,8 +17,11 @@ use axum::{
 };
 use sqlx::Row as _;
 use yttt_relay_ticket::{
-    ProofPurpose,
-    api::{DeviceEntry, DeviceRole, NodeChoice, NodePlacement, SwitchNode},
+    api::{
+        DeviceEntry, DeviceRole, NodeChoice, NodePlacement, PlacementNeeded, PlacementReason,
+        SwitchNode,
+    },
+    placement::SignedPlacement,
 };
 
 use crate::{
@@ -145,8 +149,13 @@ pub(crate) async fn register(
                 "a Client names the Host it connects to",
             ));
         }
+        (DeviceRole::Unknown, _) => {
+            return Err(Failure::bad_request(
+                "a device says whether it is a Host or a Client",
+            ));
+        }
         (_, Some(_)) => return Err(Failure::bad_request("only a Client follows a Host")),
-        (_, None) => None,
+        (DeviceRole::Host, None) => None,
     };
     let now = now_unix();
     match device(tx, endpoint_id).await? {
@@ -210,15 +219,23 @@ pub(crate) async fn register(
     }
 }
 
-/// The node a ticket for `endpoint_id` is for, checked against the plan as
-/// it is now: a Host on a node the plan no longer allows, or past the plan's
-/// node count, goes back to the default node with its Clients.
+/// What a ticket for a device is for.
+pub(crate) enum TicketNode {
+    /// A ticket for this node, and the placement the device's Host signed.
+    Node(String, SignedPlacement),
+    /// No ticket: the Host has to choose a node first.
+    Needed(PlacementNeeded),
+}
+
+/// The node a ticket for `endpoint_id` is for: the node of the placement its
+/// Host (itself, for a Host) signed, while the plan allows that node and its
+/// address is the one signed. Nothing here moves a Host.
 pub(crate) async fn ticket_node(
     tx: &mut Tx<'_>,
     account_id: i64,
     endpoint_id: &[u8],
     host: Option<[u8; 32]>,
-) -> Result<String, Failure> {
+) -> Result<TicketNode, Failure> {
     let account = lock_account(tx, account_id).await?;
     let device = device(tx, endpoint_id)
         .await?
@@ -226,46 +243,113 @@ pub(crate) async fn ticket_node(
         .ok_or(Failure::forbidden(
             "the device is not registered to this account",
         ))?;
-    let now = now_unix();
     if let Some(host) = host
         && (device.role != DeviceRole::Client || device.follows_host.as_deref() != Some(&host[..]))
     {
         return Err(Failure::conflict("the key is not a Client of that Host"));
     }
-    match device.role {
-        DeviceRole::Host => {
-            let allowed = node_allowed(tx, &account.plan_id, &device.node_id).await?
-                && nodes_in_use(tx, account_id, &account.default_node, None, None).await?
-                    <= account.max_nodes;
-            if allowed {
-                return Ok(device.node_id);
-            }
-            move_devices(
-                tx,
-                Selector::HostAndClients(endpoint_id),
-                &account.default_node,
-                now,
-            )
-            .await?;
-            Ok(account.default_node)
-        }
-        DeviceRole::Client => {
-            let followed = device
-                .follows_host
-                .as_deref()
-                .ok_or(Failure::conflict("the Client has no Host"))?;
-            let node = host_node(tx, account_id, followed).await?;
-            if node != device.node_id {
-                move_devices(tx, Selector::One(endpoint_id), &node, now).await?;
-            }
-            Ok(node)
-        }
+    let host_key: Vec<u8> = match device.role {
+        DeviceRole::Host => endpoint_id.to_vec(),
+        DeviceRole::Client => device
+            .follows_host
+            .clone()
+            .ok_or(Failure::conflict("the Client has no Host"))?,
         DeviceRole::Unknown => {
-            if device.node_id != account.default_node {
-                move_devices(tx, Selector::One(endpoint_id), &account.default_node, now).await?;
-            }
-            Ok(account.default_node)
+            return Err(Failure::conflict(
+                "the device does not say whether it is a Host or a Client; register it again",
+            ));
         }
+    };
+    let host_row = sqlx::query(
+        "SELECT node_id, placement FROM devices
+         WHERE endpoint_id = $1 AND account_id = $2 AND role = 'host'",
+    )
+    .bind(&host_key)
+    .bind(account_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(Failure::missing("the Host is not on this account"))?;
+    let host_node: String = host_row.get("node_id");
+    let current = stored_placement(host_row.get("placement"));
+    let needed = |reason, current| async move {
+        Ok::<_, Failure>(TicketNode::Needed(PlacementNeeded {
+            reason,
+            current,
+            suggested: None,
+        }))
+    };
+    let Some(current) = current else {
+        return with_suggestion(tx, &account, needed(PlacementReason::Missing, None).await?).await;
+    };
+    let allowed = node_allowed(tx, &account.plan_id, &host_node).await?
+        && nodes_in_use(tx, account_id, &account.default_node, None, None).await?
+            <= account.max_nodes;
+    if !allowed || current.placement.node_id != host_node {
+        let outcome = needed(PlacementReason::NodeUnavailable, Some(current)).await?;
+        return with_suggestion(tx, &account, outcome).await;
+    }
+    let url: String = sqlx::query_scalar("SELECT url FROM nodes WHERE id = $1")
+        .bind(&host_node)
+        .fetch_one(&mut **tx)
+        .await?;
+    if url != current.placement.relay_url {
+        let outcome = needed(PlacementReason::AddressChanged, Some(current)).await?;
+        return with_suggestion(tx, &account, outcome).await;
+    }
+    if device.role == DeviceRole::Client && device.node_id != host_node {
+        move_devices(tx, Selector::One(endpoint_id), &host_node, now_unix()).await?;
+    }
+    Ok(TicketNode::Node(host_node, current))
+}
+
+/// The placement stored in a `devices.placement` column.
+fn stored_placement(column: Option<String>) -> Option<SignedPlacement> {
+    column.and_then(|json| serde_json::from_str(&json).ok())
+}
+
+/// Adds a node the Host could choose: the account's default if it has room,
+/// else any active node of the plan that has room.
+async fn with_suggestion(
+    tx: &mut Tx<'_>,
+    account: &Account,
+    outcome: TicketNode,
+) -> Result<TicketNode, Failure> {
+    let TicketNode::Needed(mut needed) = outcome else {
+        return Ok(outcome);
+    };
+    let rows = sqlx::query(
+        "SELECT n.id, n.name, n.region, n.url, n.max_connections, n.last_connected_devices
+         FROM nodes n JOIN plan_nodes pn ON pn.node_id = n.id
+         WHERE pn.plan_id = $1 AND n.state = 'active'
+         ORDER BY CASE WHEN n.id = $2 THEN 0 ELSE 1 END, n.name, n.id",
+    )
+    .bind(&account.plan_id)
+    .bind(&account.default_node)
+    .fetch_all(&mut **tx)
+    .await?;
+    needed.suggested = rows.iter().map(node_choice).find(|choice| !choice.full);
+    // An address change keeps the node: suggest that node at its new address.
+    if needed.reason == PlacementReason::AddressChanged
+        && let Some(current) = &needed.current
+    {
+        needed.suggested = rows
+            .iter()
+            .map(node_choice)
+            .find(|choice| choice.id == current.placement.node_id)
+            .or(needed.suggested);
+    }
+    Ok(TicketNode::Needed(needed))
+}
+
+fn node_choice(row: &crate::db::Row) -> NodeChoice {
+    let (load_percent, full) = load(row);
+    NodeChoice {
+        id: row.get("id"),
+        name: row.get("name"),
+        region: row.get("region"),
+        relay_url: row.get("url"),
+        load_percent,
+        full,
     }
 }
 
@@ -314,10 +398,6 @@ enum Selector<'a> {
     One(&'a [u8]),
     /// A Host and every Client that follows it.
     HostAndClients(&'a [u8]),
-    /// Every device of an account.
-    Account(i64),
-    /// Every device on a node.
-    Node(&'a str),
 }
 
 /// Moves devices to `to` and has the nodes they leave refuse their tickets.
@@ -327,14 +407,9 @@ async fn move_devices(
     to: &str,
     now: u64,
 ) -> Result<(), Failure> {
-    let (filter, key): (&str, SelectorKey) = match selector {
-        Selector::One(endpoint) => ("endpoint_id = $1", SelectorKey::Bytes(endpoint)),
-        Selector::HostAndClients(host) => (
-            "(endpoint_id = $1 OR follows_host = $1)",
-            SelectorKey::Bytes(host),
-        ),
-        Selector::Account(account) => ("account_id = $1", SelectorKey::Int(account)),
-        Selector::Node(node) => ("node_id = $1", SelectorKey::Text(node)),
+    let (filter, key) = match selector {
+        Selector::One(endpoint) => ("endpoint_id = $1", endpoint),
+        Selector::HostAndClients(host) => ("(endpoint_id = $1 OR follows_host = $1)", host),
     };
     let revoke = format!(
         "INSERT INTO node_revocations (node_id, endpoint_id, revoked_unix)
@@ -345,26 +420,14 @@ async fn move_devices(
          WHERE {filter} AND node_id <> $2"
     );
     for statement in [revoke, update] {
-        let query = sqlx::query(&statement);
-        let query = match key {
-            SelectorKey::Bytes(bytes) => query.bind(bytes),
-            SelectorKey::Int(id) => query.bind(id),
-            SelectorKey::Text(text) => query.bind(text),
-        };
-        query
+        sqlx::query(&statement)
+            .bind(key)
             .bind(to)
             .bind(clamp_i64(now))
             .execute(&mut **tx)
             .await?;
     }
     Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum SelectorKey<'a> {
-    Bytes(&'a [u8]),
-    Int(i64),
-    Text(&'a str),
 }
 
 /// Has a device's node, and for a Host its Clients' node, refuse them; used
@@ -382,8 +445,9 @@ pub(crate) async fn revoke_removed(tx: &mut Tx<'_>, endpoint_id: &[u8]) -> Resul
     Ok(())
 }
 
-/// Moves every device on `from` and the accounts whose default it is to
-/// `to`, opening `to` to their plans; for administrators.
+/// Makes `to` the default node of the accounts whose default is `from`,
+/// opening `to` to their plans; for administrators. Hosts stay where their
+/// users put them: disabling `from` asks each of them to choose again.
 pub(crate) async fn move_node(tx: &mut Tx<'_>, from: &str, to: &str) -> Result<u64, Failure> {
     sqlx::query(
         "INSERT INTO plan_nodes (plan_id, node_id)
@@ -402,7 +466,6 @@ pub(crate) async fn move_node(tx: &mut Tx<'_>, from: &str, to: &str) -> Result<u
         .execute(&mut **tx)
         .await?
         .rows_affected();
-    move_devices(tx, Selector::Node(from), to, now_unix()).await?;
     Ok(moved)
 }
 
@@ -471,21 +534,7 @@ pub(crate) async fn list_nodes(
     .bind(session.account_id)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(
-        rows.iter()
-            .map(|row| {
-                let (load_percent, full) = load(row);
-                NodeChoice {
-                    id: row.get("id"),
-                    name: row.get("name"),
-                    region: row.get("region"),
-                    relay_url: row.get("url"),
-                    load_percent,
-                    full,
-                }
-            })
-            .collect(),
-    ))
+    Ok(Json(rows.iter().map(node_choice).collect()))
 }
 
 /// A node's load against its connection limit, and whether it is full.
@@ -504,10 +553,11 @@ fn load(row: &crate::db::Row) -> (Option<u32>, bool) {
     }
 }
 
-/// `PUT /v1/devices/{host}/node`: moves a Host, with its Clients, to another
-/// node. The app and the CLI prove they hold the Host's key and wait out a
-/// cooldown between moves; the console may move any Host of the account.
-/// With a plan of one node, the whole account moves.
+/// `PUT /v1/devices/{host}/node`: stores a newer placement the Host signed
+/// and moves the Host, with its Clients, to its node. The signature is the
+/// only authority: a session that cannot sign for the Host, the console's
+/// included, cannot move it. With a plan of one node, the account's default
+/// node follows, and its other Hosts are asked to choose again.
 pub(crate) async fn switch_node(
     State(state): Shared,
     session: AnySession,
@@ -518,23 +568,11 @@ pub(crate) async fn switch_node(
         return Err(Failure::forbidden("the account is suspended"));
     }
     let host = yttt_relay_ticket::parse_key(&host).ok_or_else(Failure::not_found)?;
-    if !session.console {
-        let proof = request
-            .proof
-            .as_ref()
-            .and_then(|proof| proof.decode())
-            .ok_or(Failure::forbidden("prove that you hold the Host's key"))?;
-        proof
-            .verify(
-                ProofPurpose::SwitchNode,
-                session.account_id as u64,
-                now_unix(),
-            )
-            .map_err(|_| Failure::forbidden("the device proof was rejected"))?;
-        if proof.endpoint_id != host {
-            return Err(Failure::forbidden("a device moves only its own Host"));
-        }
-    }
+    let signed = request.placement;
+    let placement = signed
+        .verify(&host)
+        .map_err(|_| Failure::forbidden("the placement is not signed by that Host"))?
+        .clone();
     let now = now_unix();
     let mut tx = crate::db::begin(&state.pool, state.dialect).await?;
     let account = lock_account(&mut tx, session.account_id).await?;
@@ -542,52 +580,63 @@ pub(crate) async fn switch_node(
         .await?
         .filter(|device| device.account_id == session.account_id && device.role == DeviceRole::Host)
         .ok_or(Failure::missing("the Host is not on this account"))?;
+    let (stored, stored_seq): (Option<String>, i64) =
+        sqlx::query_as("SELECT placement, placement_seq FROM devices WHERE endpoint_id = $1")
+            .bind(&host[..])
+            .fetch_one(&mut *tx)
+            .await?;
+    let stored = stored_placement(stored);
+    if placement.seq <= stored_seq.max(0) as u64 {
+        return Err(Failure::conflict(
+            "the placement is not newer than the one stored",
+        ));
+    }
     let target = sqlx::query(
         "SELECT n.url, n.max_connections, n.last_connected_devices FROM nodes n
          JOIN plan_nodes pn ON pn.node_id = n.id
          WHERE n.id = $1 AND pn.plan_id = $2 AND n.state = 'active'",
     )
-    .bind(&request.node_id)
+    .bind(&placement.node_id)
     .bind(&account.plan_id)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Failure::missing("the plan has no such node"))?;
     let relay_url: String = target.get("url");
-    if current.node_id == request.node_id {
-        return Ok(Json(NodePlacement {
-            node_id: request.node_id,
-            relay_url,
-        }));
+    if relay_url != placement.relay_url {
+        return Err(Failure::conflict("the node has another address"));
     }
-    if load(&target).1 {
+    let same_node = stored
+        .as_ref()
+        .is_some_and(|stored| stored.placement.node_id == placement.node_id)
+        && current.node_id == placement.node_id;
+    if !same_node && load(&target).1 {
         return Err(Failure::conflict("the node is full"));
     }
-    if !session.console && now.saturating_sub(current.node_changed_unix) < SWITCH_COOLDOWN_SECS {
+    // A Host whose node it may no longer use can choose at once.
+    let current_usable =
+        stored.is_some() && node_allowed(&mut tx, &account.plan_id, &current.node_id).await?;
+    if !same_node
+        && current_usable
+        && now.saturating_sub(current.node_changed_unix) < SWITCH_COOLDOWN_SECS
+    {
         return Err(Failure::conflict(
             "the Host moved recently; try again in a few minutes",
         ));
     }
     if account.max_nodes <= 1 {
-        // One node for the account: everything moves together.
+        // One node for the account: its default moves with this Host.
         sqlx::query("UPDATE accounts SET node_id = $2 WHERE id = $1")
             .bind(session.account_id)
-            .bind(&request.node_id)
+            .bind(&placement.node_id)
             .execute(&mut *tx)
             .await?;
-        move_devices(
-            &mut tx,
-            Selector::Account(session.account_id),
-            &request.node_id,
-            now,
-        )
-        .await?;
     } else {
         let used = nodes_in_use(
             &mut tx,
             session.account_id,
             &account.default_node,
             Some(&host),
-            Some(&request.node_id),
+            Some(&placement.node_id),
         )
         .await?;
         if used > account.max_nodes {
@@ -595,17 +644,24 @@ pub(crate) async fn switch_node(
                 "the plan allows no more nodes at once; move another Host first",
             ));
         }
-        move_devices(
-            &mut tx,
-            Selector::HostAndClients(&host),
-            &request.node_id,
-            now,
-        )
-        .await?;
     }
+    let json = serde_json::to_string(&signed).map_err(|_| Failure::bad_request("placement"))?;
+    sqlx::query("UPDATE devices SET placement = $2, placement_seq = $3 WHERE endpoint_id = $1")
+        .bind(&host[..])
+        .bind(json)
+        .bind(clamp_i64(placement.seq))
+        .execute(&mut *tx)
+        .await?;
+    move_devices(
+        &mut tx,
+        Selector::HostAndClients(&host),
+        &placement.node_id,
+        now,
+    )
+    .await?;
     tx.commit().await?;
     Ok(Json(NodePlacement {
-        node_id: request.node_id,
+        node_id: placement.node_id,
         relay_url,
     }))
 }

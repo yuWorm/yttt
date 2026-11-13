@@ -13918,6 +13918,7 @@ dependencies = [
  "thiserror 2.0.18",
  "yttt-agent-core",
  "yttt-core",
+ "yttt-relay-ticket",
  "zeroize",
 ]
 

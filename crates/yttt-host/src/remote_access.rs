@@ -3,7 +3,7 @@ use super::{
     device_settings::DeviceSettingsStore,
     p2p::{
         self, Decision, DeviceRegistry, HostGate, P2pGeneration, P2pShared, PairingSlot,
-        StoredRelayAccount,
+        PlacementStore, StoredRelayAccount,
     },
 };
 use parking_lot::Mutex;
@@ -25,7 +25,10 @@ use tokio::{
     sync::{Semaphore, mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
-use yttt_control_client::{ControlSession, DeviceKind, RelayTicket};
+use yttt_control_client::{
+    ControlError, ControlSession, DeviceKind, PlacementNeeded, PlacementReason, RelayTicket,
+    SignedPlacement, TicketEvents,
+};
 use yttt_core::model::ids::ClientInstanceId;
 use yttt_protocol::{
     EndpointKey, FailureCode, ProtocolFailure,
@@ -550,6 +553,7 @@ impl Manager {
                             ticket: None,
                         };
                         p2p::save_relay_account(&root, &stored).map_err(io_failure)?;
+                        self.place_at_sign_in(&stored.session).await?;
                     }
                     None => p2p::forget_relay_account(&root).map_err(io_failure)?,
                 }
@@ -590,21 +594,17 @@ impl Manager {
             }
             RemoteAccessRequest::SetRelayNode { node_id } => {
                 let session = self.relay_session()?;
-                let root = self.store.lock().root().to_path_buf();
-                let secret = p2p::load_or_create_host_key(&root).map_err(io_failure)?;
-                session
-                    .switch_node(&secret, &node_id)
+                let nodes = session
+                    .nodes()
                     .await
                     .map_err(|error| failure(format!("relay account: {error}")))?;
-                // The next start fetches a ticket for the new node.
-                let stored = StoredRelayAccount {
-                    session,
-                    ticket: None,
-                };
-                p2p::save_relay_account(&root, &stored).map_err(io_failure)?;
-                if self.p2p.is_some() {
-                    self.restart_p2p().await;
-                }
+                let node = nodes
+                    .into_iter()
+                    .find(|node| node.id == node_id)
+                    .ok_or_else(|| failure("the plan has no such relay node"))?;
+                self.choose_node(&session, &node.id, &node.relay_url)
+                    .await?;
+                self.follow_chosen_node(&session).await;
             }
             RemoteAccessRequest::StartPairing => return self.start_pairing(),
             RemoteAccessRequest::ConfirmPairing {
@@ -744,6 +744,11 @@ impl Manager {
                         }
                         Some(ticket)
                     }
+                    Err(ControlError::PlacementNeeded(needed)) => {
+                        // No relay until the user chooses a node.
+                        status.placement_needed = Some(*needed);
+                        None
+                    }
                     Err(error) => {
                         status.error = Some(format!("relay account: {error}"));
                         let now = yttt_control_client::now_unix();
@@ -863,6 +868,105 @@ impl Manager {
             .map_err(io_failure)?
             .map(|stored| stored.session)
             .ok_or_else(|| failure("sign in to a relay account first"))
+    }
+
+    /// Signs `node_id` at `relay_url` as where this Host relays and stores it
+    /// with the control plane, which moves the Host's Clients along. Only a
+    /// user's choice comes here: signing in, choosing a node, confirming a
+    /// node's new address.
+    async fn choose_node(
+        &self,
+        session: &ControlSession,
+        node_id: &str,
+        relay_url: &str,
+    ) -> Result<SignedPlacement, ProtocolFailure> {
+        let root = self.store.lock().root().to_path_buf();
+        let secret = p2p::load_or_create_host_key(&root).map_err(io_failure)?;
+        let mut placements = PlacementStore::load(&root).map_err(io_failure)?;
+        let seq = placements.reserve_seq(&root).map_err(io_failure)?;
+        let signed = SignedPlacement::sign(&secret, seq, node_id, relay_url)
+            .map_err(|error| failure(format!("relay node: {error}")))?;
+        session
+            .switch_node(&signed)
+            .await
+            .map_err(|error| failure(format!("relay account: {error}")))?;
+        placements
+            .adopt(&root, &signed.placement.host, &signed)
+            .map_err(io_failure)?;
+        tracing::info!(node = node_id, seq, "relay node chosen");
+        Ok(signed)
+    }
+
+    /// At sign-in, a Host that never chose a node takes the one the account
+    /// suggests, which the sign-in shows; one that chose before keeps it.
+    async fn place_at_sign_in(&self, session: &ControlSession) -> Result<(), ProtocolFailure> {
+        let root = self.store.lock().root().to_path_buf();
+        let secret = p2p::load_or_create_host_key(&root).map_err(io_failure)?;
+        // Anything else: unreachable now, or placed; the endpoint asks again.
+        let Err(ControlError::PlacementNeeded(needed)) = self.fetch_ticket(session, &secret).await
+        else {
+            return Ok(());
+        };
+        if let Some(current) = &needed.current {
+            PlacementStore::load(&root)
+                .and_then(|mut store| store.adopt(&root, &current.placement.host, current))
+                .map_err(io_failure)?;
+        }
+        match (needed.reason, needed.suggested) {
+            (PlacementReason::Missing, Some(node)) => {
+                self.choose_node(session, &node.id, &node.relay_url).await?;
+            }
+            (PlacementReason::Missing, None) => {
+                return Err(failure("relay account: the plan has no node with room"));
+            }
+            // Its node changed while signed out: the user chooses.
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Points a running P2P endpoint at the node just chosen, without
+    /// rebuilding it, so its sessions stay up.
+    async fn follow_chosen_node(&mut self, session: &ControlSession) {
+        let root = self.store.lock().root().to_path_buf();
+        let Some(p2p) = &self.p2p else {
+            // The next start fetches a ticket for the new node.
+            let stored = StoredRelayAccount {
+                session: session.clone(),
+                ticket: None,
+            };
+            if let Err(error) = p2p::save_relay_account(&root, &stored) {
+                tracing::warn!("could not forget the old relay ticket: {error}");
+            }
+            return;
+        };
+        let ticket = match session.ticket(&p2p.shared.secret, DeviceKind::Host).await {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                if let Some(status) = &p2p.relay_account {
+                    status.lock().error = Some(format!("relay account: {error}"));
+                }
+                return;
+            }
+        };
+        if let Err(error) = p2p.shared.endpoint.set_relay(&ticket.target()).await {
+            tracing::warn!(%error, "could not apply the new relay ticket");
+            return;
+        }
+        apply_host_ticket(
+            &root,
+            session,
+            &ticket,
+            p2p.relay_account.as_ref(),
+            &p2p.relay_url,
+        );
+        // The new node's relay connection starts with this ticket.
+        p2p.restart_after_unix.store(
+            ticket
+                .expires_unix
+                .saturating_sub(RESTART_BEFORE_EXPIRY_SECS),
+            Ordering::Relaxed,
+        );
     }
 
     /// Registers the Host's own key with its account and gets it a ticket.
@@ -1146,6 +1250,103 @@ fn advertisable(ip: IpAddr) -> bool {
     }
 }
 
+/// Caches a ticket the Host relays with and shows it in the status.
+fn apply_host_ticket(
+    root: &Path,
+    session: &ControlSession,
+    ticket: &RelayTicket,
+    status: Option<&Arc<Mutex<RelayAccountStatus>>>,
+    relay_url: &Mutex<Option<String>>,
+) {
+    let stored = StoredRelayAccount {
+        session: session.clone(),
+        ticket: Some(ticket.clone()),
+    };
+    if let Err(error) = p2p::save_relay_account(root, &stored) {
+        tracing::warn!("could not cache the relay ticket: {error}");
+    }
+    if let Some(status) = status {
+        let mut status = status.lock();
+        status.relay_url = Some(ticket.relay_url.clone());
+        status.ticket_expires_unix = Some(ticket.expires_unix);
+        status.node_id = Some(ticket.node_id.clone());
+        status.error = None;
+        status.placement_needed = None;
+    }
+    *relay_url.lock() = Some(ticket.relay_url.clone());
+}
+
+/// What the Host does with what [`yttt_control_client::keep_ticket`] learns.
+struct HostTicketEvents {
+    root: std::path::PathBuf,
+    session: ControlSession,
+    status: Arc<Mutex<RelayAccountStatus>>,
+    relay_url: Arc<Mutex<Option<String>>>,
+    restart_after_unix: Arc<AtomicU64>,
+    /// The node of the ticket the endpoint's relay connection started with.
+    node: String,
+}
+
+impl HostTicketEvents {
+    fn adopt(&self, signed: &SignedPlacement) {
+        let kept = PlacementStore::load(&self.root)
+            .and_then(|mut store| store.adopt(&self.root, &signed.placement.host, signed));
+        if let Err(error) = kept {
+            tracing::warn!("could not keep the Host's placement: {error}");
+        }
+    }
+}
+
+impl TicketEvents for HostTicketEvents {
+    fn renewed(&mut self, ticket: &RelayTicket) {
+        apply_host_ticket(
+            &self.root,
+            &self.session,
+            ticket,
+            Some(&self.status),
+            &self.relay_url,
+        );
+        let restart_at = ticket
+            .expires_unix
+            .saturating_sub(RESTART_BEFORE_EXPIRY_SECS);
+        if ticket.node_id != self.node {
+            // A new node's relay connection starts with this ticket.
+            self.node = ticket.node_id.clone();
+            self.restart_after_unix.store(restart_at, Ordering::Relaxed);
+        } else {
+            // The first ticket this endpoint's relay connection presents.
+            let _ = self.restart_after_unix.compare_exchange(
+                0,
+                restart_at,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        }
+    }
+
+    fn placement(&mut self, placement: &SignedPlacement) {
+        self.adopt(placement);
+    }
+
+    fn placement_needed(&mut self, needed: &PlacementNeeded) {
+        if let Some(current) = &needed.current {
+            self.adopt(current);
+        }
+        let mut status = self.status.lock();
+        if status.placement_needed.as_ref() != Some(needed) {
+            tracing::warn!(reason = ?needed.reason, "the relay node needs the user's choice");
+        }
+        status.placement_needed = Some(needed.clone());
+        status.relay_url = None;
+        status.node_id = None;
+        *self.relay_url.lock() = None;
+    }
+
+    fn failed(&mut self, error: &ControlError) {
+        self.status.lock().error = Some(format!("relay account: {error}"));
+    }
+}
+
 /// Keeps the Host's relay ticket fresh, caches each one for restarts, and
 /// schedules the endpoint rebuild its first ticket requires.
 #[allow(clippy::too_many_arguments)]
@@ -1159,61 +1360,19 @@ async fn keep_relay_ticket(
     relay_url: Arc<Mutex<Option<String>>>,
     restart_after_unix: Arc<AtomicU64>,
 ) {
-    // Without a ticket yet, renew right away.
-    let current = first.unwrap_or_else(|| RelayTicket {
-        relay_url: String::new(),
-        node_id: String::new(),
-        token: String::new(),
-        received_unix: 0,
-        expires_unix: 0,
-    });
-    let failed_status = status.clone();
-    let cached = session.clone();
-    let mut node = current.node_id.clone();
-    yttt_control_client::keep_ticket(
-        session,
-        secret,
-        DeviceKind::Host,
-        endpoint,
-        current,
-        move |ticket| {
-            let stored = StoredRelayAccount {
-                session: cached.clone(),
-                ticket: Some(ticket.clone()),
-            };
-            if let Err(error) = p2p::save_relay_account(&root, &stored) {
-                tracing::warn!("could not cache the relay ticket: {error}");
-            }
-            {
-                let mut status = status.lock();
-                status.relay_url = Some(ticket.relay_url.clone());
-                status.ticket_expires_unix = Some(ticket.expires_unix);
-                status.node_id = Some(ticket.node_id.clone());
-                status.error = None;
-            }
-            *relay_url.lock() = Some(ticket.relay_url.clone());
-            let restart_at = ticket
-                .expires_unix
-                .saturating_sub(RESTART_BEFORE_EXPIRY_SECS);
-            if ticket.node_id != node {
-                // A new node's relay connection starts with this ticket.
-                node = ticket.node_id.clone();
-                restart_after_unix.store(restart_at, Ordering::Relaxed);
-            } else {
-                // The first ticket this endpoint's relay connection presents.
-                let _ = restart_after_unix.compare_exchange(
-                    0,
-                    restart_at,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                );
-            }
-        },
-        move |error| {
-            failed_status.lock().error = Some(format!("relay account: {error}"));
-        },
-    )
-    .await;
+    let events = HostTicketEvents {
+        root,
+        session: session.clone(),
+        status,
+        relay_url,
+        restart_after_unix,
+        node: first
+            .as_ref()
+            .map(|ticket| ticket.node_id.clone())
+            .unwrap_or_default(),
+    };
+    yttt_control_client::keep_ticket(session, secret, DeviceKind::Host, endpoint, first, events)
+        .await;
 }
 
 #[cfg(test)]

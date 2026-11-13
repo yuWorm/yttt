@@ -1079,7 +1079,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountNode => "Node: {node}",
         UiTextKey::RelayAccountChooseNode => "Choose node",
         UiTextKey::RelayAccountNodeHint => {
-            "Pick a node close to this computer and the devices you use. Devices that connect here follow it; switching drops remote sessions, which reconnect on their own."
+            "Pick a node close to this computer and the devices you use. Devices that connect here follow it, and remote sessions stay up."
+        }
+        UiTextKey::RelayAccountNodeMissing => {
+            "No node is chosen for this computer yet; until one is, only direct connections work."
+        }
+        UiTextKey::RelayAccountNodeUnavailable => {
+            "Node {node} is no longer available (disabled or not in the plan). Until you choose another, only direct connections work."
+        }
+        UiTextKey::RelayAccountNodeMoved => {
+            "Node {node} has a new address. Choose it again to confirm; until then, only direct connections work."
         }
         UiTextKey::RelayAccountNodeLatency => "{ms} ms",
         UiTextKey::RelayAccountNodeNoAnswer => "no answer",

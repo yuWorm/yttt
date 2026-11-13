@@ -23,7 +23,7 @@ use tokio::{
     sync::{Semaphore, oneshot, watch},
     task::JoinSet,
 };
-use yttt_control_client::{ControlSession, RelayTicket};
+use yttt_control_client::{ControlSession, RelayTicket, SignedPlacement};
 use yttt_protocol::{
     EndpointKey,
     p2p::{
@@ -44,6 +44,7 @@ use super::ConnectionContext;
 const DEVICES_FILE: &str = "devices.json";
 const KEY_FILE: &str = "p2p-key.json";
 const RELAY_ACCOUNT_FILE: &str = "relay-account.json";
+const PLACEMENT_FILE: &str = "relay-placement.json";
 const MAX_STATE_FILE_BYTES: usize = 256 * 1024;
 /// How long a pairing peer may take to send its request.
 const PAIR_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -229,6 +230,68 @@ pub(crate) fn save_relay_account(root: &Path, account: &StoredRelayAccount) -> i
         &bytes,
         uuid::Uuid::new_v4().as_u128() as u64,
     )
+}
+
+/// The placements this Host signs: the next sequence number, never reused,
+/// and the newest placement the control plane accepted.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct PlacementStore {
+    #[serde(default)]
+    pub next_seq: u64,
+    #[serde(default)]
+    pub current: Option<SignedPlacement>,
+}
+
+impl PlacementStore {
+    pub(crate) fn load(root: &Path) -> io::Result<Self> {
+        Ok(read_private_json(&root.join(PLACEMENT_FILE))?.unwrap_or_default())
+    }
+
+    fn save(&self, root: &Path) -> io::Result<()> {
+        let bytes = serde_json::to_vec(self).map_err(io::Error::other)?;
+        super::workspace::atomic_write(
+            &root.join(PLACEMENT_FILE),
+            &bytes,
+            uuid::Uuid::new_v4().as_u128() as u64,
+        )
+    }
+
+    /// A sequence number for one signature, saved as used before it is
+    /// returned, so a placement the control plane refused never shares its
+    /// number with another.
+    pub(crate) fn reserve_seq(&mut self, root: &Path) -> io::Result<u64> {
+        let seq = self
+            .next_seq
+            .max(
+                self.current
+                    .as_ref()
+                    .map_or(0, |current| current.placement.seq)
+                    + 1,
+            )
+            .max(1);
+        self.next_seq = seq + 1;
+        self.save(root)?;
+        Ok(seq)
+    }
+
+    /// Keeps `signed` if this Host signed it and it is newer than the one
+    /// kept; whether it was kept.
+    pub(crate) fn adopt(
+        &mut self,
+        root: &Path,
+        host: &[u8; 32],
+        signed: &SignedPlacement,
+    ) -> io::Result<bool> {
+        if signed.verify(host).is_err()
+            || !signed.newer_than(self.current.as_ref()).unwrap_or(false)
+        {
+            return Ok(false);
+        }
+        self.next_seq = self.next_seq.max(signed.placement.seq + 1);
+        self.current = Some(signed.clone());
+        self.save(root)?;
+        Ok(true)
+    }
 }
 
 pub(crate) fn forget_relay_account(root: &Path) -> io::Result<()> {
@@ -737,6 +800,40 @@ mod tests {
         let reloaded = DeviceRegistry::load(root.path()).unwrap();
         assert_eq!(reloaded.list(), vec![device(2)]);
         assert!(!reloaded.remove(EndpointKey([1; 32])).unwrap());
+    }
+
+    #[test]
+    fn a_reserved_sequence_number_is_never_reused() {
+        let root = tempfile::tempdir().unwrap();
+        let secret = [5u8; 32];
+        let host = SignedPlacement::sign(&secret, 1, "n", "u")
+            .unwrap()
+            .placement
+            .host;
+        let mut store = PlacementStore::load(root.path()).unwrap();
+        // A signature the control plane refused still used its number.
+        assert_eq!(store.reserve_seq(root.path()).unwrap(), 1);
+        let mut store = PlacementStore::load(root.path()).unwrap();
+        let seq = store.reserve_seq(root.path()).unwrap();
+        assert_eq!(seq, 2);
+        let signed = SignedPlacement::sign(&secret, seq, "tokyo-1", "https://t").unwrap();
+        assert!(store.adopt(root.path(), &host, &signed).unwrap());
+        assert!(
+            !store.adopt(root.path(), &host, &signed).unwrap(),
+            "not newer"
+        );
+
+        // A newer placement from the control plane raises the next number.
+        let newer = SignedPlacement::sign(&secret, 9, "osaka-1", "https://o").unwrap();
+        let mut store = PlacementStore::load(root.path()).unwrap();
+        assert!(store.adopt(root.path(), &host, &newer).unwrap());
+        assert_eq!(store.reserve_seq(root.path()).unwrap(), 10);
+        // Another key's placement is never kept.
+        let forged = SignedPlacement::sign(&[6; 32], 20, "evil-1", "https://e").unwrap();
+        assert!(!store.adopt(root.path(), &host, &forged).unwrap());
+        let reloaded = PlacementStore::load(root.path()).unwrap();
+        assert_eq!(reloaded.current, Some(newer));
+        assert_eq!(reloaded.next_seq, 11);
     }
 
     #[test]

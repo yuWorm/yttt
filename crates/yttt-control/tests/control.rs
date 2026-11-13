@@ -13,9 +13,11 @@ use yttt_relay_ticket::{
     DeviceProof, ProofPurpose, TicketVerifier,
     api::{
         AccountCreated, AccountStanding, AccountUsage, AccountView, CreateAccount, DeviceList,
-        DeviceProofBody, DeviceRole, Login, NodeChoice, RegisterDevice, SessionGranted,
-        SetSuspended, Standing, SwitchNode, TicketGranted, TicketRequest, UsageReply, UsageReport,
+        DeviceProofBody, DeviceRole, Login, NodeChoice, PlacementNeeded, PlacementReason,
+        RegisterDevice, SessionGranted, SetSuspended, Standing, SwitchNode, TicketGranted,
+        TicketOutcome, TicketRequest, UsageReply, UsageReport,
     },
+    placement::SignedPlacement,
     public_key,
 };
 
@@ -216,35 +218,48 @@ impl Harness {
             .to_string()
     }
 
+    /// Registers `device` as a Host and, once registered, has it choose the
+    /// account's node, as the app does when it signs in.
     async fn register(&self, session: &str, account: u64, device: &[u8; 32]) -> StatusCode {
-        self.status(
-            "/v1/devices",
-            Some(session),
-            &RegisterDevice {
-                role: None,
-                follows_host: None,
-                label: "laptop".into(),
-                proof: proof(device, ProofPurpose::RegisterDevice, account),
-            },
-        )
-        .await
+        let status = self
+            .status(
+                "/v1/devices",
+                Some(session),
+                &RegisterDevice {
+                    role: Some(DeviceRole::Host),
+                    follows_host: None,
+                    label: "laptop".into(),
+                    proof: proof(device, ProofPurpose::RegisterDevice, account),
+                },
+            )
+            .await;
+        if status.is_success() {
+            let me: AccountView = self.get("/v1/accounts/me", session).await.unwrap();
+            let placed = put_placement(
+                self,
+                session,
+                device,
+                &signed(device, &me.node_id, &me.relay_url),
+            )
+            .await;
+            assert!(
+                placed.is_success(),
+                "choosing {} failed: {placed}",
+                me.node_id
+            );
+        }
+        status
     }
 
+    /// A ticket for `device`; `PRECONDITION_FAILED` when its Host has to
+    /// choose a node first.
     async fn ticket(
         &self,
         session: &str,
         account: u64,
         device: &[u8; 32],
     ) -> Result<TicketGranted, StatusCode> {
-        self.call(
-            "/v1/tickets",
-            Some(session),
-            &TicketRequest {
-                host: None,
-                proof: proof(device, ProofPurpose::IssueTicket, account),
-            },
-        )
-        .await
+        ticket_to(self, session, account, device, None).await
     }
 
     async fn report(&self, token: &str, usage: &[(u64, u64)]) -> Result<UsageReply, StatusCode> {
@@ -2118,6 +2133,19 @@ async fn ticket_to(
     device: &[u8; 32],
     host: Option<&[u8; 32]>,
 ) -> Result<TicketGranted, StatusCode> {
+    match outcome_for(harness, session, account, device, host).await? {
+        TicketOutcome::Granted { ticket, .. } => Ok(ticket),
+        TicketOutcome::PlacementNeeded(_) => Err(StatusCode::PRECONDITION_FAILED),
+    }
+}
+
+async fn outcome_for(
+    harness: &Harness,
+    session: &str,
+    account: u64,
+    device: &[u8; 32],
+    host: Option<&[u8; 32]>,
+) -> Result<TicketOutcome, StatusCode> {
     harness
         .call(
             "/v1/tickets",
@@ -2130,14 +2158,35 @@ async fn ticket_to(
         .await
 }
 
-/// Asks to move `host`, proving with `signer`'s key, as the app does.
-async fn switch(
+/// Why `device`, a Host or a Client, gets no ticket.
+async fn placement_needed(
     harness: &Harness,
     session: &str,
     account: u64,
+    device: &[u8; 32],
+    host: Option<&[u8; 32]>,
+) -> PlacementNeeded {
+    match outcome_for(harness, session, account, device, host)
+        .await
+        .unwrap()
+    {
+        TicketOutcome::PlacementNeeded(needed) => needed,
+        TicketOutcome::Granted { .. } => panic!("expected no ticket"),
+    }
+}
+
+/// A placement `host` signs; every call takes a higher sequence number.
+fn signed(host: &[u8; 32], node: &str, relay_url: &str) -> SignedPlacement {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    SignedPlacement::sign(host, SEQ.fetch_add(1, Ordering::Relaxed), node, relay_url).unwrap()
+}
+
+async fn put_placement(
+    harness: &Harness,
+    session: &str,
     host: &[u8; 32],
-    signer: &[u8; 32],
-    node: &str,
+    placement: &SignedPlacement,
 ) -> StatusCode {
     harness
         .http
@@ -2148,13 +2197,35 @@ async fn switch(
         ))
         .bearer_auth(session)
         .json(&SwitchNode {
-            node_id: node.into(),
-            proof: Some(proof(signer, ProofPurpose::SwitchNode, account)),
+            placement: placement.clone(),
         })
         .send()
         .await
         .unwrap()
         .status()
+}
+
+/// The relay URL of `node`, as the account's plan lists it.
+async fn node_url(harness: &Harness, session: &str, node: &str) -> String {
+    let nodes: Vec<NodeChoice> = harness.get("/v1/nodes", session).await.unwrap();
+    nodes
+        .into_iter()
+        .find(|choice| choice.id == node)
+        .map(|choice| choice.relay_url)
+        .unwrap_or_else(|| format!("https://{node}.unlisted"))
+}
+
+/// Moves `host` to `node` with a placement `signer` signs, as the app does.
+async fn switch(
+    harness: &Harness,
+    session: &str,
+    _account: u64,
+    host: &[u8; 32],
+    signer: &[u8; 32],
+    node: &str,
+) -> StatusCode {
+    let url = node_url(harness, session, node).await;
+    put_placement(harness, session, host, &signed(signer, node, &url)).await
 }
 
 async fn report_on(
@@ -2190,7 +2261,7 @@ async fn with_room(nodes: &[(&str, &str)]) -> Harness {
 }
 
 #[tokio::test]
-async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_moves() {
+async fn a_client_relays_only_through_the_node_its_host_signed() {
     let harness = with_room(&[(NODE, NODE_TOKEN), ("other-1", "other-token")]).await;
     let (alice, session) = harness.account("alice@example.com").await;
     assert_eq!(
@@ -2231,10 +2302,34 @@ async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_
         StatusCode::CONFLICT
     );
 
+    // Until the Host chooses a node, neither it nor its Client gets a ticket.
+    let needed = placement_needed(&harness, &session, alice, &HOST_CLIENT, Some(&HOST)).await;
+    assert_eq!(needed.reason, PlacementReason::Missing);
+    assert_eq!(
+        needed.suggested.as_ref().map(|node| node.id.as_str()),
+        Some(NODE)
+    );
+    let first = signed(&HOST, NODE, &node_url(&harness, &session, NODE).await);
+    assert_eq!(
+        put_placement(&harness, &session, &HOST, &first).await,
+        StatusCode::OK
+    );
     let ticket = ticket_to(&harness, &session, alice, &HOST_CLIENT, Some(&HOST))
         .await
         .unwrap();
     assert_eq!(ticket.node_id, NODE);
+    let TicketOutcome::Granted { host_placement, .. } =
+        outcome_for(&harness, &session, alice, &HOST_CLIENT, Some(&HOST))
+            .await
+            .unwrap()
+    else {
+        panic!("expected a ticket");
+    };
+    assert_eq!(
+        host_placement,
+        Some(first.clone()),
+        "the Client learns where the Host is"
+    );
     assert_eq!(
         ticket_to(&harness, &session, alice, &HOST_CLIENT, Some(&SECOND_HOST))
             .await
@@ -2244,10 +2339,16 @@ async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_
     let nodes: Vec<NodeChoice> = harness.get("/v1/nodes", &session).await.unwrap();
     assert_eq!(nodes.len(), 2);
 
-    // Only the Host's own key moves it; with one node, the account moves.
+    // Only the Host's own key moves it; with one node, the account's default
+    // follows. Its Client follows the Host, not the account.
     assert_eq!(
         switch(&harness, &session, alice, &HOST, &HOST_CLIENT, "other-1").await,
         StatusCode::FORBIDDEN
+    );
+    let wrong_address = signed(&HOST, "other-1", "https://elsewhere.example");
+    assert_eq!(
+        put_placement(&harness, &session, &HOST, &wrong_address).await,
+        StatusCode::CONFLICT
     );
     assert_eq!(
         switch(&harness, &session, alice, &HOST, &HOST, "other-1").await,
@@ -2263,6 +2364,11 @@ async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_
         switch(&harness, &session, alice, &HOST, &HOST, NODE).await,
         StatusCode::CONFLICT,
         "a Host waits between its own moves"
+    );
+    assert_eq!(
+        put_placement(&harness, &session, &HOST, &first).await,
+        StatusCode::CONFLICT,
+        "an older placement cannot move the Host back"
     );
 
     // The old node is told to refuse both, once, and bills nothing more.
@@ -2314,7 +2420,7 @@ async fn a_client_relays_through_its_hosts_node_and_follows_it_when_the_account_
 }
 
 #[tokio::test]
-async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_shrinks() {
+async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_choose_again_when_it_shrinks() {
     let harness = with_room(&[
         (NODE, NODE_TOKEN),
         ("other-1", "other-token"),
@@ -2341,6 +2447,13 @@ async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_s
         assert_eq!(
             place(&harness, &session, alice, device, follows).await,
             StatusCode::CREATED
+        );
+    }
+
+    for host in [&HOST, &SECOND_HOST] {
+        assert_eq!(
+            switch(&harness, &session, alice, host, host, NODE).await,
+            StatusCode::OK
         );
     }
 
@@ -2376,7 +2489,8 @@ async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_s
     .unwrap();
     assert_eq!(second.node_id, NODE, "the other Host stayed");
 
-    // The plan loses other-1: the Host goes home at its next ticket.
+    // The plan loses other-1: the Host is asked to choose, and stays put
+    // until it does.
     let (status, _) = send(
         &harness,
         &admin,
@@ -2386,6 +2500,33 @@ async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_s
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    let needed = placement_needed(&harness, &session, alice, &HOST, None).await;
+    assert_eq!(needed.reason, PlacementReason::NodeUnavailable);
+    assert_eq!(
+        needed
+            .current
+            .as_ref()
+            .map(|current| current.placement.node_id.as_str()),
+        Some("other-1")
+    );
+    assert_eq!(
+        needed.suggested.as_ref().map(|node| node.id.as_str()),
+        Some(NODE)
+    );
+    assert_eq!(
+        ticket_to(&harness, &session, alice, &HOST_CLIENT, Some(&HOST))
+            .await
+            .unwrap_err(),
+        StatusCode::PRECONDITION_FAILED,
+        "its Client waits for the Host too"
+    );
+    let reply = report_on(&harness, "other-1", "other-token", &[], None).await;
+    assert!(reply.revocations.is_empty(), "nothing moved");
+    // Choosing again needs no cooldown: the Host cannot stay.
+    assert_eq!(
+        switch(&harness, &session, alice, &HOST, &HOST, NODE).await,
+        StatusCode::OK
+    );
     let ticket = ticket_to(&harness, &session, alice, &HOST, None)
         .await
         .unwrap();
@@ -2393,24 +2534,43 @@ async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_s
     let reply = report_on(&harness, "other-1", "other-token", &[], None).await;
     assert_eq!(reply.revocations.len(), 2, "the Host and its Client");
 
-    // The console moves any Host, without waiting.
+    // The console holds no Host key, so it moves no Host.
     let console = harness.console("alice@example.com").await;
-    for host in [&SECOND_HOST, &SECOND_HOST] {
+    let far = node_url(&harness, &session, "far-1").await;
+    for body in [
+        serde_json::json!({"node_id": "far-1"}),
+        serde_json::to_value(SwitchNode {
+            placement: signed(&SECOND_CLIENT, "far-1", &far),
+        })
+        .unwrap(),
+    ] {
         let status = harness
             .http
             .put(format!(
                 "{}/v1/devices/{}/node",
                 harness.base,
-                key_hex(host)
+                key_hex(&SECOND_HOST)
             ))
             .console(&console)
-            .json(&serde_json::json!({"node_id": "far-1"}))
+            .json(&body)
             .send()
             .await
             .unwrap()
             .status();
-        assert_eq!(status, StatusCode::OK);
+        assert!(status.is_client_error(), "{status}");
     }
+    assert_eq!(
+        switch(
+            &harness,
+            &session,
+            alice,
+            &SECOND_HOST,
+            &SECOND_HOST,
+            "far-1"
+        )
+        .await,
+        StatusCode::OK
+    );
     let second = ticket_to(
         &harness,
         &session,
@@ -2421,6 +2581,39 @@ async fn hosts_spread_over_as_many_nodes_as_the_plan_allows_and_return_when_it_s
     .await
     .unwrap();
     assert_eq!(second.node_id, "far-1");
+
+    // A node's new address waits for the Host to confirm it.
+    let (status, _) = send(
+        &harness,
+        &admin,
+        reqwest::Method::PATCH,
+        "/v1/admin/nodes/far-1",
+        Some(serde_json::json!({"url": "https://far-1.example"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let needed = placement_needed(&harness, &session, alice, &SECOND_HOST, None).await;
+    assert_eq!(needed.reason, PlacementReason::AddressChanged);
+    let suggested = needed.suggested.unwrap();
+    assert_eq!(
+        (suggested.id.as_str(), suggested.relay_url.as_str()),
+        ("far-1", "https://far-1.example")
+    );
+    assert_eq!(
+        put_placement(
+            &harness,
+            &session,
+            &SECOND_HOST,
+            &signed(&SECOND_HOST, "far-1", "https://far-1.example")
+        )
+        .await,
+        StatusCode::OK,
+        "confirming an address waits out no cooldown"
+    );
+    let second = ticket_to(&harness, &session, alice, &SECOND_HOST, None)
+        .await
+        .unwrap();
+    assert_eq!(second.relay_url, "https://far-1.example");
     harness.control.shutdown().await;
 }
 

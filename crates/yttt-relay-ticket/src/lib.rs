@@ -158,8 +158,6 @@ impl TicketVerifier {
 pub enum ProofPurpose {
     RegisterDevice,
     IssueTicket,
-    /// A Host moves itself to another node.
-    SwitchNode,
 }
 
 impl ProofPurpose {
@@ -167,7 +165,6 @@ impl ProofPurpose {
         match self {
             Self::RegisterDevice => b"register-device",
             Self::IssueTicket => b"issue-ticket",
-            Self::SwitchNode => b"switch-node",
         }
     }
 }

@@ -548,6 +548,14 @@
       "volume"
     ]
   },
+  "HostPlacement": {
+    "": [
+      "host",
+      "node_id",
+      "relay_url",
+      "seq"
+    ]
+  },
   "HostReady": {
     "": [
       "connection_sequence",
@@ -616,6 +624,16 @@
       "stream"
     ]
   },
+  "NodeChoice": {
+    "": [
+      "full",
+      "id",
+      "load_percent",
+      "name",
+      "region",
+      "relay_url"
+    ]
+  },
   "OpenedProject": {
     "": [
       "id",
@@ -678,6 +696,18 @@
   "PathSegmentWire": {
     "Bytes": [],
     "Utf8": []
+  },
+  "PlacementNeeded": {
+    "": [
+      "current",
+      "reason",
+      "suggested"
+    ]
+  },
+  "PlacementReason": {
+    "address_changed": [],
+    "missing": [],
+    "node_unavailable": []
   },
   "ProjectChange": {
     "": [
@@ -961,6 +991,7 @@
       "control_url",
       "error",
       "node_id",
+      "placement_needed",
       "relay_url",
       "ticket_expires_unix"
     ]
@@ -1560,6 +1591,12 @@
       "context",
       "revision",
       "session_id"
+    ]
+  },
+  "SignedPlacement": {
+    "": [
+      "placement",
+      "signature"
     ]
   },
   "SshAuthentication": {

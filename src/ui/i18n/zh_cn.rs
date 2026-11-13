@@ -883,7 +883,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountNode => "节点：{node}",
         UiTextKey::RelayAccountChooseNode => "选择节点",
         UiTextKey::RelayAccountNodeHint => {
-            "选择离这台电脑和常用设备都近的节点。连接这台电脑的设备会自动跟随，切换时远程会话会断开并自动重连。"
+            "选择离这台电脑和常用设备都近的节点。连接这台电脑的设备会自动跟随，远程会话保持不断。"
+        }
+        UiTextKey::RelayAccountNodeMissing => "还没有为这台电脑选择节点，选好之前只能直连。",
+        UiTextKey::RelayAccountNodeUnavailable => {
+            "节点 {node} 已不可用（停用或不在套餐内）。选择新节点之前只能直连。"
+        }
+        UiTextKey::RelayAccountNodeMoved => {
+            "节点 {node} 的地址已变更。再次选择它以确认，确认之前只能直连。"
         }
         UiTextKey::RelayAccountNodeLatency => "{ms} ms",
         UiTextKey::RelayAccountNodeNoAnswer => "无响应",

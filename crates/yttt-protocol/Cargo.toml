@@ -16,5 +16,6 @@ sha2 = "0.10"
 thiserror = "2"
 yttt-agent-core = { path = "../yttt-agent-core" }
 yttt-core = { path = "../yttt-core" }
+yttt-relay-ticket = { path = "../yttt-relay-ticket" }
 zeroize = "1"
 

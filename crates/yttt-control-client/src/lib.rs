@@ -13,13 +13,16 @@ use yttt_relay_ticket::{
     DeviceProof, ProofPurpose,
     api::{
         ApiError, DeviceEntry, DeviceList, DeviceProofBody, DeviceRole, Login, RegisterDevice,
-        SessionGranted, SwitchNode, TicketGranted, TicketRequest,
+        SessionGranted, SwitchNode, TicketOutcome, TicketRequest,
     },
 };
 use yttt_transport_iroh::{IrohEndpoint, RelayTarget};
 
 pub use sign_in::{BrowserLogin, DeviceLogin};
-pub use yttt_relay_ticket::api::{AccountView, NodeChoice, NodePlacement};
+pub use yttt_relay_ticket::{
+    api::{AccountView, NodeChoice, NodePlacement, PlacementNeeded, PlacementReason},
+    placement::SignedPlacement,
+};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const FIRST_RETRY: Duration = Duration::from_secs(30);
@@ -39,6 +42,9 @@ pub enum ControlError {
     Denied,
     #[error("the sign-in expired; start again")]
     Expired,
+    /// No ticket until the Host's user chooses a node.
+    #[error("the Host has to choose a relay node ({:?})", .0.reason)]
+    PlacementNeeded(Box<PlacementNeeded>),
 }
 
 impl ControlError {
@@ -90,6 +96,15 @@ impl std::fmt::Debug for ControlSession {
             .field("token", &"[redacted]")
             .finish()
     }
+}
+
+/// A ticket and the placement of the Host it relays to.
+#[derive(Clone, Debug)]
+pub struct PlacedTicket {
+    pub ticket: RelayTicket,
+    /// The Host's own for a Host; for a Client, its Host's. Check it against
+    /// the Host's key before using it.
+    pub host_placement: Option<SignedPlacement>,
 }
 
 /// A ticket for one device on its account's relay node.
@@ -258,16 +273,15 @@ impl ControlSession {
             .await
     }
 
-    /// Moves this Host, and the Clients that follow it, to `node_id`. It
-    /// proves it holds the Host's key; a plan of one node moves the whole
-    /// account.
+    /// Stores a placement the Host signed, which moves it and the Clients
+    /// that follow it to its node; with a plan of one node, the account's
+    /// default node follows.
     pub async fn switch_node(
         &self,
-        host_secret: &[u8; 32],
-        node_id: &str,
+        placement: &SignedPlacement,
     ) -> Result<NodePlacement, ControlError> {
         let client = self.client()?;
-        let host = yttt_relay_ticket::hex(&yttt_relay_ticket::public_key(host_secret));
+        let host = yttt_relay_ticket::hex(&placement.placement.host);
         client
             .send(
                 client
@@ -275,8 +289,7 @@ impl ControlSession {
                     .put(client.url(&format!("/v1/devices/{host}/node")))
                     .bearer_auth(&self.token)
                     .json(&SwitchNode {
-                        node_id: node_id.to_owned(),
-                        proof: Some(self.proof(host_secret, ProofPurpose::SwitchNode)),
+                        placement: placement.clone(),
                     }),
             )
             .await
@@ -319,14 +332,24 @@ impl ControlSession {
     }
 
     /// A ticket for this key's node: a Host's own, or for a Client the node
-    /// of its Host.
+    /// of its Host, with the placement that Host signed. A Host that has to
+    /// choose a node first gets [`ControlError::PlacementNeeded`].
     pub async fn ticket(
         &self,
         device_secret: &[u8; 32],
         kind: DeviceKind,
     ) -> Result<RelayTicket, ControlError> {
+        Ok(self.placed_ticket(device_secret, kind).await?.ticket)
+    }
+
+    /// [`Self::ticket`], with the placement the Host signed.
+    pub async fn placed_ticket(
+        &self,
+        device_secret: &[u8; 32],
+        kind: DeviceKind,
+    ) -> Result<PlacedTicket, ControlError> {
         let client = self.client()?;
-        let granted: TicketGranted = client
+        let outcome: TicketOutcome = client
             .send(
                 client
                     .http
@@ -338,13 +361,24 @@ impl ControlSession {
                     }),
             )
             .await?;
-        Ok(RelayTicket {
-            relay_url: granted.relay_url,
-            node_id: granted.node_id,
-            token: granted.token,
-            received_unix: now_unix(),
-            expires_unix: granted.expires_unix,
-        })
+        match outcome {
+            TicketOutcome::Granted {
+                ticket,
+                host_placement,
+            } => Ok(PlacedTicket {
+                ticket: RelayTicket {
+                    relay_url: ticket.relay_url,
+                    node_id: ticket.node_id,
+                    token: ticket.token,
+                    received_unix: now_unix(),
+                    expires_unix: ticket.expires_unix,
+                },
+                host_placement,
+            }),
+            TicketOutcome::PlacementNeeded(needed) => {
+                Err(ControlError::PlacementNeeded(Box::new(needed)))
+            }
+        }
     }
 
     fn proof(&self, device_secret: &[u8; 32], purpose: ProofPurpose) -> DeviceProofBody {
@@ -357,9 +391,41 @@ impl ControlSession {
     }
 }
 
+/// What [`keep_ticket`] tells its owner.
+pub trait TicketEvents: Send {
+    /// A new ticket, already applied to the endpoint.
+    fn renewed(&mut self, ticket: &RelayTicket);
+    /// The Host's placement, sent with every ticket.
+    fn placement(&mut self, _placement: &SignedPlacement) {}
+    /// No ticket until the Host's user chooses a node; asked again later.
+    fn placement_needed(&mut self, _needed: &PlacementNeeded) {}
+    fn failed(&mut self, error: &ControlError);
+}
+
+/// [`TicketEvents`] from two closures, for owners that only cache tickets and
+/// log errors.
+pub fn ticket_events(
+    renewed: impl FnMut(&RelayTicket) + Send,
+    failed: impl FnMut(&ControlError) + Send,
+) -> impl TicketEvents {
+    struct Closures<R, F>(R, F);
+    impl<R: FnMut(&RelayTicket) + Send, F: FnMut(&ControlError) + Send> TicketEvents
+        for Closures<R, F>
+    {
+        fn renewed(&mut self, ticket: &RelayTicket) {
+            (self.0)(ticket);
+        }
+        fn failed(&mut self, error: &ControlError) {
+            (self.1)(error);
+        }
+    }
+    Closures(renewed, failed)
+}
+
 /// Renews `current` before it runs out and points `endpoint` at each new
-/// ticket, forever; abort the task to stop it. `renewed` sees each new ticket,
-/// e.g. to cache it, and `failed` each error.
+/// ticket, forever; abort the task to stop it. Without a ticket it asks at
+/// once. `events` sees each new ticket, e.g. to cache it, each placement and
+/// each error.
 ///
 /// iroh keeps the token a relay connection started with, so a renewal on the
 /// same URL only reaches relay connections opened afterwards. A long-running
@@ -372,34 +438,55 @@ pub async fn keep_ticket(
     device_secret: [u8; 32],
     kind: DeviceKind,
     endpoint: IrohEndpoint,
-    mut current: RelayTicket,
-    mut renewed: impl FnMut(&RelayTicket) + Send,
-    mut failed: impl FnMut(&ControlError) + Send,
+    mut current: Option<RelayTicket>,
+    mut events: impl TicketEvents,
 ) {
     let mut retry = FIRST_RETRY;
+    let mut wait = Duration::ZERO;
     loop {
-        let wait = current
-            .renew_at_unix()
-            .saturating_sub(now_unix())
-            .min(NODE_CHECK.as_secs());
-        tokio::time::sleep(Duration::from_secs(wait)).await;
-        match session.ticket(&device_secret, kind).await {
-            Ok(ticket) => {
+        if let Some(ticket) = &current {
+            wait = Duration::from_secs(
+                ticket
+                    .renew_at_unix()
+                    .saturating_sub(now_unix())
+                    .min(NODE_CHECK.as_secs()),
+            );
+        }
+        tokio::time::sleep(wait).await;
+        match session.placed_ticket(&device_secret, kind).await {
+            Ok(PlacedTicket {
+                ticket,
+                host_placement,
+            }) => {
                 retry = FIRST_RETRY;
+                if let Some(placement) = &host_placement {
+                    events.placement(placement);
+                }
                 // The same node within its renewal window keeps the ticket it has.
-                let moved = ticket.relay_url != current.relay_url;
-                if moved || now_unix() >= current.renew_at_unix() {
+                let fresh = current.as_ref().is_none_or(|current| {
+                    ticket.relay_url != current.relay_url || now_unix() >= current.renew_at_unix()
+                });
+                if fresh {
                     if let Err(error) = endpoint.set_relay(&ticket.target()).await {
                         tracing::warn!(%error, "could not apply a renewed relay ticket");
                     }
-                    renewed(&ticket);
-                    current = ticket;
+                    events.renewed(&ticket);
+                    current = Some(ticket);
                 }
             }
+            Err(ControlError::PlacementNeeded(needed)) => {
+                events.placement_needed(&needed);
+                // Asked again soon: the user may choose a node at any time.
+                current = None;
+                wait = FIRST_RETRY;
+            }
             Err(error) => {
-                failed(&error);
-                tokio::time::sleep(retry).await;
+                events.failed(&error);
+                wait = retry;
                 retry = (retry * 2).min(LAST_RETRY);
+                if current.is_some() {
+                    tokio::time::sleep(wait).await;
+                }
             }
         }
     }

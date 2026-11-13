@@ -158,6 +158,9 @@ pub struct RelayAccountStatus {
     pub error: Option<String>,
     /// The node the Host's ticket is for.
     pub node_id: Option<String>,
+    /// Set while the Host relays through no node until its user chooses one:
+    /// its node was disabled, left the plan or changed its address.
+    pub placement_needed: Option<yttt_relay_ticket::api::PlacementNeeded>,
 }
 
 /// A relay node the Host's account may use, as the Host sees it.

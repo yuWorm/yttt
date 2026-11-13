@@ -270,13 +270,12 @@ pub struct NodeChoice {
     pub full: bool,
 }
 
-/// `PUT /v1/devices/{host}/node`. From the app or the CLI, the Host proves it
-/// holds its own key; the console's session needs no proof.
+/// `PUT /v1/devices/{host}/node`: the Host's signed choice of node. The
+/// signature proves the caller holds the Host's key, so the console, which
+/// does not, cannot move a Host.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SwitchNode {
-    pub node_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proof: Option<DeviceProofBody>,
+    pub placement: crate::placement::SignedPlacement,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -316,6 +315,43 @@ impl std::fmt::Debug for TicketGranted {
             .field("expires_unix", &self.expires_unix)
             .finish()
     }
+}
+
+/// `POST /v1/tickets`: a ticket, or why the Host has to choose a node first.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketOutcome {
+    Granted {
+        ticket: TicketGranted,
+        /// The placement the Host signed: its own for a Host, its Host's for
+        /// a Client. A Client dials only the relay this names.
+        host_placement: Option<crate::placement::SignedPlacement>,
+    },
+    PlacementNeeded(PlacementNeeded),
+}
+
+/// The Host relays through no node until its user chooses one; the control
+/// plane never moves it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlacementNeeded {
+    pub reason: PlacementReason,
+    /// The placement the Host signed last, if any.
+    #[serde(default)]
+    pub current: Option<crate::placement::SignedPlacement>,
+    /// A node the plan allows that has room, the account's default first.
+    #[serde(default)]
+    pub suggested: Option<NodeChoice>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlacementReason {
+    /// The Host has signed no placement yet.
+    Missing,
+    /// Its node is disabled, gone from the plan, or past the plan's node count.
+    NodeUnavailable,
+    /// Its node now has another address, which the Host has not confirmed.
+    AddressChanged,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
