@@ -62,4 +62,31 @@ final class ProjectPageTests: XCTestCase {
         XCTAssertEqual(tipText(agent("a", "b", .waiting, .approval)), "等批准，接管后回复")
         XCTAssertEqual(tipText(agent("a", "b", .waiting, .userInput)), "等回答，接管后回复")
     }
+
+    func testATabShowsItsAgentsLogoAndWhetherOneWaits() {
+        let marks = overview.tabMarks("web")
+        XCTAssertEqual(marks["agents"], TabMark(provider: "codex", waiting: true))
+        XCTAssertEqual(marks["dev"], TabMark(provider: "codex", waiting: false))
+        XCTAssertEqual(overview.tabMarks("api"), [:])
+    }
+
+    func testAProjectListsItsActiveAgentsOnceAndCountsWaits() {
+        var claude = agent("agents", "codex", .working)
+        claude.sessionId = "c2"
+        claude.provider = "claude"
+        var withClaude = overview
+        withClaude.agents.append(claude)
+        XCTAssertEqual(withClaude.projectMark("web"), ProjectMark(providers: ["codex", "claude"], waiting: 1))
+        // Finished Agents are not shown.
+        XCTAssertEqual(overview.projectMark("api"), ProjectMark(providers: ["codex"], waiting: 0))
+        XCTAssertEqual(overview.projectMark("none"), ProjectMark(providers: [], waiting: 0))
+    }
+
+    func testAnAgentOpensItsPaneElseItsTerminalElseNothing() {
+        let terminals = [TerminalInfo(sessionId: "loose", projectId: "api", cols: 80, rows: 24)]
+        XCTAssertEqual(destination("web:agents:codex", overview, terminals),
+                       .project(Place(projectId: "web", tabId: "agents", paneId: "codex")))
+        XCTAssertEqual(destination("loose", overview, terminals), .terminal(terminals[0]))
+        XCTAssertNil(destination("gone", overview, terminals))
+    }
 }

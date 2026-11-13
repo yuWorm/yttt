@@ -74,3 +74,56 @@ func tipText(_ agent: AgentSummary?) -> String {
     default: return "等待中，接管后处理"
     }
 }
+
+/// A terminal tab's mark: the logo of an Agent in it, and whether one waits.
+struct TabMark: Equatable {
+    var provider: String?
+    var waiting: Bool
+}
+
+/// A project's mark: its active Agents' providers, once each, and how many wait.
+struct ProjectMark: Equatable {
+    var providers: [String]
+    var waiting: Int
+}
+
+extension AgentSummary {
+    var isActive: Bool { ![.completed, .interrupted, .stale].contains(state) }
+}
+
+extension Overview {
+    /// Each tab of the project with an Agent in its panes: a waiting one's provider first.
+    func tabMarks(_ projectId: String) -> [String: TabMark] {
+        guard let project = projects.first(where: { $0.projectId == projectId }) else { return [:] }
+        let bySession = Dictionary(agents.map { ($0.sessionId, $0) }, uniquingKeysWith: { first, _ in first })
+        var marks: [String: TabMark] = [:]
+        for tab in project.tabs {
+            let inTab = tab.panes.compactMap { bySession[$0.sessionId] }
+            guard let first = inTab.first else { continue }
+            let waiting = inTab.first { $0.state == .waiting }
+            marks[tab.tabId] = TabMark(provider: (waiting ?? first).provider, waiting: waiting != nil)
+        }
+        return marks
+    }
+
+    func projectMark(_ projectId: String) -> ProjectMark {
+        let inProject = agents.filter { $0.projectId == projectId }
+        var providers: [String] = []
+        for agent in inProject where agent.isActive && !providers.contains(agent.provider) {
+            providers.append(agent.provider)
+        }
+        return ProjectMark(providers: providers, waiting: inProject.filter { $0.state == .waiting }.count)
+    }
+}
+
+/// Where tapping an Agent leads.
+enum Destination: Hashable {
+    case project(Place)
+    case terminal(TerminalInfo)
+}
+
+/// The pane the terminal runs in, else the terminal alone, else nothing: it has gone.
+func destination(_ sessionId: String, _ overview: Overview, _ terminals: [TerminalInfo]) -> Destination? {
+    if let place = overview.placeOf(sessionId) { return .project(place) }
+    return terminals.first { $0.sessionId == sessionId }.map { .terminal($0) }
+}
