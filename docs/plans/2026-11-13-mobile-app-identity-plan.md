@@ -78,3 +78,33 @@
 - 签名：仍要你的 Apple 团队和 Android 签名密钥。
 - 启动画面：两端用系统默认（iOS 空白、Android 12 起用图标），以后再说。
 - 已有的计划文档里的 spike 名字不改：它们记录的是当时的状态。
+
+## 执行记录（2026-11-13）
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1 图标 | 7f66691 | 脚本从 SVG 读出底色渐变、三条路径、银色渐变和变换；iOS 图自查为 1024×1024、不透明。 |
+| 2、4、5 Android | 6251c64 | 改包名、名字、版本；接上图标；配对用设备名；删掉两段迁移和对应测试。debug 31 项、release 29 项测试通过（各少了迁移那一项）。 |
+| 3、4、5 iOS | 91dc380 | 目录、target、App 类型改名；Bundle ID、Keychain service、版本。21 项测试通过。 |
+| 6 脚本和说明 | 5d077c3 | `YTTT_DEBUG_*`；`check-release.sh` 的标记跟着改。 |
+
+**`.gitignore`**：加了 `Yttt.xcodeproj` 和 `Yttt/Info.plist`。旧的 `YtttSpike.xcodeproj`、`YtttSpike/Info.plist` 两条没删：仓库规则要求删 `.gitignore` 条目前先确认。
+
+**一处修正**：XcodeGen 生成的 Info.plist 自带写死的 `CFBundleShortVersionString = 1.0`，设了 `MARKETING_VERSION` 也不生效；改为在 Info.plist 属性里引用 `$(MARKETING_VERSION)` 和 `$(CURRENT_PROJECT_VERSION)`，正式版显示 0.1.0。
+
+### 模拟器验证
+
+- 构建：两端调试版、正式版都能构建；`check-release.sh` 对两端调试版报出参数，对正式版通过。
+- **iOS**：
+  - 主屏幕上是新图标，名字 `yttt`；
+  - Debug 版用改名后的 `YTTT_DEBUG_PAIR_CODE` 配对成功，首页正常；
+  - Host 的设备列表（`devices.json`）里记的是 `iPhone 16`（模拟器的名字）。
+- **Android 正式版**（本地用调试密钥签名）：
+  - 应用列表里是新图标，名字 `yttt`，圆形遮罩下图形完整；
+  - 从相册图片配对成功，Host 记的设备名是 `sdk_gphone64_arm64`（模拟器设置里的设备名）；
+  - Agent 等待的提醒通知、常驻通知和弹出横幅都用新的剪影图标。
+
+### 未验证
+
+- Android 13 的主题图标（单色层）：要在壁纸设置里打开主题图标，没有试。
+- 真机。

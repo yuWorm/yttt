@@ -72,13 +72,17 @@ FFI 约束：
 
 **构建类型（2026-11-13，`docs/plans/2026-11-13-mobile-release-build-plan.md`）：**
 
-- 验证用的自动化参数（iOS 的 `YTTT_SPIKE_*` 环境变量，Android 启动 Intent 的 `pair`、`qrImage`、`type`、`relayOnly`）只编进调试版：
+- 验证用的自动化参数（iOS 的 `YTTT_DEBUG_*` 环境变量（原名 `YTTT_SPIKE_*`），Android 启动 Intent 的 `pair`、`qrImage`、`type`、`relayOnly`）只编进调试版：
   - Android 放在 `debug` 源码集，`release` 源码集里同名函数什么也不读；
   - iOS 在 `#if DEBUG` 里读。
   - `scripts/mobile/check-release.sh` 在 APK 或 `.app` 里找这些名字，找到就失败。
 - Android 正式版用 R8 压缩，保留 JNA 和 UniFFI 生成的类；APK 从 40 MB 降到 22 MB。
 - iOS 模拟器构建只要 arm64：Rust 核心只编了 arm64 的模拟器库，Release 默认还要 x86_64。
-- 签名、App 名字、图标、包名还没定，正式版目前不签名。
+- 包名 `com.yttt.yai`，名字 `yttt`，版本 0.1.0（2026-11-13，`docs/plans/2026-11-13-mobile-app-identity-plan.md`）。
+  - 图标由 `scripts/build-mobile-icons.py` 从桌面图标的 SVG 生成：iOS 一张不透明的 1024 图，Android 自适应图标（含主题图标用的单色层）和通知小图标。
+  - 配对时告诉 Host 的设备名：Android 取系统设置里的设备名，没有就用型号；iOS 取 `UIDevice.current.name`。
+  - 和 spike 版包名不同，是另一个 App：spike 版的配对和密钥不带过来。
+- 正式版目前不签名：要你的 Apple 团队和 Android 签名密钥。
 
 ## 4. 终端
 
