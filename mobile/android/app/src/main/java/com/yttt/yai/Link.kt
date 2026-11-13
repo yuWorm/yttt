@@ -141,13 +141,15 @@ class Link(context: Context) {
         try {
             val connected = core.connect(stored, secret, relayOnly)
             runCatching { connected.openActiveWorkspace() }
-            connected.watchOverview(object : OverviewListener {
-                override fun onOverview(overview: Overview) {
-                    this@Link.overview.value = overview
-                }
-            })
+            // Current before the first overview arrives, which the listener checks.
             session.value = connected
             status.value = ""
+            connected.watchOverview(object : OverviewListener {
+                override fun onOverview(overview: Overview) {
+                    // A link dropped since (a Host change) may still deliver one.
+                    if (session.value === connected) this@Link.overview.value = overview
+                }
+            })
             connected
         } catch (error: Exception) {
             status.value = "连接失败：${error.message}"
