@@ -4,19 +4,19 @@ import XCTest
 final class AutomationTests: XCTestCase {
     func testReadsEveryVariable() {
         let hooks = LaunchHooks(environment: [
-            "YTTT_SPIKE_PAIR_CODE": "YTTT-PAIR:1:x",
-            "YTTT_SPIKE_QR_IMAGE": "/tmp/qr.png",
-            "YTTT_SPIKE_SWITCH": "a6a3",
-            "YTTT_SPIKE_FORGET": "1",
-            "YTTT_SPIKE_OPEN": "s1",
-            "YTTT_SPIKE_TYPE": "ls",
-            "YTTT_SPIKE_PROJECT": "p",
-            "YTTT_SPIKE_TAB": "t",
-            "YTTT_SPIKE_PANE": "n",
-            "YTTT_SPIKE_DRAWER": "1",
-            "YTTT_SPIKE_FILES": "1",
-            "YTTT_SPIKE_EDIT": "README.md",
-            "YTTT_SPIKE_RELAY_ONLY": "1",
+            "YTTT_DEBUG_PAIR_CODE": "YTTT-PAIR:1:x",
+            "YTTT_DEBUG_QR_IMAGE": "/tmp/qr.png",
+            "YTTT_DEBUG_SWITCH": "a6a3",
+            "YTTT_DEBUG_FORGET": "1",
+            "YTTT_DEBUG_OPEN": "s1",
+            "YTTT_DEBUG_TYPE": "ls",
+            "YTTT_DEBUG_PROJECT": "p",
+            "YTTT_DEBUG_TAB": "t",
+            "YTTT_DEBUG_PANE": "n",
+            "YTTT_DEBUG_DRAWER": "1",
+            "YTTT_DEBUG_FILES": "1",
+            "YTTT_DEBUG_EDIT": "README.md",
+            "YTTT_DEBUG_RELAY_ONLY": "1",
         ])
         XCTAssertEqual(hooks.pairCode, "YTTT-PAIR:1:x")
         XCTAssertEqual(hooks.qrImage, "/tmp/qr.png")
@@ -41,7 +41,7 @@ final class AutomationTests: XCTestCase {
     }
 
     func testOnlyOneTurnsAFlagOn() {
-        let hooks = LaunchHooks(environment: ["YTTT_SPIKE_FORGET": "0", "YTTT_SPIKE_RELAY_ONLY": "yes"])
+        let hooks = LaunchHooks(environment: ["YTTT_DEBUG_FORGET": "0", "YTTT_DEBUG_RELAY_ONLY": "yes"])
         XCTAssertFalse(hooks.forget)
         XCTAssertFalse(hooks.relayOnly)
     }

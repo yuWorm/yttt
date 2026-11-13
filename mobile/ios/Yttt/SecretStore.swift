@@ -12,8 +12,6 @@ struct KeychainError: Error, CustomStringConvertible {
 struct SecretStore {
     let service: String
     let account: String
-    /// Where the spike kept it in plain text; moved in once, then deleted.
-    let legacyFile: URL?
 
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -45,16 +43,9 @@ struct SecretStore {
         SecItemDelete(query as CFDictionary)
     }
 
-    /// The secret: from the Keychain, else moved from the old plain file,
-    /// else made now.
+    /// The secret: from the Keychain, else made now.
     func deviceSecret() throws -> Data {
         if let secret = try load(), secret.count == 32 { return secret }
-        if let legacyFile, let old = try? Data(contentsOf: legacyFile), old.count == 32 {
-            try save(old)
-            // Only once the Keychain has it.
-            if try load() == old { try? FileManager.default.removeItem(at: legacyFile) }
-            return old
-        }
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
             throw KeychainError(status: errSecAllocate)

@@ -42,18 +42,15 @@ final class HostListTests: XCTestCase {
         XCTAssertEqual(names.map(\.name), ["mac · 1111", "mac · 2222", "linux"])
     }
 
-    func testTheListIsKeptAndTheOldSingleRecordMovesIn() throws {
+    func testTheListIsKept() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hosts-\(UUID())")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = HostStore(directory: dir) { String(decoding: $0, as: UTF8.self) == "old" ? self.a : self.b }
-        try data("old").write(to: dir.appendingPathComponent("host.json"))
-        let migrated = store.load()
-        XCTAssertEqual(migrated.hosts.map(\.id), [a])
-        XCTAssertEqual(migrated.current, a)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("host.json").path))
+        let store = HostStore(directory: dir)
+        XCTAssertTrue(store.load().hosts.isEmpty)
+        XCTAssertNil(store.load().current)
 
-        store.save(migrated.added(b, data("new")).selected(a))
+        store.save(HostList().added(a, data("old")).added(b, data("new")).selected(a))
         let loaded = store.load()
         XCTAssertEqual(loaded.hosts.map(\.id), [a, b])
         XCTAssertEqual(loaded.current, a)

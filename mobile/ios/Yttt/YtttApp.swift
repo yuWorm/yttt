@@ -2,7 +2,7 @@ import PhotosUI
 import SwiftUI
 
 @main
-struct YtttSpikeApp: App {
+struct YtttApp: App {
     @StateObject private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 

@@ -28,7 +28,7 @@ struct LaunchHooks: Equatable {
 
     init(environment: [String: String]) {
         #if DEBUG
-        func value(_ name: String) -> String? { environment["YTTT_SPIKE_" + name] }
+        func value(_ name: String) -> String? { environment["YTTT_DEBUG_" + name] }
         func flag(_ name: String) -> Bool { value(name) == "1" }
         pairCode = value("PAIR_CODE")
         qrImage = value("QR_IMAGE")

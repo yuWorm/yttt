@@ -51,23 +51,16 @@ struct HostList: Codable, Equatable {
     }
 }
 
-/// The list in `hosts.json`, app-private and left out of backups. The
-/// spike's single `host.json` moves in as the only Host, then is deleted.
+/// The list in `hosts.json`, app-private and left out of backups.
 struct HostStore {
     let directory: URL
-    let idOf: (Data) -> String
 
     private var file: URL { directory.appendingPathComponent("hosts.json") }
-    private var legacy: URL { directory.appendingPathComponent("host.json") }
 
     func load() -> HostList {
-        if let data = try? Data(contentsOf: file), let list = try? JSONDecoder().decode(HostList.self, from: data) {
-            return list
-        }
-        guard let old = try? Data(contentsOf: legacy) else { return HostList() }
-        let list = HostList().added(idOf(old), old)
-        save(list)
-        try? FileManager.default.removeItem(at: legacy)
+        guard let data = try? Data(contentsOf: file),
+              let list = try? JSONDecoder().decode(HostList.self, from: data)
+        else { return HostList() }
         return list
     }
 

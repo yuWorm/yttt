@@ -8,15 +8,14 @@ import Security
 enum Storage {
     static var directory: URL {
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("yttt-spike", isDirectory: true)
+            .appendingPathComponent("yttt", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 
     /// The device's 32-byte secret, in the Keychain.
     static func deviceSecret() -> Data {
-        let store = SecretStore(service: "dev.yttt.spike", account: "device-secret",
-                                legacyFile: directory.appendingPathComponent("device-secret"))
+        let store = SecretStore(service: "com.yttt.yai", account: "device-secret")
         do { return try store.deviceSecret() } catch { fatalError("device secret: \(error)") }
     }
 }
@@ -80,7 +79,7 @@ final class AppModel: ObservableObject {
         let core = try! MobileCore()
         self.core = core
         secret = Storage.deviceSecret()
-        hostStore = HostStore(directory: Storage.directory) { (try? core.hostInfo(record: $0).id) ?? "" }
+        hostStore = HostStore(directory: Storage.directory)
         let hosts = hostStore.load()
         self.hosts = hosts
         record = hosts.currentRecord
@@ -135,7 +134,7 @@ final class AppModel: ObservableObject {
             }
         }
         do {
-            let record = try await core.pair(code: code, deviceLabel: "iOS spike", deviceSecret: secret,
+            let record = try await core.pair(code: code, deviceLabel: UIDevice.current.name, deviceSecret: secret,
                                             relayOnly: Self.relayOnly, listener: listener)
             let id = try core.hostInfo(record: record).id
             status = ""
