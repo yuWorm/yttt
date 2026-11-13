@@ -31,7 +31,10 @@ use yttt::{
         app::assets,
         editor::{EditorAppearance, register_builtin_editor_languages, styled_code_editor_input},
         theme::{AppearanceState, ThemeRuntime},
-        workbench::WorkbenchView,
+        workbench::{
+            WorkbenchView,
+            gallery_preview::{RemotePreview, RemoteServicesPreview},
+        },
     },
 };
 use yttt_ui::primitives::select::SelectState;
@@ -67,7 +70,7 @@ const WINDOW_WIDTH: f32 = 960.;
 const WINDOW_HEIGHT: f32 = 900.;
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 const USAGE: &str = "usage: yttt-ui-gallery [--style zed|rounded] \
-                     [--scene components|palette|tree|editor|main] [--screenshot PATH] [--dump-layout PATH]";
+                     [--scene components|palette|tree|editor|main|remote-connections|remote-fresh|remote-connected|remote-needs-node] [--screenshot PATH] [--dump-layout PATH]";
 
 type LayoutMap = Rc<RefCell<BTreeMap<String, Bounds<Pixels>>>>;
 
@@ -92,6 +95,8 @@ enum Scene {
     Editor,
     /// A full workbench sized like `baseline-1.26.2/main2.png`.
     Main,
+    /// The remote services window on fixture state.
+    Remote(RemotePreview),
 }
 
 fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
@@ -115,6 +120,10 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
                     "tree" => Scene::Tree,
                     "editor" => Scene::Editor,
                     "main" => Scene::Main,
+                    "remote-connections" => Scene::Remote(RemotePreview::Connections),
+                    "remote-fresh" => Scene::Remote(RemotePreview::ThisComputerFresh),
+                    "remote-connected" => Scene::Remote(RemotePreview::ThisComputerConnected),
+                    "remote-needs-node" => Scene::Remote(RemotePreview::ThisComputerNeedsNode),
                     _ => bail!(USAGE),
                 }
             }
@@ -164,6 +173,14 @@ fn run(options: Options) {
             // The main scene matches the Zed baseline window.
             let (width, height) = if scene == Scene::Main {
                 (1536., 1049.)
+            } else if matches!(scene, Scene::Remote(_)) {
+                // The remote services window's width; tall enough for its
+                // longest page, or YTTT_GALLERY_HEIGHT.
+                let height = std::env::var("YTTT_GALLERY_HEIGHT")
+                    .ok()
+                    .and_then(|height| height.parse().ok())
+                    .unwrap_or(720.);
+                (960., height)
             } else {
                 (WINDOW_WIDTH, WINDOW_HEIGHT)
             };
@@ -176,6 +193,11 @@ fn run(options: Options) {
             };
             let handle = cx
                 .open_window(window_options, move |window, cx| {
+                    if let Scene::Remote(preview) = scene {
+                        let root = workbench_in(ui_style.id, LanguageSetting::Chinese);
+                        let view = cx.new(|cx| RemoteServicesPreview::new(root, preview, cx));
+                        return cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx));
+                    }
                     if scene == Scene::Main {
                         let view = cx.new(|_| main_workbench(ui_style.id));
                         return cx.new(|cx| yttt_ui::window::yttt_root(view, window, cx));
@@ -213,13 +235,17 @@ fn run(options: Options) {
 /// A workbench on a fixture shaped like the Zed baseline's: a project with
 /// `src/` and `README.md`, one shell tab, and no running processes.
 fn main_workbench(style: UiStyleId) -> WorkbenchView {
+    workbench_in(style, LanguageSetting::English)
+}
+
+fn workbench_in(style: UiStyleId, language: LanguageSetting) -> WorkbenchView {
     let root = std::env::temp_dir().join("yttt-ui-gallery-main");
     let project = root.join("zed-fixture");
     let _ = std::fs::create_dir_all(project.join("src"));
     let _ = std::fs::write(project.join("README.md"), "# Fixture\n");
     let paths = AppConfigPaths::from_config_dir(root.join("config"));
     let mut settings = AppSettings::default();
-    settings.general.language = LanguageSetting::English;
+    settings.general.language = language;
     settings.general.onboarding_completed = true;
     settings.theme.ui_style = style;
     let _ = save_scoped_settings(&paths, &settings, &AppSettings::default(), false);
@@ -675,7 +701,9 @@ impl Render for Gallery {
             Scene::Palette => return self.palette_scene(window),
             Scene::Tree => return self.tree_scene(),
             Scene::Editor => return self.editor_scene(),
-            Scene::Main => unreachable!("the main scene renders a workbench, not the gallery"),
+            Scene::Main | Scene::Remote(_) => {
+                unreachable!("these scenes render a workbench, not the gallery")
+            }
             Scene::Components => {}
         }
         div()

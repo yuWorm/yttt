@@ -45,6 +45,8 @@ mod dialogs;
 mod document_lifecycle;
 mod file_finder;
 mod file_previews;
+#[cfg(feature = "ui-gallery")]
+pub mod gallery_preview;
 mod git;
 mod helpers;
 pub mod layout_editor;

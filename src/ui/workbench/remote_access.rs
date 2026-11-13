@@ -19,7 +19,7 @@ impl WorkbenchView {
         let theme = appearance.ui;
         let style = appearance.style;
         let text = self.ui_text;
-        let busy = self.ssh.remote_access_busy || runtime.is_none();
+        let busy = self.ssh.remote_access_busy || (runtime.is_none() && !self.ssh.preview);
         let p2p_section = self.p2p_settings_section(cx);
         let relay_account_section = self.relay_account_section(window, cx);
         let status = self.ssh.remote_access.as_ref();

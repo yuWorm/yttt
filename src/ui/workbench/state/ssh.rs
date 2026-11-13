@@ -174,6 +174,8 @@ pub(in super::super) struct SshControllerState {
     pub(in super::super) remote_access: Option<yttt_protocol::remote_access::RemoteAccessStatus>,
     pub(in super::super) remote_access_busy: bool,
     pub(in super::super) remote_access_loaded: bool,
+    /// Fixture state for gallery screenshots: act as if a Host answered.
+    pub(in super::super) preview: bool,
     pub(in super::super) remote_access_error: Option<String>,
     pub(in super::super) remote_access_address: Option<Entity<InputState>>,
     pub(in super::super) p2p: P2pPanelState,
@@ -207,6 +209,7 @@ impl SshControllerState {
                 remote_access: None,
                 remote_access_busy: false,
                 remote_access_loaded: false,
+                preview: false,
                 remote_access_error: None,
                 remote_access_address: None,
                 p2p: P2pPanelState::default(),

@@ -49,7 +49,8 @@ impl WorkbenchView {
         let theme = appearance.ui;
         let style = appearance.style;
         let text = self.ui_text;
-        let busy = self.ssh.remote_access_busy || self.local_runtime().is_none();
+        let busy =
+            self.ssh.remote_access_busy || (self.local_runtime().is_none() && !self.ssh.preview);
         let status = self
             .ssh
             .remote_access
