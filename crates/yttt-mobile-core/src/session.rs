@@ -30,6 +30,7 @@ use yttt_transport_iroh::{
 };
 
 use crate::{
+    account::{Account, AccountError, TICKET_WAIT, host_key},
     files::{FileEntry, OpenedFile, SESSION_PROVIDERS, SaveOutcome, SessionEntry},
     keys::TerminalKey,
     overview::Overview,
@@ -65,6 +66,56 @@ pub enum MobileError {
     NotInControl,
     #[error("the Host is too old to hand over a single terminal; update yttt on the computer")]
     HostTooOld,
+    /// The relay account's session is no longer valid: sign in again.
+    #[error("the relay account's sign-in expired")]
+    SignInExpired,
+}
+
+/// Where the endpoint's relay came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum RelaySource {
+    /// A ticket from the signed-in relay account, for the Host's node.
+    Account,
+    /// The relay the Host named when pairing, with no ticket: only a relay
+    /// that admits anyone carries it.
+    PairingHint,
+    /// No relay: direct paths only.
+    None,
+}
+
+/// A ticket for `host`'s relay node, if signed in. Failures other than an
+/// expired sign-in are returned as text, so a phone that cannot reach the
+/// control plane still tries the pairing relay and direct paths.
+async fn account_ticket(
+    account: Option<&Account>,
+    device_secret: &[u8; 32],
+    host: &yttt_protocol::EndpointKey,
+    label: &str,
+    wait: Option<Duration>,
+) -> Result<Result<Option<yttt_client_core::control::RelayTicket>, String>, MobileError> {
+    let Some(account) = account else {
+        return Ok(Ok(None));
+    };
+    let lookup = account.ticket(device_secret, host, label);
+    let result = match wait {
+        Some(wait) => tokio::time::timeout(wait, lookup)
+            .await
+            .unwrap_or_else(|_| {
+                Err(AccountError::Control(format!(
+                    "the control plane did not answer within {} s",
+                    wait.as_secs()
+                )))
+            }),
+        None => lookup.await,
+    };
+    match result {
+        Ok(ticket) => Ok(Ok(Some(ticket))),
+        Err(AccountError::SignInExpired) => Err(MobileError::SignInExpired),
+        Err(error) => {
+            tracing::warn!(%error, "no relay ticket; using the pairing relay");
+            Ok(Err(error.to_string()))
+        }
+    }
 }
 
 /// Which relay the endpoint uses.
@@ -81,14 +132,10 @@ pub enum RelayChoice {
 }
 
 impl RelayChoice {
-    /// The endpoint's relay and direct paths, given the Host's relay `hint`.
-    fn setup(self, hint: Option<&str>) -> Result<(RelaySetup, DirectPaths), MobileError> {
-        let relay = || {
-            hint.map(|url| RelayTarget {
-                url: url.to_string(),
-                token: None,
-            })
-        };
+    /// The endpoint's relay and direct paths, given the relay to use: a
+    /// ticket's, or the Host's hint.
+    fn setup(self, target: Option<RelayTarget>) -> Result<(RelaySetup, DirectPaths), MobileError> {
+        let relay = || target.clone();
         Ok(match self {
             Self::Off => (RelaySetup::Off, DirectPaths::Any),
             Self::FromHost => (relay().into(), DirectPaths::Any),
@@ -181,22 +228,58 @@ async fn bind(
     .map_err(|error| MobileError::Transport(error.to_string()))
 }
 
+/// The relay a hint names, with no ticket.
+fn hint(url: Option<&String>) -> Option<RelayTarget> {
+    url.map(|url| RelayTarget {
+        url: url.clone(),
+        token: None,
+    })
+}
+
 /// Pairs this device with the Host named in `code_text`. `on_short_code`
 /// receives the six digits the user compares with the Host's screen.
+///
+/// Signed in to a relay account, the phone first registers its key for this
+/// Host and pairs through the Host's relay node with a ticket, as a Host
+/// reachable only through that relay needs.
 pub async fn pair(
     code_text: &str,
     device_label: &str,
     device_secret: [u8; 32],
     relay: RelayChoice,
+    account: Option<&Account>,
     on_short_code: impl FnOnce(u32),
 ) -> Result<PairedHostRecord, MobileError> {
-    let code = PairingCode::decode(code_text.trim())
+    let mut code = PairingCode::decode(code_text.trim())
         .map_err(|error| MobileError::InvalidCode(format!("{error:?}")))?;
-    let endpoint = bind(device_secret, relay.setup(code.relay_url.as_deref())?).await?;
+    let key = host_key(&device_secret, &code.host);
+    // The Host's name comes with pairing; connecting renames the key.
+    let short_host = code.host.to_string().chars().take(8).collect::<String>();
+    let label = crate::account::device_label(device_label, &short_host);
+    let ticket = account_ticket(account, &device_secret, &code.host, &label, None).await?;
+    let target = match &ticket {
+        Ok(Some(ticket)) => {
+            code.relay_url = Some(ticket.relay_url.clone());
+            Some(ticket.target())
+        }
+        _ => hint(code.relay_url.as_ref()),
+    };
+    let endpoint = bind(key, relay.setup(target)?).await?;
     let result = yttt_client_core::p2p::pair(&endpoint, &code, device_label, on_short_code).await;
     endpoint.close().await;
-    let host = result.map_err(|error| MobileError::Pairing(error.to_string()))?;
-    Ok(PairedHostRecord { host })
+    match result {
+        Ok(host) => Ok(PairedHostRecord { host }),
+        Err(error) => {
+            // A key that never paired should not hold one of the plan's slots.
+            if let (Some(account), Ok(Some(_))) = (account, &ticket) {
+                let _ = account.release(&device_secret, &code.host).await;
+            }
+            Err(MobileError::Pairing(match ticket {
+                Err(ticket) => format!("{error} (relay account: {ticket})"),
+                Ok(_) => error.to_string(),
+            }))
+        }
+    }
 }
 
 /// Terminals the Host runs.
@@ -260,6 +343,9 @@ pub struct MobileSession {
     connector: Option<Arc<IrohConnector>>,
     /// The task calling back with overviews, replaced by each `watch_overview`.
     overview_watch: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Renews the relay ticket while the session lasts.
+    ticket_renewal: Option<tokio::task::JoinHandle<()>>,
+    relay_source: RelaySource,
 }
 
 /// The path a P2P session's data takes now.
@@ -274,26 +360,61 @@ pub enum LinkPath {
 }
 
 impl MobileSession {
-    /// Connects to a paired Host over P2P.
+    /// Connects to a paired Host over P2P. Signed in to a relay account, it
+    /// goes through the Host's relay node with a ticket it keeps renewed;
+    /// `device_label` names this phone on the account's console.
     pub async fn connect(
         record: &PairedHostRecord,
         device_secret: [u8; 32],
         relay: RelayChoice,
+        account: Option<&Account>,
+        device_label: &str,
     ) -> Result<Self, MobileError> {
-        let endpoint = bind(
-            device_secret,
-            relay.setup(record.host.relay_url.as_deref())?,
+        let mut host = record.host.clone();
+        let key = host_key(&device_secret, &host.host);
+        let label = crate::account::device_label(device_label, &host.host_label);
+        let ticket = account_ticket(
+            account,
+            &device_secret,
+            &host.host,
+            &label,
+            Some(TICKET_WAIT),
         )
-        .await?;
-        let connector = Arc::new(record.host.connector(endpoint.clone()));
-        let session = Self::connect_with(
-            connector.clone(),
-            record,
-            record.host.credential(device_secret),
-        )
-        .await;
+        .await?
+        .ok()
+        .flatten();
+        let target = match &ticket {
+            Some(ticket) => {
+                host.relay_url = Some(ticket.relay_url.clone());
+                Some(ticket.target())
+            }
+            None => hint(host.relay_url.as_ref()),
+        };
+        let relay_source = match (&ticket, &target, relay) {
+            (_, _, RelayChoice::Off) | (_, None, _) => RelaySource::None,
+            (Some(_), _, _) => RelaySource::Account,
+            (None, Some(_), _) => RelaySource::PairingHint,
+        };
+        let endpoint = bind(key, relay.setup(target)?).await?;
+        let connector = Arc::new(host.connector(endpoint.clone()));
+        let session = Self::connect_with(connector.clone(), record, host.credential(key)).await;
         match session {
             Ok(mut session) => {
+                if let (Some(account), Some(ticket), true) =
+                    (account, ticket, relay_source == RelaySource::Account)
+                {
+                    session.ticket_renewal =
+                        Some(tokio::spawn(yttt_client_core::control::keep_ticket(
+                            account.session.clone(),
+                            key,
+                            yttt_client_core::control::DeviceKind::Client { host: host.host.0 },
+                            endpoint.clone(),
+                            ticket,
+                            |_| {},
+                            |error| tracing::warn!(%error, "relay ticket renewal failed"),
+                        )));
+                }
+                session.relay_source = relay_source;
                 session.endpoint = Some(endpoint);
                 session.connector = Some(connector);
                 Ok(session)
@@ -360,6 +481,8 @@ impl MobileSession {
             endpoint: None,
             connector: None,
             overview_watch: Mutex::new(None),
+            ticket_renewal: None,
+            relay_source: RelaySource::None,
         })
     }
 
@@ -369,6 +492,11 @@ impl MobileSession {
 
     pub fn is_ready(&self) -> bool {
         matches!(self.client.state(), ConnectionState::Ready { .. })
+    }
+
+    /// Where the relay this session uses came from.
+    pub fn relay_source(&self) -> RelaySource {
+        self.relay_source
     }
 
     /// Opens the workspace the Host's desktop shows, without changing any
@@ -874,6 +1002,9 @@ impl MobileSession {
 
     pub async fn close(&self) {
         self.events.abort();
+        if let Some(renewal) = &self.ticket_renewal {
+            renewal.abort();
+        }
         if let Some(watch) = self.overview_watch.lock().take() {
             watch.abort();
         }

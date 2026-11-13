@@ -57,6 +57,7 @@ async fn main() -> Result<(), String> {
                 "mobile_tty",
                 secret,
                 RelayChoice::FromHost,
+                None,
                 |short_code| {
                     println!("Compare this code with the Host and confirm there: {short_code:06}");
                 },
@@ -97,7 +98,7 @@ async fn main() -> Result<(), String> {
 }
 
 async fn connect(record: &PairedHostRecord, secret: [u8; 32]) -> Result<MobileSession, String> {
-    MobileSession::connect(record, secret, RelayChoice::FromHost)
+    MobileSession::connect(record, secret, RelayChoice::FromHost, None, "mobile_tty")
         .await
         .map_err(|error| error.to_string())
 }

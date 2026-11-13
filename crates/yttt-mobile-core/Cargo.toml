@@ -13,8 +13,10 @@ parking_lot = "0.12"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
 # Logs to stderr when YTTT_LOG is set (a filter, as RUST_LOG); off otherwise.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
 uniffi = "=0.31.1"
@@ -37,3 +39,8 @@ tokio = { version = "1", features = ["signal"] }
 yttt-host = { path = "../yttt-host" }
 # A self-hosted relay node, for the relay-only test.
 yttt-relay = { path = "../yttt-relay" }
+# The paid-relay test: a control plane on PostgreSQL and a ticket-only node.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+yttt-control = { path = "../yttt-control" }
+yttt-relay-ticket = { path = "../yttt-relay-ticket" }

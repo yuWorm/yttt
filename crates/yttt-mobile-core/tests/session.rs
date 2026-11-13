@@ -17,6 +17,7 @@ use yttt_core::model::{
     layout::ProjectLayout,
     project::{ProjectDescriptor, ProjectLocation},
 };
+use yttt_mobile_core::account;
 use yttt_mobile_core::files::{FileKind, SaveOutcome};
 use yttt_mobile_core::keys::TerminalKey;
 use yttt_mobile_core::overview::{AgentState, Overview, WaitingKind};
@@ -141,7 +142,7 @@ async fn pair_device(admin: &ClientCore, relay: RelayChoice) -> PairedHostRecord
     let (shown, shown_rx) = tokio::sync::oneshot::channel();
     let text = code.0.clone();
     let pairing = tokio::spawn(async move {
-        pair(&text, "phone", SECRET, relay, move |short_code| {
+        pair(&text, "phone", SECRET, relay, None, move |short_code| {
             let _ = shown.send(short_code);
         })
         .await
@@ -332,14 +333,14 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     assert!(matches!(
         tokio::time::timeout(
             Duration::from_secs(2),
-            MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost),
+            MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost, None, "phone"),
         )
         .await
         .expect("an immediate answer"),
         Err(MobileError::Transport(_))
     ));
     let id = terminal.to_string();
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
         .await
         .unwrap();
     assert!(
@@ -436,7 +437,7 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     phone.close().await;
 
     // A restarted app connects again at once with the same record.
-    let again = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+    let again = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
         .await
         .unwrap();
     assert_ne!(again.client_instance_id(), first_id);
@@ -489,7 +490,7 @@ async fn a_phone_works_through_the_relay_alone() {
     assert_eq!(record.host.relay_url.as_deref(), Some(relay_url.as_str()));
     let terminal = desktop_terminals(&admin, temp.path(), &["project:tab:relay"]).await;
     let id = terminal[0].to_string();
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost)
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost, None, "phone")
         .await
         .unwrap();
     phone.attach(&id).await.unwrap();
@@ -503,7 +504,7 @@ async fn a_phone_works_through_the_relay_alone() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(phone.path().await, LinkPath::Relay);
     // And what the phone sent went through it.
-    let phone_key = endpoint_key(&SECRET).0;
+    let phone_key = endpoint_key(&account::host_key(&SECRET, &record.host.host)).0;
     let relayed = relay
         .account(open_account_id(&phone_key))
         .expect("the phone on the relay")
@@ -603,7 +604,7 @@ async fn the_overview_follows_an_agent_into_waiting() {
         .await
         .unwrap();
 
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
         .await
         .unwrap();
     assert!(phone.open_active_workspace().await.unwrap().is_some());
@@ -722,7 +723,7 @@ async fn a_phone_reads_edits_and_saves_a_project_file() {
         .await
         .unwrap();
 
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
         .await
         .unwrap();
     phone.open_active_workspace().await.unwrap();
@@ -829,7 +830,7 @@ async fn keys_reach_the_program_as_it_expects_them() {
     )
     .await;
     let id = terminal[0].to_string();
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off)
+    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
         .await
         .unwrap();
     phone.attach(&id).await.unwrap();
