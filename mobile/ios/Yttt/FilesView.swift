@@ -55,7 +55,7 @@ struct FilesView: View {
         .task(id: section) {
             guard section == 1, sessions == nil, let session = model.session else { return }
             do { sessions = try await session.agentSessions(projectId: projectId) } catch {
-                self.error = error.localizedDescription
+                self.error = error.message
                 sessions = []
             }
         }
@@ -124,7 +124,7 @@ struct FilesView: View {
         do {
             tree.loaded(directory, try await session.listDirectory(projectId: projectId, directory: directory))
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.message
         }
     }
 }

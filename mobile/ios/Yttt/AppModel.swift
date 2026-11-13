@@ -60,6 +60,14 @@ final class AppModel: ObservableObject {
     @Published var projectsPath: [Destination] = []
     /// Direct or through the relay, refreshed while connected.
     @Published var linkPath: LinkPath = .unknown
+    /// The signed-in relay account, if any: pairing and connecting go
+    /// through the Host's relay node with its tickets.
+    @Published var account: RelayAccount?
+    /// Why the account was signed out, until the user signs in again.
+    @Published var accountNotice: String?
+    /// Where the current link's relay came from.
+    @Published var relaySource: RelaySource = .none
+    private let accountStore = AccountStore()
     /// A project file open full screen.
     @Published var editing: EditingFile?
     /// Debug automation: the project page opens its files sheet once.
@@ -85,6 +93,33 @@ final class AppModel: ObservableObject {
         let hosts = hostStore.load()
         self.hosts = hosts
         record = hosts.currentRecord
+        account = accountStore.load()
+    }
+
+    /// Keeps a new sign-in and reconnects through its relay.
+    func signIn(_ signedIn: SignedIn) async {
+        let account = RelayAccount(signedIn)
+        accountStore.save(account)
+        self.account = account
+        accountNotice = nil
+        await reconnect()
+    }
+
+    /// Forgets the account; `notice` says why when the phone did it itself.
+    func signOut(notice: String? = nil) async {
+        accountStore.delete()
+        account = nil
+        accountNotice = notice
+        await reconnect()
+    }
+
+    /// Connects to the current Host again, as after the account changed.
+    private func reconnect() async {
+        guard record != nil, !connecting else { return }
+        let old = session
+        session = nil
+        await old?.disconnect()
+        await connect()
     }
 
     /// Each Host's name, told apart when two share one.
@@ -103,6 +138,11 @@ final class AppModel: ObservableObject {
     /// Forgets a Host. Forgetting the current one moves the link to the
     /// first one left, if any; another one just leaves the list.
     func forget(_ id: String) async {
+        // Gives the key's device slot on the account back; the Host is
+        // forgotten here either way.
+        if let account, let record = hosts.hosts.first(where: { $0.id == id })?.record {
+            try? await core.releaseHost(account: account.account, record: record, deviceSecret: secret)
+        }
         let list = hosts.removed(id)
         if id == hosts.current {
             await changeHosts(list)
@@ -141,14 +181,19 @@ final class AppModel: ObservableObject {
         }
         do {
             let record = try await core.pair(code: code, deviceLabel: UIDevice.current.name, deviceSecret: secret,
-                                            relayOnly: Self.relayOnly, listener: listener)
+                                            relayOnly: Self.relayOnly, account: account?.account, listener: listener)
             let id = try core.hostInfo(record: record).id
             status = ""
             shortCode = nil
             addingHost = false
             await changeHosts(hosts.added(id, record))
+        } catch MobileCoreError.SignInExpired {
+            shortCode = nil
+            status = "Relay 账号的登录已过期，请重新登录后再配对。"
+            await signOut(notice: "Relay 账号的登录已过期，请重新登录。")
         } catch {
-            status = "配对失败：\(error.localizedDescription)"
+            shortCode = nil
+            status = "配对失败：\(error.message)"
         }
     }
 
@@ -187,17 +232,21 @@ final class AppModel: ObservableObject {
         busy = true
         status = "正在连接…"
         defer { busy = false }
+        let usedAccount = account
         do {
-            let connected = try await core.connect(record: record, deviceSecret: secret, relayOnly: Self.relayOnly)
-            // The Host changed while connecting (paired, switched, forgot):
-            // this link is to the old one; connect to the current one instead.
-            guard self.record == record else {
+            let connected = try await core.connect(record: record, deviceSecret: secret, relayOnly: Self.relayOnly,
+                                                   account: usedAccount?.account, deviceLabel: UIDevice.current.name)
+            // The Host or the account changed while connecting (paired,
+            // switched, forgot, signed in or out): this link is the old one;
+            // connect again with what is current.
+            guard self.record == record, self.account == usedAccount else {
                 await connected.disconnect()
                 connecting = false
                 await connect()
                 return
             }
             session = connected
+            relaySource = connected.relaySource()
             status = ""
             _ = try? await connected.openActiveWorkspace()
             connected.watchOverview(listener: OverviewSink { overview in
@@ -209,13 +258,17 @@ final class AppModel: ObservableObject {
             })
             await refresh()
             watchLinkPath()
+        } catch MobileCoreError.SignInExpired {
+            // Signing out connects again, without the account.
+            connecting = false
+            await signOut(notice: "Relay 账号的登录已过期，请重新登录。")
         } catch {
-            guard self.record == record else {
+            guard self.record == record, self.account == usedAccount else {
                 connecting = false
                 await connect()
                 return
             }
-            status = "连接失败：\(error.localizedDescription)"
+            status = "连接失败：\(error.message)"
         }
     }
 
@@ -244,7 +297,7 @@ final class AppModel: ObservableObject {
         } catch {
             // A link dropped since (a Host change, a reconnect) says nothing about this one.
             guard self.session === asked else { return }
-            status = "读取终端失败：\(error.localizedDescription)"
+            status = "读取终端失败：\(error.message)"
         }
     }
 

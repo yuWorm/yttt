@@ -68,7 +68,7 @@ struct EditorView: View {
             dirty = false
             status = ""
         } catch {
-            status = "打不开：\(error.localizedDescription)"
+            status = "打不开：\(error.message)"
         }
     }
 
@@ -83,7 +83,7 @@ struct EditorView: View {
                 conflict = true
             }
         } catch {
-            status = "保存失败：\(error.localizedDescription)"
+            status = "保存失败：\(error.message)"
         }
     }
 }

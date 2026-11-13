@@ -77,6 +77,7 @@ struct PairView: View {
 
     var body: some View {
         Form {
+            AccountStep()
             Section {
                 Button { scanning = true } label: {
                     HStack(spacing: 12) {
@@ -94,18 +95,13 @@ struct PairView: View {
                 .disabled(model.busy)
                 if let scanError { Text(scanError).font(.caption).foregroundStyle(.red) }
             } header: {
-                VStack(spacing: 10) {
-                    IconTile(systemName: "qrcode", color: .blue).scaleEffect(1.6).padding(.vertical, 8)
-                    Text("在电脑上打开 yttt 的“设置 ▸ 远程访问 ▸ 配对设备”，会显示一个二维码。")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .textCase(nil)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 8)
+                Text("第 2 步 · 配对电脑")
             } footer: {
-                if !PairingScanner.available {
-                    Text("这台设备不能用相机扫码，可以从照片识别或粘贴配对码。")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("在电脑上打开 yttt 的“设置 ▸ 远程访问 ▸ 配对设备”，会显示一个二维码。")
+                    if !PairingScanner.available {
+                        Text("这台设备不能用相机扫码，可以从照片识别或粘贴配对码。")
+                    }
                 }
             }
             Section("配对码") {

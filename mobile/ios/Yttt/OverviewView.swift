@@ -262,6 +262,7 @@ struct SettingsView: View {
             } footer: {
                 Text("点一台 Host 切换过去；向左滑可以忘记它。")
             }
+            AccountSection()
             Section("关于") {
                 HStack(spacing: 12) {
                     IconTile(systemName: "info", color: Color(uiColor: .systemGray))

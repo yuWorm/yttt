@@ -10,7 +10,12 @@
 //!
 //! ```text
 //! cargo run -p yttt-mobile-core --example spike_host [-- --relay http://<LAN IP>:3341] [--name A]
+//! cargo run -p yttt-mobile-core --example spike_host -- --account <control URL> <email> <password>
 //! ```
+//!
+//! `--account` signs the Host in to a paid-relay account, as the desktop's
+//! settings do: it then joins its node with a ticket, and only phones signed
+//! in to the account reach it through the relay.
 //!
 //! The current pairing code is also written to
 //! `target/mobile-spike-host/pairing-code`. Everything is deleted on exit.
@@ -170,6 +175,30 @@ async fn main() {
     )
     .await
     .unwrap();
+    if let Some(at) = args.iter().position(|arg| arg == "--account") {
+        let [control_url, email, password] = [1, 2, 3].map(|offset| {
+            args.get(at + offset)
+                .cloned()
+                .expect("--account <control URL> <email> <password>")
+        });
+        let session = yttt_client_core::control::ControlClient::new(&control_url)
+            .unwrap()
+            .login(&email, &password)
+            .await
+            .expect("signing the Host in to the relay account");
+        remote_access(
+            &admin,
+            RemoteAccessRequest::SetRelayAccount {
+                account: Some(yttt_protocol::remote_access::RelayAccount {
+                    control_url,
+                    account_id: session.account_id,
+                    session: yttt_protocol::remote_access::SecretText(session.token),
+                }),
+            },
+        )
+        .await;
+        println!("relay account: {email}");
+    }
     remote_access(
         &admin,
         RemoteAccessRequest::SetP2p {

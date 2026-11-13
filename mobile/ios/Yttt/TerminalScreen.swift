@@ -37,7 +37,7 @@ final class TerminalControl: ObservableObject {
             hostTooOld = true
         } catch {
             container.observeHostSize()
-            self.error = error.localizedDescription
+            self.error = error.message
         }
     }
 
@@ -198,7 +198,7 @@ final class TerminalContainer: UIView, TerminalViewDelegate {
             do {
                 try await session.attach(sessionId: terminal.sessionId)
             } catch {
-                onStats("attach failed: \(error.localizedDescription)")
+                onStats("attach failed: \(error.message)")
             }
         }
         let link = CADisplayLink(target: self, selector: #selector(tick))
