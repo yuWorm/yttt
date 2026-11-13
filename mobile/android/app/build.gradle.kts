@@ -64,6 +64,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     // The back stack, with predictive back.
     implementation("androidx.navigation:navigation-compose:2.9.8")
+    // Custom Tabs for the relay account's browser sign-in; no Google services.
+    implementation("androidx.browser:browser:1.8.0")
     // Icons beyond the core set; R8 keeps only those used in release.
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
     testImplementation("junit:junit:4.13.2")

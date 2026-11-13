@@ -14,32 +14,40 @@ private const val KEY_ALIAS = "yttt-device-secret"
 private const val IV_BYTES = 12
 private const val TAG_BITS = 128
 
-/**
- * The device secret, encrypted with `key` (AES-GCM) in `device-secret.enc`:
- * the IV, then the ciphertext and tag. Made on first use.
- */
-class SecretStore(private val dir: File, private val key: () -> SecretKey) {
-    private val encrypted = File(dir, "device-secret.enc")
+/** Bytes kept encrypted with `key` (AES-GCM) in `dir/name`: the IV, then the ciphertext and tag. */
+class SealedFile(private val dir: File, private val name: String, private val key: () -> SecretKey) {
+    private val file = File(dir, name)
 
-    fun deviceSecret(): ByteArray {
-        if (encrypted.exists()) return decrypt(encrypted.readBytes())
-        val secret = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        write(secret)
-        return secret
-    }
+    val exists: Boolean get() = file.exists()
 
-    private fun write(secret: ByteArray) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val sealed = cipher.iv + cipher.doFinal(secret)
-        writeDurably(File(dir, "device-secret.enc.partial"), sealed, encrypted)
-    }
-
-    private fun decrypt(sealed: ByteArray): ByteArray {
-        require(sealed.size > IV_BYTES) { "the stored device secret is damaged" }
+    fun read(): ByteArray {
+        val sealed = file.readBytes()
+        require(sealed.size > IV_BYTES) { "$name is damaged" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, sealed, 0, IV_BYTES))
         return cipher.doFinal(sealed, IV_BYTES, sealed.size - IV_BYTES)
+    }
+
+    fun write(bytes: ByteArray) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        writeDurably(File(dir, "$name.partial"), cipher.iv + cipher.doFinal(bytes), file)
+    }
+
+    fun delete() {
+        file.delete()
+    }
+}
+
+/** The device secret, sealed in `device-secret.enc`; made on first use. */
+class SecretStore(dir: File, key: () -> SecretKey) {
+    private val sealed = SealedFile(dir, "device-secret.enc", key)
+
+    fun deviceSecret(): ByteArray {
+        if (sealed.exists) return sealed.read()
+        val secret = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        sealed.write(secret)
+        return secret
     }
 
     companion object {

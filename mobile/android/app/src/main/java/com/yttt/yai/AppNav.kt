@@ -1,6 +1,7 @@
 package com.yttt.yai
 
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -38,6 +39,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.launch
+import uniffi.yttt_mobile_core.AccountDetails
+import uniffi.yttt_mobile_core.MobileCoreException
+import uniffi.yttt_mobile_core.RelaySource
 import uniffi.yttt_mobile_core.TerminalInfo
 
 private const val OVERVIEW = "overview"
@@ -45,6 +49,7 @@ private const val PROJECTS = "projects"
 private const val SETTINGS = "settings"
 private const val PAIR = "pair"
 private const val LICENSES = "licenses"
+private const val SIGN_IN = "sign-in"
 
 private class TopLevel(val route: String, val label: String, val selected: ImageVector, val unselected: ImageVector)
 
@@ -86,6 +91,25 @@ fun App(
     var terminals by remember { mutableStateOf<List<TerminalInfo>>(emptyList()) }
     val scope = rememberCoroutineScope()
     val pairing = remember { Pairing(link, scope) }
+    val signIn = remember { SignIn(link) }
+    val account by link.account.collectAsState()
+    val accountNotice by link.accountNotice.collectAsState()
+    val relaySource by link.relaySource.collectAsState()
+    var details by remember { mutableStateOf<AccountDetails?>(null) }
+    // Again after each connect: pairing registers a device.
+    LaunchedEffect(account, session) {
+        val signed = account ?: return@LaunchedEffect
+        try {
+            details = link.core.accountDetails(signed.account)
+        } catch (expired: MobileCoreException.SignInExpired) {
+            link.signOut(EXPIRED)
+        } catch (_: Exception) {
+        }
+    }
+    /** Runs a sign-in in the link's scope, so it outlives the browser in front; `then` once signed in. */
+    fun signInWith(then: () -> Unit): (suspend () -> Boolean) -> Unit = { work ->
+        link.scope.launch { if (work()) then() }
+    }
     // Each project's files sheet, kept while it is closed or a file is open.
     val filesStates = remember { HashMap<String, FilesState>() }
     val snackbar = remember { SnackbarHostState() }
@@ -107,7 +131,16 @@ fun App(
     }
 
     if (record == null) {
-        PairScreen(pairing) { code -> scope.launch { pairing.pair(code) } }
+        // First run: pairing, and signing in before it.
+        var signingIn by remember { mutableStateOf(false) }
+        if (signingIn) {
+            BackHandler { signingIn = false }
+            SignInScreen(signIn, onBack = { signingIn = false }, onSignIn = signInWith { signingIn = false })
+        } else {
+            PairScreen(pairing, account, accountNotice, onSignIn = { signingIn = true }) { code ->
+                scope.launch { pairing.pair(code) }
+            }
+        }
         return
     }
 
@@ -201,11 +234,24 @@ fun App(
                     onBattery = onBattery,
                     onNotifications = onNotifications,
                     onLicenses = { nav.navigate(LICENSES) },
+                    account = account,
+                    accountNotice = accountNotice,
+                    viaAccount = relaySource == RelaySource.ACCOUNT,
+                    details = details,
+                    onSignIn = { nav.navigate(SIGN_IN) },
+                    onSignOut = { scope.launch { link.signOut() } },
                 )
             }
             composable(LICENSES) { LicensesScreen(onBack = { nav.popBackStack() }) }
+            composable(SIGN_IN) {
+                SignInScreen(signIn, onBack = { nav.popBackStack() }, onSignIn = signInWith { nav.popBackStack() })
+            }
             composable(PAIR) {
-                PairScreen(pairing, onBack = { pairing.reset(); nav.popBackStack() }) { code ->
+                PairScreen(
+                    pairing, account, accountNotice,
+                    onSignIn = { nav.navigate(SIGN_IN) },
+                    onBack = { pairing.reset(); nav.popBackStack() },
+                ) { code ->
                     scope.launch { if (pairing.pair(code)) nav.popBackStack() }
                 }
             }

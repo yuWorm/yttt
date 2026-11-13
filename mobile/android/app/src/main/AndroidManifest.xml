@@ -39,5 +39,10 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps an end-to-end encrypted link with the user's own computer open to notify them when a coding Agent running there waits for their approval or answer; no push service is involved." />
         </service>
+        <!-- Keeps the network while the browser is in front for a relay sign-in (SignInService). -->
+        <service
+            android:name=".SignInService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
     </application>
 </manifest>

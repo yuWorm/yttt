@@ -47,10 +47,10 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import uniffi.yttt_mobile_core.MobileCoreException
 import uniffi.yttt_mobile_core.PairingListener
 
 /** Pairing with a Host, from the first launch or "添加 Host": the progress and the digits to compare. */
@@ -73,11 +73,18 @@ class Pairing(private val link: Link, private val scope: CoroutineScope) {
             }
         }
         return try {
-            link.savePairing(link.core.pair(code.trim(), link.deviceName, link.secret, link.relayOnly, listener))
+            val account = link.account.value?.account
+            link.savePairing(link.core.pair(code.trim(), link.deviceName, link.secret, link.relayOnly, account, listener))
             status = ""
             digits = null
             true
+        } catch (expired: MobileCoreException.SignInExpired) {
+            digits = null
+            status = "Relay 账号的登录已过期，请重新登录后再配对。"
+            link.signOut(EXPIRED)
+            false
         } catch (error: Exception) {
+            digits = null
             status = "配对失败：${error.message}"
             false
         } finally {
@@ -94,7 +101,14 @@ class Pairing(private val link: Link, private val scope: CoroutineScope) {
 /** Scan the computer's QR code, read it from a picture, or paste the code. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PairScreen(pairing: Pairing, onBack: (() -> Unit)? = null, onPair: (String) -> Unit) {
+fun PairScreen(
+    pairing: Pairing,
+    account: RelayAccount?,
+    accountNotice: String?,
+    onSignIn: () -> Unit,
+    onBack: (() -> Unit)? = null,
+    onPair: (String) -> Unit,
+) {
     var code by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     var scanError by remember { mutableStateOf<String?>(null) }
@@ -125,18 +139,18 @@ fun PairScreen(pairing: Pairing, onBack: (() -> Unit)? = null, onPair: (String) 
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (pairing.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            Icon(
-                Icons.Outlined.QrCode2, null,
-                Modifier.size(56.dp).align(Alignment.CenterHorizontally),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                "在电脑上打开 yttt 的“设置 ▸ 远程访问 ▸ 配对设备”，会显示一个二维码。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            AccountStep(account, accountNotice, onSignIn)
+            Text("第 2 步 · 配对电脑", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.QrCode2, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "在电脑上打开 yttt 的“设置 ▸ 远程访问 ▸ 配对设备”，会显示一个二维码。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Button(onClick = { scanning = true }, enabled = !pairing.busy, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Outlined.QrCodeScanner, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))

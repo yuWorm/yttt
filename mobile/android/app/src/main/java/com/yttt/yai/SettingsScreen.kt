@@ -10,7 +10,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Add
@@ -39,8 +42,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import uniffi.yttt_mobile_core.AccountDetails
 
 /** Settings: the paired Hosts, the system settings the link depends on, and about. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,12 +60,19 @@ fun SettingsScreen(
     onBattery: () -> Unit,
     onNotifications: () -> Unit,
     onLicenses: () -> Unit,
+    account: RelayAccount?,
+    accountNotice: String?,
+    viaAccount: Boolean,
+    details: AccountDetails?,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
 ) {
     val context = LocalContext.current
     val version = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
     var forgetting by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var signingOut by remember { mutableStateOf(false) }
     Scaffold(contentWindowInsets = WindowInsets(0), topBar = { TopAppBar(title = { Text("设置") }) }) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxWidth()) {
             item { Header("Host") }
@@ -95,6 +107,59 @@ fun SettingsScreen(
                     leadingContent = { Icon(Icons.Outlined.Add, null) },
                     headlineContent = { Text("添加 Host") },
                     modifier = Modifier.clickable(onClick = onAdd),
+                )
+            }
+            item { Header("Relay 账号") }
+            if (account != null) {
+                item {
+                    ListItem(
+                        leadingContent = { Icon(AccountIcon, null) },
+                        headlineContent = { Text(account.email) },
+                        supportingContent = { Text(account.controlHost) },
+                    )
+                }
+                details?.let { details ->
+                    item {
+                        ListItem(
+                            leadingContent = { Icon(Icons.Outlined.Devices, null) },
+                            headlineContent = { Text("套餐 ${details.plan}") },
+                            supportingContent = {
+                                Text(
+                                    if (details.suspended) "账号已暂停，Relay 暂时不能用"
+                                    else "设备 ${details.devices} / ${details.maxDevices}",
+                                    color = if (details.suspended) MaterialTheme.colorScheme.error else Color.Unspecified,
+                                )
+                            },
+                        )
+                    }
+                }
+                item {
+                    ListItem(
+                        leadingContent = { Icon(Icons.AutoMirrored.Outlined.Logout, null, tint = MaterialTheme.colorScheme.error) },
+                        headlineContent = { Text("退出登录", color = MaterialTheme.colorScheme.error) },
+                        modifier = Modifier.clickable { signingOut = true },
+                    )
+                }
+            } else {
+                item {
+                    ListItem(
+                        leadingContent = { Icon(Icons.Outlined.PersonAdd, null) },
+                        headlineContent = { Text("登录 Relay 账号") },
+                        modifier = Modifier.clickable(onClick = onSignIn),
+                    )
+                }
+            }
+            item {
+                Text(
+                    when {
+                        accountNotice != null -> accountNotice
+                        account == null -> "登录后手机经你的 Relay 连接电脑，不在同一个网络也能用。"
+                        connected && !viaAccount -> "没能从账号拿到 Relay 凭证，这次只能直连。"
+                        else -> "手机经这个账号的 Relay 连接电脑。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (accountNotice != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
             item { Header("后台") }
@@ -132,6 +197,20 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+    if (signingOut) {
+        AlertDialog(
+            onDismissRequest = { signingOut = false },
+            icon = { Icon(Icons.AutoMirrored.Outlined.Logout, null) },
+            title = { Text("退出 Relay 账号？") },
+            text = { Text("退出后，手机只能在同一个网络里直连电脑，或经自建的 Relay。") },
+            confirmButton = {
+                TextButton(onClick = { signingOut = false; onSignOut() }) {
+                    Text("退出登录", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { signingOut = false }) { Text("取消") } },
+        )
     }
     forgetting?.let { (id, name) ->
         AlertDialog(

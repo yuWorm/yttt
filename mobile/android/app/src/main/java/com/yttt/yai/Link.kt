@@ -18,6 +18,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import uniffi.yttt_mobile_core.HostSession
 import uniffi.yttt_mobile_core.MobileCore
+import uniffi.yttt_mobile_core.MobileCoreException
+import uniffi.yttt_mobile_core.RelaySource
+import uniffi.yttt_mobile_core.SignedIn
 import uniffi.yttt_mobile_core.Overview
 import uniffi.yttt_mobile_core.OverviewListener
 
@@ -65,6 +68,14 @@ class Link(context: Context) {
     /** A terminal to open, from a notification or automation. */
     val openRequest = MutableStateFlow<String?>(null)
 
+    private val accountStore = storage.accountStore()
+    /** The signed-in relay account, if any: pairing and connecting go through the Host's relay node with its tickets. */
+    val account = MutableStateFlow(accountStore.load())
+    /** Why the account was signed out, until the user signs in again. */
+    val accountNotice = MutableStateFlow<String?>(null)
+    /** Where the current link's relay came from. */
+    val relaySource = MutableStateFlow(RelaySource.NONE)
+
     private val connecting = Mutex()
     private val main = Handler(Looper.getMainLooper())
     private val notifyNetwork = Runnable {
@@ -93,6 +104,34 @@ class Link(context: Context) {
         app.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
     }
 
+    /** Keeps a new sign-in and reconnects through its relay. */
+    suspend fun signIn(signedIn: SignedIn) {
+        val signed = RelayAccount(signedIn.account, signedIn.email, signedIn.controlUrl)
+        accountStore.save(signed)
+        account.value = signed
+        accountNotice.value = null
+        reconnect()
+    }
+
+    /** Forgets the account; `notice` says why when the phone did it itself. */
+    suspend fun signOut(notice: String? = null) {
+        forgetAccount(notice)
+        reconnect()
+    }
+
+    private fun forgetAccount(notice: String?) {
+        accountStore.delete()
+        account.value = null
+        accountNotice.value = notice
+    }
+
+    /** Connects to the current Host again, as after the account changed. */
+    private suspend fun reconnect() {
+        if (record.value == null) return
+        disconnect()
+        connect()
+    }
+
     /** Each Host's name, told apart when two share one. */
     fun hostNames(list: HostList): List<Pair<String, String>> =
         list.names { runCatching { core.hostInfo(it).label }.getOrDefault("Host") }
@@ -110,6 +149,10 @@ class Link(context: Context) {
      * one left, if any; another one just leaves the list.
      */
     suspend fun forget(id: String) {
+        // Gives the key's device slot on the account back; the Host is forgotten here either way.
+        val signed = account.value
+        val stored = hosts.value.hosts.firstOrNull { it.id == id }?.record
+        if (signed != null && stored != null) runCatching { core.releaseHost(signed.account, stored, secret) }
         val list = hosts.value.removed(id)
         if (id == hosts.value.current) {
             changeHosts(list)
@@ -139,7 +182,14 @@ class Link(context: Context) {
         val stored = record.value ?: return@withLock null
         status.value = "正在连接…"
         try {
-            val connected = core.connect(stored, secret, relayOnly)
+            val connected = try {
+                core.connect(stored, secret, relayOnly, account.value?.account, deviceName)
+            } catch (expired: MobileCoreException.SignInExpired) {
+                // Without the account: only direct paths or a relay that admits anyone.
+                forgetAccount(EXPIRED)
+                core.connect(stored, secret, relayOnly, null, deviceName)
+            }
+            relaySource.value = connected.relaySource()
             runCatching { connected.openActiveWorkspace() }
             // Current before the first overview arrives, which the listener checks.
             session.value = connected
@@ -159,6 +209,9 @@ class Link(context: Context) {
 
     suspend fun disconnect() {
         val current = connecting.withLock { session.value.also { session.value = null } } ?: return
+        relaySource.value = RelaySource.NONE
         runCatching { current.disconnect() }
     }
 }
+
+const val EXPIRED = "Relay 账号的登录已过期，请重新登录。"

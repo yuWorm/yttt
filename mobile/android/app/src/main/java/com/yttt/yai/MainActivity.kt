@@ -26,6 +26,9 @@ class Storage(context: Context) {
 
     /** Encrypted with a key that never leaves the Android Keystore. */
     fun deviceSecret(): ByteArray = SecretStore(dir, SecretStore::keystoreKey).deviceSecret()
+
+    /** The relay account, sealed with the same Keystore key. */
+    fun accountStore() = AccountStore(dir, SecretStore::keystoreKey)
 }
 
 class MainActivity : ComponentActivity() {
