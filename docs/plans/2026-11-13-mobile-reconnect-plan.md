@@ -4,30 +4,40 @@
 - 分支：`feat/mobile-reconnect`（worktree `.worktrees/mobile-reconnect`）
 - 依据：用户反馈（iPhone 真机）：网络出错、断开重连后看不到终端，要退出再进来才好；iOS tab 条“全部 Tab”按钮去掉背景后，tab 滚到按钮下面很难看。
 
-## 现状
+## 现状（经评审核对代码）
 
-- `ClientCore` 断线后自己重连（退避最长 5 s），重连后重新订阅已附着的终端；`retry_now` / `probe_now` 可立即重试。
-- 手机核心只在第一次连接时打开桌面的当前 workspace（项目、tab、pane 的来源）。重连后不再打开；Host 重启过（桌面更新、重启电脑）则 host epoch 变了，旧 workspace 的布局、终端 id 都不再有效，总控与项目页就没有终端。
-- 应用不知道链路状态：断开时界面照旧，没有提示，也没有重试入口。
-- 应用整个重建连接（换 Host、登录变化）时，已打开的终端页仍拿着旧的 `HostSession`，画面停住。
+- `ClientCore` 断线后自己重连（退避最长 5 s）；每次新连接重新订阅已附着的终端、重新打开已打开过的 workspace（`OpenExisting`）、重新上报可见终端。Host 重启（新 epoch）时清掉旧终端并发 `TerminalUnavailable`。
+- **附着失败不再重试**：终端页只在创建时 `attach` 一次；链路不通时失败，只写进调试统计。`ClientCore` 只重新订阅附着成功的终端，所以断线期间打开的终端页一直空白，直到退出再进——就是用户遇到的情况。
+- **终端列表只按数量刷新**：两端都在概要的终端数变了才重新取终端列表。Host 重启后终端 id 全换了、数量多半不变，应用拿着旧 id，项目页显示“这个 pane 没有在运行”。
+- **控制权不同步**：Host 断线后为手机保留接管 60 s，重连回来照旧；核心却在每次 `Ready` 把接管清零，手机以为交还了，电脑上的终端还停在手机的尺寸。
+- **workspace 只在第一次打开**：第一次失败、重连后被告知不存在、桌面换了当前 workspace，三种情况都不再打开。
+- 应用不知道链路状态，没有提示和重试入口；回到前台不检查网络（iOS）。
+- 整个重建连接时，终端页按终端 id 建视图，新会话来了仍用旧会话。
 
 ## 设计
 
 ### 核心（`yttt-mobile-core`）
 
-1. **链路状态导出**：`HostSession.link_state() -> LinkState`（`Connecting`、`Ready`、`Reconnecting { attempt, reason }`、`Lost { reason }`），`watch_link(listener)` 每次变化回调；`retry_now()`。
-2. **重连后恢复**：会话自己在每次重新 `Ready` 后重新打开桌面的当前 workspace，再通知概要（overview）更新；终端由 `ClientCore` 重新订阅、编码器整屏重画（已有）。
-3. **测试**：集成测试里让 Host 的连接断掉（连接器可以切断已建的连接），断言 `LinkState` 依次经过 `Reconnecting` → `Ready`、workspace 重新打开、概要里的项目与终端回来、附着的终端继续出画面。
+1. **想要附着的终端**：`attach` 记下意图，链路不通也不报错；每次 `Ready` 补附着还没附着上的；终端在 Host 上没了（`TerminalUnavailable`）就从意图里去掉。
+2. **接管跟着 Host**：Host epoch 没变的重连保留接管；变了才清零。
+3. **workspace**：`Ready` 时若还没有、或 Host epoch 变了、或上次打开失败，重新打开桌面的当前 workspace。
+4. **概要带终端 id**：`Overview` 加上终端 id 列表，应用按 id 变化刷新终端列表。
+5. **链路状态导出**：`HostSession.link_state()`（`Connecting`、`Ready`、`Reconnecting { attempt, reason }`、`Lost { reason }`）、`watch_link(listener)`、`retry_now()`。
+6. **测试**（`tests/session.rs`，用可切断的连接器，同 `yttt-client-core/tests/transport_contract.rs` 的 `Cuttable`）：切断期间附着的终端在恢复后出画面；概要的项目与终端回来；接管在短暂切断后还在；`LinkState` 经过 `Reconnecting` → `Ready`。
 
 ### 两端
 
-1. **状态提示**：总控、项目页、终端页顶部一条细横幅：重连中显示“连接断开，正在重连…”与“立即重试”；`Lost` 显示原因与“重新连接”。`Ready` 时不显示。
-2. **重连后刷新**：收到从非 `Ready` 回到 `Ready`，重新取终端列表（项目页的 tab/pane 跟着概要更新）。
-3. **兜底重建**：前台时链路连续 20 s 不是 `Ready`，或进入 `Lost`，丢掉旧会话、新建连接（等于用户“退出再进来”）。
-4. **回到前台**：立即 `networkChanged()`（重新检查网络并探测，死连接马上换）。
-5. **下拉刷新**：总控下拉：链路好时重新打开 workspace 并取终端；不好时立即重试。
-6. **终端页跟随会话**：终端、项目页按会话身份建视图，新会话来了重建，不再停在旧会话上。
-7. **iOS tab 条**：tab 的滚动区域与按钮并排（`HStack`），tab 不会滚到按钮下面；按钮与整条用同一个背景，没有色差。
+1. **状态横幅**：总控、项目页、终端页顶部：重连中“连接断开，正在重连…”与“立即重试”；超过 15 s 还没好，或 `Lost`，加“重新连接”（整个重建，等于退出再进）。`Lost` 时自动重建一次。
+2. **重连后刷新**：从非 `Ready` 回到 `Ready`、或概要的终端 id 变了，重新取终端列表。
+3. **回到前台**：立即 `networkChanged()`。
+4. **下拉刷新**：总控下拉：链路好时重新取终端与概要；不好时立即重试。
+5. **视图跟随会话**：终端视图按（会话、终端 id）建，新会话来了重建；单独打开的终端在 Host 上没了，显示“终端已结束”并可返回。
+6. **iOS tab 条**（已改，`2ae8363`）：tab 与按钮并排，同一背景。
+
+### 暂不做（记录）
+
+- `IrohConnector` 缓存的 QUIC 连接在握手应答后不因超时丢弃，重连可能一直用死连接直到空闲超时；`network_changed` 的探测会换掉它，先靠回到前台与网络变化触发。
+- 重连时没有“只经 relay”的 8 s 兜底；手动“重新连接”会走首连的兜底。
 
 ## 验证
 
