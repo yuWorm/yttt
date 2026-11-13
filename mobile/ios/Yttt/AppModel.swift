@@ -29,6 +29,12 @@ final class ShortCodeListener: PairingListener, @unchecked Sendable {
     func onShortCode(shortCode: UInt32) { onCode(shortCode) }
 }
 
+final class RecordStore: RecordSink, @unchecked Sendable {
+    private let onRecord: @Sendable (Data) -> Void
+    init(_ onRecord: @escaping @Sendable (Data) -> Void) { self.onRecord = onRecord }
+    func onRecordChanged(record: Data) { onRecord(record) }
+}
+
 final class LinkSink: LinkListener, @unchecked Sendable {
     private let onLink: @Sendable (LinkState) -> Void
     init(_ onLink: @escaping @Sendable (LinkState) -> Void) { self.onLink = onLink }
@@ -75,7 +81,12 @@ final class AppModel: ObservableObject {
     /// Why the account was signed out, until the user signs in again.
     @Published var accountNotice: String?
     /// Where the current link's relay came from.
-    @Published var relaySource: RelaySource = .none
+    @Published var relaySource: RelaySource = .directOnly
+    /// The control plane a pairing code named while signed out: sign in there,
+    /// or pair over the local network only.
+    @Published var signInFor: String?
+    /// The code that asked for it, to pair over the local network instead.
+    var signInCode: String?
     /// Whether the session reaches the Host, for the banner.
     @Published var link: LinkState = .ready
     /// When the link went down, for offering a fresh connection after a while.
@@ -258,9 +269,10 @@ final class AppModel: ObservableObject {
         await connect()
     }
 
-    func pair(code: String) async {
+    func pair(code: String, directOnly: Bool = false) async {
         busy = true
         shortCode = nil
+        signInFor = nil
         status = "正在连接 Host…"
         defer { busy = false }
         let listener = ShortCodeListener { code in
@@ -271,12 +283,18 @@ final class AppModel: ObservableObject {
         }
         do {
             let record = try await core.pair(code: code, deviceLabel: UIDevice.current.name, deviceSecret: secret,
-                                            relayOnly: Self.relayOnly, account: account?.account, listener: listener)
+                                            relayOnly: Self.relayOnly, account: account?.account,
+                                            directOnly: directOnly, listener: listener)
             let id = try core.hostInfo(record: record).id
             status = ""
             shortCode = nil
             addingHost = false
             await changeHosts(hosts.added(id, record))
+        } catch let MobileCoreError.SignInRequired(controlUrl) {
+            shortCode = nil
+            signInFor = controlUrl
+            signInCode = code
+            status = "这台电脑使用 \(controlUrl) 的 Relay 账号。先登录它，在外面也能连上；也可以只在局域网内配对。"
         } catch MobileCoreError.SignInExpired {
             shortCode = nil
             status = "Relay 账号的登录已过期，请重新登录后再配对。"
@@ -323,9 +341,19 @@ final class AppModel: ObservableObject {
         status = "正在连接…"
         defer { busy = false }
         let usedAccount = account
+        let hostID = hosts.current
+        // Where the Host relays and the relay ticket, as the core learns them.
+        let records = RecordStore { data in
+            Task { @MainActor in
+                guard let hostID else { return }
+                self.hosts = self.hosts.withRecord(hostID, data)
+                self.hostStore.save(self.hosts)
+            }
+        }
         do {
             let connected = try await core.connect(record: record, deviceSecret: secret, relayOnly: Self.relayOnly,
-                                                   account: usedAccount?.account, deviceLabel: UIDevice.current.name)
+                                                   account: usedAccount?.account, deviceLabel: UIDevice.current.name,
+                                                   records: records)
             // The Host or the account changed while connecting (paired,
             // switched, forgot, signed in or out): this link is the old one;
             // connect again with what is current.

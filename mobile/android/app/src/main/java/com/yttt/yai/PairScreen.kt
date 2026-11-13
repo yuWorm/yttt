@@ -56,6 +56,10 @@ import uniffi.yttt_mobile_core.PairingListener
 /** Pairing with a Host, from the first launch or "添加 Host": the progress and the digits to compare. */
 class Pairing(private val link: Link, private val scope: CoroutineScope) {
     var status by mutableStateOf("")
+    /** The code that named a control plane while signed out, to pair over the local network instead. */
+    var signInCode by mutableStateOf<String?>(null)
+    /** The next pairing uses the local network only. */
+    var directOnly = false
     var digits by mutableStateOf<UInt?>(null)
     var busy by mutableStateOf(false)
 
@@ -72,12 +76,21 @@ class Pairing(private val link: Link, private val scope: CoroutineScope) {
                 }
             }
         }
+        val localOnly = directOnly.also { directOnly = false }
+        signInCode = null
         return try {
             val account = link.account.value?.account
-            link.savePairing(link.core.pair(code.trim(), link.deviceName, link.secret, link.relayOnly, account, listener))
+            link.savePairing(
+                link.core.pair(code.trim(), link.deviceName, link.secret, link.relayOnly, account, localOnly, listener),
+            )
             status = ""
             digits = null
             true
+        } catch (needed: MobileCoreException.SignInRequired) {
+            digits = null
+            signInCode = code
+            status = "这台电脑使用 ${needed.controlUrl} 的 Relay 账号。先登录它，在外面也能连上；也可以只在局域网内配对。"
+            false
         } catch (expired: MobileCoreException.SignInExpired) {
             digits = null
             status = "Relay 账号的登录已过期，请重新登录后再配对。"
@@ -197,6 +210,16 @@ fun PairScreen(
                 }
             }
             if (pairing.status.isNotEmpty()) Text(pairing.status)
+            pairing.signInCode?.let { pending ->
+                OutlinedButton(
+                    onClick = {
+                        pairing.directOnly = true
+                        onPair(pending)
+                    },
+                    enabled = !pairing.busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("只在局域网内配对") }
+            }
         }
     }
 }

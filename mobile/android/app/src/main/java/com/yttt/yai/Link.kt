@@ -22,6 +22,7 @@ import uniffi.yttt_mobile_core.LinkListener
 import uniffi.yttt_mobile_core.LinkState
 import uniffi.yttt_mobile_core.MobileCore
 import uniffi.yttt_mobile_core.MobileCoreException
+import uniffi.yttt_mobile_core.RecordSink
 import uniffi.yttt_mobile_core.RelaySource
 import uniffi.yttt_mobile_core.SignedIn
 import uniffi.yttt_mobile_core.startConnectionLog
@@ -83,7 +84,7 @@ class Link(context: Context) {
     /** Why the account was signed out, until the user signs in again. */
     val accountNotice = MutableStateFlow<String?>(null)
     /** Where the current link's relay came from. */
-    val relaySource = MutableStateFlow(RelaySource.NONE)
+    val relaySource = MutableStateFlow(RelaySource.DIRECT_ONLY)
     /** Whether the session reaches the Host, for the banner. */
     val linkState = MutableStateFlow<LinkState>(LinkState.Ready)
     /** When the link went down (elapsed realtime), for offering a fresh connection after a while. */
@@ -258,14 +259,27 @@ class Link(context: Context) {
     suspend fun connect(): HostSession? = connecting.withLock {
         session.value?.let { return@withLock it }
         val stored = record.value ?: return@withLock null
+        val hostId = hosts.value.current
+        // Where the Host relays and the relay ticket, as the core learns them;
+        // `record` stays, so screens do not take it for another Host.
+        val records = object : RecordSink {
+            override fun onRecordChanged(record: ByteArray) {
+                scope.launch {
+                    val id = hostId ?: return@launch
+                    val list = hosts.value.withRecord(id, record)
+                    hostStore.save(list)
+                    hosts.value = list
+                }
+            }
+        }
         status.value = "正在连接…"
         try {
             val connected = try {
-                core.connect(stored, secret, relayOnly, account.value?.account, deviceName)
+                core.connect(stored, secret, relayOnly, account.value?.account, deviceName, records)
             } catch (expired: MobileCoreException.SignInExpired) {
-                // Without the account: only direct paths or a relay that admits anyone.
+                // Without the account: direct paths only.
                 forgetAccount(EXPIRED)
-                core.connect(stored, secret, relayOnly, null, deviceName)
+                core.connect(stored, secret, relayOnly, null, deviceName, records)
             }
             relaySource.value = connected.relaySource()
             linkState.value = LinkState.Ready
@@ -294,7 +308,7 @@ class Link(context: Context) {
 
     suspend fun disconnect() {
         val current = connecting.withLock { session.value.also { session.value = null } } ?: return
-        relaySource.value = RelaySource.NONE
+        relaySource.value = RelaySource.DIRECT_ONLY
         runCatching { current.disconnect() }
     }
 }

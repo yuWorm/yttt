@@ -43,6 +43,7 @@ extension Error {
         case .HostTooOld?: "电脑上的 yttt 版本太旧"
         case .SignInExpired?: "Relay 账号的登录已过期"
         case .Cancelled?: "已取消"
+        case .SignInRequired(let controlUrl)?: "先登录 \(controlUrl) 的 Relay 账号"
         case nil: localizedDescription
         }
     }

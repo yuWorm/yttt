@@ -26,6 +26,10 @@ class HostList(val hosts: List<HostEntry> = emptyList(), val current: String? = 
         return HostList(if (hosts.any { it.id == id }) replaced else hosts + HostEntry(id, record), current = id)
     }
 
+    /** The core's newer record for a Host: where it relays now and the cached ticket. */
+    fun withRecord(id: String, record: ByteArray): HostList =
+        HostList(hosts.map { if (it.id == id) HostEntry(it.id, record, it.name) else it }, current)
+
     /** Names a Host on this phone; a blank or null name goes back to the Host's own. */
     fun renamed(id: String, name: String?): HostList {
         val given = name?.trim()?.takeIf { it.isNotEmpty() }

@@ -29,6 +29,15 @@ struct HostList: Codable, Equatable {
         return list
     }
 
+    /// The core's newer record for a Host it is connected to: where the Host
+    /// relays now, and the cached relay ticket. Leaves which Host is current.
+    func withRecord(_ id: String, _ record: Data) -> HostList {
+        var list = self
+        guard let at = hosts.firstIndex(where: { $0.id == id }) else { return self }
+        list.hosts[at].record = record
+        return list
+    }
+
     /// Names a Host on this phone; a blank or nil name goes back to the Host's own.
     func renamed(_ id: String, _ name: String?) -> HostList {
         var list = self

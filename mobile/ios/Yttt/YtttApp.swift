@@ -121,6 +121,16 @@ struct PairView: View {
                 Button("配对") { Task { await model.pair(code: code) } }
                     .disabled(model.busy || code.isEmpty)
             }
+            if model.signInFor != nil, let pending = model.signInCode, model.account == nil {
+                Section {
+                    Button("只在局域网内配对") {
+                        Task { await model.pair(code: pending, directOnly: true) }
+                    }
+                    .disabled(model.busy)
+                } footer: {
+                    Text("登录上面的 Relay 账号后再点“配对”，在外面也能连上这台电脑。")
+                }
+            }
             if let shortCode = model.shortCode {
                 Section {
                     Text(String(format: "%06d", shortCode))
