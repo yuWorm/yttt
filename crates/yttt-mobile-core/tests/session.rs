@@ -22,7 +22,7 @@ use yttt_mobile_core::files::{FileKind, SaveOutcome};
 use yttt_mobile_core::keys::TerminalKey;
 use yttt_mobile_core::overview::{AgentState, Overview, WaitingKind};
 use yttt_mobile_core::session::{
-    LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
+    LinkPath, LinkState, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
 };
 use yttt_protocol::{
     BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
@@ -74,6 +74,15 @@ fn bootstrap(root: &Path) -> yttt_host::HostBootstrap {
 /// Starts a Host with P2P on, through `relay_url` when given, and returns its
 /// local administrator, which plays the desktop.
 async fn start_host(root: &Path, relay_url: Option<String>) -> ClientCore {
+    start_host_with_connector(root, relay_url).await.0
+}
+
+/// Like `start_host`, also returning the Host's local connector, for a phone
+/// whose link a test cuts.
+async fn start_host_with_connector(
+    root: &Path,
+    relay_url: Option<String>,
+) -> (ClientCore, yttt_transport::MemoryConnector) {
     let bootstrap = bootstrap(root);
     let (listener, connector) = memory_pair();
     let ready = bootstrap.ready_file();
@@ -88,6 +97,7 @@ async fn start_host(root: &Path, relay_url: Option<String>) -> ClientCore {
     })
     .await
     .expect("Host ready timeout");
+    let local = connector.clone();
     let admin = ClientCore::connect(
         connector,
         ClientIdentity {
@@ -114,7 +124,7 @@ async fn start_host(root: &Path, relay_url: Option<String>) -> ClientCore {
         },
     )
     .await;
-    admin
+    (admin, local)
 }
 
 async fn remote_access(admin: &ClientCore, request: RemoteAccessRequest) -> RemoteAccessResponse {
@@ -848,5 +858,130 @@ async fn keys_reach_the_program_as_it_expects_them() {
     .await;
     phone.send_key(&id, TerminalKey::Up).unwrap();
     drain_until(&phone, &id, "second: 1b 4f 41").await;
+    phone.close().await;
+}
+
+/// A link a test cuts: while cut, live streams close and new connects hang,
+/// as on a phone that lost its network.
+#[derive(Clone)]
+struct Cuttable {
+    inner: yttt_transport::MemoryConnector,
+    cut: tokio::sync::watch::Sender<bool>,
+}
+
+impl yttt_transport::TransportConnector for Cuttable {
+    fn connect(
+        &self,
+    ) -> yttt_transport::BoxFuture<
+        '_,
+        Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+    > {
+        Box::pin(async move {
+            let mut cut = self.cut.subscribe();
+            cut.wait_for(|cut| !*cut).await.unwrap();
+            let mut stream = self.inner.connect().await?;
+            let (client, mut peer) = tokio::io::duplex(64 * 1024);
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = tokio::io::copy_bidirectional(&mut stream, &mut peer) => {}
+                    _ = cut.wait_for(|cut| *cut) => {}
+                }
+            });
+            Ok(Box::new(client) as yttt_transport::TransportStream)
+        })
+    }
+}
+
+async fn wait_for_link(phone: &MobileSession, what: &str, wanted: impl Fn(&LinkState) -> bool) {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !wanted(&phone.link_state()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the link never became {what}: {:?}", phone.link_state()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminal_opened_while_the_link_is_down_shows_once_it_is_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let (admin, local) = start_host_with_connector(temp.path(), None).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+    let terminal =
+        desktop_terminals(&admin, temp.path(), &["project:tab:pane"]).await[0].to_string();
+    let (cut, _) = tokio::sync::watch::channel(false);
+    let phone = MobileSession::connect_with(
+        Cuttable {
+            inner: local,
+            cut: cut.clone(),
+        },
+        &record,
+        AuthToken::from_bytes(TOKEN),
+    )
+    .await
+    .unwrap();
+    assert_eq!(phone.link_state(), LinkState::Ready);
+
+    cut.send_replace(true);
+    wait_for_link(&phone, "reconnecting", |state| {
+        matches!(state, LinkState::Reconnecting { .. })
+    })
+    .await;
+    // The screen opens now: the attach waits for the link instead of failing.
+    phone.attach(&terminal).await.unwrap();
+    cut.send_replace(false);
+    phone.retry_now();
+    wait_for_link(&phone, "ready", |state| *state == LinkState::Ready).await;
+    drain_until(&phone, &terminal, "desktop-ready").await;
+    phone.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn control_and_the_workspace_survive_a_short_drop() {
+    let temp = tempfile::tempdir().unwrap();
+    let (admin, local) = start_host_with_connector(temp.path(), None).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+    let terminal =
+        desktop_terminals(&admin, temp.path(), &["project:tab:pane"]).await[0].to_string();
+    let (cut, _) = tokio::sync::watch::channel(false);
+    let phone = MobileSession::connect_with(
+        Cuttable {
+            inner: local,
+            cut: cut.clone(),
+        },
+        &record,
+        AuthToken::from_bytes(TOKEN),
+    )
+    .await
+    .unwrap();
+    phone.attach(&terminal).await.unwrap();
+    drain_until(&phone, &terminal, "desktop-ready").await;
+    phone.take_control(&terminal, 50, 20).await.unwrap();
+    assert!(phone.in_control(&terminal));
+
+    cut.send_replace(true);
+    wait_for_link(&phone, "reconnecting", |state| {
+        matches!(state, LinkState::Reconnecting { .. })
+    })
+    .await;
+    cut.send_replace(false);
+    phone.retry_now();
+    wait_for_link(&phone, "ready", |state| *state == LinkState::Ready).await;
+    // The Host kept this phone's control through the drop; so does the phone.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !phone.in_control(&terminal) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the phone lost control over a short drop");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while phone.send_input(&terminal, b"again\r".to_vec()).is_err() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("typing after the drop");
+    drain_until(&phone, &terminal, "got:again").await;
     phone.close().await;
 }

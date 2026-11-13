@@ -417,6 +417,9 @@ struct DrainTimes {
 
 struct Shared {
     attached: Mutex<HashMap<TerminalSessionId, Attached>>,
+    /// The terminals the screens want, attached or not yet: one asked for
+    /// while the link was down is attached once it is back.
+    wanted: Mutex<std::collections::HashSet<TerminalSessionId>>,
     times: Mutex<DrainTimes>,
     /// The workspace `open_active_workspace` opened, kept current with the
     /// Host's layout updates.
@@ -437,9 +440,47 @@ pub struct MobileSession {
     connector: Option<Arc<IrohConnector>>,
     /// The task calling back with overviews, replaced by each `watch_overview`.
     overview_watch: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The task calling back with link states, replaced by each `watch_link`.
+    link_watch: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Renews the relay ticket while the session lasts.
     ticket_renewal: Option<tokio::task::JoinHandle<()>>,
     relay_source: RelaySource,
+}
+
+/// Whether the session reaches the Host, for the banner the apps show.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum LinkState {
+    Connecting,
+    Ready,
+    /// Down, and trying again; `attempt` counts from 1.
+    Reconnecting {
+        attempt: u32,
+        reason: String,
+    },
+    /// Given up: the Host refused this device or is not the one paired.
+    /// Only a new session can help.
+    Lost {
+        reason: String,
+    },
+}
+
+impl From<&ConnectionState> for LinkState {
+    fn from(state: &ConnectionState) -> Self {
+        match state {
+            ConnectionState::Ready { .. } => Self::Ready,
+            ConnectionState::Connecting => Self::Connecting,
+            ConnectionState::Reconnecting { attempt, message } => Self::Reconnecting {
+                attempt: *attempt,
+                reason: message.clone(),
+            },
+            ConnectionState::HostLost { message } => Self::Lost {
+                reason: message.clone(),
+            },
+            ConnectionState::Disconnected => Self::Lost {
+                reason: "disconnected".into(),
+            },
+        }
+    }
 }
 
 /// The path a P2P session's data takes now.
@@ -573,12 +614,14 @@ impl MobileSession {
         );
         let shared = Arc::new(Shared {
             attached: Mutex::new(HashMap::new()),
+            wanted: Mutex::new(std::collections::HashSet::new()),
             times: Mutex::new(DrainTimes::default()),
             workspace: Mutex::new(None),
             opened_files: Mutex::new(HashMap::new()),
         });
         let events = tokio::spawn(follow_events(
             client.subscribe_events(),
+            Arc::downgrade(&client),
             shared.clone(),
             client_id.clone(),
         ));
@@ -590,6 +633,7 @@ impl MobileSession {
             endpoint: None,
             connector: None,
             overview_watch: Mutex::new(None),
+            link_watch: Mutex::new(None),
             ticket_renewal: None,
             relay_source: RelaySource::None,
         })
@@ -611,9 +655,57 @@ impl MobileSession {
     /// Opens the workspace the Host's desktop shows, without changing any
     /// shared view.
     pub async fn open_active_workspace(&self) -> Result<Option<WorkspaceSummary>, MobileError> {
-        let Response::Workspace(WorkspaceResponse::Workspaces(workspaces)) = self
-            .request(Request::Workspace(WorkspaceRequest::List))
-            .await?
+        open_active_workspace(&self.client, &self.shared).await
+    }
+
+    /// Where the link stands now.
+    pub fn link_state(&self) -> LinkState {
+        LinkState::from(&self.client.state())
+    }
+
+    /// Calls `callback` with the link state now and after each change;
+    /// replaces an earlier callback and ends with `close`.
+    pub fn watch_link(&self, callback: impl Fn(LinkState) + Send + Sync + 'static) {
+        let mut states = self.client.subscribe_state();
+        let task = tokio::spawn(async move {
+            let mut last = None;
+            loop {
+                let state = LinkState::from(&*states.borrow_and_update());
+                if last.as_ref() != Some(&state) {
+                    callback(state.clone());
+                    last = Some(state);
+                }
+                if states.changed().await.is_err() {
+                    return;
+                }
+            }
+        });
+        if let Some(previous) = self.link_watch.lock().replace(task) {
+            previous.abort();
+        }
+    }
+
+    /// Tries to reconnect at once rather than after the backoff.
+    pub fn retry_now(&self) {
+        self.client.retry_now();
+    }
+}
+
+/// Opens the workspace the Host's desktop shows, without changing any shared
+/// view, and keeps it for the overview.
+async fn open_active_workspace(
+    client: &ClientCore,
+    shared: &Shared,
+) -> Result<Option<WorkspaceSummary>, MobileError> {
+    let request = |request| async move {
+        client
+            .request(request)
+            .await
+            .map_err(|error| MobileError::Host(error.to_string()))
+    };
+    {
+        let Response::Workspace(WorkspaceResponse::Workspaces(workspaces)) =
+            request(Request::Workspace(WorkspaceRequest::List)).await?
         else {
             return Err(MobileError::Host(
                 "unexpected workspace list response".into(),
@@ -622,8 +714,8 @@ impl MobileSession {
         let Some(active) = workspaces.into_iter().find(|workspace| workspace.active) else {
             return Ok(None);
         };
-        let Response::Workspace(WorkspaceResponse::Opened { layout, .. }) = self
-            .request(Request::Workspace(WorkspaceRequest::Open {
+        let Response::Workspace(WorkspaceResponse::Opened { layout, .. }) =
+            request(Request::Workspace(WorkspaceRequest::Open {
                 workspace_id: active.workspace_id.clone(),
             }))
             .await?
@@ -632,10 +724,12 @@ impl MobileSession {
                 "unexpected workspace open response".into(),
             ));
         };
-        *self.shared.workspace.lock() = Some((active.workspace_id.clone(), layout));
+        *shared.workspace.lock() = Some((active.workspace_id.clone(), layout));
         Ok(Some(active))
     }
+}
 
+impl MobileSession {
     /// Terminals the Host runs, from its resource catalog.
     pub async fn terminals(&self) -> Result<Vec<TerminalInfo>, MobileError> {
         let Response::Resources(catalog) = self.request(Request::ListResources).await? else {
@@ -655,45 +749,28 @@ impl MobileSession {
 
     /// Observes a terminal. Never asks for the Interactive lease: that would
     /// resize the PTY and make this device the controller.
+    /// Observes a terminal. Asked while the link is down, it is attached
+    /// once the link is back rather than failing.
     pub async fn attach(&self, session_id: &str) -> Result<(), MobileError> {
         let session_id = TerminalSessionId::new(session_id);
-        let Response::TerminalAttached { lease, checkpoint } = self
-            .request(Request::AttachTerminal(AttachTerminal {
-                session_id: session_id.clone(),
-                known_session_epoch: None,
-                after_sequence: None,
-                mode: TerminalLeaseMode::Observer,
-                geometry: checkpoint_geometry(),
-                geometry_epoch: 0,
-                query_palette: Vec::new(),
-                palette_revision: 0,
-            }))
-            .await?
-        else {
-            return Err(MobileError::Host("unexpected attach response".into()));
-        };
-        let interactive = lease.mode == TerminalLeaseMode::Interactive;
-        let mut encoder = VtEncoder::new();
-        encoder.set_interactive(interactive);
-        self.shared.attached.lock().insert(
-            session_id.clone(),
-            Attached {
-                encoder,
-                encoded: None,
-                dirty: false,
-                session_epoch: checkpoint.viewport.session_epoch,
-                geometry_epoch: checkpoint.viewport.geometry_epoch,
-                lease_epoch: if interactive { lease.lease_epoch } else { 0 },
-                client_sequence: 0,
-            },
-        );
-        let visible: Vec<_> = self.shared.attached.lock().keys().cloned().collect();
-        self.client.set_visible_terminals(VISIBILITY_SCOPE, visible);
-        Ok(())
+        self.shared.wanted.lock().insert(session_id.clone());
+        if !self.is_ready() {
+            return Ok(());
+        }
+        match attach_now(&self.client, &self.shared, &session_id).await {
+            // The link went down during the request: the next Ready attaches.
+            Err(_) if !self.is_ready() => Ok(()),
+            Err(error) => {
+                self.shared.wanted.lock().remove(&session_id);
+                Err(error)
+            }
+            Ok(()) => Ok(()),
+        }
     }
 
     pub async fn detach(&self, session_id: &str) -> Result<(), MobileError> {
         let session_id = TerminalSessionId::new(session_id);
+        self.shared.wanted.lock().remove(&session_id);
         if self.shared.attached.lock().remove(&session_id).is_none() {
             return Ok(());
         }
@@ -1117,6 +1194,9 @@ impl MobileSession {
         if let Some(watch) = self.overview_watch.lock().take() {
             watch.abort();
         }
+        if let Some(watch) = self.link_watch.lock().take() {
+            watch.abort();
+        }
         self.client.shutdown().await;
         if let Some(endpoint) = &self.endpoint {
             endpoint.close().await;
@@ -1140,9 +1220,13 @@ fn current_overview(client: &ClientCore, shared: &Shared) -> Overview {
     crate::overview::build(
         workspace.as_ref().map(|(_, layout)| layout),
         &client.agent_snapshots(),
-        client
-            .resource_catalog()
-            .map_or(0, |catalog| catalog.terminals.len()),
+        client.resource_catalog().map_or_else(Vec::new, |catalog| {
+            catalog
+                .terminals
+                .iter()
+                .map(|terminal| terminal.session_id.to_string())
+                .collect()
+        }),
     )
 }
 
@@ -1193,13 +1277,90 @@ fn lose(terminal: &mut Attached) {
     terminal.dirty = true;
 }
 
+/// Attaches one terminal as an Observer, keeping any lease the Host has
+/// for this device.
+async fn attach_now(
+    client: &ClientCore,
+    shared: &Shared,
+    session_id: &TerminalSessionId,
+) -> Result<(), MobileError> {
+    let Response::TerminalAttached { lease, checkpoint } = client
+        .request(Request::AttachTerminal(AttachTerminal {
+            session_id: session_id.clone(),
+            known_session_epoch: None,
+            after_sequence: None,
+            mode: TerminalLeaseMode::Observer,
+            geometry: checkpoint_geometry(),
+            geometry_epoch: 0,
+            query_palette: Vec::new(),
+            palette_revision: 0,
+        }))
+        .await
+        .map_err(|error| MobileError::Host(error.to_string()))?
+    else {
+        return Err(MobileError::Host("unexpected attach response".into()));
+    };
+    let interactive = lease.mode == TerminalLeaseMode::Interactive;
+    let mut encoder = VtEncoder::new();
+    encoder.set_interactive(interactive);
+    shared.attached.lock().insert(
+        session_id.clone(),
+        Attached {
+            encoder,
+            encoded: None,
+            dirty: false,
+            session_epoch: checkpoint.viewport.session_epoch,
+            geometry_epoch: checkpoint.viewport.geometry_epoch,
+            lease_epoch: if interactive { lease.lease_epoch } else { 0 },
+            client_sequence: 0,
+        },
+    );
+    let visible: Vec<_> = shared.attached.lock().keys().cloned().collect();
+    client.set_visible_terminals(VISIBILITY_SCOPE, visible);
+    Ok(())
+}
+
+/// After a reconnect: the terminals the screens want and the Host still
+/// runs are attached, and the workspace is opened if this session has none,
+/// as after a Host restart or a first open that failed.
+async fn recover(client: Arc<ClientCore>, shared: Arc<Shared>) {
+    let missing: Vec<_> = {
+        let attached = shared.attached.lock();
+        shared
+            .wanted
+            .lock()
+            .iter()
+            .filter(|id| !attached.contains_key(*id))
+            .cloned()
+            .collect()
+    };
+    for session_id in missing {
+        if let Err(error) = attach_now(&client, &shared, &session_id).await {
+            if !matches!(client.state(), ConnectionState::Ready { .. }) {
+                // Down again: the next Ready tries again.
+                return;
+            }
+            tracing::debug!(%error, session = %session_id, "a wanted terminal is gone");
+            shared.wanted.lock().remove(&session_id);
+        }
+    }
+    if shared.workspace.lock().is_none()
+        && let Err(error) = open_active_workspace(&client, &shared).await
+    {
+        tracing::debug!(%error, "reopening the workspace failed");
+    }
+}
+
 /// Tracks lease grants and losses so input carries the right epoch, and the
-/// encoder syncs mouse modes only while this device is in control.
+/// encoder syncs mouse modes only while this device is in control; recovers
+/// after each reconnect.
 async fn follow_events(
     mut events: tokio::sync::broadcast::Receiver<ClientEvent>,
+    client: std::sync::Weak<ClientCore>,
     shared: Arc<Shared>,
     me: ClientInstanceId,
 ) {
+    let mut host_epoch = client.upgrade().and_then(|client| client.host_epoch());
     use tokio::sync::broadcast::error::RecvError;
     loop {
         let event = match events.recv().await {
@@ -1236,14 +1397,33 @@ async fn follow_events(
                     *layout = update.layout;
                 }
             }
-            ClientEvent::Connection(ConnectionState::Ready { .. }) => {
-                // A new connection: leases are granted again, the view repaints.
+            ClientEvent::Connection(ConnectionState::Ready {
+                host_epoch: epoch, ..
+            }) => {
+                // The same Host keeps this device's leases through a short
+                // drop; a restarted one has forgotten them, its terminals and
+                // the workspace this session opened.
+                let same_host = host_epoch == Some(epoch);
+                host_epoch = Some(epoch);
                 for terminal in shared.attached.lock().values_mut() {
-                    terminal.lease_epoch = 0;
+                    if !same_host {
+                        terminal.lease_epoch = 0;
+                    }
                     terminal.encoder.reset();
-                    terminal.encoder.set_interactive(false);
+                    terminal.encoder.set_interactive(terminal.lease_epoch != 0);
                     terminal.encoded = None;
+                    terminal.dirty = true;
                 }
+                if !same_host {
+                    *shared.workspace.lock() = None;
+                }
+                if let Some(client) = client.upgrade() {
+                    tokio::spawn(recover(client, shared.clone()));
+                }
+            }
+            ClientEvent::TerminalUnavailable(session_id) => {
+                shared.attached.lock().remove(&session_id);
+                shared.wanted.lock().remove(&session_id);
             }
             _ => {}
         }

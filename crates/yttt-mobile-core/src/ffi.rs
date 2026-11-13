@@ -14,8 +14,8 @@ use crate::files::{FileEntry, OpenedFile, SaveOutcome, SessionEntry};
 use crate::keys::TerminalKey;
 use crate::overview::Overview;
 use crate::session::{
-    DrainStats, HostInfo, LinkPath, MobileError, MobileSession, PairedHostRecord, RelayChoice,
-    RelaySource, TerminalInfo,
+    DrainStats, HostInfo, LinkPath, LinkState, MobileError, MobileSession, PairedHostRecord,
+    RelayChoice, RelaySource, TerminalInfo,
 };
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -161,6 +161,12 @@ fn secret(bytes: &[u8]) -> Result<[u8; 32], MobileCoreError> {
 #[uniffi::export(with_foreign)]
 pub trait OverviewListener: Send + Sync {
     fn on_overview(&self, overview: Overview);
+}
+
+/// Receives the link's state after each change, on a Rust thread.
+#[uniffi::export(with_foreign)]
+pub trait LinkListener: Send + Sync {
+    fn on_link(&self, state: LinkState);
 }
 
 /// Receives the six-digit pairing code to show while the Host user decides.
@@ -361,6 +367,24 @@ impl HostSession {
     /// Where the relay this session uses came from.
     pub fn relay_source(&self) -> RelaySource {
         self.session.relay_source()
+    }
+
+    /// Whether the session reaches the Host now.
+    pub fn link_state(&self) -> LinkState {
+        self.session.link_state()
+    }
+
+    /// Calls `listener` with the link state now and after each change;
+    /// replaces an earlier listener and ends on `disconnect`.
+    pub fn watch_link(&self, listener: Arc<dyn LinkListener>) {
+        let _runtime = self.runtime.enter();
+        self.session
+            .watch_link(move |state| listener.on_link(state));
+    }
+
+    /// Reconnects at once instead of after the backoff.
+    pub fn retry_now(&self) {
+        self.session.retry_now();
     }
 
     /// Opens the workspace the desktop shows, so the overview has its

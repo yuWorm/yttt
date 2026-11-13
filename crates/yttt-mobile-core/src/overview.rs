@@ -15,6 +15,9 @@ pub struct Overview {
     pub agents: Vec<AgentSummary>,
     /// Terminals the Host runs, from its resource catalog.
     pub terminals: u32,
+    /// Their ids, sorted: after a Host restart the ids change though the
+    /// count may not, and the apps fetch the terminals again.
+    pub terminal_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
@@ -140,12 +143,14 @@ fn collect_panes<'a>(node: &'a LayoutNode, panes: &mut Vec<&'a PaneConfig>) {
 }
 
 /// The overview from the open workspace's `layout` (none before it opened),
-/// the Agent snapshots and the number of terminals, in the Host's order.
+/// the Agent snapshots and the terminals, in the Host's order.
 pub fn build(
     layout: Option<&HostWorkspaceState>,
     agents: &[AgentSnapshotUpdate],
-    terminals: usize,
+    terminal_ids: Vec<String>,
 ) -> Overview {
+    let mut terminal_ids = terminal_ids;
+    terminal_ids.sort();
     let projects = layout
         .map(|layout| {
             layout
@@ -230,7 +235,8 @@ pub fn build(
     Overview {
         projects,
         agents,
-        terminals: terminals as u32,
+        terminals: terminal_ids.len() as u32,
+        terminal_ids,
     }
 }
 
@@ -279,6 +285,11 @@ fn locate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `count` terminal ids, listed out of order.
+    fn ids(count: usize) -> Vec<String> {
+        (0..count).rev().map(|index| format!("t{index}")).collect()
+    }
     use yttt_agent_core::{
         AgentAction, AgentInstanceId, AgentProcessState, AgentReducer, AgentTask, AgentTaskSource,
         AgentTurnState, ProviderId,
@@ -388,8 +399,14 @@ mod tests {
 
     #[test]
     fn projects_and_tabs_come_from_the_layout() {
-        let overview = build(Some(&layout()), &[], 3);
+        let overview = build(Some(&layout()), &[], ids(3));
         assert_eq!(overview.terminals, 3);
+        // Sorted, so the same terminals compare equal however the Host lists them.
+        assert_eq!(overview.terminal_ids, vec!["t0", "t1", "t2"]);
+        assert_ne!(
+            build(None, &[], vec!["new".into()]).terminal_ids,
+            build(None, &[], vec!["old".into()]).terminal_ids
+        );
         let pane = |id: &str, title: &str, tab: &str, state| PaneSummary {
             pane_id: id.to_string(),
             title: title.to_string(),
@@ -439,7 +456,7 @@ mod tests {
         let overview = build(
             Some(&layout()),
             &[waiting_agent("web", "agents", "claude")],
-            1,
+            ids(1),
         );
         assert_eq!(
             overview.agents,
@@ -464,7 +481,7 @@ mod tests {
     fn a_waiting_reason_counts_only_while_waiting() {
         let mut agent = waiting_agent("web", "agents", "claude");
         agent.snapshot.turn_state = AgentTurnState::Working;
-        let overview = build(Some(&layout()), &[agent], 1);
+        let overview = build(Some(&layout()), &[agent], ids(1));
         assert_eq!(overview.agents[0].state, AgentState::Working);
         assert_eq!(overview.agents[0].waiting, None);
     }
@@ -472,7 +489,7 @@ mod tests {
     #[test]
     fn agents_outside_the_open_workspace_or_before_it_opened_are_listed() {
         let elsewhere = waiting_agent("other", "tab", "pane");
-        let overview = build(Some(&layout()), std::slice::from_ref(&elsewhere), 1);
+        let overview = build(Some(&layout()), std::slice::from_ref(&elsewhere), ids(1));
         let agent = &overview.agents[0];
         assert_eq!(
             (
@@ -482,7 +499,7 @@ mod tests {
             ),
             ("other", "tab", "pane")
         );
-        let overview = build(None, &[elsewhere], 0);
+        let overview = build(None, &[elsewhere], ids(0));
         assert!(overview.projects.is_empty());
         assert_eq!(overview.agents.len(), 1);
     }
