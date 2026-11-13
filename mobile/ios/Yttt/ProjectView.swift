@@ -34,6 +34,7 @@ struct ProjectView: View {
         let pane = panes.first { $0.paneId == place.paneId } ?? panes.first
         let marks = overview.tabMarks(place.projectId)
         VStack(spacing: 0) {
+            LinkBanner()
             if !tabs.isEmpty {
                 TabStrip(tabs: tabs, selected: tab?.tabId, marks: marks,
                          onTab: { place = overview.placeIn(place.projectId, $0) },
@@ -45,7 +46,8 @@ struct ProjectView: View {
                          agent: overview.agents.first { $0.sessionId == info.sessionId },
                          panes: panes, pane: pane, overview: overview,
                          onPane: { place = Place(projectId: place.projectId, tabId: place.tabId, paneId: $0) })
-                    .id(info.sessionId)
+                    // A new session (a fresh connection) makes the pane again.
+                    .id(model.sessionKey + info.sessionId)
             } else {
                 ContentUnavailableView(pane == nil ? "这个项目没有终端" : "这个 pane 没有在运行",
                                        systemImage: "terminal")
@@ -349,10 +351,15 @@ struct TerminalAloneView: View {
     let info: TerminalInfo
 
     var body: some View {
-        Group {
-            if let session = model.session {
+        VStack(spacing: 0) {
+            LinkBanner()
+            if let session = model.session, model.link != .ready || model.terminals.contains(where: { $0.sessionId == info.sessionId }) {
                 AloneArea(session: session, info: info,
                           agent: model.overview.agents.first { $0.sessionId == info.sessionId })
+                    .id(model.sessionKey + info.sessionId)
+            } else {
+                ContentUnavailableView("终端已结束", systemImage: "terminal",
+                                       description: Text("电脑上的这个终端已经不在了。"))
             }
         }
         .navigationTitle(info.sessionId)

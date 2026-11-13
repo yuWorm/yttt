@@ -26,6 +26,12 @@ final class ShortCodeListener: PairingListener, @unchecked Sendable {
     func onShortCode(shortCode: UInt32) { onCode(shortCode) }
 }
 
+final class LinkSink: LinkListener, @unchecked Sendable {
+    private let onLink: @Sendable (LinkState) -> Void
+    init(_ onLink: @escaping @Sendable (LinkState) -> Void) { self.onLink = onLink }
+    func onLink(state: LinkState) { onLink(state) }
+}
+
 final class OverviewSink: OverviewListener, @unchecked Sendable {
     private let onOverview: @Sendable (Overview) -> Void
     init(_ onOverview: @escaping @Sendable (Overview) -> Void) { self.onOverview = onOverview }
@@ -53,7 +59,7 @@ final class AppModel: ObservableObject {
     @Published var busy = false
     @Published var session: HostSession?
     @Published var terminals: [TerminalInfo] = []
-    @Published var overview = Overview(projects: [], agents: [], terminals: 0)
+    @Published var overview = Overview(projects: [], agents: [], terminals: 0, terminalIds: [])
     /// The selected tab, and the pages pushed in the two that push.
     @Published var tab: AppTab = .overview
     @Published var overviewPath: [Destination] = []
@@ -67,6 +73,12 @@ final class AppModel: ObservableObject {
     @Published var accountNotice: String?
     /// Where the current link's relay came from.
     @Published var relaySource: RelaySource = .none
+    /// Whether the session reaches the Host, for the banner.
+    @Published var link: LinkState = .ready
+    /// When the link went down, for offering a fresh connection after a while.
+    @Published var downSince: Date?
+    /// The session this app made for each Host change, so views follow a new one.
+    var sessionKey: String { session.map { String(describing: ObjectIdentifier($0)) } ?? "none" }
     private let accountStore = AccountStore()
     /// A project file open full screen.
     @Published var editing: EditingFile?
@@ -111,6 +123,37 @@ final class AppModel: ObservableObject {
         account = nil
         accountNotice = notice
         await reconnect()
+    }
+
+    /// Tries the link again now; a session that gave up is made again.
+    func retryNow() {
+        if case .lost = link { Task { await reconnect() } } else { session?.retryNow() }
+    }
+
+    /// A fresh session, as leaving and coming back did.
+    func reconnectFresh() async { await reconnect() }
+
+    /// Back in the foreground: the network may have changed while suspended.
+    func enterForeground() {
+        session?.networkChanged()
+    }
+
+    private func follow(_ state: LinkState, of connected: HostSession) {
+        guard session === connected else { return }
+        let wasReady = link == .ready
+        link = state
+        switch state {
+        case .ready:
+            downSince = nil
+            // Terminals may have changed while down (a Host restart).
+            if !wasReady { Task { await refresh() } }
+        case .lost:
+            downSince = downSince ?? Date()
+            // The session gave up; a new one may still get through, once.
+            if wasReady { Task { await reconnect() } }
+        case .connecting, .reconnecting:
+            downSince = downSince ?? Date()
+        }
     }
 
     /// Connects to the current Host again, as after the account changed.
@@ -171,7 +214,7 @@ final class AppModel: ObservableObject {
         await session?.disconnect()
         session = nil
         terminals = []
-        overview = Overview(projects: [], agents: [], terminals: 0)
+        overview = Overview(projects: [], agents: [], terminals: 0, terminalIds: [])
         overviewPath = []
         projectsPath = []
         editing = nil
@@ -259,6 +302,11 @@ final class AppModel: ObservableObject {
                 return
             }
             session = connected
+            link = .ready
+            downSince = nil
+            connected.watchLink(listener: LinkSink { state in
+                Task { @MainActor in self.follow(state, of: connected) }
+            })
             relaySource = connected.relaySource()
             status = ""
             _ = try? await connected.openActiveWorkspace()
@@ -300,6 +348,7 @@ final class AppModel: ObservableObject {
 
     func refresh() async {
         guard let session else { return }
+        guard link == .ready else { return retryNow() }
         let asked = session
         do {
             terminals = try await session.terminals()
@@ -329,7 +378,8 @@ final class AppModel: ObservableObject {
     }
 
     private func apply(_ overview: Overview) {
-        let terminalsChanged = overview.terminals != self.overview.terminals
+        // Ids, not the count: a restarted Host has new ones in the same number.
+        let terminalsChanged = overview.terminalIds != self.overview.terminalIds
         self.overview = overview
         // The terminals change as panes start and stop.
         if terminalsChanged { Task { await refresh() } }

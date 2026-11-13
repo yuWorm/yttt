@@ -126,6 +126,7 @@ targets:
         buildPhase: resources
       # The home screen's sorting, tested on its own with the core's types.
       - Yttt/HomeSections.swift
+      - Yttt/LinkBannerText.swift
       - Yttt/ProjectPage.swift
       - Yttt/FileTree.swift
       - Yttt/SecretStore.swift

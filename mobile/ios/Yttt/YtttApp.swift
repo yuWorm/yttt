@@ -35,6 +35,7 @@ struct YtttApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { model.enterBackground() }
+            if phase == .active { model.enterForeground() }
         }
     }
 }

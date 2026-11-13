@@ -44,6 +44,7 @@ struct OverviewView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .safeAreaInset(edge: .top, spacing: 0) { LinkBanner() }
         .navigationTitle("总控")
         .navigationDestination(for: Destination.self) { DestinationView(destination: $0) }
         .refreshable { await model.refresh() }
@@ -52,6 +53,7 @@ struct OverviewView: View {
     private var linkLabel: String {
         if !model.status.isEmpty { return model.status }
         guard model.session != nil else { return "未连接" }
+        if model.link != .ready { return "重连中" }
         switch model.linkPath {
         case .direct: return "已连接 · 直连"
         case .relay: return "已连接 · 经中继"
