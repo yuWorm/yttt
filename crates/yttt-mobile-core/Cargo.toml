@@ -18,7 +18,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 # Logs to stderr when YTTT_LOG is set (a filter, as RUST_LOG); off otherwise.
-tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "registry", "std"] }
 uniffi = "=0.31.1"
 yttt-agent-core = { path = "../yttt-agent-core" }
 yttt-client-core = { path = "../yttt-client-core" }

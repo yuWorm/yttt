@@ -52,6 +52,59 @@ use yttt_protocol::{
 /// connection stalls for its whole timeout while the relay would have worked.
 const DIRECT_GRACE: Duration = Duration::from_secs(8);
 
+/// How long a Host whose direct path stalled is reached through the relay
+/// alone, without first waiting [`DIRECT_GRACE`] on direct paths again. A
+/// phone behind a proxy that breaks them pays that wait on every connect
+/// otherwise; after this long, direct paths get another chance.
+const REMEMBER_STALLED: Duration = Duration::from_secs(10 * 60);
+
+/// The Hosts whose direct path stalled lately, for this process.
+#[derive(Default)]
+pub struct StalledDirect {
+    hosts: Mutex<HashMap<yttt_protocol::EndpointKey, Instant>>,
+}
+
+impl StalledDirect {
+    pub fn stalled(&self, host: &yttt_protocol::EndpointKey, now: Instant) {
+        self.hosts.lock().insert(*host, now);
+    }
+
+    /// Whether to skip direct paths for `host` now.
+    pub fn skip_direct(&self, host: &yttt_protocol::EndpointKey, now: Instant) -> bool {
+        let mut hosts = self.hosts.lock();
+        match hosts.get(host) {
+            Some(at) if now.saturating_duration_since(*at) < REMEMBER_STALLED => true,
+            Some(_) => {
+                hosts.remove(host);
+                false
+            }
+            None => false,
+        }
+    }
+}
+
+fn stalled_direct() -> &'static StalledDirect {
+    static STALLED: std::sync::OnceLock<StalledDirect> = std::sync::OnceLock::new();
+    STALLED.get_or_init(StalledDirect::default)
+}
+
+/// The relay choice for this attempt, and the grace to give direct paths:
+/// the relay alone, at once, when `host`'s direct path stalled lately.
+fn plan_relay(
+    relay: RelayChoice,
+    host: &yttt_protocol::EndpointKey,
+    has_relay: bool,
+) -> (RelayChoice, Option<Duration>) {
+    if relay != RelayChoice::FromHost || !has_relay {
+        return (relay, None);
+    }
+    if stalled_direct().skip_direct(host, Instant::now()) {
+        tracing::info!("direct paths to this Host stalled lately; going through the relay alone");
+        return (RelayChoice::OnlyFromHost, None);
+    }
+    (relay, Some(DIRECT_GRACE))
+}
+
 /// The visibility scope this Client reports; it has one screen.
 const VISIBILITY_SCOPE: u64 = 1;
 
@@ -195,6 +248,21 @@ pub struct HostInfo {
 mod grace_tests {
     use super::*;
 
+    #[test]
+    fn a_stalled_direct_path_is_skipped_for_a_while_per_host() {
+        let memory = StalledDirect::default();
+        let office = yttt_protocol::EndpointKey([1; 32]);
+        let home = yttt_protocol::EndpointKey([2; 32]);
+        let start = Instant::now();
+        assert!(!memory.skip_direct(&office, start));
+        memory.stalled(&office, start);
+        assert!(memory.skip_direct(&office, start + Duration::from_secs(60)));
+        assert!(!memory.skip_direct(&home, start + Duration::from_secs(60)));
+        // Later, direct paths get another chance.
+        assert!(!memory.skip_direct(&office, start + REMEMBER_STALLED));
+        assert!(!memory.skip_direct(&office, start + Duration::from_secs(1)));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_link_that_answers_in_time_is_kept() {
         let quick = async {
@@ -321,7 +389,7 @@ pub async fn pair(
             show(short_code);
         }
     };
-    let grace = (relay == RelayChoice::FromHost && target.is_some()).then_some(DIRECT_GRACE);
+    let (relay, grace) = plan_relay(relay, &code.host, target.is_some());
     let endpoint = bind(key, relay.setup(target.clone())?).await?;
     let attempt = yttt_client_core::p2p::pair(&endpoint, &code, device_label, &show);
     let result = match within_grace(attempt, grace, || {
@@ -336,6 +404,7 @@ pub async fn pair(
         None => {
             endpoint.close().await;
             tracing::warn!("pairing heard nothing from the Host directly; trying the relay alone");
+            stalled_direct().stalled(&code.host, Instant::now());
             let endpoint = bind(key, RelayChoice::OnlyFromHost.setup(target)?).await?;
             let result = yttt_client_core::p2p::pair(&endpoint, &code, device_label, &show).await;
             endpoint.close().await;
@@ -505,6 +574,7 @@ impl MobileSession {
         account: Option<&Account>,
         device_label: &str,
     ) -> Result<Self, MobileError> {
+        let started = Instant::now();
         let mut host = record.host.clone();
         let key = host_key(&device_secret, &host.host);
         let label = crate::account::device_label(device_label, &host.host_label);
@@ -530,7 +600,7 @@ impl MobileSession {
             (Some(_), _, _) => RelaySource::Account,
             (None, Some(_), _) => RelaySource::PairingHint,
         };
-        let grace = (relay == RelayChoice::FromHost && target.is_some()).then_some(DIRECT_GRACE);
+        let (relay, grace) = plan_relay(relay, &host.host, target.is_some());
         let mut endpoint = bind(key, relay.setup(target.clone())?).await?;
         let mut connector = Arc::new(host.connector(endpoint.clone()));
         let first = Self::connect_with(connector.clone(), record, host.credential(key));
@@ -543,6 +613,7 @@ impl MobileSession {
                 tracing::warn!(
                     "the Host did not answer directly; connecting through the relay alone"
                 );
+                stalled_direct().stalled(&host.host, Instant::now());
                 endpoint = bind(key, RelayChoice::OnlyFromHost.setup(target)?).await?;
                 connector = Arc::new(host.connector(endpoint.clone()));
                 Self::connect_with(connector.clone(), record, host.credential(key)).await
@@ -565,6 +636,13 @@ impl MobileSession {
                         )));
                 }
                 session.relay_source = relay_source;
+                tracing::info!(
+                    host = %host.host_label,
+                    millis = started.elapsed().as_millis() as u64,
+                    relay = ?relay_source,
+                    relay_alone = relay == RelayChoice::OnlyFromHost,
+                    "connected"
+                );
                 session.endpoint = Some(endpoint);
                 session.connector = Some(connector);
                 Ok(session)
