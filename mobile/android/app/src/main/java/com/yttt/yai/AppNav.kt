@@ -230,6 +230,8 @@ fun App(
                     connected = session != null,
                     onSwitch = { id -> scope.launch { link.switchTo(id) } },
                     onForget = { id -> scope.launch { link.forget(id) } },
+                    editableName = link::editableName,
+                    onRename = link::rename,
                     onAdd = { pairing.reset(); nav.navigate(PAIR) },
                     onBattery = onBattery,
                     onNotifications = onNotifications,

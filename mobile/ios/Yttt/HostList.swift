@@ -1,9 +1,11 @@
 import Foundation
 
-/// A paired Host: `id` from the core's `hostInfo`, `record` as the core stores it.
+/// A paired Host: `id` from the core's `hostInfo`, `record` as the core stores
+/// it, and the name the user gave it on this phone, if any.
 struct HostEntry: Codable, Equatable {
     var id: String
     var record: Data
+    var name: String?
 }
 
 /// The Hosts this phone paired with, in the order they were added, and the
@@ -14,7 +16,8 @@ struct HostList: Codable, Equatable {
 
     var currentRecord: Data? { hosts.first { $0.id == current }?.record }
 
-    /// A new Host goes last; pairing with a known one again replaces its record in place.
+    /// A new Host goes last; pairing with a known one again replaces its
+    /// record in place and keeps the name the user gave it.
     func added(_ id: String, _ record: Data) -> HostList {
         var list = self
         if let at = hosts.firstIndex(where: { $0.id == id }) {
@@ -23,6 +26,15 @@ struct HostList: Codable, Equatable {
             list.hosts.append(HostEntry(id: id, record: record))
         }
         list.current = id
+        return list
+    }
+
+    /// Names a Host on this phone; a blank or nil name goes back to the Host's own.
+    func renamed(_ id: String, _ name: String?) -> HostList {
+        var list = self
+        guard let at = hosts.firstIndex(where: { $0.id == id }) else { return self }
+        let given = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        list.hosts[at].name = given?.isEmpty == false ? given : nil
         return list
     }
 
@@ -41,9 +53,10 @@ struct HostList: Codable, Equatable {
         return list
     }
 
-    /// Each Host's name; Hosts with the same name get their id's last four characters.
+    /// Each Host's name: the one given on this phone, else `label` of its
+    /// record; Hosts with the same name get their id's last four characters.
     func names(_ label: (Data) -> String) -> [(id: String, name: String)] {
-        let labels = hosts.map { (id: $0.id, name: label($0.record)) }
+        let labels = hosts.map { (id: $0.id, name: $0.name ?? label($0.record)) }
         let counts = Dictionary(labels.map { ($0.name, 1) }, uniquingKeysWith: +)
         return labels.map { entry in
             (entry.id, counts[entry.name, default: 0] > 1 ? "\(entry.name) · \(entry.id.suffix(4))" : entry.name)

@@ -2,6 +2,7 @@ package com.yttt.yai
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,6 +14,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MoreVert
@@ -31,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,6 +59,8 @@ fun SettingsScreen(
     connected: Boolean,
     onSwitch: (String) -> Unit,
     onForget: (String) -> Unit,
+    editableName: (String) -> String,
+    onRename: (String, String) -> Unit,
     onAdd: () -> Unit,
     onBattery: () -> Unit,
     onNotifications: () -> Unit,
@@ -73,6 +78,8 @@ fun SettingsScreen(
     }
     var forgetting by remember { mutableStateOf<Pair<String, String>?>(null) }
     var signingOut by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf<String?>(null) }
+    var newName by remember { mutableStateOf("") }
     Scaffold(contentWindowInsets = WindowInsets(0), topBar = { TopAppBar(title = { Text("设置") }) }) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxWidth()) {
             item { Header("Host") }
@@ -90,6 +97,11 @@ fun SettingsScreen(
                             Box {
                                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "更多") }
                                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    DropdownMenuItem(
+                                        leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                        text = { Text("重命名") },
+                                        onClick = { menu = false; newName = editableName(id); renaming = id },
+                                    )
                                     DropdownMenuItem(
                                         leadingIcon = { Icon(Icons.Outlined.LinkOff, null) },
                                         text = { Text("忘记") },
@@ -197,6 +209,32 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+    renaming?.let { id ->
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            icon = { Icon(Icons.Outlined.Edit, null) },
+            title = { Text("重命名 Host") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "只改这台手机上显示的名称。留空则用电脑自己的名称。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { renaming = null; onRename(id, newName) }) { Text("好") } },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text("取消") } },
+        )
     }
     if (signingOut) {
         AlertDialog(

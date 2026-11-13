@@ -59,6 +59,19 @@ class HostListTest {
     }
 
     @Test
+    fun aRenamedHostShowsItsNameUntilClearedAndKeepsItWhenPairedAgain() {
+        val list = HostList().added(a, bytes("mac")).added(b, bytes("linux")).renamed(a, "  Office  ")
+        assertEquals(listOf(a to "Office", b to "linux"), list.names { String(it) })
+        assertEquals(listOf(a to "Office", b to "linux"), list.added(a, bytes("mac2")).names { String(it) })
+        assertEquals(b, list.current)
+        assertEquals(listOf(a to "mac", b to "linux"), list.renamed(a, "   ").names { String(it) })
+        assertEquals(listOf(a to "mac", b to "linux"), list.renamed(a, null).names { String(it) })
+        assertEquals(list.names { String(it) }, list.renamed("unknown", "x").names { String(it) })
+        // Two Hosts given the same name are still told apart.
+        assertEquals(listOf(a to "Office · 1111", b to "Office · 2222"), list.renamed(b, "Office").names { String(it) })
+    }
+
+    @Test
     fun theListIsKept() {
         val store = HostStore(folder.root)
         assertEquals(emptyList<HostEntry>(), store.load().hosts)
@@ -69,6 +82,9 @@ class HostListTest {
         assertEquals(listOf(a, b), loaded.hosts.map { it.id })
         assertEquals(a, loaded.current)
         assertArrayEquals(bytes("new"), loaded.hosts[1].record)
+
+        store.save(loaded.renamed(b, "Office"))
+        assertEquals(listOf(a to "old", b to "Office"), store.load().names { String(it) })
     }
 
     @Test

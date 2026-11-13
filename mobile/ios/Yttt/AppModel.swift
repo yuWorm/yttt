@@ -135,6 +135,19 @@ final class AppModel: ObservableObject {
         await changeHosts(hosts.selected(id))
     }
 
+    /// The name to edit: the one given on this phone, else the Host's own.
+    func editableName(_ id: String) -> String {
+        guard let entry = hosts.hosts.first(where: { $0.id == id }) else { return "" }
+        return entry.name ?? (try? core.hostInfo(record: entry.record).label) ?? ""
+    }
+
+    /// Names a Host on this phone only; blank goes back to the Host's own name.
+    func rename(_ id: String, to name: String) {
+        let list = hosts.renamed(id, name)
+        hostStore.save(list)
+        hosts = list
+    }
+
     /// Forgets a Host. Forgetting the current one moves the link to the
     /// first one left, if any; another one just leaves the list.
     func forget(_ id: String) async {

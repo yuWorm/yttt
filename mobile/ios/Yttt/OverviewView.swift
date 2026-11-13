@@ -226,6 +226,8 @@ struct ProjectsView: View {
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var forgetting: (id: String, name: String)?
+    @State private var renaming: String?
+    @State private var newName = ""
 
     var body: some View {
         Form {
@@ -249,6 +251,12 @@ struct SettingsView: View {
                     .tint(.primary)
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) { forgetting = host } label: { Label("忘记", systemImage: "trash") }
+                        Button { startRenaming(host.id) } label: { Label("重命名", systemImage: "pencil") }
+                            .tint(.blue)
+                    }
+                    .contextMenu {
+                        Button { startRenaming(host.id) } label: { Label("重命名", systemImage: "pencil") }
+                        Button(role: .destructive) { forgetting = host } label: { Label("忘记", systemImage: "trash") }
                     }
                 }
                 Button { model.addingHost = true } label: {
@@ -260,7 +268,7 @@ struct SettingsView: View {
             } header: {
                 Text("Host")
             } footer: {
-                Text("点一台 Host 切换过去；向左滑可以忘记它。")
+                Text("点一台 Host 切换过去；向左滑或长按可以重命名、忘记它。")
             }
             AccountSection()
             Section("关于") {
@@ -279,6 +287,17 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("设置")
+        .alert("重命名 Host", isPresented: Binding(
+            get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("名称", text: $newName)
+            Button("取消", role: .cancel) { renaming = nil }
+            Button("好") {
+                if let id = renaming { model.rename(id, to: newName) }
+                renaming = nil
+            }
+        } message: {
+            Text("只改这台手机上显示的名称。留空则用电脑自己的名称。")
+        }
         .confirmationDialog("忘记 \(forgetting?.name ?? "")？", isPresented: Binding(
             get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), titleVisibility: .visible) {
             Button("忘记", role: .destructive) {
@@ -288,6 +307,11 @@ struct SettingsView: View {
         } message: {
             Text("这台手机不再连接它。要再用，需要在电脑上重新配对。")
         }
+    }
+
+    private func startRenaming(_ id: String) {
+        newName = model.editableName(id)
+        renaming = id
     }
 
     static var version: String {

@@ -144,6 +144,19 @@ class Link(context: Context) {
         if (id != hosts.value.current) changeHosts(hosts.value.selected(id))
     }
 
+    /** The name to edit: the one given on this phone, else the Host's own. */
+    fun editableName(id: String): String {
+        val entry = hosts.value.hosts.firstOrNull { it.id == id } ?: return ""
+        return entry.name ?: runCatching { core.hostInfo(entry.record).label }.getOrDefault("")
+    }
+
+    /** Names a Host on this phone only; blank goes back to the Host's own name. */
+    fun rename(id: String, name: String) {
+        val list = hosts.value.renamed(id, name)
+        hostStore.save(list)
+        hosts.value = list
+    }
+
     /**
      * Forgets a Host. Forgetting the current one moves the link to the first
      * one left, if any; another one just leaves the list.

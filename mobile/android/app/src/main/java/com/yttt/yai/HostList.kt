@@ -6,8 +6,11 @@ import java.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** A paired Host: `id` from the core's `hostInfo`, `record` as the core stores it. */
-class HostEntry(val id: String, val record: ByteArray)
+/**
+ * A paired Host: `id` from the core's `hostInfo`, `record` as the core stores
+ * it, and the name the user gave it on this phone, if any.
+ */
+class HostEntry(val id: String, val record: ByteArray, val name: String? = null)
 
 /**
  * The Hosts this phone paired with, in the order they were added, and the
@@ -18,9 +21,15 @@ class HostList(val hosts: List<HostEntry> = emptyList(), val current: String? = 
 
     /** A new Host goes last; pairing with a known one again replaces its record in place. */
     fun added(id: String, record: ByteArray): HostList {
-        val entry = HostEntry(id, record)
-        val replaced = hosts.map { if (it.id == id) entry else it }
-        return HostList(if (hosts.any { it.id == id }) replaced else hosts + entry, id)
+        // Pairing again keeps the name the user gave it.
+        val replaced = hosts.map { if (it.id == id) HostEntry(id, record, it.name) else it }
+        return HostList(if (hosts.any { it.id == id }) replaced else hosts + HostEntry(id, record), current = id)
+    }
+
+    /** Names a Host on this phone; a blank or null name goes back to the Host's own. */
+    fun renamed(id: String, name: String?): HostList {
+        val given = name?.trim()?.takeIf { it.isNotEmpty() }
+        return HostList(hosts.map { if (it.id == id) HostEntry(it.id, it.record, given) else it }, current)
     }
 
     /** The current Host falls back to the first one left. */
@@ -32,9 +41,12 @@ class HostList(val hosts: List<HostEntry> = emptyList(), val current: String? = 
     fun selected(id: String): HostList =
         if (hosts.any { it.id == id }) HostList(hosts, id) else this
 
-    /** Each Host's name; Hosts with the same name get their id's last four characters. */
+    /**
+     * Each Host's name: the one given on this phone, else `label` of its
+     * record; Hosts with the same name get their id's last four characters.
+     */
     fun names(label: (ByteArray) -> String): List<Pair<String, String>> {
-        val labels = hosts.map { it.id to label(it.record) }
+        val labels = hosts.map { it.id to (it.name ?: label(it.record)) }
         val counts = labels.groupingBy { it.second }.eachCount()
         return labels.map { (id, name) -> id to if (counts.getValue(name) > 1) "$name · ${id.takeLast(4)}" else name }
     }
@@ -59,6 +71,7 @@ class HostStore(private val dir: File, private val onDamaged: (Throwable) -> Uni
         list.current?.let { json.put("current", it) }
         json.put("hosts", JSONArray(list.hosts.map {
             JSONObject().put("id", it.id).put("record", Base64.getEncoder().encodeToString(it.record))
+                .apply { it.name?.let { name -> put("name", name) } }
         }))
         writeDurably(File(dir, "hosts.json.partial"), json.toString().toByteArray(), file)
     }
@@ -68,7 +81,11 @@ class HostStore(private val dir: File, private val onDamaged: (Throwable) -> Uni
         val hosts = json.getJSONArray("hosts")
         val entries = (0 until hosts.length()).map {
             val host = hosts.getJSONObject(it)
-            HostEntry(host.getString("id"), Base64.getDecoder().decode(host.getString("record")))
+            HostEntry(
+                host.getString("id"),
+                Base64.getDecoder().decode(host.getString("record")),
+                host.optString("name").takeIf { it.isNotEmpty() },
+            )
         }
         return HostList(entries, json.optString("current").takeIf { it.isNotEmpty() })
     }

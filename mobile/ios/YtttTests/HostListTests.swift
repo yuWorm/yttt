@@ -42,6 +42,25 @@ final class HostListTests: XCTestCase {
         XCTAssertEqual(names.map(\.name), ["mac · 1111", "mac · 2222", "linux"])
     }
 
+    func testARenamedHostShowsItsNameUntilClearedAndKeepsItWhenPairedAgain() {
+        let label = { (record: Data) in String(decoding: record, as: UTF8.self) }
+        let list = HostList().added(a, data("mac")).added(b, data("linux")).renamed(a, "  Office  ")
+        XCTAssertEqual(list.names(label).map(\.name), ["Office", "linux"])
+        XCTAssertEqual(list.added(a, data("mac2")).names(label).map(\.name), ["Office", "linux"])
+        XCTAssertEqual(list.current, b)
+        XCTAssertEqual(list.renamed(a, "   ").names(label).map(\.name), ["mac", "linux"])
+        XCTAssertEqual(list.renamed(a, nil).names(label).map(\.name), ["mac", "linux"])
+        XCTAssertEqual(list.renamed("unknown", "x"), list)
+        // Two Hosts given the same name are still told apart.
+        XCTAssertEqual(list.renamed(b, "Office").names(label).map(\.name), ["Office · 1111", "Office · 2222"])
+    }
+
+    func testAListStoredBeforeNamesStillLoads() throws {
+        let json = #"{"hosts":[{"id":"aaaaaaaa1111","record":"bWFj"}],"current":"aaaaaaaa1111"}"#
+        let list = try JSONDecoder().decode(HostList.self, from: Data(json.utf8))
+        XCTAssertEqual(list.names { String(decoding: $0, as: UTF8.self) }.map(\.name), ["mac"])
+    }
+
     func testTheListIsKept() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hosts-\(UUID())")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -55,5 +74,8 @@ final class HostListTests: XCTestCase {
         XCTAssertEqual(loaded.hosts.map(\.id), [a, b])
         XCTAssertEqual(loaded.current, a)
         XCTAssertEqual(loaded.hosts[1].record, data("new"))
+
+        store.save(loaded.renamed(b, "Office"))
+        XCTAssertEqual(store.load().names { String(decoding: $0, as: UTF8.self) }.map(\.name), ["old", "Office"])
     }
 }
