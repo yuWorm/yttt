@@ -117,6 +117,24 @@ pub(crate) fn upsert(
     Ok(())
 }
 
+/// Stores where `host` relays and the ticket cached for it, keeping the rest
+/// of its record as the user left it; a Host no longer paired is skipped.
+pub(crate) fn update_cached(profile: &AppProfile, host: &PairedHost) -> Result<(), String> {
+    let mut records = read_records(profile)?;
+    let Some(record) = records
+        .iter_mut()
+        .find(|record| record.host.host == host.host)
+    else {
+        return Ok(());
+    };
+    if record.host.placement == host.placement && record.host.ticket == host.ticket {
+        return Ok(());
+    }
+    record.host.placement = host.placement.clone();
+    record.host.ticket = host.ticket.clone();
+    save_records(profile, &records)
+}
+
 pub(crate) fn find(records: &[PairedHostRecord], host: EndpointKey) -> Option<&PairedHostRecord> {
     records.iter().find(|record| record.host.host == host)
 }
@@ -232,6 +250,8 @@ mod tests {
             host_label: "environment".into(),
             relay_url: Some("https://relay.example".into()),
             direct_addrs: vec!["192.168.1.20:4433".parse().unwrap()],
+            placement: None,
+            ticket: None,
         }
     }
 
@@ -257,6 +277,41 @@ mod tests {
             .save(&key_id(EndpointKey([3; 32])), "not a key")
             .unwrap();
         assert!(load_device_key(&store, EndpointKey([3; 32])).is_err());
+    }
+
+    #[test]
+    fn a_hosts_relay_and_ticket_are_stored_and_the_users_name_kept() {
+        use crate::config::profile::{
+            AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let profile = AppProfile::scoped(
+            yttt_core::model::ids::ProfileId::new("paired-cache"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            temp.path(),
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        let record = PairedHostRecord {
+            name: "Office".into(),
+            host: host(1),
+        };
+        save_records(&profile, std::slice::from_ref(&record)).unwrap();
+        let mut moved = host(1);
+        moved.host_label = "renamed by nobody".into();
+        moved.placement = Some(
+            yttt_control_client::SignedPlacement::sign(&[1; 32], 3, "tokyo-1", "https://t")
+                .unwrap(),
+        );
+        update_cached(&profile, &moved).unwrap();
+        // A Host no longer paired is not added back.
+        update_cached(&profile, &host(2)).unwrap();
+        let stored = read_records(&profile).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].name, "Office");
+        assert_eq!(stored[0].host.host_label, record.host.host_label);
+        assert_eq!(stored[0].host.placement, moved.placement);
     }
 
     #[test]

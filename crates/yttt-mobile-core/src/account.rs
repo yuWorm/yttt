@@ -108,6 +108,19 @@ impl Account {
         })
     }
 
+    /// Registers this phone's key for `host` as a Client of it.
+    pub async fn register(
+        &self,
+        device_secret: &[u8; 32],
+        host: &EndpointKey,
+        label: &str,
+    ) -> Result<(), AccountError> {
+        let key = host_key(device_secret, host);
+        let kind = DeviceKind::Client { host: host.0 };
+        self.session.register_device(&key, label, kind).await?;
+        Ok(())
+    }
+
     /// Registers this phone's key for `host` and gets it a ticket for that
     /// Host's relay node.
     pub async fn ticket(

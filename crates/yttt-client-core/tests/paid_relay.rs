@@ -490,19 +490,16 @@ async fn a_host_moves_to_another_node_and_its_device_follows() {
     let account = status(&admin).await.p2p.relay_account.unwrap();
     assert_eq!(account.node_id.as_deref(), Some("local-2"));
     assert_eq!(account.relay_url.as_deref(), Some(second_url.as_str()));
-    // Connected, the phone hears of the move, newer and signed.
-    let moved = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some(moved) = placement.borrow_and_update().clone()
-                && moved.placement.seq > first_placement.placement.seq
-            {
-                return moved;
-            }
-            placement.changed().await.unwrap();
-        }
-    })
-    .await
-    .expect("the move within 5 s");
+    // Its session through the old node ended with the move; asking again,
+    // the phone gets the newer placement the Host signed.
+    let moved = session
+        .placed_ticket(&PHONE, phone_kind)
+        .await
+        .unwrap()
+        .host_placement
+        .expect("the Host's placement");
+    assert!(moved.placement.seq > first_placement.placement.seq);
+    let moved_signed = moved.clone();
     let moved = moved.verify(&host_key.0).unwrap();
     assert_eq!(
         (moved.node_id.as_str(), moved.relay_url.as_str()),
@@ -523,7 +520,11 @@ async fn a_host_moves_to_another_node_and_its_device_follows() {
     // Reconnecting, the phone asks again and lands on the Host's new node.
     let ticket = session.ticket(&PHONE, phone_kind).await.unwrap();
     assert_eq!(ticket.node_id, "local-2");
-    paired.relay_url = Some(ticket.relay_url.clone());
+    assert!(paired.accept_placement(&moved_signed).unwrap());
+    assert!(
+        !paired.accept_placement(&first_placement).unwrap(),
+        "an older placement never replaces it"
+    );
     let phone = IrohEndpoint::bind(EndpointConfig {
         secret: PHONE,
         relay: RelaySetup::Use(ticket.target()),

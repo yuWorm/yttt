@@ -3,6 +3,7 @@
 mod diagnostics;
 mod mirror;
 pub mod p2p;
+pub mod relay_follow;
 /// Paid-relay accounts: log in, register this device, fetch relay tickets.
 pub use yttt_control_client as control;
 

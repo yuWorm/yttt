@@ -416,6 +416,7 @@ pub fn connect(
                 events,
                 cancellation,
                 label,
+                None,
             )
         }
     }
@@ -480,7 +481,7 @@ fn connect_paired(
     cancellation: RemoteConnectCancellation,
     label: String,
 ) -> Result<RemoteEnvironment, String> {
-    use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelayTarget};
+    use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, OpenGate};
     // Read here rather than carried in the launch, so no long-lived key passes
     // between processes.
     let secret = crate::paired_hosts::load_device_key(
@@ -494,70 +495,83 @@ fn connect_paired(
         .thread_name("yttt-paired-host-client")
         .build()
         .map_err(|error| error.to_string())?;
-    // A signed-in relay account puts this device on the node of the Host it
-    // connects to, as the control plane says. Without one, or if the control
-    // plane cannot be reached or the Host is not on the account, the relay
-    // hint from pairing is used.
+    // A signed-in relay account puts this device on the node the Host
+    // signed, with a ticket it keeps renewed and a record it keeps current;
+    // without one, or while the control plane is out of reach, the cached
+    // ticket or direct paths serve.
     let account = crate::relay_account::load_session(&crate::relay_account::session_store(
         &launch.local_profile,
     ))
     .ok()
     .flatten();
-    let mut host = host;
-    let ticket = account.as_ref().and_then(|session| {
-        let label = crate::relay_account::device_label(&label);
-        match runtime.block_on(within_ticket_wait(
-            crate::relay_account::ticket_for(session, &secret, &label, host.host.0),
-            TICKET_WAIT,
-        )) {
-            Ok(ticket) => Some(ticket),
-            Err(error) => {
-                let line = format!("relay account unavailable, using the pairing relay: {error}");
-                crate::connection_log::note(&label, &line);
-                None
-            }
-        }
-    });
-    let relay = match &ticket {
-        Some(ticket) => {
-            host.relay_url = Some(ticket.relay_url.clone());
-            yttt_transport_iroh::RelaySetup::Use(ticket.target())
-        }
-        None => host
-            .relay_url
-            .clone()
-            .map(|url| RelayTarget { url, token: None })
-            .into(),
+    let shared = Arc::new(parking_lot::Mutex::new(host.clone()));
+    let note: yttt_client_core::relay_follow::Note = {
+        let label = label.clone();
+        Arc::new(move |line: &str| crate::connection_log::note(&label, line))
     };
+    let on_changed: yttt_client_core::relay_follow::RecordChanged = {
+        let profile = launch.local_profile.clone();
+        let label = label.clone();
+        Arc::new(move |updated: &yttt_client_core::p2p::PairedHost| {
+            if let Err(error) = crate::paired_hosts::update_cached(&profile, updated) {
+                crate::connection_log::note(
+                    &label,
+                    &format!("could not store the Host's relay: {error}"),
+                );
+            }
+        })
+    };
+    let mut ticket = None;
+    if let Some(session) = &account {
+        let device = crate::relay_account::device_label(&label);
+        let prepared = runtime.block_on(within_ticket_wait(
+            async {
+                crate::relay_account::register_for(session, &secret, &device, host.host.0).await?;
+                Ok::<_, yttt_control_client::ControlError>(
+                    yttt_client_core::relay_follow::refresh_record(
+                        session, &secret, &shared, None, &note,
+                    )
+                    .await,
+                )
+            },
+            TICKET_WAIT,
+        ));
+        match prepared {
+            Ok((fresh, changed)) => {
+                if changed {
+                    on_changed(&shared.lock().clone());
+                }
+                ticket = fresh;
+            }
+            Err(error) => note(&format!(
+                "relay account unavailable, using the cached ticket: {error}"
+            )),
+        }
+    }
+    let target = shared
+        .lock()
+        .relay_target(ticket.as_ref(), yttt_control_client::now_unix());
+    if let Err(reason) = &target {
+        note(&format!("connecting without a relay: {reason}"));
+    }
     let endpoint = runtime
         .block_on(IrohEndpoint::bind(EndpointConfig {
             secret: *secret,
-            relay,
+            relay: target.ok().into(),
             alpns: Vec::new(),
             gate: Arc::new(OpenGate),
             direct: DirectPaths::Any,
         }))
         .map_err(|error| format!("cannot open the P2P endpoint: {error}"))?;
-    if let (Some(session), Some(ticket)) = (account, ticket) {
-        let label = label.clone();
-        runtime.spawn(yttt_control_client::keep_ticket(
-            session,
-            *secret,
-            yttt_control_client::DeviceKind::Client { host: host.host.0 },
-            endpoint.clone(),
-            Some(ticket),
-            yttt_control_client::ticket_events(
-                |_| {},
-                move |error| {
-                    crate::connection_log::note(
-                        &label,
-                        &format!("relay ticket renewal failed: {error}"),
-                    );
-                },
-            ),
-        ));
+    let follower = yttt_client_core::relay_follow::RelayFollower::new(
+        account, *secret, endpoint, shared, on_changed, note,
+    );
+    let connector = follower.connector(yttt_protocol::p2p::WORK_ALPN, TICKET_WAIT);
+    {
+        let _runtime = runtime.enter();
+        // Lives as long as this process does.
+        let _ = follower.keep_ticket();
     }
-    let connector = Arc::new(host.connector(endpoint));
     set_p2p_path(P2pPath::Connecting);
     watch_path(&runtime, connector.clone(), label.clone());
     let identity = ClientIdentity {
@@ -590,6 +604,10 @@ fn connect_paired(
         events,
         cancellation,
         label,
+        Some(Box::new(move |client: &Arc<ClientCore>| {
+            // Lives as long as this process does.
+            drop(follower.follow_session(client));
+        })),
     )
 }
 
@@ -838,6 +856,7 @@ fn connect_ssh(
         events,
         cancellation,
         label,
+        None,
     )
 }
 
@@ -865,6 +884,9 @@ fn run_cancellable_blocking<T: Send + 'static>(
     })
 }
 
+/// What a connection does with its Client once connected, inside its runtime.
+type AfterConnect = Box<dyn FnOnce(&Arc<ClientCore>) + Send>;
+
 #[allow(clippy::too_many_arguments)]
 fn initialize_environment(
     runtime: tokio::runtime::Runtime,
@@ -874,6 +896,7 @@ fn initialize_environment(
     events: flume::Sender<RemoteConnectEvent>,
     cancellation: RemoteConnectCancellation,
     label: String,
+    after_connect: Option<AfterConnect>,
 ) -> Result<RemoteEnvironment, String> {
     cancellation.check(&events)?;
     let client = Arc::new(runtime.block_on(async {
@@ -886,6 +909,10 @@ fn initialize_environment(
     })?);
     crate::connection_log::follow(client.clone(), runtime.handle(), label.clone());
     crate::link_watch::follow(client.clone(), runtime.handle(), label.clone());
+    if let Some(after_connect) = after_connect {
+        let _runtime = runtime.enter();
+        after_connect(&client);
+    }
     let environment = match runtime.block_on(async {
         cancellation.check(&events)?;
         tokio::select! {

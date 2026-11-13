@@ -374,6 +374,8 @@ fn a_paired_host_is_listed_and_pairing_opens_its_editor(cx: &mut TestAppContext)
                 host_label: "office".into(),
                 relay_url: Some("https://relay.example".into()),
                 direct_addrs: Vec::new(),
+                placement: None,
+                ticket: None,
             },
         }],
     )

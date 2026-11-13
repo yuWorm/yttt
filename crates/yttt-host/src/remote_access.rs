@@ -289,6 +289,8 @@ const MAX_REBIND_DELAY: Duration = Duration::from_secs(30);
 const MAX_ADVERTISED_ADDRS: usize = 4;
 /// How long before its first relay ticket expires a P2P endpoint is rebuilt.
 const RESTART_BEFORE_EXPIRY_SECS: u64 = 3600;
+/// How long a Host moving to another node waits to be reachable there.
+const HOME_RELAY_WAIT: Duration = Duration::from_secs(10);
 
 struct Rebind {
     at: tokio::time::Instant,
@@ -602,9 +604,14 @@ impl Manager {
                     .into_iter()
                     .find(|node| node.id == node_id)
                     .ok_or_else(|| failure("the plan has no such relay node"))?;
-                self.choose_node(&session, &node.id, &node.relay_url)
+                let signed = self
+                    .choose_node(&session, &node.id, &node.relay_url)
                     .await?;
                 self.follow_chosen_node(&session).await;
+                // Devices on a direct path hear of it on their session;
+                // those that came through the old node lost it with the move
+                // and ask the control plane as they redial.
+                self.context.relay_placement.send_replace(Some(signed));
             }
             RemoteAccessRequest::StartPairing => return self.start_pairing(),
             RemoteAccessRequest::ConfirmPairing {
@@ -894,10 +901,6 @@ impl Manager {
         placements
             .adopt(&root, &signed.placement.host, &signed)
             .map_err(io_failure)?;
-        // Connected devices hear of it before the Host moves.
-        self.context
-            .relay_placement
-            .send_replace(Some(signed.clone()));
         tracing::info!(node = node_id, seq, "relay node chosen");
         Ok(signed)
     }
@@ -923,7 +926,8 @@ impl Manager {
         }
         match (needed.reason, needed.suggested) {
             (PlacementReason::Missing, Some(node)) => {
-                self.choose_node(session, &node.id, &node.relay_url).await?;
+                let signed = self.choose_node(session, &node.id, &node.relay_url).await?;
+                self.context.relay_placement.send_replace(Some(signed));
             }
             (PlacementReason::Missing, None) => {
                 return Err(failure("relay account: the plan has no node with room"));
@@ -958,9 +962,25 @@ impl Manager {
                 return;
             }
         };
+        // Sessions through the old node would go quiet with the move, and a
+        // close sent after it never arrives: end them while the old node
+        // still carries the close. Their devices ask the control plane, which
+        // already names the new node, as they redial.
+        let closed = p2p.shared.endpoint.close_relayed();
+        if closed > 0 {
+            tracing::info!(closed, "closed relayed P2P connections before the move");
+        }
         if let Err(error) = p2p.shared.endpoint.set_relay(&ticket.target()).await {
             tracing::warn!(%error, "could not apply the new relay ticket");
             return;
+        }
+        if !p2p
+            .shared
+            .endpoint
+            .wait_home_relay(&ticket.relay_url, HOME_RELAY_WAIT)
+            .await
+        {
+            tracing::warn!(relay = %ticket.relay_url, "the new relay node did not take the Host in time");
         }
         apply_host_ticket(
             &root,

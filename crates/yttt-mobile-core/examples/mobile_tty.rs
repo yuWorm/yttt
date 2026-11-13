@@ -98,9 +98,16 @@ async fn main() -> Result<(), String> {
 }
 
 async fn connect(record: &PairedHostRecord, secret: [u8; 32]) -> Result<MobileSession, String> {
-    MobileSession::connect(record, secret, RelayChoice::FromHost, None, "mobile_tty")
-        .await
-        .map_err(|error| error.to_string())
+    MobileSession::connect(
+        record,
+        secret,
+        RelayChoice::FromHost,
+        None,
+        "mobile_tty",
+        std::sync::Arc::new(|_: &yttt_client_core::p2p::PairedHost| {}),
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 async fn watch(session: MobileSession, id: String, control: bool) -> Result<(), String> {

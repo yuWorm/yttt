@@ -8,7 +8,7 @@
 use std::io::{Read as _, Write as _};
 
 use serde::{Deserialize, Serialize};
-use yttt_control_client::{ControlError, ControlSession, DeviceKind, RelayTicket};
+use yttt_control_client::{ControlError, ControlSession, DeviceKind};
 use yttt_core::model::ids::CredentialId;
 
 use crate::{config::profile::AppProfile, paired_hosts::KeyStore};
@@ -132,18 +132,18 @@ fn label_for(local: &str, host_name: &str) -> String {
         .collect()
 }
 
-/// Registers `device_secret` with the account (repeating it is harmless) and
-/// gets it a ticket for the account's relay node.
-pub(crate) async fn ticket_for(
+/// Registers `device_secret` with the account as a Client of `host`;
+/// repeating it is harmless.
+pub(crate) async fn register_for(
     session: &ControlSession,
     device_secret: &[u8; 32],
     label: &str,
     host: [u8; 32],
-) -> Result<RelayTicket, ControlError> {
-    // The key exists only to reach `host`, so it relays through that Host's node.
-    let kind = DeviceKind::Client { host };
-    session.register_device(device_secret, label, kind).await?;
-    session.ticket(device_secret, kind).await
+) -> Result<(), ControlError> {
+    session
+        .register_device(device_secret, label, DeviceKind::Client { host })
+        .await
+        .map(|_| ())
 }
 
 #[cfg(test)]

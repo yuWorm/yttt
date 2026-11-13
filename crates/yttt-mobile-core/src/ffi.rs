@@ -175,6 +175,13 @@ pub trait PairingListener: Send + Sync {
     fn on_short_code(&self, short_code: u32);
 }
 
+/// Receives a paired Host's record whenever what it caches changes (where
+/// the Host relays, the relay ticket), to store in place of the old one.
+#[uniffi::export(with_foreign)]
+pub trait RecordSink: Send + Sync {
+    fn on_record_changed(&self, record: Vec<u8>);
+}
+
 #[derive(uniffi::Object)]
 pub struct MobileCore {
     runtime: tokio::runtime::Runtime,
@@ -321,7 +328,8 @@ impl MobileCore {
     }
 
     /// Connects to a paired Host; `account` as for `pair`, `device_label`
-    /// naming this phone on the account's console.
+    /// naming this phone on the account's console. `records` receives the
+    /// record each time it changes while the session lasts.
     pub async fn connect(
         &self,
         record: Vec<u8>,
@@ -329,10 +337,15 @@ impl MobileCore {
         relay_only: bool,
         account: Option<Vec<u8>>,
         device_label: String,
+        records: Arc<dyn RecordSink>,
     ) -> Result<Arc<HostSession>, MobileCoreError> {
         let record = PairedHostRecord::from_bytes(&record)?;
         let device_secret = secret(&device_secret)?;
         let account = self::account(account)?;
+        let on_record: yttt_client_core::relay_follow::RecordChanged =
+            Arc::new(move |host: &yttt_client_core::p2p::PairedHost| {
+                records.on_record_changed(PairedHostRecord { host: host.clone() }.to_bytes());
+            });
         let work = self.runtime.spawn(async move {
             MobileSession::connect(
                 &record,
@@ -340,6 +353,7 @@ impl MobileCore {
                 relay_choice(relay_only),
                 account.as_ref(),
                 &device_label,
+                on_record,
             )
             .await
         });

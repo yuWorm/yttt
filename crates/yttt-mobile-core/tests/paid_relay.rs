@@ -13,7 +13,9 @@ use yttt_client_core::{ClientCore, control::ControlClient};
 use yttt_control::test_support::{EMAIL, PASSWORD, TestRelay};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_mobile_core::account::{self, Account};
-use yttt_mobile_core::session::{MobileError, MobileSession, RelayChoice, RelaySource, pair};
+use yttt_mobile_core::session::{
+    MobileError, MobileSession, PairedHostRecord, RelayChoice, RelaySource, pair,
+};
 use yttt_protocol::{
     BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
     p2p::DevicePreset,
@@ -202,7 +204,8 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
     })
     .await;
 
-    // Signed out, the node turns the phone away and pairing fails.
+    // Signed out, the phone learns of no relay the Host signed, and a phone
+    // limited to the relay cannot pair.
     let code = invite(&admin).await;
     let refused = tokio::time::timeout(
         Duration::from_secs(60),
@@ -218,7 +221,7 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
     .await
     .expect("pairing without a ticket should fail, not hang");
     assert!(
-        matches!(refused, Err(MobileError::Pairing(_))),
+        matches!(refused, Err(MobileError::Transport(_))),
         "{refused:?}"
     );
     remote_access(&admin, RemoteAccessRequest::CancelPairing).await;
@@ -249,7 +252,13 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
     });
     confirm(&admin).await;
     let record = pairing.await.unwrap().unwrap();
-    assert_eq!(record.host.relay_url.as_deref(), Some(relay_url.as_str()));
+    let placement = record
+        .host
+        .placement
+        .as_ref()
+        .expect("the Host's placement");
+    assert_eq!(placement.placement.relay_url, relay_url);
+    assert!(record.host.ticket.is_some(), "the ticket is cached");
     assert_eq!(devices(&account).await, before + 1);
 
     // It connects the same way and the Host sees the key it derived.
@@ -259,6 +268,7 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
         RelayChoice::OnlyFromHost,
         Some(&account),
         "iPhone",
+        std::sync::Arc::new(|_: &yttt_client_core::p2p::PairedHost| {}),
     )
     .await
     .unwrap();
@@ -284,4 +294,179 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
 
     node.shutdown().await;
     control.shutdown().await;
+}
+
+/// What the app would store: the record each time the core hands it over.
+fn record_store() -> (
+    yttt_client_core::relay_follow::RecordChanged,
+    std::sync::Arc<parking_lot::Mutex<Vec<PairedHostRecord>>>,
+) {
+    let stored = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let sink = stored.clone();
+    (
+        std::sync::Arc::new(move |host: &yttt_client_core::p2p::PairedHost| {
+            sink.lock().push(PairedHostRecord { host: host.clone() });
+        }),
+        stored,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connected_phone_follows_its_host_to_another_node_and_connects_from_its_cache() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(std::env::var("TEST_LOG").unwrap_or_else(|_| "off".into()))
+        .with_test_writer()
+        .try_init();
+    let relay = TestRelay::spawn(&[NODE, "local-2"]).await;
+    relay.create_account(NODE).await;
+    let second_url = relay.node_url(1);
+    let TestRelay {
+        control,
+        nodes,
+        control_url,
+        ..
+    } = relay;
+    let host_session = ControlClient::new(&control_url)
+        .unwrap()
+        .login(EMAIL, PASSWORD)
+        .await
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetRelayAccount {
+            account: Some(RelayAccount {
+                control_url: control_url.clone(),
+                account_id: host_session.account_id,
+                session: SecretText(host_session.token.clone()),
+            }),
+        },
+    )
+    .await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetP2p {
+            enabled: true,
+            relay_url: None,
+        },
+    )
+    .await;
+    eventually("the Host on the first node", async || {
+        nodes[0]
+            .account(host_session.account_id)
+            .filter(|account| account.connections == 1)
+    })
+    .await;
+    let account = Account::sign_in(&control_url, EMAIL, PASSWORD)
+        .await
+        .unwrap();
+    let code = invite(&admin).await;
+    let pairing = tokio::spawn({
+        let account = account.clone();
+        async move {
+            pair(
+                &code,
+                "iPhone",
+                SECRET,
+                RelayChoice::OnlyFromHost,
+                Some(&account),
+                |_| {},
+            )
+            .await
+        }
+    });
+    confirm(&admin).await;
+    let record = pairing.await.unwrap().unwrap();
+
+    // Connected through the relay alone, the phone follows the Host's move
+    // without anyone touching it.
+    let (sink, stored) = record_store();
+    let phone = MobileSession::connect(
+        &record,
+        SECRET,
+        RelayChoice::OnlyFromHost,
+        Some(&account),
+        "iPhone",
+        sink,
+    )
+    .await
+    .unwrap();
+    phone
+        .client()
+        .request(Request::ListResources)
+        .await
+        .unwrap();
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetRelayNode {
+            node_id: "local-2".into(),
+        },
+    )
+    .await;
+    eventually("the phone and the Host on the second node", async || {
+        nodes[1]
+            .account(host_session.account_id)
+            .filter(|account| account.connections >= 2)
+    })
+    .await;
+    // Within a few seconds of the move, with no one touching the phone.
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        phone.client().request(Request::ListResources),
+    )
+    .await
+    .expect("the session works again")
+    .unwrap();
+    let latest = stored
+        .lock()
+        .last()
+        .cloned()
+        .expect("the record was stored");
+    let placement = latest.host.placement.as_ref().unwrap();
+    assert_eq!(
+        (
+            placement.placement.node_id.as_str(),
+            placement.placement.relay_url.as_str()
+        ),
+        ("local-2", second_url.as_str())
+    );
+    assert_eq!(
+        latest
+            .host
+            .ticket
+            .as_ref()
+            .map(|ticket| ticket.node_id.as_str()),
+        Some("local-2")
+    );
+    phone.close().await;
+
+    // With the control plane gone, the stored record and its ticket still
+    // reach the Host through its node.
+    control.shutdown().await;
+    let (sink, _) = record_store();
+    let phone = tokio::time::timeout(
+        Duration::from_secs(30),
+        MobileSession::connect(
+            &latest,
+            SECRET,
+            RelayChoice::OnlyFromHost,
+            Some(&account),
+            "iPhone",
+            sink,
+        ),
+    )
+    .await
+    .expect("connects without waiting long on the control plane")
+    .unwrap();
+    assert_eq!(phone.relay_source(), RelaySource::Account);
+    phone
+        .client()
+        .request(Request::ListResources)
+        .await
+        .unwrap();
+    phone.close().await;
+    for node in nodes {
+        node.shutdown().await;
+    }
 }

@@ -10,6 +10,7 @@ use hmac::{Hmac, Mac as _};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use yttt_control_client::{PlacementError, RelayTicket, SignedPlacement};
 use yttt_core::model::ids::ProfileId;
 use yttt_protocol::{
     EndpointKey,
@@ -19,7 +20,7 @@ use yttt_protocol::{
     },
 };
 use yttt_transport::{Credential, DeviceKeyCredential, receive_pairing, send_pairing};
-use yttt_transport_iroh::{IrohConnector, IrohEndpoint, PeerAddr};
+use yttt_transport_iroh::{IrohConnector, IrohEndpoint, PeerAddr, RelayTarget};
 
 /// How long the Host may take to answer before the user confirms.
 const HOST_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -31,19 +32,63 @@ pub struct PairedHost {
     pub environment_id: String,
     pub profile_id: ProfileId,
     pub host_label: String,
-    /// Hints only: a wrong relay or address makes the Host unreachable, never
-    /// another Host trusted.
+    /// The relay the pairing code named. Not dialed: only a placement the
+    /// Host signed says where it relays.
+    #[serde(default)]
     pub relay_url: Option<String>,
     pub direct_addrs: Vec<SocketAddr>,
+    /// Where the Host relays, as it signed it; checked against `host`.
+    #[serde(default)]
+    pub placement: Option<SignedPlacement>,
+    /// The last relay ticket for this device's key, for when the control
+    /// plane is out of reach. It only works with this device's key.
+    #[serde(default)]
+    pub ticket: Option<RelayTicket>,
 }
 
 impl PairedHost {
     pub fn peer_addr(&self) -> PeerAddr {
         PeerAddr {
             key: self.host,
-            relay_url: self.relay_url.clone(),
+            relay_url: self
+                .placement
+                .as_ref()
+                .map(|placement| placement.placement.relay_url.clone()),
             direct_addrs: self.direct_addrs.clone(),
         }
+    }
+
+    /// Keeps `signed` if the Host signed it and it is newer than the one
+    /// kept; whether it was kept.
+    pub fn accept_placement(&mut self, signed: &SignedPlacement) -> Result<bool, PlacementError> {
+        signed.verify(&self.host.0)?;
+        if !signed.newer_than(self.placement.as_ref())? {
+            return Ok(false);
+        }
+        self.placement = Some(signed.clone());
+        Ok(true)
+    }
+
+    /// The relay to use: the Host's signed one, with a ticket still usable at
+    /// `now_unix` for the same node, `ticket` first and then the cached one.
+    pub fn relay_target(
+        &self,
+        ticket: Option<&RelayTicket>,
+        now_unix: u64,
+    ) -> Result<RelayTarget, &'static str> {
+        let placement = &self
+            .placement
+            .as_ref()
+            .ok_or("the Host has not said where it relays")?
+            .placement;
+        let mut tickets = ticket.into_iter().chain(self.ticket.as_ref());
+        let ticket = tickets
+            .find(|ticket| ticket.usable(now_unix) && ticket.node_id == placement.node_id)
+            .ok_or("no relay ticket for the node the Host chose")?;
+        Ok(RelayTarget {
+            url: placement.relay_url.clone(),
+            token: Some(ticket.token.clone()),
+        })
     }
 
     /// Opens work sessions to the paired Host through `endpoint`.
@@ -157,6 +202,8 @@ pub async fn pair(
                 host_label,
                 relay_url: code.relay_url.clone(),
                 direct_addrs: code.direct_addrs.clone(),
+                placement: None,
+                ticket: None,
             })
         }
         PairMessage::Rejected(reason) => Err(PairError::Rejected(reason)),
@@ -172,4 +219,101 @@ async fn receive(
         .await
         .map_err(|_| PairError::TimedOut)?
         .map_err(|error| PairError::Transport(error.to_string()))
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    const HOST_SECRET: [u8; 32] = [9; 32];
+
+    fn host() -> PairedHost {
+        PairedHost {
+            host: yttt_transport_iroh::endpoint_key(&HOST_SECRET),
+            environment_id: "environment".into(),
+            profile_id: ProfileId::new("default"),
+            host_label: "mac".into(),
+            relay_url: Some("https://from-the-code.example".into()),
+            direct_addrs: Vec::new(),
+            placement: None,
+            ticket: None,
+        }
+    }
+
+    fn placement(secret: &[u8; 32], seq: u64, node: &str) -> SignedPlacement {
+        SignedPlacement::sign(secret, seq, node, format!("https://{node}.example")).unwrap()
+    }
+
+    fn ticket(node: &str, expires_unix: u64) -> RelayTicket {
+        RelayTicket {
+            relay_url: format!("https://{node}.example"),
+            node_id: node.into(),
+            token: format!("token-{node}"),
+            received_unix: 0,
+            expires_unix,
+        }
+    }
+
+    #[test]
+    fn only_a_newer_placement_the_host_signed_is_kept() {
+        let mut host = host();
+        assert_eq!(
+            host.peer_addr().relay_url,
+            None,
+            "the code's relay is not dialed"
+        );
+        assert!(
+            host.accept_placement(&placement(&HOST_SECRET, 2, "tokyo-1"))
+                .unwrap()
+        );
+        assert_eq!(
+            host.peer_addr().relay_url.as_deref(),
+            Some("https://tokyo-1.example")
+        );
+        // Older, the same again, or signed by another key: kept as it was.
+        assert!(
+            !host
+                .accept_placement(&placement(&HOST_SECRET, 1, "evil-1"))
+                .unwrap()
+        );
+        assert!(
+            !host
+                .accept_placement(&placement(&HOST_SECRET, 2, "tokyo-1"))
+                .unwrap()
+        );
+        assert!(
+            host.accept_placement(&placement(&[8; 32], 9, "evil-1"))
+                .is_err()
+        );
+        assert!(
+            host.accept_placement(&placement(&HOST_SECRET, 2, "osaka-1"))
+                .is_err()
+        );
+        assert_eq!(host.placement.unwrap().placement.node_id, "tokyo-1");
+    }
+
+    #[test]
+    fn a_ticket_is_used_only_for_the_node_the_host_signed() {
+        let mut host = host();
+        assert!(
+            host.relay_target(Some(&ticket("tokyo-1", 1_000)), 10)
+                .is_err()
+        );
+        host.accept_placement(&placement(&HOST_SECRET, 1, "tokyo-1"))
+            .unwrap();
+        // The control plane's ticket for another node is not used.
+        assert!(
+            host.relay_target(Some(&ticket("evil-1", 1_000)), 10)
+                .is_err()
+        );
+        let target = host
+            .relay_target(Some(&ticket("tokyo-1", 1_000)), 10)
+            .unwrap();
+        assert_eq!(target.url, "https://tokyo-1.example");
+        assert_eq!(target.token.as_deref(), Some("token-tokyo-1"));
+        // Without a fresh one, the cached ticket serves while it is usable.
+        host.ticket = Some(ticket("tokyo-1", 1_000));
+        assert!(host.relay_target(None, 10).is_ok());
+        assert!(host.relay_target(None, 999).is_err());
+    }
 }

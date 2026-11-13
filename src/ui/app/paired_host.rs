@@ -55,7 +55,7 @@ enum PairStage {
 
 enum PairEvent {
     ShortCode(u32),
-    Done(Result<PairedHostRecord, String>),
+    Done(Box<Result<PairedHostRecord, String>>),
 }
 
 impl gpui::EventEmitter<super::existing_host::RemoteClientLaunched> for PairedHostForm {}
@@ -242,7 +242,7 @@ impl PairedHostForm {
             .name("yttt-p2p-pairing".into())
             .spawn(move || {
                 let result = pair_with_host(&profile, code, name, &events, cancelled);
-                let _ = events.send(PairEvent::Done(result));
+                let _ = events.send(PairEvent::Done(Box::new(result)));
             });
         if let Err(error) = spawned {
             self.busy = false;
@@ -265,7 +265,7 @@ impl PairedHostForm {
                         PairEvent::Done(result) => {
                             view.busy = false;
                             view.cancel_pairing = None;
-                            match result {
+                            match *result {
                                 Ok(record) => {
                                     let host = record.host.host;
                                     let _ = paired_hosts::upsert(&mut view.records, record);
@@ -744,7 +744,7 @@ fn pair_with_host(
     events: &flume::Sender<PairEvent>,
     cancelled: flume::Receiver<()>,
 ) -> Result<PairedHostRecord, String> {
-    use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelayTarget};
+    use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, OpenGate};
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -763,28 +763,41 @@ fn pair_with_host(
         } else {
             name.clone()
         };
-        let ticket = match &account {
-            Some(session) => crate::relay_account::ticket_for(
-                session,
-                &secret,
-                &crate::relay_account::device_label(&host_name),
-                code.host.0,
-            )
-            .await
-            .ok(),
-            None => None,
-        };
-        let relay = match &ticket {
-            Some(ticket) => {
-                code.relay_url = Some(ticket.relay_url.clone());
-                yttt_transport_iroh::RelaySetup::Use(ticket.target())
+        // Only the Host's signed placement says which relay reaches it.
+        let draft = parking_lot::Mutex::new(yttt_client_core::p2p::PairedHost {
+            host: code.host,
+            environment_id: code.environment_id.clone(),
+            profile_id: code.profile_id.clone(),
+            host_label: String::new(),
+            relay_url: None,
+            direct_addrs: code.direct_addrs.clone(),
+            placement: None,
+            ticket: None,
+        });
+        let mut ticket = None;
+        if let Some(session) = &account {
+            let device = crate::relay_account::device_label(&host_name);
+            let note: yttt_client_core::relay_follow::Note = {
+                let host_name = host_name.clone();
+                Arc::new(move |line: &str| crate::connection_log::note(&host_name, line))
+            };
+            if crate::relay_account::register_for(session, &secret, &device, code.host.0)
+                .await
+                .is_ok()
+            {
+                ticket = yttt_client_core::relay_follow::refresh_record(
+                    session, &secret, &draft, None, &note,
+                )
+                .await
+                .0;
             }
-            None => code
-                .relay_url
-                .clone()
-                .map(|url| RelayTarget { url, token: None })
-                .into(),
-        };
+        }
+        let draft = draft.into_inner();
+        let target = draft
+            .relay_target(ticket.as_ref(), yttt_control_client::now_unix())
+            .ok();
+        code.relay_url = target.as_ref().map(|target| target.url.clone());
+        let relay = yttt_transport_iroh::RelaySetup::from(target);
         let endpoint = IrohEndpoint::bind(EndpointConfig {
             // The key the Host will admit: the work session must use the same one.
             secret: *secret,
@@ -808,7 +821,7 @@ fn pair_with_host(
             Err(error) => {
                 // A key that never paired should not hold one of the plan's
                 // device slots.
-                if let (Some(session), Some(_)) = (&account, &ticket) {
+                if let Some(session) = &account {
                     let _ = session
                         .remove_device(&yttt_transport_iroh::endpoint_key(&secret).0)
                         .await;
@@ -816,6 +829,9 @@ fn pair_with_host(
                 return Err(error);
             }
         };
+        let mut host = host;
+        host.placement = draft.placement;
+        host.ticket = draft.ticket;
         paired_hosts::save_device_key(
             &paired_hosts::device_key_store(profile),
             host.host,

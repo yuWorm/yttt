@@ -11,6 +11,7 @@ use std::{
 };
 
 use yttt_client_core::{ClientCore, ConnectionState};
+use yttt_control::test_support::{EMAIL, PASSWORD, TestRelay};
 use yttt_core::model::{
     host_workspace::{ProjectPanel, WorkspaceIntent},
     ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId},
@@ -24,6 +25,7 @@ use yttt_mobile_core::overview::{AgentState, Overview, WaitingKind};
 use yttt_mobile_core::session::{
     LinkPath, LinkState, MobileError, MobileSession, PairedHostRecord, RelayChoice, pair,
 };
+use yttt_protocol::remote_access::{RelayAccount, SecretText};
 use yttt_protocol::{
     BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
     p2p::{DevicePreset, PairingCode},
@@ -32,9 +34,7 @@ use yttt_protocol::{
     terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalLeaseMode, TerminalSpawnSpec},
     workspace::{WorkspaceId, WorkspaceProjectConfig, WorkspaceRequest, WorkspaceResponse},
 };
-use yttt_relay::{NodeConfig, OpenConfig, RelayNode, open_account_id};
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
-use yttt_transport_iroh::endpoint_key;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -141,8 +141,21 @@ async fn status(admin: &ClientCore) -> RemoteAccessStatus {
     }
 }
 
+/// A phone record store that keeps nothing.
+fn no_store() -> yttt_client_core::relay_follow::RecordChanged {
+    std::sync::Arc::new(|_: &yttt_client_core::p2p::PairedHost| {})
+}
+
 /// Pairs the device the way the app does, the desktop user confirming.
 async fn pair_device(admin: &ClientCore, relay: RelayChoice) -> PairedHostRecord {
+    pair_signed_in(admin, relay, None).await
+}
+
+async fn pair_signed_in(
+    admin: &ClientCore,
+    relay: RelayChoice,
+    account: Option<account::Account>,
+) -> PairedHostRecord {
     let RemoteAccessResponse::PairingInvitation { code, .. } =
         remote_access(admin, RemoteAccessRequest::StartPairing).await
     else {
@@ -152,9 +165,16 @@ async fn pair_device(admin: &ClientCore, relay: RelayChoice) -> PairedHostRecord
     let (shown, shown_rx) = tokio::sync::oneshot::channel();
     let text = code.0.clone();
     let pairing = tokio::spawn(async move {
-        pair(&text, "phone", SECRET, relay, None, move |short_code| {
-            let _ = shown.send(short_code);
-        })
+        pair(
+            &text,
+            "phone",
+            SECRET,
+            relay,
+            account.as_ref(),
+            move |short_code| {
+                let _ = shown.send(short_code);
+            },
+        )
         .await
     });
     let (endpoint_id, short_code) = tokio::time::timeout(Duration::from_secs(20), async {
@@ -343,16 +363,24 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     assert!(matches!(
         tokio::time::timeout(
             Duration::from_secs(2),
-            MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost, None, "phone"),
+            MobileSession::connect(
+                &record,
+                SECRET,
+                RelayChoice::OnlyFromHost,
+                None,
+                "phone",
+                no_store()
+            ),
         )
         .await
         .expect("an immediate answer"),
         Err(MobileError::Transport(_))
     ));
     let id = terminal.to_string();
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
-        .await
-        .unwrap();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
     assert!(
         phone
             .terminals()
@@ -447,9 +475,10 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     phone.close().await;
 
     // A restarted app connects again at once with the same record.
-    let again = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
-        .await
-        .unwrap();
+    let again =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
     assert_ne!(again.client_instance_id(), first_id);
     assert!(
         again
@@ -478,31 +507,65 @@ async fn eventually<T>(what: &str, mut probe: impl AsyncFnMut() -> Option<T>) ->
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_phone_works_through_the_relay_alone() {
-    let mut config = NodeConfig::local("mobile-relay", "127.0.0.1:0".parse().unwrap(), &[]);
-    config.open = Some(OpenConfig {
-        rate_bps: 50_000_000,
-        burst_bytes: 10_000_000,
-    });
-    let relay = RelayNode::spawn(config).await.unwrap();
-    let relay_url = format!("http://{}", relay.addr());
+    let node = "mobile-relay";
+    let test_relay = TestRelay::spawn(&[node]).await;
+    let created = test_relay.create_account(node).await;
+    let relay_url = test_relay.node_url(0);
+    let relay = &test_relay.nodes[0];
+    let host_session = yttt_client_core::control::ControlClient::new(&test_relay.control_url)
+        .unwrap()
+        .login(EMAIL, PASSWORD)
+        .await
+        .unwrap();
 
     let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path(), Some(relay_url.clone())).await;
-    let host_key = status(&admin).await.p2p.endpoint_id.unwrap().0;
+    let admin = start_host(temp.path(), None).await;
+    remote_access(
+        &admin,
+        RemoteAccessRequest::SetRelayAccount {
+            account: Some(RelayAccount {
+                control_url: test_relay.control_url.clone(),
+                account_id: host_session.account_id,
+                session: SecretText(host_session.token.clone()),
+            }),
+        },
+    )
+    .await;
     eventually("the Host on the relay", async || {
         relay
-            .account(open_account_id(&host_key))
+            .account(created.account_id)
             .filter(|account| account.connections > 0)
     })
     .await;
-
-    let record = pair_device(&admin, RelayChoice::OnlyFromHost).await;
-    assert_eq!(record.host.relay_url.as_deref(), Some(relay_url.as_str()));
-    let terminal = desktop_terminals(&admin, temp.path(), &["project:tab:relay"]).await;
-    let id = terminal[0].to_string();
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::OnlyFromHost, None, "phone")
+    let phone_account = account::Account::sign_in(&test_relay.control_url, EMAIL, PASSWORD)
         .await
         .unwrap();
+
+    let record = pair_signed_in(
+        &admin,
+        RelayChoice::OnlyFromHost,
+        Some(phone_account.clone()),
+    )
+    .await;
+    let placement = record
+        .host
+        .placement
+        .as_ref()
+        .expect("the Host's placement");
+    assert_eq!(placement.placement.relay_url, relay_url);
+
+    let terminal = desktop_terminals(&admin, temp.path(), &["project:tab:relay"]).await;
+    let id = terminal[0].to_string();
+    let phone = MobileSession::connect(
+        &record,
+        SECRET,
+        RelayChoice::OnlyFromHost,
+        Some(&phone_account),
+        "phone",
+        no_store(),
+    )
+    .await
+    .unwrap();
     phone.attach(&id).await.unwrap();
     drain_until(&phone, &id, "desktop-ready").await;
     phone.take_control(&id, 50, 20).await.unwrap();
@@ -514,10 +577,9 @@ async fn a_phone_works_through_the_relay_alone() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(phone.path().await, LinkPath::Relay);
     // And what the phone sent went through it.
-    let phone_key = endpoint_key(&account::host_key(&SECRET, &record.host.host)).0;
     let relayed = relay
-        .account(open_account_id(&phone_key))
-        .expect("the phone on the relay")
+        .account(created.account_id)
+        .expect("the account on the relay")
         .relayed_bytes;
     assert!(relayed > 0, "the phone sent nothing through the relay");
 
@@ -539,7 +601,6 @@ async fn a_phone_works_through_the_relay_alone() {
     tokio::time::timeout(Duration::from_secs(1), phone.network_changed())
         .await
         .expect("network_changed after close returns at once");
-    relay.shutdown().await;
 }
 
 /// Sends one Agent hook event the way an Agent CLI's hook does.
@@ -614,9 +675,10 @@ async fn the_overview_follows_an_agent_into_waiting() {
         .await
         .unwrap();
 
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
-        .await
-        .unwrap();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
     assert!(phone.open_active_workspace().await.unwrap().is_some());
     let seen = Arc::new(Mutex::new(Vec::<Overview>::new()));
     phone.watch_overview({
@@ -733,9 +795,10 @@ async fn a_phone_reads_edits_and_saves_a_project_file() {
         .await
         .unwrap();
 
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
-        .await
-        .unwrap();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
     phone.open_active_workspace().await.unwrap();
 
     // The tree, a directory at a time.
@@ -840,9 +903,10 @@ async fn keys_reach_the_program_as_it_expects_them() {
     )
     .await;
     let id = terminal[0].to_string();
-    let phone = MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone")
-        .await
-        .unwrap();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
     phone.attach(&id).await.unwrap();
     drain_until(&phone, &id, "ready").await;
     // Only while in control.

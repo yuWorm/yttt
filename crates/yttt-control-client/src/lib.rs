@@ -21,7 +21,7 @@ use yttt_transport_iroh::{IrohEndpoint, RelayTarget};
 pub use sign_in::{BrowserLogin, DeviceLogin};
 pub use yttt_relay_ticket::{
     api::{AccountView, NodeChoice, NodePlacement, PlacementNeeded, PlacementReason},
-    placement::SignedPlacement,
+    placement::{PlacementError, SignedPlacement},
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -108,7 +108,7 @@ pub struct PlacedTicket {
 }
 
 /// A ticket for one device on its account's relay node.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayTicket {
     pub relay_url: String,
     pub node_id: String,

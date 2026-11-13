@@ -37,6 +37,8 @@ pub use path_report::{AddressKind, PathReport, PathSummary, address_kind};
 const CLOSE_REFUSED: u32 = 1;
 /// QUIC close code for a peer the Host revoked or disconnected.
 const CLOSE_REVOKED: u32 = 2;
+/// QUIC close code for a relayed connection after the endpoint moved relay.
+const CLOSE_RELAY_MOVED: u32 = 3;
 /// Keeps NAT bindings and relay paths warm between Session heartbeats.
 const KEEP_ALIVE: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -342,6 +344,23 @@ impl PeerRegistry {
         handles.push(connection.weak_handle());
     }
 
+    /// Closes every connection whose selected path is not direct.
+    fn close_relayed(&self, reason: &[u8]) -> usize {
+        let handles: Vec<_> = self.peers.lock().values().flatten().cloned().collect();
+        let mut closed = 0;
+        for connection in handles.iter().filter_map(WeakConnectionHandle::upgrade) {
+            let direct = connection
+                .paths()
+                .iter()
+                .any(|path| path.is_selected() && !path.is_relay());
+            if !direct {
+                connection.close(VarInt::from_u32(CLOSE_RELAY_MOVED), reason);
+                closed += 1;
+            }
+        }
+        closed
+    }
+
     fn close(&self, peer: EndpointKey) -> usize {
         let handles = self.peers.lock().remove(&peer).unwrap_or_default();
         let mut closed = 0;
@@ -489,6 +508,22 @@ impl IrohEndpoint {
         self.endpoint.online().await;
     }
 
+    /// Waits up to `limit` until peers can reach this endpoint through
+    /// `relay_url`, its home relay; whether they can.
+    pub async fn wait_home_relay(&self, relay_url: &str, limit: Duration) -> bool {
+        let Ok(wanted) = parse_relay_url(relay_url) else {
+            return false;
+        };
+        let home = || self.endpoint.addr().relay_urls().any(|url| *url == wanted);
+        tokio::time::timeout(limit, async {
+            while !home() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
     /// The next connection the gate admitted; `None` once the endpoint closed.
     /// Cancel safe: a connection not yet taken waits for the next call.
     pub async fn accept(&self) -> Option<PeerConnection> {
@@ -516,6 +551,13 @@ impl IrohEndpoint {
                 .map_err(|_| TransportError::Other("P2P connection timed out".into()))?
                 .map_err(other)?;
         Ok(self.wrap(connection))
+    }
+
+    /// Closes the connections that do not run straight to their peer, after
+    /// this endpoint moved to another relay: peers that came through the old
+    /// one redial at once instead of waiting for a timeout. Returns how many.
+    pub fn close_relayed(&self) -> usize {
+        self.registry.close_relayed(b"relay moved")
     }
 
     /// Closes every connection to `peer`; the gate must already refuse it so that
@@ -669,6 +711,8 @@ pub struct IrohConnector {
     /// Whether a connection was ever dialed, so the next dial is a redial.
     dialed: AtomicBool,
     before_redial: Option<RedialHook>,
+    /// The cached connection, for closing it without waiting on a dial.
+    live_connection: parking_lot::Mutex<Option<Arc<PeerConnection>>>,
     connection: tokio::sync::Mutex<Option<Arc<PeerConnection>>>,
     /// The cached connection has carried a handshake the Host answered.
     answered: AtomicBool,
@@ -732,6 +776,7 @@ impl IrohConnector {
             alpn: alpn.to_vec(),
             dialed: AtomicBool::new(false),
             before_redial: None,
+            live_connection: parking_lot::Mutex::new(None),
             connection: tokio::sync::Mutex::new(None),
             answered: AtomicBool::new(false),
             live: tokio::sync::Mutex::new(Arc::default()),
@@ -752,7 +797,8 @@ impl IrohConnector {
     }
 
     /// Dials the peer through `relay_url` from now on. A connection still
-    /// open is closed, so the next `connect` dials the new address.
+    /// open that does not run straight to the peer is closed, so the next
+    /// `connect` dials the new address; a direct one keeps working.
     pub fn set_peer_relay(&self, relay_url: Option<String>) {
         {
             let mut peer = self.peer.lock();
@@ -761,10 +807,15 @@ impl IrohConnector {
             }
             peer.relay_url = relay_url;
         }
-        // While a dial is in progress it already reads the new address.
-        if let Ok(mut current) = self.connection.try_lock()
-            && let Some(connection) = current.take()
+        // A dial in progress holds the cache; it reads the new address. The
+        // closed connection is redialed at the next connect.
+        let live = self.live_connection.lock().clone();
+        if let Some(connection) =
+            live.filter(|connection| connection.path_kind() != PathKind::Direct)
         {
+            tracing::info!(
+                "the peer moved to another relay; closing the connection through the old one"
+            );
             connection.close();
         }
     }
@@ -799,6 +850,7 @@ impl IrohConnector {
         }
         let peer = self.peer();
         let connection = Arc::new(self.endpoint.connect(&peer, &self.alpn).await?);
+        *self.live_connection.lock() = Some(connection.clone());
         self.answered.store(false, Ordering::SeqCst);
         *self.live.lock().await = Arc::default();
         *current = Some(connection.clone());
