@@ -16,7 +16,7 @@
 ## 约束（来自控制面）
 
 - 设备 key 以 `Client { host }` 注册后，角色和所跟的 Host 都不能改（`placement::register`：`the device's role and Host cannot change`）。手机现在所有 Host 共用一个 device secret，登录后第二台 Host 就注册不上。
-- 浏览器登录（PKCE）只回调 loopback，手机用不了；设备码流程（RFC 8628，`/v1/oauth/device`）和邮箱密码（`/v1/sessions`）都可用。
+- 浏览器登录（授权码 + PKCE，RFC 8252）只回调 `http://127.0.0.1:<任意端口>`。手机同样可以：核心在本机 loopback 端口上等回调，应用用应用内浏览器打开控制台的授权页，登录确认后页面跳回这个端口。网页登录能用密码管理器（用户要求：有的密码只记在网页上）。邮箱密码（`/v1/sessions`）作为备选。
 - Ticket 有效期至少 1 h（`ticket_ttl` 下限 3600 s）；iroh 只在新 relay 连接上用新 token，长连的 endpoint 需要在首个 ticket 过期前重建。手机前后台切换、换网都会重建会话，`keep_ticket` 续期即可。
 
 ## 设计
@@ -26,7 +26,7 @@
 1. **每台 Host 一把 key**：`keys::host_key(device_secret, host) = SHA-256("yttt-mobile host key v1" ‖ device_secret ‖ host)`。配对和连接都用它，两端存储不变。同一 Host 重新配对得到同一把 key（控制面上同角色同 Host，可重复注册）。已有配对要重新配对（应用未发布，不做迁移）。
 2. **账号**（新模块 `account.rs`，经 FFI 导出）：
    - `sign_in_password(control_url, email, password) -> SignedIn`；
-   - `begin_device_sign_in(control_url, label) -> DeviceSignIn`（对象：`user_code`、`verification_url`（带 code）、`finish()`、`cancel()`）；
+   - `begin_browser_sign_in(control_url, label) -> BrowserSignIn`（对象：`authorize_url`、`finish()`、`cancel()`；`finish` 在 loopback 端口等浏览器回调，换取会话）；
    - `account_info(session) -> AccountInfo`（邮箱、套餐、设备数）；
    - `SignedIn { session: bytes, email, control_url }`；`session` 是 `ControlSession` 的 JSON，由应用存进 Keychain / Keystore 加密文件。
    - 401 映射为 `MobileCoreError::SignInExpired`，应用据此退出登录并提示重新登录。
@@ -41,13 +41,13 @@
 - `AppModel`：`account` 状态；配对、连接传入账号；登录或退出后重连所有 Host；`SignInExpired` 时退出登录并在设置与总控提示。
 - 界面（原生 Form / NavigationStack）：
   - 设置页新增“Relay 账号”一节：未登录显示“登录”；已登录显示邮箱、控制台地址、设备数，“退出登录”（确认）。
-  - 登录页：控制台地址（记住上次输入）；主按钮“在浏览器中登录”——显示设备码，用 `SFSafariViewController` 打开登录页，后台轮询，确认后自动关闭；次要“用邮箱和密码登录”。
+  - 登录页：控制台地址（记住上次输入）；主按钮“在浏览器中登录”——用 `SFSafariViewController` 打开授权页（支持钥匙串和第三方密码管理器自动填充），回调到达后自动关闭；次要“用邮箱和密码登录”。
   - 配对页顶部：未登录时一张卡片“先登录 Relay 账号，手机在外面也能连上电脑”［登录］，可跳过（只用局域网或自建 relay）。
   - 首次启动（没有 Host）：总控空状态分两步：① 登录 Relay 账号 ② 配对电脑。
 
 ### Android
 
-同 iOS：`AccountStore`（复用 Keystore AES 密钥，`relay-account.enc`，`writeDurably`）；设置页一节、登录页（设备码用浏览器 `ACTION_VIEW` 打开，回到应用时轮询仍在）、配对页卡片、首次启动两步。
+同 iOS：`AccountStore`（复用 Keystore AES 密钥，`relay-account.enc`，`writeDurably`）；设置页一节、登录页（授权页用浏览器 `ACTION_VIEW` 打开，回调到核心的 loopback 端口，回到应用时登录已完成）、配对页卡片、首次启动两步。
 
 ### 其他
 
@@ -63,4 +63,4 @@
 ## 不做
 
 - 局域网直连在 TUN 代理下握手超时：另查。
-- 浏览器 PKCE 登录（需控制面支持非 loopback 回调）。
+- 设备码登录（RFC 8628）：有浏览器登录后不需要；进程在浏览器期间被系统杀掉时，重新登录即可。
