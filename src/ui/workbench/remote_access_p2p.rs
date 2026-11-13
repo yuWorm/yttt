@@ -44,13 +44,14 @@ impl WorkbenchView {
             .filter(|runtime| !runtime.is_remote())
     }
 
+    /// The devices paired with this computer, which of them are online, and
+    /// pairing another.
     pub(super) fn p2p_settings_section(&mut self, cx: &mut Context<Self>) -> Div {
         let appearance = self.theme_runtime();
         let theme = appearance.ui;
         let style = appearance.style;
         let text = self.ui_text;
-        let busy =
-            self.ssh.remote_access_busy || (self.local_runtime().is_none() && !self.ssh.preview);
+        let busy = !self.remote_access_idle();
         let status = self
             .ssh
             .remote_access
@@ -65,142 +66,55 @@ impl WorkbenchView {
         if pairing_active && !self.ssh.p2p.polling {
             self.poll_pairing(cx);
         }
-        let state_key = match status.as_ref().map(|status| status.effective) {
-            Some(RemoteAccessState::Listening) => UiTextKey::RemoteAccessListening,
-            Some(RemoteAccessState::Starting) => UiTextKey::RemoteAccessStarting,
-            Some(RemoteAccessState::Stopping) => UiTextKey::RemoteAccessStopping,
-            Some(RemoteAccessState::Failed) => UiTextKey::RemoteAccessFailed,
-            Some(RemoteAccessState::Disabled) => UiTextKey::RemoteAccessDisabled,
-            None => UiTextKey::RemoteAccessUnavailable,
-        };
-
-        let header = div()
-            .flex()
-            .flex_col()
-            .gap(style.spacing.sm)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(style.spacing.lg)
-                    .child(div().text_base().child(text.get(UiTextKey::P2pTitle)))
-                    .child(
-                        yttt_button(
-                            "p2p-toggle",
-                            text.get(if listening {
-                                UiTextKey::RemoteAccessDisable
-                            } else {
-                                UiTextKey::RemoteAccessEnable
-                            }),
-                            if listening {
-                                YtttButtonVariant::Secondary
-                            } else {
-                                YtttButtonVariant::Primary
-                            },
-                            theme,
-                            style,
-                        )
-                        .disabled(busy || pairing_active)
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            root.set_p2p(!listening, cx);
-                        })),
-                    ),
+        // Pairing replaces the button while it is under way.
+        let pairing_shown = pairing_active
+            || matches!(pairing, Some(PairingState::Compromised))
+            || matches!(pairing, Some(PairingState::Open { .. }) if self.ssh.p2p.code.is_some());
+        let pair_button = (!pairing_shown && listening).then(|| {
+            yttt_button(
+                "p2p-pair-device",
+                text.get(UiTextKey::P2pPairDevice),
+                YtttButtonVariant::Primary,
+                theme,
+                style,
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.text_muted)
-                    .child(text.get(UiTextKey::P2pDescription)),
-            );
-
-        let status_row = div()
-            .flex()
-            .items_center()
-            .gap(style.spacing.sm)
-            .py(style.spacing.sm)
-            .border_b(style.border.hairline)
-            .border_color(theme.border_variant)
-            .child(
-                div()
-                    .size(gpui::rems(0.375))
-                    .rounded_full()
-                    .bg(if listening {
-                        theme.success
-                    } else {
-                        theme.text_subtle
-                    }),
-            )
-            .child(div().text_sm().child(text.get(state_key)))
-            .when_some(
-                status.as_ref().and_then(|status| status.endpoint_id),
-                |row, key| {
-                    row.child(div().text_xs().text_color(theme.text_muted).child(format!(
-                        "{} {}",
-                        text.get(UiTextKey::P2pThisKey),
-                        &key.to_string()[..8]
-                    )))
-                },
-            );
-
-        let relay_account = status
-            .as_ref()
-            .and_then(|status| status.relay_account.as_ref())
-            .map(|account| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(style.spacing.xs)
-                    .child(
-                        div().text_sm().child(
-                            text.get(UiTextKey::P2pRelayAccount)
-                                .replace("{account}", &account.account_id.to_string())
-                                .replace("{relay}", account.relay_url.as_deref().unwrap_or("—")),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(text.get(UiTextKey::P2pRelayAccountDevices)),
-                    )
-                    .when_some(account.error.clone(), |view, error| {
-                        view.child(div().text_xs().text_color(theme.danger).child(error))
-                    })
-            });
-
-        // Without a relay account, only direct paths reach this computer.
-        let relay_row = status
-            .as_ref()
-            .is_none_or(|status| status.relay_account.is_none())
-            .then(|| {
-                div()
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child(text.get(UiTextKey::P2pRelayHint))
-            });
-
-        let pairing_view = self.pairing_view(pairing, listening, busy, cx);
-        let devices = self.devices_view(busy, cx);
-
-        div()
+            .disabled(busy || !listening)
+            .on_click(cx.listener(|root, _, _, cx| {
+                root.begin_remote_access_action(
+                    Request::RemoteAccess(RemoteAccessRequest::StartPairing),
+                    cx,
+                )
+            }))
+            .into_any_element()
+        });
+        let count = self.ssh.p2p.devices.len();
+        let pairing_view = pairing_shown.then(|| {
+            div()
+                .p(gpui::rems(1.0))
+                .rounded(style.radius.card)
+                .bg(theme.element_background)
+                .child(self.pairing_view(pairing, listening, busy, cx))
+        });
+        let devices = (listening || count > 0).then(|| self.devices_view(busy, cx));
+        super::remote_access::remote_card(theme, style)
             .debug_selector(|| "p2p-settings".into())
-            .flex()
-            .flex_col()
-            .gap(style.spacing.lg)
-            .pt(style.spacing.lg)
-            .border_t(style.border.hairline)
-            .border_color(theme.border_variant)
-            .child(header)
-            .child(status_row)
-            .children(relay_account)
-            .children(relay_row)
-            .child(pairing_view)
-            .child(devices)
-            .when_some(
-                status.as_ref().and_then(|status| status.error.clone()),
-                |view, error| view.child(div().text_sm().text_color(theme.danger).child(error)),
-            )
+            .child(super::remote_access::remote_card_header(
+                text.get(UiTextKey::RemoteDevicesTitle),
+                (count > 0).then(|| count.to_string()),
+                pair_button,
+                theme,
+                style,
+            ))
+            .when(!listening && !pairing_shown, |card| {
+                card.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.text_muted)
+                        .child(text.get(UiTextKey::RemoteDevicesNeedAccess)),
+                )
+            })
+            .children(pairing_view)
+            .children(devices)
     }
 
     fn pairing_view(
@@ -455,28 +369,22 @@ impl WorkbenchView {
         let style = appearance.style;
         let text = self.ui_text;
         let devices = self.ssh.p2p.devices.clone();
+        let online: Vec<EndpointKey> = self
+            .ssh
+            .remote_access
+            .as_ref()
+            .map(|status| {
+                status
+                    .clients
+                    .iter()
+                    .filter_map(|client| client.device)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let count = devices.len();
         div()
             .flex()
             .flex_col()
-            .gap(style.spacing.md)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(text.get(UiTextKey::P2pDevices)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(devices.len().to_string()),
-                    ),
-            )
             .when(devices.is_empty(), |view| {
                 view.child(
                     div()
@@ -485,33 +393,53 @@ impl WorkbenchView {
                         .child(text.get(UiTextKey::P2pNoDevices)),
                 )
             })
-            .children(devices.into_iter().map(|device| {
+            .children(devices.into_iter().enumerate().map(|(index, device)| {
                 let endpoint_id = device.endpoint_id;
+                let is_online = online.contains(&endpoint_id);
                 div()
                     .debug_selector(move || format!("p2p-device-{endpoint_id}"))
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(style.spacing.lg)
+                    .py(style.spacing.sm)
+                    .when(index + 1 < count, |row| {
+                        row.border_b(style.border.hairline)
+                            .border_color(theme.border_variant)
+                    })
                     .child(
                         div()
                             .flex()
-                            .flex_col()
+                            .items_center()
+                            .gap(style.spacing.md)
                             .min_w_0()
-                            .gap(style.spacing.xs)
-                            .child(div().text_sm().truncate().child(device.label.clone()))
+                            .child(div().flex_none().size(gpui::rems(0.5)).rounded_full().bg(
+                                if is_online {
+                                    theme.success
+                                } else {
+                                    theme.text_subtle.alpha(0.5)
+                                },
+                            ))
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .child(device_summary(&device, text)),
+                                    .flex()
+                                    .flex_col()
+                                    .min_w_0()
+                                    .gap(style.spacing.xs)
+                                    .child(div().text_sm().truncate().child(device.label.clone()))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.text_muted)
+                                            .child(device_summary(&device, is_online, text)),
+                                    ),
                             ),
                     )
                     .child(
                         yttt_button(
                             SharedString::from(format!("p2p-revoke-{endpoint_id}")),
                             text.get(UiTextKey::P2pRevoke),
-                            YtttButtonVariant::Secondary,
+                            YtttButtonVariant::Ghost,
                             theme,
                             style,
                         )
@@ -523,7 +451,7 @@ impl WorkbenchView {
             }))
     }
 
-    fn set_p2p(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    pub(super) fn set_p2p(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.begin_remote_access_action(
             Request::RemoteAccess(RemoteAccessRequest::SetP2p { enabled }),
             cx,
@@ -772,13 +700,21 @@ fn now_millis() -> u64 {
         .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 
-fn device_summary(device: &PairedDevice, text: UiText) -> String {
+/// What a device may do and when it was last here: online now, its last
+/// visit, or when it paired if it never connected.
+fn device_summary(device: &PairedDevice, online: bool, text: UiText) -> String {
+    let now = chrono::Local::now();
     let format = |millis: u64| {
         chrono::DateTime::from_timestamp_millis(millis as i64)
             .map(|time| {
-                time.with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M")
-                    .to_string()
+                let time = time.with_timezone(&chrono::Local);
+                if time.date_naive() == now.date_naive() {
+                    time.format("%H:%M").to_string()
+                } else if time.format("%Y").to_string() == now.format("%Y").to_string() {
+                    time.format("%m-%d %H:%M").to_string()
+                } else {
+                    time.format("%Y-%m-%d").to_string()
+                }
             })
             .unwrap_or_default()
     };
@@ -786,20 +722,16 @@ fn device_summary(device: &PairedDevice, text: UiText) -> String {
         DevicePreset::Full => UiTextKey::P2pPresetFull,
         DevicePreset::Observe => UiTextKey::P2pPresetObserve,
     });
-    let mut summary = format!(
-        "{preset} · {}",
+    let when = if online {
+        text.get(UiTextKey::RemoteDeviceOnline).to_owned()
+    } else if let Some(seen) = device.last_seen_millis {
+        text.get(UiTextKey::P2pLastSeen)
+            .replace("{time}", &format(seen))
+    } else {
         text.get(UiTextKey::P2pPairedAt)
             .replace("{time}", &format(device.paired_at_millis))
-    );
-    if let Some(seen) = device.last_seen_millis {
-        summary.push_str(" · ");
-        summary.push_str(
-            &text
-                .get(UiTextKey::P2pLastSeen)
-                .replace("{time}", &format(seen)),
-        );
-    }
-    summary
+    };
+    format!("{preset} · {when}")
 }
 
 /// Paints the code's modules as squares in one pass, with the quiet zone the

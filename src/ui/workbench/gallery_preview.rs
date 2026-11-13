@@ -15,8 +15,10 @@ use yttt_protocol::{
 /// Which page of the window, in which state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemotePreview {
-    /// The saved connections list.
+    /// The saved connections list, empty.
     Connections,
+    /// The saved connections list with a few SSH servers.
+    ConnectionsList,
     /// This computer, never set up: P2P off, no account.
     ThisComputerFresh,
     /// This computer with P2P on, a relay account, a node and two devices.
@@ -42,11 +44,26 @@ impl RemoteServicesPreview {
         root.ssh.manager_open = true;
         root.ssh.preview = true;
         root.auxiliary_windows.remote_page = match preview {
-            RemotePreview::Connections => RemoteServicesPage::Connections,
+            RemotePreview::Connections | RemotePreview::ConnectionsList => {
+                RemoteServicesPage::Connections
+            }
             _ => RemoteServicesPage::ThisComputer,
         };
-        if preview != RemotePreview::Connections {
-            fill_this_computer(&mut root, preview);
+        match preview {
+            RemotePreview::Connections => {}
+            RemotePreview::ConnectionsList => {
+                for (name, host, user) in [
+                    ("开发机", "dev.example.com", "alice"),
+                    ("构建服务器", "build.internal", "ci"),
+                    ("家里的 NAS", "192.168.1.20", "admin"),
+                ] {
+                    let mut connection =
+                        crate::config::ssh::SshConnectionConfig::new(name, host, 22, user);
+                    connection.id = crate::model::ids::ConnectionId::new(host);
+                    root.ssh.connections.connections.push(connection);
+                }
+            }
+            _ => fill_this_computer(&mut root, preview),
         }
         Self(cx.new(|_| root))
     }

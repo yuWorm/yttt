@@ -990,6 +990,28 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsLoginStartupConfirmAction => "Enable at login",
         UiTextKey::RemoteAccessTitle => "Remote access to this computer",
+        UiTextKey::RemoteSummaryOn => "Other devices can reach this computer",
+        UiTextKey::RemoteSummaryOff => "Remote access is off",
+        UiTextKey::RemoteSummaryDevices => "{paired} paired devices · {online} online",
+        UiTextKey::RemoteSummaryRelay => "Through node “{node}” when no direct path works",
+        UiTextKey::RemoteSummaryRelayPending => "Connecting to the relay node…",
+        UiTextKey::RemoteSummaryChooseNode => {
+            "The relay node needs choosing again; until then only direct connections work. See “Access from anywhere” below."
+        }
+        UiTextKey::RemoteSummaryDirectOnly => {
+            "Only devices on the same network can connect. Sign in to a relay account below to connect from anywhere."
+        }
+        UiTextKey::RemoteSummaryToggle => "Allow remote access",
+        UiTextKey::RemoteDevicesTitle => "Devices",
+        UiTextKey::RemoteDevicesNeedAccess => {
+            "Turn on “Allow remote access” to pair a phone or another computer."
+        }
+        UiTextKey::RemoteDeviceOnline => "online",
+        UiTextKey::RemoteTlsTitle => "Advanced: TLS connection code",
+        UiTextKey::RemoteTlsOff => "Off · for port forwarding and other tunnels",
+        UiTextKey::RemoteTlsEnable => "Turn on TLS",
+        UiTextKey::RemoteTlsSessions => "Sessions over TLS",
+        UiTextKey::RelayAccountNotUsedHere => "This computer does not use this account yet.",
         UiTextKey::RemoteAccessDescription => {
             "Share this running Host through TLS and optional TCP forwarding. Connection information grants access to all workspaces in this profile; keep it private. Closing a window does not stop sharing."
         }
@@ -999,8 +1021,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessFailed => "Unable to start sharing",
         UiTextKey::RemoteAccessDisabled => "Remote access is off",
         UiTextKey::RemoteAccessUnavailable => "Waiting for the local Host",
-        UiTextKey::RemoteAccessAddress => "Listen address",
-        UiTextKey::RemoteAccessClients => "Connected devices",
         UiTextKey::RemoteAccessNoClients => "No remote devices connected",
         UiTextKey::RemoteAccessStreams => "streams",
         UiTextKey::RemoteAccessEnable => "Enable",
@@ -1009,7 +1029,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessCopy => "Copy connection information",
         UiTextKey::RemoteAccessReset => "Reset credentials",
         UiTextKey::RemoteAccessDisconnect => "Disconnect all remote clients",
-        UiTextKey::RemoteAccessRefresh => "Refresh",
         UiTextKey::RemoteAccessConfirmTitle => "Change remote access?",
         UiTextKey::RemoteAccessConfirmDescription => {
             "This may disconnect remote clients. A non-loopback address exposes the port to your network. Forced control uses the last confirmed state; unpublished edits on the previous client may be lost. Continue only if you understand these consequences."
@@ -1045,12 +1064,25 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ConnectionRemembered => "Remember: system credential store",
         UiTextKey::RemoteConnections => "Remote connections",
         UiTextKey::RemoteAdd => "Add connection",
-        UiTextKey::RemoteAddSsh => "SSH connection",
-        UiTextKey::RemoteAddHost => "Network Host",
-        UiTextKey::RemoteAddPaired => "Pair with a Host (P2P)",
-        UiTextKey::RelayAccountTitle => "Relay account",
+        UiTextKey::RemoteAddSsh => "SSH server",
+        UiTextKey::RemoteConnectionsHint => {
+            "Connect to another computer or server and open its workspace here."
+        }
+        UiTextKey::RemoteAddSshDetail => {
+            "Sign in to a server over SSH; yttt installs what it needs there."
+        }
+        UiTextKey::RemoteAddPairedDetail => {
+            "Scan the pairing code on another computer; connect directly or through a relay."
+        }
+        UiTextKey::RemoteAddHostDetail => {
+            "Paste a code copied from “Advanced: TLS connection code” on another computer."
+        }
+        UiTextKey::RemoteConnect => "Connect",
+        UiTextKey::RemoteAddHost => "Paste a connection code",
+        UiTextKey::RemoteAddPaired => "Pair another computer",
+        UiTextKey::RelayAccountTitle => "Access from anywhere",
         UiTextKey::RelayAccountDescription => {
-            "A relay account lets your devices reach each other through a paid relay when no direct path works. Sign in with the same account on the Host and on its devices. The account only carries traffic; it never decides who may reach this computer."
+            "Sign in to a relay account and devices reach this computer through a relay node when no direct path works. They sign in with the same account. The relay only carries encrypted traffic; it never decides who may connect."
         }
         UiTextKey::RelayAccountControlUrl => "Service address",
         UiTextKey::RelayAccountEmail => "Email",
@@ -1061,11 +1093,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountPlan => "Plan {plan} · relay {relay}",
         UiTextKey::RelayAccountUsage => "This month {used} of {quota} · devices {devices} of {max}",
         UiTextKey::RelayAccountSuspended => "This account is suspended.",
-        UiTextKey::RelayAccountUseForHost => "Use for this computer as a Host",
-        UiTextKey::RelayAccountStopForHost => "Stop using for this computer",
-        UiTextKey::RelayAccountHostNeedsP2p => {
-            "Turn on P2P pairing to use the account for this computer."
-        }
+        UiTextKey::RelayAccountUseForHost => "Use on this computer",
         UiTextKey::RelayAccountSessionExpired => "The sign-in has expired; sign in again.",
         UiTextKey::RelayAccountSignInWithBrowser => "Sign in with browser",
         UiTextKey::RelayAccountWaitingForBrowser => {
@@ -1076,8 +1104,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountUseBrowser => "Sign in with the browser instead",
         UiTextKey::RelayAccountBrowserTimedOut => "The browser sign-in timed out; try again.",
         UiTextKey::RelayAccountBrowserDenied => "The sign-in was denied in the browser.",
-        UiTextKey::RelayAccountNode => "Node: {node}",
-        UiTextKey::RelayAccountChooseNode => "Choose node",
+        UiTextKey::RelayAccountChooseNode => "Change node",
+        UiTextKey::RelayAccountNodeLabel => "Node",
+        UiTextKey::RelayAccountNodeNone => "None chosen",
+        UiTextKey::RelayAccountNodeCollapse => "Done",
         UiTextKey::RelayAccountNodeHint => {
             "Pick a node close to this computer and the devices you use. Devices that connect here follow it, and remote sessions stay up."
         }
@@ -1129,18 +1159,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PairedHostRepair => {
             "Pair this Host again from Remote connections to replace its key."
         }
-        UiTextKey::P2pTitle => "P2P pairing",
         UiTextKey::P2pDescription => {
             "Paired devices reach this computer by their device key, directly or through a relay. Traffic is end-to-end encrypted; a relay only forwards it."
         }
-        UiTextKey::P2pRelayHint => {
-            "Without a relay account, only direct connections work. Sign in to one and devices reach this computer through its relay from anywhere."
-        }
-        UiTextKey::P2pRelayAccount => "Using relay account {account}: {relay}",
-        UiTextKey::P2pRelayAccountDevices => {
-            "Devices that have not signed in to a relay account can only connect directly."
-        }
-        UiTextKey::P2pThisKey => "This computer's key",
         UiTextKey::P2pPairDevice => "Pair a new device",
         UiTextKey::P2pPairingOpen => {
             "Scan the code or paste it on the device. It expires in {seconds} s."
@@ -1160,8 +1181,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "A second device used this code, so the invitation was withdrawn. The code may have leaked."
         }
         UiTextKey::P2pAcknowledge => "OK",
-        UiTextKey::P2pDevices => "Paired devices",
-        UiTextKey::P2pNoDevices => "No paired devices.",
+        UiTextKey::P2pNoDevices => {
+            "No paired devices yet. Choose “Pair a device” and scan the code with a phone or another computer."
+        }
         UiTextKey::P2pPresetFull => "Full control",
         UiTextKey::P2pPresetObserve => "View only",
         UiTextKey::P2pPairedAt => "Paired {time}",
@@ -1174,9 +1196,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pRevokeAndResetTls => "Revoke and reset TLS",
         UiTextKey::RemoteEdit => "Edit",
         UiTextKey::RemoteSaveConnect => "Save and connect",
-        UiTextKey::RemoteEmpty => {
-            "No remote connections yet. Add an SSH connection or paste a Host connection code."
-        }
         UiTextKey::RemoteConnecting => "Connecting…",
         UiTextKey::RemoteConnectionName => "Connection name",
         UiTextKey::RemoteCredentialsRequired => "Credentials required",

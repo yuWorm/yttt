@@ -4,7 +4,7 @@ use gpui_base::FocusTrapElement as _;
 use yttt_core::model::ids::{ConnectionId, CredentialId};
 use yttt_protocol::EndpointKey;
 use yttt_ui::menu::{YtttDropdownMenu as _, YtttMenuItem};
-use yttt_ui::primitives::button::{yttt_button, yttt_button_base};
+use yttt_ui::primitives::button::yttt_button;
 
 #[derive(Clone)]
 enum Target {
@@ -573,43 +573,148 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
     } else {
         root.ssh.error.clone().or(host_error).or(paired_error)
     };
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .justify_end()
-                .p(gpui::rems(1.0))
-                .child(add),
-        )
-        .child(
-            div().flex().flex_col().flex_1().min_h_0().child(
+    let count = rows.len();
+    let body = if empty {
+        empty_connections(root, cx)
+    } else {
+        div()
+            .flex()
+            .flex_col()
+            .rounded(style.radius.card)
+            .border(style.border.hairline)
+            .border_color(theme.border_variant)
+            .bg(theme.surface)
+            .overflow_hidden()
+            .children(rows.into_iter().enumerate().map(|(index, row)| {
+                row.when(index + 1 < count, |row| {
+                    row.border_b(style.border.hairline)
+                        .border_color(theme.border_variant)
+                })
+            }))
+    };
+    div().flex().flex_col().flex_1().min_h_0().child(
+        div()
+            .id("remote-connections-list")
+            .debug_selector(|| "remote-connections-list".into())
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .vertical_scrollbar(&root.auxiliary_windows.remote_list_scroll)
+            .p(gpui::rems(2.0))
+            .child(
                 div()
-                    .id("remote-connections-list")
-                    .debug_selector(|| "remote-connections-list".into())
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .vertical_scrollbar(&root.auxiliary_windows.remote_list_scroll)
-                    .px(gpui::rems(1.0))
-                    .pb(gpui::rems(1.0))
-                    .child(div().flex().flex_col().gap(style.spacing.sm).children(rows))
-                    .when(empty, |view| {
-                        view.child(
-                            div()
-                                .p(gpui::rems(2.0))
-                                .text_sm()
-                                .text_color(theme.text_muted)
-                                .child(text.get(UiTextKey::RemoteEmpty)),
-                        )
-                    }),
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .max_w(gpui::rems(46.0))
+                    .mx_auto()
+                    .gap(gpui::rems(1.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(style.spacing.lg)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(style.spacing.xs)
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .child(text.get(UiTextKey::RemoteConnections)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.text_muted)
+                                            .child(text.get(UiTextKey::RemoteConnectionsHint)),
+                                    ),
+                            )
+                            .when(!empty, |row| row.child(add)),
+                    )
+                    .children(error.map(|error| {
+                        div()
+                            .px(gpui::rems(1.0))
+                            .py(style.spacing.sm)
+                            .rounded(style.radius.card)
+                            .bg(theme.danger.alpha(0.12))
+                            .text_sm()
+                            .text_color(theme.danger)
+                            .child(error)
+                    }))
+                    .child(body),
             ),
-        )
-        .children(error.map(|error| div().flex_none().p(gpui::rems(1.0)).text_sm().child(error)))
+    )
+}
+
+/// No connections yet: the three ways to add one, side by side.
+fn empty_connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
+    let theme = root.theme_runtime().ui;
+    let style = current_ui_style(cx);
+    let text = root.ui_text;
+    let option =
+        |id: &'static str,
+         icon: IconName,
+         title: UiTextKey,
+         detail: UiTextKey,
+         cx: &mut Context<WorkbenchView>,
+         open: fn(&mut WorkbenchView, &mut Window, &mut Context<WorkbenchView>)| {
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(style.spacing.sm)
+                .p(gpui::rems(1.0))
+                .rounded(style.radius.card)
+                .border(style.border.hairline)
+                .border_color(theme.border_variant)
+                .bg(theme.surface)
+                .cursor_pointer()
+                .hover(|row| row.bg(theme.element_hover))
+                .child(Icon::new(icon).size(px(18.0)).text_color(theme.icon_muted))
+                .child(div().text_sm().child(text.get(title)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(text.get(detail)),
+                )
+                .on_click(cx.listener(move |root, _, window, cx| open(root, window, cx)))
+        };
+    div().flex().flex_col().gap(style.spacing.md).child(
+        div()
+            .flex()
+            .gap(style.spacing.md)
+            .child(option(
+                "remote-empty-ssh",
+                IconName::SquareTerminal,
+                UiTextKey::RemoteAddSsh,
+                UiTextKey::RemoteAddSshDetail,
+                cx,
+                |root, window, cx| root.open_ssh_connection_editor(None, window, cx),
+            ))
+            .child(option(
+                "remote-empty-paired",
+                IconName::Network,
+                UiTextKey::RemoteAddPaired,
+                UiTextKey::RemoteAddPairedDetail,
+                cx,
+                |root, window, cx| root.pair_remote_host(window, cx),
+            ))
+            .child(option(
+                "remote-empty-host",
+                IconName::Globe,
+                UiTextKey::RemoteAddHost,
+                UiTextKey::RemoteAddHostDetail,
+                cx,
+                |root, window, cx| root.new_remote_host(window, cx),
+            )),
+    )
 }
 
 fn connection_row(
@@ -619,7 +724,7 @@ fn connection_row(
     address: String,
     busy: bool,
     cx: &mut Context<WorkbenchView>,
-) -> Div {
+) -> gpui::Stateful<Div> {
     let theme = root.theme_runtime().ui;
     let style = current_ui_style(cx);
     let text = root.ui_text;
@@ -666,60 +771,84 @@ fn connection_row(
             ),
         )
     });
+    let icon = match &target {
+        Target::Ssh(_) => IconName::SquareTerminal,
+        Target::Host(_) => IconName::Globe,
+        Target::Paired(_) => IconName::Network,
+    };
+    let connect_target = target.clone();
     div()
+        .id(SharedString::from(format!("remote-row-{id}")))
         .debug_selector(move || debug_id.clone())
         .flex()
         .items_center()
-        .gap(style.spacing.sm)
-        .border_b_1()
-        .border_color(theme.border_variant)
+        .gap(style.spacing.md)
+        .px(gpui::rems(1.0))
+        .py(style.spacing.md)
+        .hover(|row| row.bg(theme.element_hover))
+        .cursor_pointer()
+        .when(!busy, |row| {
+            row.on_click(cx.listener(move |root, _, window, cx| {
+                root.connect_remote_record(connect_target.clone(), window, cx)
+            }))
+        })
         .child(
-            yttt_button_base(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(gpui::rems(2.0))
+                .rounded(style.radius.control)
+                .bg(theme.element_background)
+                .child(Icon::new(icon).size(px(16.0)).text_color(theme.icon_muted)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(style.spacing.xs)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(style.spacing.sm)
+                        .min_w_0()
+                        .child(div().text_sm().truncate().child(name))
+                        .child(
+                            div()
+                                .flex_none()
+                                .px(px(6.0))
+                                .rounded(style.radius.compact)
+                                .bg(theme.element_background)
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(kind),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .truncate()
+                        .child(address),
+                ),
+        )
+        .child(
+            yttt_button(
                 SharedString::from(format!("remote-connect-{id}")),
-                YtttButtonVariant::Ghost,
+                text.get(UiTextKey::RemoteConnect),
+                YtttButtonVariant::Secondary,
                 theme,
                 style,
             )
-            .on_click(cx.listener(move |root, _, window, cx| {
-                root.connect_remote_record(target.clone(), window, cx)
-            }))
             .disabled(busy)
-            .flex_1()
-            .min_w_0()
-            .h_auto()
-            .justify_start()
-            .py(px(12.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .w_full()
-                    .min_w_0()
-                    .gap(style.spacing.lg)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(style.spacing.xs)
-                            .child(div().text_sm().truncate().child(name))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .truncate()
-                                    .child(address),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(kind),
-                    ),
-            ),
+            .on_click(cx.listener(move |root, _, window, cx| {
+                cx.stop_propagation();
+                root.connect_remote_record(target.clone(), window, cx)
+            })),
         )
         .child(options)
 }

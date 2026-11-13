@@ -121,6 +121,7 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options> {
                     "editor" => Scene::Editor,
                     "main" => Scene::Main,
                     "remote-connections" => Scene::Remote(RemotePreview::Connections),
+                    "remote-connections-list" => Scene::Remote(RemotePreview::ConnectionsList),
                     "remote-fresh" => Scene::Remote(RemotePreview::ThisComputerFresh),
                     "remote-connected" => Scene::Remote(RemotePreview::ThisComputerConnected),
                     "remote-needs-node" => Scene::Remote(RemotePreview::ThisComputerNeedsNode),

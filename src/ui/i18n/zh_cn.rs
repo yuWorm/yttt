@@ -804,6 +804,26 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsLoginStartupConfirmAction => "启用登录启动",
         UiTextKey::RemoteAccessTitle => "远程访问此电脑",
+        UiTextKey::RemoteSummaryOn => "其他设备可以访问这台电脑",
+        UiTextKey::RemoteSummaryOff => "远程访问已关闭",
+        UiTextKey::RemoteSummaryDevices => "{paired} 台已配对设备 · {online} 台在线",
+        UiTextKey::RemoteSummaryRelay => "直连不通时经节点“{node}”中转",
+        UiTextKey::RemoteSummaryRelayPending => "正在连接 relay 节点…",
+        UiTextKey::RemoteSummaryChooseNode => {
+            "relay 节点需要重新选择，选好之前只能直连。见下方“外网访问”。"
+        }
+        UiTextKey::RemoteSummaryDirectOnly => {
+            "只能在同一网络内直连。登录下方的 relay 账号后，在外网也能连上。"
+        }
+        UiTextKey::RemoteSummaryToggle => "允许远程访问",
+        UiTextKey::RemoteDevicesTitle => "设备",
+        UiTextKey::RemoteDevicesNeedAccess => "打开“允许远程访问”后，就能配对手机或另一台电脑。",
+        UiTextKey::RemoteDeviceOnline => "在线",
+        UiTextKey::RemoteTlsTitle => "高级：TLS 连接码",
+        UiTextKey::RemoteTlsOff => "未开启 · 用于端口转发等隧道连接",
+        UiTextKey::RemoteTlsEnable => "开启 TLS 入口",
+        UiTextKey::RemoteTlsSessions => "经 TLS 连接的会话",
+        UiTextKey::RelayAccountNotUsedHere => "这台电脑还没有使用此账号。",
         UiTextKey::RemoteAccessDescription => {
             "通过 TLS 和可选的 TCP 端口转发共享当前 Host。连接信息可访问此 profile 的全部工作区，请保密。关闭工作窗口不会停止共享。"
         }
@@ -813,8 +833,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessFailed => "无法启动共享",
         UiTextKey::RemoteAccessDisabled => "远程访问已关闭",
         UiTextKey::RemoteAccessUnavailable => "正在等待本机 Host",
-        UiTextKey::RemoteAccessAddress => "监听地址",
-        UiTextKey::RemoteAccessClients => "已连接设备",
         UiTextKey::RemoteAccessNoClients => "尚无远程设备连接",
         UiTextKey::RemoteAccessStreams => "条数据流",
         UiTextKey::RemoteAccessEnable => "开启",
@@ -823,7 +841,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessCopy => "复制连接信息",
         UiTextKey::RemoteAccessReset => "重置凭据",
         UiTextKey::RemoteAccessDisconnect => "断开全部远程会话",
-        UiTextKey::RemoteAccessRefresh => "刷新",
         UiTextKey::RemoteAccessConfirmTitle => "更改远程访问？",
         UiTextKey::RemoteAccessConfirmDescription => {
             "此操作可能断开远程会话。非回环地址会向网络开放端口。强制收回使用最后确认状态，原控制端未发布的编辑可能丢失。请确认已了解这些后果。"
@@ -851,12 +868,17 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ConnectionRemembered => "已选择记住凭据（系统安全存储）",
         UiTextKey::RemoteConnections => "远程连接",
         UiTextKey::RemoteAdd => "添加连接",
-        UiTextKey::RemoteAddSsh => "SSH 连接",
-        UiTextKey::RemoteAddHost => "网络 Host",
-        UiTextKey::RemoteAddPaired => "配对 Host（P2P）",
-        UiTextKey::RelayAccountTitle => "relay 账号",
+        UiTextKey::RemoteAddSsh => "SSH 服务器",
+        UiTextKey::RemoteConnectionsHint => "连接到别的电脑或服务器，在这台电脑上打开它的工作区。",
+        UiTextKey::RemoteAddSshDetail => "用 SSH 登录服务器，yttt 会在上面自动安装所需组件。",
+        UiTextKey::RemoteAddPairedDetail => "扫描另一台电脑上的配对码，直连或经 relay 连接。",
+        UiTextKey::RemoteAddHostDetail => "粘贴另一台电脑“高级：TLS 连接码”里复制的连接码。",
+        UiTextKey::RemoteConnect => "连接",
+        UiTextKey::RemoteAddHost => "粘贴连接码",
+        UiTextKey::RemoteAddPaired => "配对另一台电脑",
+        UiTextKey::RelayAccountTitle => "外网访问",
         UiTextKey::RelayAccountDescription => {
-            "登录 relay 账号后，直连不通时设备之间可以经付费 relay 互通。Host 和它的设备要登录同一个账号。账号只负责转发流量，不决定谁能连接本机。"
+            "登录 relay 账号后，直连不通时设备经 relay 节点连接这台电脑。连接它的设备要登录同一个账号。relay 只转发加密流量，不决定谁能连接。"
         }
         UiTextKey::RelayAccountControlUrl => "服务地址",
         UiTextKey::RelayAccountEmail => "邮箱",
@@ -867,9 +889,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountPlan => "套餐 {plan} · relay {relay}",
         UiTextKey::RelayAccountUsage => "本月 {used} / {quota} · 设备 {devices} / {max}",
         UiTextKey::RelayAccountSuspended => "此账号已被封停。",
-        UiTextKey::RelayAccountUseForHost => "本机作为 Host 时使用此账号",
-        UiTextKey::RelayAccountStopForHost => "本机不再使用此账号",
-        UiTextKey::RelayAccountHostNeedsP2p => "开启 P2P 配对后，才能让本机作为 Host 使用此账号。",
+        UiTextKey::RelayAccountUseForHost => "用于这台电脑",
         UiTextKey::RelayAccountSessionExpired => "登录已失效，请重新登录。",
         UiTextKey::RelayAccountSignInWithBrowser => "在浏览器中登录",
         UiTextKey::RelayAccountWaitingForBrowser => {
@@ -880,8 +900,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RelayAccountUseBrowser => "改用浏览器登录",
         UiTextKey::RelayAccountBrowserTimedOut => "浏览器登录已超时，请重试。",
         UiTextKey::RelayAccountBrowserDenied => "已在浏览器中拒绝这次登录。",
-        UiTextKey::RelayAccountNode => "节点：{node}",
-        UiTextKey::RelayAccountChooseNode => "选择节点",
+        UiTextKey::RelayAccountChooseNode => "更换节点",
+        UiTextKey::RelayAccountNodeLabel => "节点",
+        UiTextKey::RelayAccountNodeNone => "未选择",
+        UiTextKey::RelayAccountNodeCollapse => "收起",
         UiTextKey::RelayAccountNodeHint => {
             "选择离这台电脑和常用设备都近的节点。连接这台电脑的设备会自动跟随，远程会话保持不断。"
         }
@@ -927,16 +949,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::PairedHostForget => "忘记",
         UiTextKey::PairedHostRepair => "如需更换密钥，请在“远程连接”中重新配对这台 Host。",
-        UiTextKey::P2pTitle => "P2P 配对",
         UiTextKey::P2pDescription => {
             "已配对的设备凭各自的设备密钥连接本机，直连或经 relay。流量端到端加密，relay 只负责转发。"
         }
-        UiTextKey::P2pRelayHint => {
-            "未登录 relay 账号时只能直连。登录后，连接这台电脑的设备在外网也能经 relay 连上。"
-        }
-        UiTextKey::P2pRelayAccount => "正在使用 relay 账号 {account}：{relay}",
-        UiTextKey::P2pRelayAccountDevices => "未登录 relay 账号的设备只能直连。",
-        UiTextKey::P2pThisKey => "本机密钥",
         UiTextKey::P2pPairDevice => "配对新设备",
         UiTextKey::P2pPairingOpen => "在设备上扫描或粘贴此配对码，{seconds} 秒后失效。",
         UiTextKey::P2pShowCode => "显示配对码",
@@ -952,8 +967,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pDecline => "拒绝",
         UiTextKey::P2pCompromised => "有第二台设备使用了此配对码，邀请已作废。配对码可能已泄露。",
         UiTextKey::P2pAcknowledge => "知道了",
-        UiTextKey::P2pDevices => "已配对的设备",
-        UiTextKey::P2pNoDevices => "暂无已配对的设备。",
+        UiTextKey::P2pNoDevices => "还没有配对的设备。点“配对新设备”，用手机或另一台电脑扫码。",
         UiTextKey::P2pPresetFull => "完全控制",
         UiTextKey::P2pPresetObserve => "仅查看",
         UiTextKey::P2pPairedAt => "配对于 {time}",
@@ -964,7 +978,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pRevokeAndResetTls => "撤销并重置 TLS 凭据",
         UiTextKey::RemoteEdit => "编辑",
         UiTextKey::RemoteSaveConnect => "保存并连接",
-        UiTextKey::RemoteEmpty => "暂无远程连接。添加 SSH 连接，或粘贴 Host 连接码即可开始。",
         UiTextKey::RemoteConnecting => "正在连接…",
         UiTextKey::RemoteConnectionName => "连接名称",
         UiTextKey::RemoteCredentialsRequired => "补充连接凭据",
