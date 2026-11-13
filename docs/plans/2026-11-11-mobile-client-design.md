@@ -14,20 +14,28 @@
 
 两端各用系统 UI 技术与系统样式（iOS：SwiftUI；Android：Jetpack Compose + Material 3），两端外观不必一致，不做自定义设计系统。可点击的交互原型只在本地保存，用来定流程，不作为视觉稿。
 
-| 页面 | 内容 |
-|---|---|
-| 首页（总控） | 当前 Host 与连接状态；项目、tab、终端、Agent 数量；“需要处理”（等批准 → 等回答 → 失败）卡片；运行中列表；已结束折叠 |
-| 项目页 | 顶栏：左抽屉按钮、项目名、右抽屉按钮；终端 tab 横向列表（不含文件）；当前 tab 有多个 pane 时才显示 ◀ n/m ▶ 切换条；终端 |
-| 左抽屉 | “总控”入口；项目列表，带等待、失败、运行数量角标；设置、切换 Host |
-| 右抽屉 | “文件 / 会话”分段；文件树；Agent 会话历史 |
-| 文件 | 点文件全屏打开，可编辑保存，关闭回到终端 |
+**2026-11-13 起按平台原生方式（`docs/plans/2026-11-13-mobile-native-ui-plan.md`）：** 取消侧滑抽屉，导航用各平台自己的结构。
 
-- 首页与项目页是平级根页面，由左抽屉切换，不使用推入式导航：iOS 左边缘返回手势会与左抽屉冲突。
-- 抽屉两端都从侧边滑出。iOS 没有系统抽屉，容器自写，内容用系统组件；Android 左侧 `ModalNavigationDrawer`，右侧同一组件外层改为 RTL、内容恢复 LTR。终端可横向滚动时，右抽屉只响应屏幕边缘约 20pt 内开始的拖动。
+| 页面 | iOS | Android |
+|---|---|---|
+| 根 | `TabView`：总控 / 项目 / 设置，各自一个导航栈；“总控”的角标是需要处理的数量 | `NavigationBar` 同样三个目的地，Navigation Compose 返回栈，预测性返回；边到边，Android 12 起动态取色 |
+| 总控 | Host 行（菜单：切换、添加、管理）、四个数量、需要处理、运行中、已结束折叠；下拉刷新；空状态 | 同左，Host 是带下拉菜单的 chip |
+| 项目列表 | 项目，带正在跑的 Agent 的 logo、等待数、运行数 | 同左 |
+| 项目页（推入，隐藏标签栏 / 导航栏） | 标题菜单就地换项目；胶囊 tab 一排（Agent logo、等待点），最后是 tab 总览 sheet；底部细的 pane 条和接管栏 | 标题下拉换项目；带图标的 `PrimaryScrollableTabRow`；底部细的 pane 条；接管 FAB |
+| 文件与会话 | 半屏 / 全屏 sheet，分段切换 | `ModalBottomSheet`，`PrimaryTabRow` 切换 |
+| 编辑器 | `fullScreenCover` | 独立页面，Snackbar 提示 |
+| 设置 | Host 列表（点切换，左滑忘记）、添加、版本、开源许可 | Host 列表（菜单忘记）、添加、后台运行、通知、版本、开源许可 |
+
+- Agent 用桌面版的 logo（`scripts/build-mobile-agent-logos.py` 从 `assets/icons/agent-*.svg` 生成）。Codex、Claude 彩色，其余单色，跟随文字颜色。状态、数量、文件类型、设置项都带图标。
+- pane 条只在当前 tab 有多个 pane 时出现。接管前在接管栏（Android 是导航栏）上方，接管后在按键栏上方，可以点也可以左右滑。
+- 点 Agent、点通知：推入它所在的项目页，定位到那个 pane；不在 pane 里的终端单独推入。
+- 终端的调试统计只在调试版显示。
+- iOS 的界面测试 `YtttUITests` 对着 spike Host 真点一遍，每步截图。
+
 - 按键栏（2026-11-12，`docs/plans/2026-11-12-mobile-key-bar-plan.md`）：按键编码在核心（`send_key`，方向键随程序的光标模式），Android 自做按键栏与一次性 Ctrl，iOS 用 SwiftTerm 自带的 `TerminalAccessory`。
 - 未接管的终端在底部悬浮“接管终端”提示；Agent 等待时提示改为“等批准，接管后回复”。接管后提示换成按键栏（Esc、Tab、Ctrl、方向键、回车、键盘）和“交还电脑”。
 
-**已实现（2026-11-12，spike App，见 `docs/plans/2026-11-12-mobile-project-page-plan.md`）：** 首页与项目页为平级根页面，左抽屉切换（iOS 自写侧滑容器，Android `ModalNavigationDrawer`）；项目页有终端 tab、多 pane 时的 ◀ n/m ▶、终端与随 Agent 等待变化的接管提示；进入项目打开电脑选中的 tab 与其聚焦 pane；首页点 Agent、点通知都定位到它所在的 pane。右抽屉（文件 / 会话）与全屏文件编辑已实现（`docs/plans/2026-11-12-mobile-files-plan.md`；编辑器 iOS Runestone、Android sora-editor）。Android 的抽屉手势只在打开后生效（观察终端时横向拖动留给终端），由顶栏按钮打开。
+**2026-11-12 的 spike 版（已被上面的结构取代）：** 首页与项目页为平级根页面，左抽屉切换（iOS 自写侧滑容器，Android `ModalNavigationDrawer`）；项目页有终端 tab、多 pane 时的 ◀ n/m ▶、终端与随 Agent 等待变化的接管提示；进入项目打开电脑选中的 tab 与其聚焦 pane；首页点 Agent、点通知都定位到它所在的 pane。右抽屉（文件 / 会话）与全屏文件编辑已实现（`docs/plans/2026-11-12-mobile-files-plan.md`；编辑器 iOS Runestone、Android sora-editor）。Android 的抽屉手势只在打开后生效（观察终端时横向拖动留给终端），由顶栏按钮打开。
 
 ## 3. 分层
 
