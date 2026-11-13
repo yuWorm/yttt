@@ -37,6 +37,23 @@
 - 连接状态（已连接 / 正在连接 / 连接失败，直连还是经中继）显示在总控的 Host 行里。
 - 两端都跟随系统的深浅色。Android 12 起用动态取色，内容延伸到状态栏和导航栏下面。
 
+## 渲染图确认后的修改（2026-11-13，第二版）
+
+渲染图在本地 `scratchpad/native-ui/index.html`，用户确认了第二版。下面几条覆盖上表：
+
+- **图标**：Agent 用桌面版已有的 logo（`assets/icons/agent-*.svg`，Lobe Icons、Oh My Pi，MIT）。
+  - 出现在总控的 Agent 行、项目列表、换项目菜单、终端 tab、会话列表和 Android 通知上。
+  - Codex、Claude 是彩色的，其余是单色，跟随文字颜色，和桌面一致。
+  - 状态带图标：等批准是举手，等回答是对话气泡，工作中是闪电，已结束是对勾。数量、Host、文件类型、设置项也都带图标。
+- **项目页**：
+  - 顶部标题是项目名，点开就地换项目，列出各项目正在跑的 Agent 的 logo 和等待数。iOS 用 `toolbarTitleMenu`，Android 用标题的下拉菜单。
+  - 下面一排是终端 tab，两端都直接显示。Agent 的 tab 带它的 logo，有 Agent 在等的 tab 带一个点。iOS 用系统样式的胶囊按钮，Android 用带图标的 `PrimaryScrollableTabRow`。
+  - iOS 这一排的最后一个按钮打开 tab 总览 sheet：每个 tab 一张卡片，显示图标、标题、Agent 状态和 pane 数。终端缩略内容要核心支持，这次不做。
+  - pane 切换是最底部一条约 26pt 高的细条，紧贴接管栏的上方，接管后则在按键栏上方。只有一个 pane 时不出现，可以点名字也可以左右滑。Android 去掉第二排 tab。
+  - iOS 的接管提示改成贴底的接管栏；Android 仍用 FAB，浮在 pane 条上方。
+- **总控的 Host 菜单**：只有切换、添加、“管理 Host”（跳到设置）；忘记 Host 只在设置里做，可以忘记任意一台。
+- **配对页**：配对码输入框带粘贴按钮。
+
 ## 任务 1：导航目标（纯逻辑，先写测试）
 
 - 两端各写一个 `destination(agent, overview, terminals)`：
