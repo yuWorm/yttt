@@ -270,6 +270,7 @@ struct SettingsView: View {
             } footer: {
                 Text("点一台 Host 切换过去；向左滑或长按可以重命名、忘记它。")
             }
+            AppearanceSection()
             AccountSection()
             Section("关于") {
                 HStack(spacing: 12) {
@@ -327,6 +328,8 @@ struct LicensesView: View {
     private let licenses = [
         ("SwiftTerm", "MIT"),
         ("Runestone", "MIT"),
+        ("TreeSitterLanguages（tree-sitter 语法）", "MIT"),
+        ("JetBrains Mono", "SIL OFL 1.1"),
         ("Lobe Icons（Agent 图标）", "MIT"),
         ("Oh My Pi（图标）", "MIT"),
     ]

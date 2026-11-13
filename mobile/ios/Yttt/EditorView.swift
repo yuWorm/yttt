@@ -21,12 +21,23 @@ struct EditorView: View {
     @State private var status = ""
     @State private var conflict = false
     @State private var confirmClose = false
+    @Environment(\.colorScheme) private var scheme
+    @AppStorage(AppearanceSettings.editorFontKey) private var font = AppearanceSettings.defaultFont
+    @AppStorage(AppearanceSettings.editorSizeKey) private var size = AppearanceSettings.defaultEditorSize
+    @AppStorage(AppearanceSettings.editorThemeKey) private var themeId = AppearanceSettings.defaultTheme
+    @AppStorage(AppearanceSettings.editorWrapKey) private var wrap = false
+    @AppStorage(AppearanceSettings.editorLineNumbersKey) private var lineNumbers = true
+
+    private var look: EditorLook {
+        EditorLook(font: font, size: AppearanceSettings.editorSize(size),
+                   theme: theme(id: themeId, systemDark: scheme == .dark), wrap: wrap, lineNumbers: lineNumbers)
+    }
 
     var body: some View {
         NavigationStack {
             Group {
                 if text != nil {
-                    RunestoneEditor(handle: editor, onChange: { dirty = true })
+                    RunestoneEditor(handle: editor, look: look, editable: true, onChange: { dirty = true })
                 } else {
                     ProgressView()
                 }
@@ -64,7 +75,7 @@ struct EditorView: View {
         do {
             let opened = try await session.openFile(projectId: file.projectId, path: file.path)
             text = opened.text
-            editor.setText(opened.text)
+            editor.setText(opened.text, language: editorLanguage(path: file.path))
             dirty = false
             status = ""
         } catch {
@@ -88,46 +99,82 @@ struct EditorView: View {
     }
 }
 
-/// Reaches the Runestone view from SwiftUI: its text, and setting it.
+/// Reaches the Runestone view from SwiftUI: its text, setting it with the
+/// language to highlight it as, and the look it is drawn with.
 final class EditorHandle {
     weak var view: TextView?
-    private var pending: String?
+    private var pending: (text: String, language: String?)?
+    private var language: TreeSitterLanguage?
+    private(set) var theme: EditorTheme?
 
     var text: String? { view?.text }
 
-    func setText(_ text: String) {
-        if let view { view.text = text } else { pending = text }
+    func setText(_ text: String, language id: String?) {
+        language = treeSitterLanguage(id)
+        if let view { load(text, into: view) } else { pending = (text, id) }
     }
 
-    func attach(_ view: TextView) {
+    func attach(_ view: TextView, look: EditorLook) {
         self.view = view
-        if let pending { view.text = pending }
+        apply(look, to: view)
+        if let pending {
+            language = treeSitterLanguage(pending.language)
+            load(pending.text, into: view)
+        }
         pending = nil
+    }
+
+    /// A new theme needs the text parsed again with it; other settings apply at once.
+    func apply(_ look: EditorLook, to view: TextView) {
+        view.showLineNumbers = look.lineNumbers
+        view.isLineWrappingEnabled = look.wrap
+        guard theme?.look != look else { return }
+        let theme = EditorTheme(look)
+        self.theme = theme
+        view.backgroundColor = theme.backgroundColor
+        view.insertionPointColor = UIColor(rgb: look.theme.cursor)
+        view.selectionBarColor = UIColor(rgb: look.theme.cursor)
+        view.selectionHighlightColor = UIColor(rgb: look.theme.selection).withAlphaComponent(0.6)
+        let text = view.text
+        load(text, into: view)
+    }
+
+    private func load(_ text: String, into view: TextView) {
+        guard let theme else { return }
+        let selection = view.selectedRange
+        if let language {
+            view.setState(TextViewState(text: text, theme: theme, language: language))
+        } else {
+            view.setState(TextViewState(text: text, theme: theme))
+        }
+        if selection.upperBound <= (text as NSString).length { view.selectedRange = selection }
     }
 }
 
 struct RunestoneEditor: UIViewRepresentable {
     let handle: EditorHandle
+    let look: EditorLook
+    let editable: Bool
     let onChange: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
 
     func makeUIView(context: Context) -> TextView {
         let view = TextView()
-        view.backgroundColor = .systemBackground
-        view.showLineNumbers = true
         view.lineSelectionDisplayType = .line
-        view.isLineWrappingEnabled = false
+        view.isEditable = editable
         view.autocorrectionType = .no
         view.autocapitalizationType = .none
         view.smartQuotesType = .no
         view.smartDashesType = .no
         view.editorDelegate = context.coordinator
-        handle.attach(view)
+        handle.attach(view, look: look)
         return view
     }
 
-    func updateUIView(_ view: TextView, context: Context) {}
+    func updateUIView(_ view: TextView, context: Context) {
+        handle.apply(look, to: view)
+    }
 
     final class Coordinator: TextViewDelegate {
         let onChange: () -> Void

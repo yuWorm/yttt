@@ -17,10 +17,31 @@ final class TerminalControl: ObservableObject {
     @Published var controlling = false
     @Published var hostTooOld = false
     @Published var error: String?
+    /// The system keyboard is up, for the button that puts it away.
+    @Published var keyboardShown = false
+    private var observers: [NSObjectProtocol] = []
 
     init(session: HostSession, sessionId: String) {
         self.session = session
         self.sessionId = sessionId
+        let center = NotificationCenter.default
+        observers = [
+            center.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.keyboardShown = true }
+            },
+            center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.keyboardShown = false }
+            },
+        ]
+    }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    /// Puts the keyboard away; tapping the terminal brings it back.
+    func hideKeyboard() {
+        handle.container?.hideKeyboard()
     }
 
     /// Takes the terminal at the size the view has once it fits the screen;
@@ -54,10 +75,16 @@ struct TerminalScreen: View {
     let terminal: TerminalInfo
     @ObservedObject var control: TerminalControl
     @State private var stats = ""
+    @Environment(\.colorScheme) private var scheme
+    @AppStorage(AppearanceSettings.terminalFontKey) private var font = AppearanceSettings.defaultFont
+    @AppStorage(AppearanceSettings.terminalSizeKey) private var size = AppearanceSettings.defaultTerminalSize
+    @AppStorage(AppearanceSettings.terminalThemeKey) private var themeId = AppearanceSettings.defaultTheme
 
     var body: some View {
+        let look = TerminalLook(font: font, size: AppearanceSettings.terminalSize(size),
+                                theme: theme(id: themeId, systemDark: scheme == .dark))
         TerminalHost(session: control.session, terminal: terminal, controlling: control.controlling,
-                     handle: control.handle,
+                     look: look, handle: control.handle,
                      onStats: { stats = $0 },
                      onControlLost: { control.controlling = false })
             .overlay(alignment: .topTrailing) {
@@ -139,18 +166,20 @@ struct TerminalHost: UIViewRepresentable {
     let session: HostSession
     let terminal: TerminalInfo
     let controlling: Bool
+    let look: TerminalLook
     let handle: TerminalHandle
     let onStats: (String) -> Void
     let onControlLost: () -> Void
 
     func makeUIView(context: Context) -> TerminalContainer {
-        let view = TerminalContainer(session: session, terminal: terminal, onStats: onStats,
+        let view = TerminalContainer(session: session, terminal: terminal, look: look, onStats: onStats,
                                      onControlLost: onControlLost)
         handle.container = view
         return view
     }
 
     func updateUIView(_ view: TerminalContainer, context: Context) {
+        view.apply(look)
         view.setControlling(controlling)
     }
 
@@ -159,7 +188,7 @@ struct TerminalHost: UIViewRepresentable {
     }
 }
 
-final class TerminalContainer: UIView, TerminalViewDelegate {
+final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizerDelegate {
     private let session: HostSession
     private let info: TerminalInfo
     private let onStats: (String) -> Void
@@ -177,23 +206,26 @@ final class TerminalContainer: UIView, TerminalViewDelegate {
     private var frames = 0
     private var lastReport = CACurrentMediaTime()
     private var fedBytes = 0
+    private var look: TerminalLook?
 
-    init(session: HostSession, terminal: TerminalInfo, onStats: @escaping (String) -> Void,
+    init(session: HostSession, terminal: TerminalInfo, look: TerminalLook, onStats: @escaping (String) -> Void,
          onControlLost: @escaping () -> Void) {
         self.session = session
         self.info = terminal
         self.onStats = onStats
         self.onControlLost = onControlLost
         super.init(frame: .zero)
-        backgroundColor = .black
         scroll.alwaysBounceHorizontal = true
-        scroll.indicatorStyle = .white
         addSubview(scroll)
         terminalView.terminalDelegate = self
         terminalView.changeScrollback(0)
-        terminalView.font = UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         scroll.addSubview(terminalView)
-        observeLayout()
+        apply(look)
+        // A swipe down puts the keyboard away, as in Messages.
+        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipedDown))
+        swipe.direction = .down
+        swipe.delegate = self
+        addGestureRecognizer(swipe)
         Task { @MainActor in
             do {
                 try await session.attach(sessionId: terminal.sessionId)
@@ -207,6 +239,43 @@ final class TerminalContainer: UIView, TerminalViewDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The font and colors; a new font changes the grid, as the Host or the
+    /// screen decides.
+    func apply(_ look: TerminalLook) {
+        guard look != self.look else { return }
+        let fontChanged = look.font != self.look?.font || look.size != self.look?.size
+        self.look = look
+        let theme = look.theme
+        if fontChanged { terminalView.font = look.uiFont }
+        terminalView.installColors(theme.ansi.map { rgb in
+            SwiftTerm.Color(red: UInt16((rgb >> 16) & 0xFF) * 257, green: UInt16((rgb >> 8) & 0xFF) * 257,
+                            blue: UInt16(rgb & 0xFF) * 257)
+        })
+        terminalView.nativeForegroundColor = UIColor(rgb: theme.foreground)
+        terminalView.nativeBackgroundColor = UIColor(rgb: theme.background)
+        terminalView.caretColor = UIColor(rgb: theme.cursor)
+        terminalView.selectedTextBackgroundColor = UIColor(rgb: theme.selection)
+        backgroundColor = UIColor(rgb: theme.background)
+        scroll.indicatorStyle = theme.dark ? .white : .black
+        if fontChanged {
+            if controlling || fitting {
+                setNeedsLayout()
+            } else {
+                observeLayout()
+            }
+        }
+        // Repaint everything in the new colors.
+        session.repaint(sessionId: info.sessionId)
+    }
+
+    func hideKeyboard() {
+        _ = terminalView.resignFirstResponder()
+    }
+
+    @objc private func swipedDown() {
+        if controlling { hideKeyboard() }
+    }
 
     func stop() {
         link?.invalidate()
@@ -295,6 +364,10 @@ final class TerminalContainer: UIView, TerminalViewDelegate {
             lastReport = now
         }
     }
+
+    /// The swipe goes along with the terminal's own touches.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
     // MARK: TerminalViewDelegate
 

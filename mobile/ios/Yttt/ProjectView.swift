@@ -168,8 +168,6 @@ private struct TabStrip: View {
                 .accessibilityLabel("全部 Tab")
                 .padding(.horizontal, 12)
                 .frame(maxHeight: .infinity)
-                .background(.bar)
-                .overlay(alignment: .leading) { Divider() }
         }
         .fixedSize(horizontal: false, vertical: true)
         .background(.bar)
@@ -211,6 +209,9 @@ private struct PaneArea: View {
         }
         .toolbar {
             if control.controlling {
+                if control.keyboardShown {
+                    ToolbarItem(placement: .topBarTrailing) { HideKeyboardButton(control: control) }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { control.giveBack() } label: { Label("交还电脑", systemImage: "desktopcomputer") }
                         .labelStyle(.titleOnly)
@@ -378,8 +379,21 @@ private struct AloneArea: View {
         }
         .toolbar {
             if control.controlling {
+                if control.keyboardShown {
+                    ToolbarItem(placement: .topBarTrailing) { HideKeyboardButton(control: control) }
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button("交还电脑") { control.giveBack() } }
             }
         }
+    }
+}
+
+/// Puts the system keyboard away while typing into a terminal.
+private struct HideKeyboardButton: View {
+    let control: TerminalControl
+
+    var body: some View {
+        Button { control.hideKeyboard() } label: { Image(systemName: "keyboard.chevron.compact.down") }
+            .accessibilityLabel("收起键盘")
     }
 }
