@@ -51,6 +51,7 @@ private const val PROJECTS = "projects"
 private const val SETTINGS = "settings"
 private const val PAIR = "pair"
 private const val LICENSES = "licenses"
+private const val CONNECTION_LOG = "connection-log"
 private const val SIGN_IN = "sign-in"
 private const val TERMINAL_LOOK = "terminal-look"
 private const val EDITOR_LOOK = "editor-look"
@@ -249,6 +250,7 @@ fun App(
                     onBattery = onBattery,
                     onNotifications = onNotifications,
                     onLicenses = { nav.navigate(LICENSES) },
+                    onLog = { nav.navigate(CONNECTION_LOG) },
                     account = account,
                     accountNotice = accountNotice,
                     viaAccount = relaySource == RelaySource.ACCOUNT,
@@ -262,6 +264,7 @@ fun App(
                 )
             }
             composable(LICENSES) { LicensesScreen(onBack = { nav.popBackStack() }) }
+            composable(CONNECTION_LOG) { ConnectionLogScreen(link.logs, onBack = { nav.popBackStack() }) }
             composable(TERMINAL_LOOK) { TerminalAppearanceScreen(link.appearance) { nav.popBackStack() } }
             composable(EDITOR_LOOK) { EditorAppearanceScreen(link.appearance) { nav.popBackStack() } }
             composable(SIGN_IN) {

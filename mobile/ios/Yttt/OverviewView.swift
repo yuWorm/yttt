@@ -280,6 +280,14 @@ struct SettingsView: View {
                     LabeledContent("版本", value: Self.version)
                 }
                 NavigationLink {
+                    ConnectionLogView()
+                } label: {
+                    HStack(spacing: 12) {
+                        IconTile(systemName: "list.bullet.rectangle", color: .teal)
+                        Text("连接日志")
+                    }
+                }
+                NavigationLink {
                     LicensesView()
                 } label: {
                     HStack(spacing: 12) {

@@ -13,6 +13,9 @@ enum Storage {
         return url
     }
 
+    /// Where the core keeps its connection log.
+    static var logs: URL { directory.appendingPathComponent("logs", isDirectory: true) }
+
     /// The device's 32-byte secret, in the Keychain.
     static func deviceSecret() -> Data {
         let store = SecretStore(service: "com.yttt.yai", account: "device-secret")
@@ -98,6 +101,7 @@ final class AppModel: ObservableObject {
     }
 
     init() {
+        startConnectionLog(dir: Storage.logs.path)
         let core = try! MobileCore()
         self.core = core
         secret = Storage.deviceSecret()
@@ -152,7 +156,29 @@ final class AppModel: ObservableObject {
             // The session gave up; a new one may still get through, once.
             if wasReady { Task { await reconnect() } }
         case .connecting, .reconnecting:
-            downSince = downSince ?? Date()
+            if downSince == nil {
+                downSince = Date()
+                scheduleFreshConnect(for: connected)
+            }
+        }
+    }
+
+    /// The last fresh connection this app made by itself, to space them out.
+    private var lastAutoFresh: Date?
+
+    /// Down this long in the foreground, a fresh session usually gets through
+    /// where the old one keeps failing, as leaving and coming back did; at most
+    /// once a minute.
+    private func scheduleFreshConnect(for connected: HostSession) {
+        Task {
+            try? await Task.sleep(for: .seconds(20))
+            guard session === connected, link != .ready,
+                  UIApplication.shared.applicationState == .active,
+                  pathMonitor.currentPath.status == .satisfied,
+                  lastAutoFresh.map({ Date().timeIntervalSince($0) > 60 }) ?? true
+            else { return }
+            lastAutoFresh = Date()
+            await reconnect()
         }
     }
 

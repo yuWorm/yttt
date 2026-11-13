@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Code
@@ -67,6 +68,7 @@ fun SettingsScreen(
     onBattery: () -> Unit,
     onNotifications: () -> Unit,
     onLicenses: () -> Unit,
+    onLog: () -> Unit,
     account: RelayAccount?,
     accountNotice: String?,
     viaAccount: Boolean,
@@ -222,6 +224,14 @@ fun SettingsScreen(
                     leadingContent = { Icon(Icons.Outlined.Info, null) },
                     headlineContent = { Text("版本") },
                     supportingContent = { Text(version) },
+                )
+            }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.AutoMirrored.Outlined.ListAlt, null) },
+                    headlineContent = { Text("连接日志") },
+                    supportingContent = { Text("连接慢或失败时，看看卡在哪一步") },
+                    modifier = Modifier.clickable(onClick = onLog),
                 )
             }
             item {

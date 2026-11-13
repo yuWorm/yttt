@@ -24,6 +24,7 @@ import uniffi.yttt_mobile_core.MobileCore
 import uniffi.yttt_mobile_core.MobileCoreException
 import uniffi.yttt_mobile_core.RelaySource
 import uniffi.yttt_mobile_core.SignedIn
+import uniffi.yttt_mobile_core.startConnectionLog
 import uniffi.yttt_mobile_core.Overview
 import uniffi.yttt_mobile_core.OverviewListener
 
@@ -43,6 +44,8 @@ val Context.link: Link get() = (applicationContext as YtttApp).link
 class Link(context: Context) {
     private val app = context.applicationContext
     val storage = Storage(app)
+    /** Where the core keeps its connection log. */
+    val logs = java.io.File(storage.dir, "logs").also { startConnectionLog(it.path) }
     val core = MobileCore()
     val secret: ByteArray = storage.deviceSecret()
     /** Work that must outlive any screen, such as detaching a terminal. */
@@ -159,7 +162,31 @@ class Link(context: Context) {
                 // The session gave up; a new one may still get through, once.
                 if (wasReady) scope.launch { reconnect() }
             }
-            else -> if (downSince.value == null) downSince.value = android.os.SystemClock.elapsedRealtime()
+            else -> if (downSince.value == null) {
+                downSince.value = android.os.SystemClock.elapsedRealtime()
+                scheduleFreshConnect(of)
+            }
+        }
+    }
+
+    /** The last fresh connection this app made by itself (elapsed realtime), to space them out. */
+    private var lastAutoFresh: Long? = null
+
+    /**
+     * Down this long in the foreground, a fresh session usually gets through
+     * where the old one keeps failing, as leaving and coming back did; at most
+     * once a minute.
+     */
+    private fun scheduleFreshConnect(of: HostSession) {
+        scope.launch {
+            kotlinx.coroutines.delay(20_000)
+            val now = android.os.SystemClock.elapsedRealtime()
+            val connectivity = app.getSystemService(ConnectivityManager::class.java)
+            if (session.value !== of || linkState.value is LinkState.Ready || !foreground.value) return@launch
+            if (connectivity.activeNetwork == null) return@launch
+            if (lastAutoFresh?.let { now - it < 60_000 } == true) return@launch
+            lastAutoFresh = now
+            reconnect()
         }
     }
 
