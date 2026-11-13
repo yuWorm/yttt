@@ -750,7 +750,6 @@ fn pair_with_host(
         .build()
         .map_err(|error| error.to_string())?;
     let secret = paired_hosts::new_device_key();
-    let mut code = code;
     let account = crate::relay_account::load_session(&crate::relay_account::session_store(profile))
         .ok()
         .flatten();
@@ -796,7 +795,7 @@ fn pair_with_host(
         let target = draft
             .relay_target(ticket.as_ref(), yttt_control_client::now_unix())
             .ok();
-        code.relay_url = target.as_ref().map(|target| target.url.clone());
+        let relay_url = target.as_ref().map(|target| target.url.clone());
         let relay = yttt_transport_iroh::RelaySetup::from(target);
         let endpoint = IrohEndpoint::bind(EndpointConfig {
             // The key the Host will admit: the work session must use the same one.
@@ -810,12 +809,20 @@ fn pair_with_host(
         .map_err(|error| format!("cannot open the P2P endpoint: {error}"))?;
         let label = device_label();
         let result = tokio::select! {
-            result = yttt_client_core::p2p::pair(&endpoint, &code, &label, |short_code| {
+            result = yttt_client_core::p2p::pair(&endpoint, &code, relay_url, &label, |short_code| {
                 let _ = events.send(PairEvent::ShortCode(short_code));
             }) => result.map_err(|error| error.to_string()),
             _ = cancelled.recv_async() => Err("pairing was cancelled".to_string()),
         };
         endpoint.close().await;
+        // Signed out, only the local network reaches a Host that relays
+        // through its account's nodes.
+        let result = match (&account, &code.control_url, result) {
+            (None, Some(control_url), Err(error)) => Err(format!(
+                "{error}. This computer relays through {control_url}: sign in to that relay account to pair from outside its network"
+            )),
+            (_, _, result) => result,
+        };
         let host = match result {
             Ok(host) => host,
             Err(error) => {

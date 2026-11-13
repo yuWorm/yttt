@@ -708,9 +708,15 @@ impl Manager {
         // can hold many temporary IPv6 addresses that only lengthen the code.
         direct_addrs.sort_by_key(|address| address.is_ipv6());
         direct_addrs.truncate(MAX_ADVERTISED_ADDRS.min(MAX_DIRECT_ADDRS));
+        // A device signs in to the Host's control plane to reach it through
+        // its relay node.
+        let control_url = p2p::load_relay_account(self.store.lock().root())
+            .ok()
+            .flatten()
+            .map(|stored| stored.session.control_url);
         let code = PairingCode {
             host: endpoint.id(),
-            relay_url: p2p.relay_url.lock().clone(),
+            control_url,
             direct_addrs,
             invitation_id: invitation.id,
             secret: *invitation.secret,

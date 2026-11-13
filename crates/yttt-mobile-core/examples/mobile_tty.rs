@@ -58,6 +58,7 @@ async fn main() -> Result<(), String> {
                 secret,
                 RelayChoice::FromHost,
                 None,
+                true,
                 |short_code| {
                     println!("Compare this code with the Host and confirm there: {short_code:06}");
                 },

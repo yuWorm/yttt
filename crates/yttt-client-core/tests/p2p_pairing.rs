@@ -175,7 +175,7 @@ async fn pair_device(
     let (shown, shown_rx) = tokio::sync::oneshot::channel();
     let device = endpoint.clone();
     let pairing = tokio::spawn(async move {
-        pair(&device, &code, "test device", move |short_code| {
+        pair(&device, &code, None, "test device", move |short_code| {
             let _ = shown.send(short_code);
         })
         .await
@@ -290,7 +290,8 @@ async fn a_declined_device_is_not_paired() {
     let admin = start_host(temp.path()).await;
     let code = invitation(&admin).await;
     let endpoint = device_endpoint([23; 32]).await;
-    let pairing = tokio::spawn(async move { pair(&endpoint, &code, "declined", |_| {}).await });
+    let pairing =
+        tokio::spawn(async move { pair(&endpoint, &code, None, "declined", |_| {}).await });
     awaiting_confirmation(&admin).await;
     remote_access(&admin, RemoteAccessRequest::CancelPairing).await;
 
@@ -313,7 +314,7 @@ async fn a_device_that_leaves_before_the_host_decides_frees_the_invitation() {
     let code = invitation(&admin).await;
     let endpoint = device_endpoint([27; 32]).await;
     let device = endpoint.clone();
-    let pairing = tokio::spawn(async move { pair(&device, &code, "leaving", |_| {}).await });
+    let pairing = tokio::spawn(async move { pair(&device, &code, None, "leaving", |_| {}).await });
     awaiting_confirmation(&admin).await;
     pairing.abort();
     endpoint.close().await;
@@ -354,11 +355,11 @@ async fn a_second_holder_of_the_code_withdraws_the_invitation() {
     let first = device_endpoint([24; 32]).await;
     let first_code = code.clone();
     let first_pairing =
-        tokio::spawn(async move { pair(&first, &first_code, "first", |_| {}).await });
+        tokio::spawn(async move { pair(&first, &first_code, None, "first", |_| {}).await });
     awaiting_confirmation(&admin).await;
 
     let second = device_endpoint([25; 32]).await;
-    let second_result = pair(&second, &code, "second", |_| {}).await;
+    let second_result = pair(&second, &code, None, "second", |_| {}).await;
     assert!(matches!(
         second_result,
         Err(PairError::Rejected(PairRejectReason::InvitationClosed))
@@ -404,56 +405,6 @@ async fn a_client_refuses_a_host_that_is_not_the_paired_one() {
             .iter()
             .all(|session| session.device.is_none())
     );
-}
-
-/// Needs a relay, e.g. `packaging/relay-dev/docker-compose.yml`, at `YTTT_TEST_RELAY_URL`.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs a local iroh relay"]
-async fn a_device_pairs_and_works_with_only_the_relay_as_a_hint() {
-    let relay_url = std::env::var("YTTT_TEST_RELAY_URL").expect("set YTTT_TEST_RELAY_URL");
-    let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path()).await;
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: true,
-            relay_url: Some(relay_url.clone()),
-        },
-    )
-    .await;
-    let mut code = invitation(&admin).await;
-    assert_eq!(code.relay_url.as_deref(), Some(relay_url.as_str()));
-    code.direct_addrs.clear();
-
-    let secret = [28; 32];
-    let endpoint = IrohEndpoint::bind(EndpointConfig {
-        secret,
-        relay: RelaySetup::Use(yttt_transport_iroh::RelayTarget {
-            url: relay_url,
-            token: None,
-        }),
-        alpns: Vec::new(),
-        gate: Arc::new(OpenGate),
-        direct: DirectPaths::Any,
-    })
-    .await
-    .unwrap();
-    let device = endpoint.clone();
-    let pairing = tokio::spawn(async move { pair(&device, &code, "relay device", |_| {}).await });
-    let (endpoint_id, _) = awaiting_confirmation(&admin).await;
-    remote_access(
-        &admin,
-        RemoteAccessRequest::ConfirmPairing {
-            endpoint_id,
-            preset: DevicePreset::Full,
-        },
-    )
-    .await;
-    let paired = pairing.await.unwrap().unwrap();
-    assert!(paired.direct_addrs.is_empty());
-
-    let client = connect_device(endpoint, &paired, secret).await;
-    client.request(Request::ListResources).await.unwrap();
 }
 
 /// Connected Clients the Host last reported in its diagnostics.

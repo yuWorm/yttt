@@ -34,6 +34,10 @@ pub enum MobileCoreError {
     /// A browser sign-in was cancelled.
     #[error("the sign-in was cancelled")]
     Cancelled,
+    /// The computer relays through this control plane: sign in there and pair
+    /// again, or pair over the local network only.
+    #[error("sign in to {control_url} to pair with this computer")]
+    SignInRequired { control_url: String },
 }
 
 impl From<AccountError> for MobileCoreError {
@@ -50,6 +54,7 @@ impl From<MobileError> for MobileCoreError {
         match error {
             MobileError::HostTooOld => Self::HostTooOld,
             MobileError::SignInExpired => Self::SignInExpired,
+            MobileError::SignInRequired { control_url } => Self::SignInRequired { control_url },
             error => Self::Failed {
                 reason: error.to_string(),
             },
@@ -295,7 +300,10 @@ impl MobileCore {
     /// Pairs with the Host in `code` and returns the record to store.
     /// `relay_only` keeps the device off direct paths (a diagnostic setting);
     /// `account`, a signed-in relay account, pairs through the Host's relay
-    /// node with a ticket.
+    /// node with a ticket. Signed out, a code naming the Host's control plane
+    /// fails with `SignInRequired` unless `direct_only`, when pairing uses the
+    /// local network.
+    #[allow(clippy::too_many_arguments)]
     pub async fn pair(
         &self,
         code: String,
@@ -303,6 +311,7 @@ impl MobileCore {
         device_secret: Vec<u8>,
         relay_only: bool,
         account: Option<Vec<u8>>,
+        direct_only: bool,
         listener: Arc<dyn PairingListener>,
     ) -> Result<Vec<u8>, MobileCoreError> {
         let device_secret = secret(&device_secret)?;
@@ -314,6 +323,7 @@ impl MobileCore {
                 device_secret,
                 relay_choice(relay_only),
                 account.as_ref(),
+                direct_only,
                 move |short_code| listener.on_short_code(short_code),
             )
             .await

@@ -911,7 +911,7 @@ mod qr_tests {
     fn a_pairing_code_survives_its_qr_code() {
         let code = yttt_protocol::p2p::PairingCode {
             host: yttt_protocol::EndpointKey([7; 32]),
-            relay_url: Some("https://relay.example.com".into()),
+            control_url: Some("https://control.example.com".into()),
             direct_addrs: vec![
                 "192.168.1.20:51820".parse().unwrap(),
                 "[2001:db8::20]:51820".parse().unwrap(),

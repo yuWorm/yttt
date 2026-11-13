@@ -71,8 +71,11 @@ pub struct PairedDevice {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingCode {
     pub host: EndpointKey,
+    /// The control plane the Host's relay account is on: a device signs in
+    /// there to reach the Host through its relay node. Where the Host relays
+    /// comes from the placement it signs, never from the code.
     #[serde(default)]
-    pub relay_url: Option<String>,
+    pub control_url: Option<String>,
     #[serde(default)]
     pub direct_addrs: Vec<SocketAddr>,
     #[serde(with = "serde_bytes")]
@@ -88,7 +91,7 @@ impl fmt::Debug for PairingCode {
         formatter
             .debug_struct("PairingCode")
             .field("host", &self.host)
-            .field("relay_url", &self.relay_url)
+            .field("control_url", &self.control_url)
             .field("direct_addrs", &self.direct_addrs)
             .field("environment_id", &self.environment_id)
             .field("profile_id", &self.profile_id)
@@ -142,7 +145,7 @@ impl PairingCode {
         let code = code.map_err(|_| PairingCodeError::Malformed)?;
         let valid = code.direct_addrs.len() <= MAX_DIRECT_ADDRS
             && code
-                .relay_url
+                .control_url
                 .as_ref()
                 .is_none_or(|url| url.len() <= MAX_RELAY_URL_BYTES)
             && !code.environment_id.is_empty();
@@ -266,7 +269,7 @@ mod tests {
     fn code() -> PairingCode {
         PairingCode {
             host: EndpointKey([7; 32]),
-            relay_url: Some("http://127.0.0.1:3340".into()),
+            control_url: Some("https://control.example".into()),
             direct_addrs: vec!["192.0.2.1:4433".parse().unwrap()],
             invitation_id: [1; 16],
             secret: [2; 32],
@@ -313,6 +316,21 @@ mod tests {
             PairingCode::decode(&crowded.encode()).unwrap_err(),
             PairingCodeError::Malformed
         );
+        let mut long_control = code();
+        long_control.control_url = Some(format!("https://{}", "c".repeat(MAX_RELAY_URL_BYTES)));
+        assert_eq!(
+            PairingCode::decode(&long_control.encode()).unwrap_err(),
+            PairingCodeError::Malformed
+        );
+    }
+
+    #[test]
+    fn a_pairing_code_with_every_address_and_a_long_control_url_fits() {
+        let mut full = code();
+        full.direct_addrs = vec!["[2001:db8::1]:65535".parse().unwrap(); MAX_DIRECT_ADDRS];
+        full.control_url = Some(format!("https://{}.example.com", "c".repeat(48)));
+        full.environment_id = "e".repeat(64);
+        assert!(PairingCode::decode(&full.encode()).is_ok());
     }
 
     #[test]

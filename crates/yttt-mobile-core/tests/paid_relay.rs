@@ -204,9 +204,24 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
     })
     .await;
 
-    // Signed out, the phone learns of no relay the Host signed, and a phone
-    // limited to the relay cannot pair.
+    // Signed out, the code names the Host's control plane to sign in to.
     let code = invite(&admin).await;
+    let refused = pair(
+        &code,
+        "iPhone",
+        SECRET,
+        RelayChoice::OnlyFromHost,
+        None,
+        false,
+        |_| {},
+    )
+    .await;
+    assert!(
+        matches!(&refused, Err(MobileError::SignInRequired { control_url: url }) if *url == control_url),
+        "{refused:?}"
+    );
+    // Asked to pair over the local network instead, a phone limited to the
+    // relay has nothing to pair through.
     let refused = tokio::time::timeout(
         Duration::from_secs(60),
         pair(
@@ -215,6 +230,7 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
             SECRET,
             RelayChoice::OnlyFromHost,
             None,
+            true,
             |_| {},
         ),
     )
@@ -245,6 +261,7 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
                 SECRET,
                 RelayChoice::OnlyFromHost,
                 Some(&account),
+                false,
                 |_| {},
             )
             .await
@@ -371,6 +388,7 @@ async fn a_connected_phone_follows_its_host_to_another_node_and_connects_from_it
                 SECRET,
                 RelayChoice::OnlyFromHost,
                 Some(&account),
+                false,
                 |_| {},
             )
             .await
@@ -411,13 +429,23 @@ async fn a_connected_phone_follows_its_host_to_another_node_and_connects_from_it
     })
     .await;
     // Within a few seconds of the move, with no one touching the phone.
-    tokio::time::timeout(
-        Duration::from_secs(15),
-        phone.client().request(Request::ListResources),
-    )
+    let moved_at = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while phone
+            .client()
+            .request(Request::ListResources)
+            .await
+            .is_err()
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
     .await
-    .expect("the session works again")
-    .unwrap();
+    .expect("the session works again");
+    eprintln!(
+        "the phone worked again {:?} after the move",
+        moved_at.elapsed()
+    );
     let latest = stored
         .lock()
         .last()

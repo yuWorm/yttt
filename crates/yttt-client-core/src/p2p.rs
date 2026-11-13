@@ -118,18 +118,21 @@ pub enum PairError {
     TimedOut,
 }
 
-/// Pairs this device with the Host named in `code`. `show_short_code` receives the
-/// six-digit code to display; the user compares it with the Host's screen while the
-/// Host user decides. Returns only after the Host accepted the device.
+/// Pairs this device with the Host named in `code`, through `relay_url` (the
+/// relay the Host signed, if this device knows it) or the code's direct
+/// addresses. `show_short_code` receives the six-digit code to display; the
+/// user compares it with the Host's screen while the Host user decides.
+/// Returns only after the Host accepted the device.
 pub async fn pair(
     endpoint: &IrohEndpoint,
     code: &PairingCode,
+    relay_url: Option<String>,
     device_label: &str,
     show_short_code: impl FnOnce(u32),
 ) -> Result<PairedHost, PairError> {
     let peer = PeerAddr {
         key: code.host,
-        relay_url: code.relay_url.clone(),
+        relay_url,
         direct_addrs: code.direct_addrs.clone(),
     };
     let transport = |error: yttt_transport::TransportError| PairError::Transport(error.to_string());
@@ -200,7 +203,7 @@ pub async fn pair(
                 environment_id,
                 profile_id,
                 host_label,
-                relay_url: code.relay_url.clone(),
+                relay_url: None,
                 direct_addrs: code.direct_addrs.clone(),
                 placement: None,
                 ticket: None,

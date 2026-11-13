@@ -5,7 +5,8 @@
 //!     cargo run -p yttt-client-core --example p2p_probe -- '<pairing code>' [--relay-only] [--seconds 30]
 //!         [--account <control url> <email>]
 //!
-//! With `--account` the probe signs in to a paid relay account (password from
+//! Without `--account` it pairs over direct paths only. With `--account` the
+//! probe signs in to a paid relay account (password from
 //! `YTTT_RELAY_PASSWORD` or the terminal), registers its key and joins the
 //! relay with a ticket, as the desktop app does; it removes the key from the
 //! account when it ends.
@@ -76,26 +77,31 @@ async fn main() -> Result<(), String> {
     }
     // Whatever happens next, the probe's key leaves the account at the end.
     let outcome = async {
-        let relay = match &session {
-            Some(session) => {
-                let ticket = session
-                    .ticket(&secret, kind)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                println!("ticket for {} at {}", ticket.node_id, ticket.relay_url);
-                if code.relay_url.as_deref() != Some(ticket.relay_url.as_str()) {
-                    println!(
-                        "note: the Host invited through {:?}; this account's relay is {}",
-                        code.relay_url, ticket.relay_url
-                    );
-                }
-                Some(ticket.target())
-            }
-            None => code
-                .relay_url
-                .clone()
-                .map(|url| RelayTarget { url, token: None }),
-        };
+        // Only the Host's signed placement says which relay reaches it.
+        let mut relay = None;
+        let mut placement = None;
+        if let Some(session) = &session {
+            let placed = session
+                .placed_ticket(&secret, kind)
+                .await
+                .map_err(|error| error.to_string())?;
+            let signed = placed
+                .host_placement
+                .ok_or("the control plane sent no placement for the Host")?;
+            let node = signed
+                .verify(&code.host.0)
+                .map_err(|error| format!("the Host's placement: {error}"))?;
+            println!(
+                "the Host relays through {} at {}",
+                node.node_id, node.relay_url
+            );
+            relay = Some(RelayTarget {
+                url: node.relay_url.clone(),
+                token: Some(placed.ticket.token.clone()),
+            });
+            placement = Some(signed);
+        }
+        let relay_url = relay.as_ref().map(|relay| relay.url.clone());
         let endpoint = IrohEndpoint::bind(EndpointConfig {
             secret,
             relay: relay.into(),
@@ -107,7 +113,7 @@ async fn main() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         println!("device key {}", endpoint.id());
         println!("reaching the Host…");
-        let host = pair(&endpoint, &code, "p2p probe", |short_code| {
+        let mut host = pair(&endpoint, &code, relay_url, "p2p probe", |short_code| {
             let digits = format!("{short_code:06}");
             println!(
                 "confirm on the Host that it shows: {} {}",
@@ -118,6 +124,7 @@ async fn main() -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?;
         println!("paired with {}", host.host);
+        host.placement = placement;
 
         let connector = Arc::new(host.connector(endpoint.clone()));
         let started = std::time::Instant::now();

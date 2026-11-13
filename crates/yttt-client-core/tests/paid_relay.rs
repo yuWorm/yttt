@@ -216,10 +216,11 @@ async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
         panic!("expected an invitation");
     };
     let code = PairingCode::decode(&code.0).unwrap();
-    assert_eq!(code.relay_url.as_deref(), Some(relay_url.as_str()));
+    assert_eq!(code.control_url.as_deref(), Some(control_url.as_str()));
     let pairing = tokio::spawn({
         let phone = phone.clone();
-        async move { pair(&phone, &code, "phone", |_| {}).await }
+        let relay_url = relay_url.clone();
+        async move { pair(&phone, &code, Some(relay_url), "phone", |_| {}).await }
     });
     let endpoint_id = eventually("the phone asking to pair", async || {
         match status(&admin).await.p2p.pairing {
@@ -437,7 +438,8 @@ async fn a_host_moves_to_another_node_and_its_device_follows() {
     let code = PairingCode::decode(&code.0).unwrap();
     let pairing = tokio::spawn({
         let phone = phone.clone();
-        async move { pair(&phone, &code, "phone", |_| {}).await }
+        let relay_url = ticket.relay_url.clone();
+        async move { pair(&phone, &code, Some(relay_url), "phone", |_| {}).await }
     });
     let endpoint_id = eventually("the phone asking to pair", async || {
         match status(&admin).await.p2p.pairing {

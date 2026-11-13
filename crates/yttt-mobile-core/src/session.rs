@@ -131,6 +131,10 @@ pub enum MobileError {
     /// The relay account's session is no longer valid: sign in again.
     #[error("the relay account's sign-in expired")]
     SignInExpired,
+    /// The Host relays through `control_url`'s nodes: sign in there to pair
+    /// from anywhere, or pair over the local network only.
+    #[error("sign in to {control_url} to pair with this computer")]
+    SignInRequired { control_url: String },
 }
 
 /// Where the endpoint's relay came from.
@@ -363,17 +367,25 @@ async fn bind(
 ///
 /// Signed in to a relay account, the phone first registers its key for this
 /// Host and pairs through the Host's relay node with a ticket, as a Host
-/// reachable only through that relay needs.
+/// reachable only through that relay needs. Signed out, a code that names
+/// the Host's control plane is refused with [`MobileError::SignInRequired`]
+/// unless `direct_only`, when the phone pairs over the local network.
 pub async fn pair(
     code_text: &str,
     device_label: &str,
     device_secret: [u8; 32],
     relay: RelayChoice,
     account: Option<&Account>,
+    direct_only: bool,
     on_short_code: impl FnOnce(u32),
 ) -> Result<PairedHostRecord, MobileError> {
-    let mut code = PairingCode::decode(code_text.trim())
+    let code = PairingCode::decode(code_text.trim())
         .map_err(|error| MobileError::InvalidCode(format!("{error:?}")))?;
+    if let (None, Some(control_url), false) = (account, &code.control_url, direct_only) {
+        return Err(MobileError::SignInRequired {
+            control_url: control_url.clone(),
+        });
+    }
     let key = host_key(&device_secret, &code.host);
     // The Host's name comes with pairing; connecting renames the key.
     let short_host = code.host.to_string().chars().take(8).collect::<String>();
@@ -396,7 +408,7 @@ pub async fn pair(
         tracing::info!("pairing without a relay: {reason}");
     }
     let target = target.ok();
-    code.relay_url = target.as_ref().map(|target| target.url.clone());
+    let relay_url = target.as_ref().map(|target| target.url.clone());
     // The short code shows once the Host has answered twice: until then the
     // link may be one a proxy stalls, and the relay alone gets a second try.
     let on_short_code = Mutex::new(Some(on_short_code));
@@ -409,7 +421,8 @@ pub async fn pair(
     };
     let (relay, grace) = plan_relay(relay, &code.host, target.is_some());
     let endpoint = bind(key, relay.setup(target.clone())?).await?;
-    let attempt = yttt_client_core::p2p::pair(&endpoint, &code, device_label, &show);
+    let attempt =
+        yttt_client_core::p2p::pair(&endpoint, &code, relay_url.clone(), device_label, &show);
     let result = match within_grace(attempt, grace, || {
         shown.load(std::sync::atomic::Ordering::SeqCst)
     })
@@ -424,7 +437,8 @@ pub async fn pair(
             tracing::warn!("pairing heard nothing from the Host directly; trying the relay alone");
             stalled_direct().stalled(&code.host, Instant::now());
             let endpoint = bind(key, RelayChoice::OnlyFromHost.setup(target)?).await?;
-            let result = yttt_client_core::p2p::pair(&endpoint, &code, device_label, &show).await;
+            let result =
+                yttt_client_core::p2p::pair(&endpoint, &code, relay_url, device_label, &show).await;
             endpoint.close().await;
             result
         }

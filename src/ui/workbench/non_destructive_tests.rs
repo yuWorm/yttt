@@ -178,7 +178,7 @@ fn the_host_page_shows_an_invitation_then_asks_to_compare_the_devices_numbers(
     };
     let code = yttt_protocol::p2p::PairingCode {
         host: yttt_protocol::EndpointKey([7; 32]),
-        relay_url: None,
+        control_url: None,
         direct_addrs: vec!["192.168.1.20:51820".parse().unwrap()],
         invitation_id: [1; 16],
         secret: [2; 32],

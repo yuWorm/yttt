@@ -171,6 +171,7 @@ async fn pair_signed_in(
             SECRET,
             relay,
             account.as_ref(),
+            false,
             move |short_code| {
                 let _ = shown.send(short_code);
             },
