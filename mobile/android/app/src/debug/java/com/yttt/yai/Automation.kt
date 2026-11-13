@@ -19,3 +19,6 @@ fun launchHooks(
     type = extra("type"),
     relayOnly = flag("relayOnly"),
 )
+
+/** Debug builds show the terminal's frame rate, throughput and drain time. */
+const val SHOW_DIAGNOSTICS = true

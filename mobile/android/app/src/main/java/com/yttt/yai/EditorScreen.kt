@@ -4,14 +4,25 @@ import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,7 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -33,16 +43,18 @@ import uniffi.yttt_mobile_core.SaveOutcome
 /**
  * A project file, full screen, in sora-editor. Saving checks the file is as
  * it was when opened; if the Host's copy changed, the user overwrites it or
- * reloads it. Closing with unsaved changes asks first.
+ * reloads it. Closing or going back with unsaved changes asks first.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditorScreen(session: HostSession, projectId: String, path: String, onClose: () -> Unit) {
+fun EditorScreen(session: HostSession, projectId: String, projectName: String, path: String, onClose: () -> Unit) {
     var editor by remember { mutableStateOf<CodeEditor?>(null) }
     var loaded by remember { mutableStateOf<String?>(null) }
     var dirty by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("") }
+    var failed by remember { mutableStateOf<String?>(null) }
     var conflict by remember { mutableStateOf(false) }
     var confirmClose by remember { mutableStateOf(false) }
+    val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     suspend fun load() {
@@ -51,9 +63,9 @@ fun EditorScreen(session: HostSession, projectId: String, path: String, onClose:
                 loaded = it.text
                 editor?.setText(it.text)
                 dirty = false
-                status = ""
+                failed = null
             }
-            .onFailure { status = "打不开：${it.message}" }
+            .onFailure { failed = "打不开：${it.message}" }
     }
 
     suspend fun save(force: Boolean) {
@@ -61,27 +73,39 @@ fun EditorScreen(session: HostSession, projectId: String, path: String, onClose:
         runCatching { session.saveFile(projectId, path, text, force) }
             .onSuccess {
                 when (it) {
-                    SaveOutcome.SAVED -> { dirty = false; status = "已保存" }
+                    SaveOutcome.SAVED -> { dirty = false; snackbar.showSnackbar("已保存") }
                     SaveOutcome.CONFLICT -> conflict = true
                 }
             }
-            .onFailure { status = "保存失败：${it.message}" }
+            .onFailure { snackbar.showSnackbar("保存失败：${it.message}") }
     }
 
-    LaunchedEffect(projectId, path) { load() }
-    BackHandler { if (dirty) confirmClose = true else onClose() }
+    fun close() = if (dirty) confirmClose = true else onClose()
 
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { if (dirty) confirmClose = true else onClose() }) { Text("关闭") }
-            Column(Modifier.weight(1f)) {
-                Text(path.substringAfterLast('/') + if (dirty) " ●" else "", style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (status.isNotEmpty()) Text(status, style = MaterialTheme.typography.bodySmall)
-            }
-            TextButton(onClick = { scope.launch { save(force = false) } }, enabled = dirty) { Text("保存") }
-        }
-        Box(Modifier.fillMaxSize()) {
+    LaunchedEffect(projectId, path) { load() }
+    BackHandler(enabled = dirty) { confirmClose = true }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                navigationIcon = { IconButton(onClick = ::close) { Icon(Icons.Filled.Close, "关闭") } },
+                title = {
+                    Column {
+                        Text(path.substringAfterLast('/') + if (dirty) " ●" else "", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("$projectName / $path", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { scope.launch { save(force = false) } }, enabled = dirty) {
+                        Icon(Icons.Outlined.Save, "保存")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()) {
             AndroidView(
                 factory = { context ->
                     CodeEditor(context).apply {
@@ -96,7 +120,10 @@ fun EditorScreen(session: HostSession, projectId: String, path: String, onClose:
                 },
                 modifier = Modifier.fillMaxSize(),
             )
-            if (loaded == null && status.isEmpty()) Text("正在读取…", Modifier.align(Alignment.Center))
+            when {
+                failed != null -> Text(failed!!, Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.error)
+                loaded == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+            }
         }
     }
 

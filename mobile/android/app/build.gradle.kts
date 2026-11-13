@@ -62,6 +62,10 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    // The back stack, with predictive back.
+    implementation("androidx.navigation:navigation-compose:2.9.8")
+    // Icons beyond the core set; R8 keeps only those used in release.
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
     testImplementation("junit:junit:4.13.2")
     // The real org.json: the android.jar one only throws in JVM tests.
     testImplementation("org.json:json:20250517")

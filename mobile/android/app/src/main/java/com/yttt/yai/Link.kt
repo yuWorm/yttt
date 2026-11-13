@@ -105,10 +105,18 @@ class Link(context: Context) {
         if (id != hosts.value.current) changeHosts(hosts.value.selected(id))
     }
 
-    /** Forgets the current Host; the link moves to the first one left, if any. */
-    suspend fun forget() {
-        val current = hosts.value.current ?: return
-        changeHosts(hosts.value.removed(current))
+    /**
+     * Forgets a Host. Forgetting the current one moves the link to the first
+     * one left, if any; another one just leaves the list.
+     */
+    suspend fun forget(id: String) {
+        val list = hosts.value.removed(id)
+        if (id == hosts.value.current) {
+            changeHosts(list)
+        } else {
+            hostStore.save(list)
+            hosts.value = list
+        }
     }
 
     /**

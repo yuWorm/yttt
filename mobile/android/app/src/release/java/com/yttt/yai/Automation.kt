@@ -7,3 +7,6 @@ fun launchHooks(
     flag: (String) -> Boolean,
     decodeImage: (String) -> String?,
 ): LaunchHooks = LaunchHooks()
+
+/** Release builds hide the terminal's diagnostics. */
+const val SHOW_DIAGNOSTICS = false
