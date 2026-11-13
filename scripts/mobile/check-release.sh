@@ -18,7 +18,13 @@ case "$build" in
   *.app | *.app/)
     # The environment variables of the Debug configuration's hooks.
     markers=(YTTT_SPIKE)
-    dir="$build"
+    dir="${build%/}"
+    # A failed link leaves an .app without its executable, which would pass.
+    exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$dir/Info.plist" 2>/dev/null || true)"
+    if [[ -z "$exe" || ! -f "$dir/$exe" ]]; then
+      echo "no executable in $build: did the build finish?" >&2
+      exit 2
+    fi
     ;;
   *)
     echo "not an .apk or .app: $build" >&2
