@@ -42,6 +42,7 @@ class ProjectPageTest {
             agent("x", "z", AgentState.COMPLETED, project = "api"),
         ),
         terminals = 3u,
+        terminalIds = emptyList(),
     )
 
     @Test

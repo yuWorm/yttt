@@ -82,6 +82,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         link.foreground.value = true
+        // The network may have changed while in the background.
+        link.session.value?.networkChanged()
     }
 
     /** Leaving the foreground gives every terminal back to the computer. */

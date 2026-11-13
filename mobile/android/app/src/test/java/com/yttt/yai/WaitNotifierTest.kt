@@ -28,6 +28,7 @@ class WaitNotifierTest {
         projects = listOf(ProjectSummary("web", "Website", listOf(TabSummary("build", "Build", emptyList(), null)), "build")),
         agents = agents.toList(),
         terminals = 1u,
+        terminalIds = emptyList(),
     )
 
     @Test

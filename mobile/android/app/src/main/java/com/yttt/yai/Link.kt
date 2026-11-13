@@ -13,10 +13,13 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import uniffi.yttt_mobile_core.HostSession
+import uniffi.yttt_mobile_core.LinkListener
+import uniffi.yttt_mobile_core.LinkState
 import uniffi.yttt_mobile_core.MobileCore
 import uniffi.yttt_mobile_core.MobileCoreException
 import uniffi.yttt_mobile_core.RelaySource
@@ -62,7 +65,7 @@ class Link(context: Context) {
     /** The current Host's record. */
     val record = MutableStateFlow(hosts.value.currentRecord)
     val session = MutableStateFlow<HostSession?>(null)
-    val overview = MutableStateFlow(Overview(emptyList(), emptyList(), 0u))
+    val overview = MutableStateFlow(Overview(emptyList(), emptyList(), 0u, emptyList()))
     val status = MutableStateFlow("")
     /** The terminal the user looks at in the foreground, if any. */
     val viewing = MutableStateFlow<String?>(null)
@@ -78,6 +81,12 @@ class Link(context: Context) {
     val accountNotice = MutableStateFlow<String?>(null)
     /** Where the current link's relay came from. */
     val relaySource = MutableStateFlow(RelaySource.NONE)
+    /** Whether the session reaches the Host, for the banner. */
+    val linkState = MutableStateFlow<LinkState>(LinkState.Ready)
+    /** When the link went down (elapsed realtime), for offering a fresh connection after a while. */
+    val downSince = MutableStateFlow<Long?>(null)
+    /** Bumped when the link comes back, so screens fetch the terminals again. */
+    val recovered = MutableStateFlow(0)
 
     private val connecting = Mutex()
     private val main = Handler(Looper.getMainLooper())
@@ -126,6 +135,32 @@ class Link(context: Context) {
         accountStore.delete()
         account.value = null
         accountNotice.value = notice
+    }
+
+    /** Tries the link again now; a session that gave up is made again. */
+    fun retryNow() {
+        if (linkState.value is LinkState.Lost) scope.launch { reconnect() } else session.value?.retryNow()
+    }
+
+    /** A fresh session, as leaving the app and coming back did. */
+    suspend fun reconnectFresh() = reconnect()
+
+    private fun follow(state: LinkState, of: HostSession) {
+        if (session.value !== of) return
+        val wasReady = linkState.value is LinkState.Ready
+        linkState.value = state
+        when (state) {
+            is LinkState.Ready -> {
+                downSince.value = null
+                if (!wasReady) recovered.value += 1
+            }
+            is LinkState.Lost -> {
+                if (downSince.value == null) downSince.value = android.os.SystemClock.elapsedRealtime()
+                // The session gave up; a new one may still get through, once.
+                if (wasReady) scope.launch { reconnect() }
+            }
+            else -> if (downSince.value == null) downSince.value = android.os.SystemClock.elapsedRealtime()
+        }
     }
 
     /** Connects to the current Host again, as after the account changed. */
@@ -185,7 +220,7 @@ class Link(context: Context) {
      */
     private suspend fun changeHosts(list: HostList) {
         disconnect()
-        overview.value = Overview(emptyList(), emptyList(), 0u)
+        overview.value = Overview(emptyList(), emptyList(), 0u, emptyList())
         viewing.value = null
         hostStore.save(list)
         hosts.value = list
@@ -206,10 +241,17 @@ class Link(context: Context) {
                 core.connect(stored, secret, relayOnly, null, deviceName)
             }
             relaySource.value = connected.relaySource()
+            linkState.value = LinkState.Ready
+            downSince.value = null
             runCatching { connected.openActiveWorkspace() }
             // Current before the first overview arrives, which the listener checks.
             session.value = connected
             status.value = ""
+            connected.watchLink(object : LinkListener {
+                override fun onLink(state: LinkState) {
+                    scope.launch { follow(state, connected) }
+                }
+            })
             connected.watchOverview(object : OverviewListener {
                 override fun onOverview(overview: Overview) {
                     // A link dropped since (a Host change) may still deliver one.

@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,6 +41,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.launch
 import uniffi.yttt_mobile_core.AccountDetails
+import uniffi.yttt_mobile_core.LinkState
 import uniffi.yttt_mobile_core.MobileCoreException
 import uniffi.yttt_mobile_core.RelaySource
 import uniffi.yttt_mobile_core.TerminalInfo
@@ -129,8 +131,10 @@ fun App(
         terminals = runCatching { connected.terminals() }.getOrDefault(emptyList())
         onConnected()
     }
-    // The terminals change as panes start and stop.
-    LaunchedEffect(session, overview.terminals) {
+    val recovered by link.recovered.collectAsState()
+    // The terminals change as panes start and stop, and after the link comes
+    // back; ids, not the count: a restarted Host has new ones in the same number.
+    LaunchedEffect(session, overview.terminalIds, recovered) {
         session?.let { current -> runCatching { terminals = current.terminals() } }
     }
 
@@ -221,7 +225,12 @@ fun App(
                     status = linkStatus,
                     overview = overview,
                     onAgent = { agent -> scope.launch { open(agent.sessionId) } },
-                    onRefresh = { session?.let { current -> runCatching { terminals = current.terminals() } } },
+                    onRefresh = {
+                        // Down: try again now; up: fetch the terminals again.
+                        if (link.linkState.value !is LinkState.Ready) link.retryNow()
+                        else session?.let { current -> runCatching { terminals = current.terminals() } }
+                    },
+                    banner = { LinkBanner(link) },
                 )
             }
             composable(PROJECTS) {
@@ -292,7 +301,10 @@ fun App(
                 val current = session
                 val info = terminals.firstOrNull { it.sessionId == id }
                 if (current != null && info != null) {
-                    TerminalScreen(current, link, overview, info) { nav.popBackStack() }
+                    // A fresh session makes the screen again.
+                    key(current) { TerminalScreen(current, link, overview, info) { nav.popBackStack() } }
+                } else if (current != null && link.linkState.collectAsState().value is LinkState.Ready) {
+                    TerminalGone(onBack = { nav.popBackStack() })
                 }
             }
             composable(Routes.EDITOR_PATTERN, arguments = listOf(optional(Routes.ARG_PROJECT), optional(Routes.ARG_PATH))) { backStack ->

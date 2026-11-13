@@ -83,6 +83,7 @@ fun OverviewScreen(
     overview: Overview,
     onAgent: (AgentSummary) -> Unit,
     onRefresh: suspend () -> Unit,
+    banner: @Composable () -> Unit = {},
 ) {
     val sections = HomeSections(overview)
     var showFinished by remember { mutableStateOf(false) }
@@ -101,7 +102,12 @@ fun OverviewScreen(
     Scaffold(
         contentWindowInsets = WindowInsets(0),
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = { TopAppBar(title = { Text("总控") }, scrollBehavior = scroll) },
+        topBar = {
+            Column {
+                TopAppBar(title = { Text("总控") }, scrollBehavior = scroll)
+                banner()
+            }
+        },
     ) { padding ->
         PullToRefreshBox(
             isRefreshing = refreshing,

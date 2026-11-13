@@ -134,6 +134,7 @@ fun ProjectScreen(
                         IconButton(onClick = { showFiles = true }) { Icon(Icons.Outlined.FolderOpen, "文件与会话") }
                     },
                 )
+                LinkBanner(link)
                 if (tabs.isNotEmpty()) {
                     PrimaryScrollableTabRow(selectedTabIndex = tabs.indexOf(tab).coerceAtLeast(0), edgePadding = 8.dp) {
                         for (candidate in tabs) {
@@ -164,7 +165,8 @@ fun ProjectScreen(
         }
         Box(Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize().background(Color.Black)) {
             if (info != null) {
-                key(info.sessionId) {
+                // A fresh session makes the pane again.
+                key(session, info.sessionId) {
                     val agent = overview.agents.firstOrNull { it.sessionId == info.sessionId }
                     TerminalPane(session, info, tipText(agent), autoType, link, control, above = paneBar)
                 }
@@ -292,13 +294,16 @@ fun TerminalScreen(session: HostSession, link: Link, overview: Overview, info: T
     Scaffold(
         contentWindowInsets = WindowInsets(0),
         topBar = {
-            TopAppBar(
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
-                title = { Text(info.sessionId, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium) },
-                actions = {
-                    if (control.controlling) TextButton(onClick = { control.giveBack() }) { Text("交还电脑") }
-                },
-            )
+            Column {
+                TopAppBar(
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
+                    title = { Text(info.sessionId, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium) },
+                    actions = {
+                        if (control.controlling) TextButton(onClick = { control.giveBack() }) { Text("交还电脑") }
+                    },
+                )
+                LinkBanner(link)
+            }
         },
     ) { padding ->
         Box(Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize()) {

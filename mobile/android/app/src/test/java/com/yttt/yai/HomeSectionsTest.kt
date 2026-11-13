@@ -34,6 +34,7 @@ class HomeSectionsTest {
                 agent("done", AgentState.COMPLETED, startedAt = 2),
             ),
             terminals = 6u,
+            terminalIds = emptyList(),
         )
         val sections = HomeSections(overview)
         assertEquals(listOf(2, 2, 6, 7), listOf(sections.projects, sections.tabs, sections.terminals, sections.agents))
@@ -44,7 +45,7 @@ class HomeSectionsTest {
 
     @Test
     fun namesFallBackToIds() {
-        val overview = Overview(emptyList(), emptyList(), 0u)
+        val overview = Overview(emptyList(), emptyList(), 0u, emptyList())
         assertEquals("web", overview.projectName("web"))
         assertEquals("dev", overview.tabTitle("web", "dev"))
     }
