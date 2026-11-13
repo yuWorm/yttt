@@ -372,7 +372,6 @@ fn a_paired_host_is_listed_and_pairing_opens_its_editor(cx: &mut TestAppContext)
                 environment_id: "office".into(),
                 profile_id: yttt_core::model::ids::ProfileId::new("default"),
                 host_label: "office".into(),
-                relay_url: Some("https://relay.example".into()),
                 direct_addrs: Vec::new(),
                 placement: None,
                 ticket: None,

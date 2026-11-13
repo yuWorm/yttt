@@ -14,7 +14,7 @@ use gpui::{
 use gpui_base::input::{InputEvent, InputState};
 use yttt_protocol::{
     EndpointKey,
-    p2p::{MAX_DEVICE_LABEL_BYTES, MAX_RELAY_URL_BYTES, PairingCode},
+    p2p::{MAX_DEVICE_LABEL_BYTES, PairingCode},
 };
 use yttt_ui::{
     primitives::{dialog::DialogFooter, scroll::ScrollableElement as _},
@@ -65,7 +65,6 @@ pub(crate) struct PairedHostForm {
     text: UiText,
     name: Entity<InputState>,
     code: Entity<InputState>,
-    relay: Entity<InputState>,
     addresses: Entity<InputState>,
     records: Vec<PairedHostRecord>,
     editor: Editor,
@@ -114,11 +113,6 @@ pub(crate) fn create(
                     .validate(|value, _| value.len() <= 1024)
             }),
             code,
-            relay: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("https://relay.example")
-                    .validate(|value, _| value.len() <= MAX_RELAY_URL_BYTES)
-            }),
             addresses: cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder("192.168.1.20:51820")
@@ -187,9 +181,6 @@ impl PairedHostForm {
             .join(", ");
         self.name
             .update(cx, |input, cx| input.set_value(&record.name, window, cx));
-        self.relay.update(cx, |input, cx| {
-            input.set_value(record.host.relay_url.as_deref().unwrap_or(""), window, cx)
-        });
         self.addresses
             .update(cx, |input, cx| input.set_value(&addresses, window, cx));
         self.error = None;
@@ -210,7 +201,7 @@ impl PairedHostForm {
     }
 
     fn clear_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for input in [&self.name, &self.code, &self.relay, &self.addresses] {
+        for input in [&self.name, &self.code, &self.addresses] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
     }
@@ -294,12 +285,6 @@ impl PairedHostForm {
     }
 
     fn save_edit(&mut self, host: EndpointKey, window: &mut Window, cx: &mut Context<Self>) {
-        let relay = self.relay.read(cx).value().trim().to_string();
-        if !relay.is_empty() && !(relay.starts_with("http://") || relay.starts_with("https://")) {
-            self.error = Some(self.text.get(UiTextKey::PairedHostRelayInvalid).into());
-            cx.notify();
-            return;
-        }
         let addresses = self.addresses.read(cx).value().to_string();
         let mut direct_addrs = Vec::new();
         for address in addresses
@@ -323,7 +308,6 @@ impl PairedHostForm {
             return;
         };
         record.name = self.name.read(cx).value().trim().to_string();
-        record.host.relay_url = (!relay.is_empty()).then_some(relay);
         record.host.direct_addrs = direct_addrs;
         match paired_hosts::save_records(&self.profile, &records) {
             Ok(()) => {
@@ -572,17 +556,6 @@ impl PairedHostForm {
             .child(
                 div()
                     .text_sm()
-                    .child(text.get(UiTextKey::PairedHostRelayLabel)),
-            )
-            .child(yttt_input(
-                &self.relay,
-                YtttInputKind::Settings,
-                theme,
-                style,
-            ))
-            .child(
-                div()
-                    .text_sm()
                     .child(text.get(UiTextKey::PairedHostAddressesLabel)),
             )
             .child(yttt_input(
@@ -768,7 +741,6 @@ fn pair_with_host(
             environment_id: code.environment_id.clone(),
             profile_id: code.profile_id.clone(),
             host_label: String::new(),
-            relay_url: None,
             direct_addrs: code.direct_addrs.clone(),
             placement: None,
             ticket: None,

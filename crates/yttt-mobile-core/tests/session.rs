@@ -71,17 +71,16 @@ fn bootstrap(root: &Path) -> yttt_host::HostBootstrap {
     }
 }
 
-/// Starts a Host with P2P on, through `relay_url` when given, and returns its
+/// Starts a Host with P2P on, direct paths only until it signs in, and returns its
 /// local administrator, which plays the desktop.
-async fn start_host(root: &Path, relay_url: Option<String>) -> ClientCore {
-    start_host_with_connector(root, relay_url).await.0
+async fn start_host(root: &Path) -> ClientCore {
+    start_host_with_connector(root).await.0
 }
 
 /// Like `start_host`, also returning the Host's local connector, for a phone
 /// whose link a test cuts.
 async fn start_host_with_connector(
     root: &Path,
-    relay_url: Option<String>,
 ) -> (ClientCore, yttt_transport::MemoryConnector) {
     let bootstrap = bootstrap(root);
     let (listener, connector) = memory_pair();
@@ -120,7 +119,6 @@ async fn start_host_with_connector(
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url,
         },
     )
     .await;
@@ -344,7 +342,7 @@ async fn geometry(admin: &ClientCore, id: &TerminalSessionId) -> TerminalGeometr
 #[tokio::test(flavor = "multi_thread")]
 async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path(), None).await;
+    let admin = start_host(temp.path()).await;
     let record = pair_device(&admin, RelayChoice::Off).await;
     assert_eq!(
         PairedHostRecord::from_bytes(&record.to_bytes()).unwrap(),
@@ -520,7 +518,7 @@ async fn a_phone_works_through_the_relay_alone() {
         .unwrap();
 
     let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path(), None).await;
+    let admin = start_host(temp.path()).await;
     remote_access(
         &admin,
         RemoteAccessRequest::SetRelayAccount {
@@ -625,7 +623,7 @@ fn post_hook(environment: &[String], event: &str, payload: &str) {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_overview_follows_an_agent_into_waiting() {
     let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path(), None).await;
+    let admin = start_host(temp.path()).await;
     let record = pair_device(&admin, RelayChoice::Off).await;
 
     // The desktop opens a project whose Agent pane the Host starts; the pane
@@ -751,7 +749,7 @@ async fn the_overview_follows_an_agent_into_waiting() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_phone_reads_edits_and_saves_a_project_file() {
     let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path(), None).await;
+    let admin = start_host(temp.path()).await;
     let record = pair_device(&admin, RelayChoice::Off).await;
 
     let project_root = temp.path().join("site");
@@ -886,7 +884,7 @@ async fn a_phone_reads_edits_and_saves_a_project_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn keys_reach_the_program_as_it_expects_them() {
     let temp = tempfile::tempdir().unwrap();
-    let admin = start_host(temp.path(), None).await;
+    let admin = start_host(temp.path()).await;
     let record = pair_device(&admin, RelayChoice::Off).await;
     // Reads a key raw and prints its bytes, then turns on application cursor
     // keys (as vim and full-screen CLIs do) and does it again.
@@ -970,7 +968,7 @@ async fn wait_for_link(phone: &MobileSession, what: &str, wanted: impl Fn(&LinkS
 #[tokio::test(flavor = "multi_thread")]
 async fn a_terminal_opened_while_the_link_is_down_shows_once_it_is_back() {
     let temp = tempfile::tempdir().unwrap();
-    let (admin, local) = start_host_with_connector(temp.path(), None).await;
+    let (admin, local) = start_host_with_connector(temp.path()).await;
     let record = pair_device(&admin, RelayChoice::Off).await;
     let terminal =
         desktop_terminals(&admin, temp.path(), &["project:tab:pane"]).await[0].to_string();
@@ -1004,7 +1002,7 @@ async fn a_terminal_opened_while_the_link_is_down_shows_once_it_is_back() {
 #[tokio::test(flavor = "multi_thread")]
 async fn control_and_the_workspace_survive_a_short_drop() {
     let temp = tempfile::tempdir().unwrap();
-    let (admin, local) = start_host_with_connector(temp.path(), None).await;
+    let (admin, local) = start_host_with_connector(temp.path()).await;
     let record = pair_device(&admin, RelayChoice::Off).await;
     let terminal =
         desktop_terminals(&admin, temp.path(), &["project:tab:pane"]).await[0].to_string();

@@ -916,13 +916,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PairingCompare => "请核对 Host 上显示的是同一组数字：",
         UiTextKey::PairingCompareHint => "只有数字一致时，Host 那边才应接受此设备。",
         UiTextKey::PairingCancelled => "已取消配对。",
-        UiTextKey::PairedHostRelayLabel => "relay 地址（提示）",
         UiTextKey::PairedHostAddressesLabel => "直连地址（提示）",
         UiTextKey::PairedHostAddressesHint => {
             "用英文逗号分隔的 主机:端口。提示只用于找到 Host，不会改变信任的是哪台 Host。"
         }
         UiTextKey::PairedHostAddressesInvalid => "每个直连地址都必须是 IP:端口。",
-        UiTextKey::PairedHostRelayInvalid => "relay 地址必须以 http:// 或 https:// 开头。",
         UiTextKey::PairedHostForgetTitle => "忘记这台 Host？",
         UiTextKey::PairedHostForgetDescription => {
             "这会删除配对记录和本机为这台 Host 保存的密钥。在 Host 上撤销之前，Host 仍会列出此设备。"
@@ -933,8 +931,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pDescription => {
             "已配对的设备凭各自的设备密钥连接本机，直连或经 relay。流量端到端加密，relay 只负责转发。"
         }
-        UiTextKey::P2pRelayLabel => "relay 地址（可选）",
-        UiTextKey::P2pRelayHint => "留空则只允许直连。修改会重启 P2P，并断开当前的 P2P 会话。",
+        UiTextKey::P2pRelayHint => {
+            "未登录 relay 账号时只能直连。登录后，连接这台电脑的设备在外网也能经 relay 连上。"
+        }
         UiTextKey::P2pRelayAccount => "正在使用 relay 账号 {account}：{relay}",
         UiTextKey::P2pRelayAccountDevices => "未登录 relay 账号的设备只能直连。",
         UiTextKey::P2pThisKey => "本机密钥",

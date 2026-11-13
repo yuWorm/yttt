@@ -30,9 +30,9 @@ pub struct RemoteAccessSettings {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct P2pSettings {
+    /// With a relay account the Host relays through the node it signed;
+    /// without one, only direct paths reach it.
     pub enabled: bool,
-    /// The one relay the Host keeps a home connection to; `None` allows only direct paths.
-    pub relay_url: Option<String>,
 }
 
 impl Default for RemoteAccessSettings {
@@ -205,7 +205,6 @@ pub enum RemoteAccessRequest {
     DisconnectAll,
     SetP2p {
         enabled: bool,
-        relay_url: Option<String>,
     },
     /// Opens a single-use invitation, replacing any open one.
     StartPairing,

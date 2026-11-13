@@ -540,8 +540,9 @@ fn connections(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
         for record in records {
             let hint = record
                 .host
-                .relay_url
-                .clone()
+                .placement
+                .as_ref()
+                .map(|placement| placement.placement.node_id.clone())
                 .or_else(|| record.host.direct_addrs.first().map(ToString::to_string))
                 .unwrap_or_else(|| record.host.host.to_string()[..16].to_string());
             rows.push(connection_row(

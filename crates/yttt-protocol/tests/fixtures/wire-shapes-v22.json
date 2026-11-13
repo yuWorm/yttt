@@ -646,8 +646,7 @@
   },
   "P2pSettings": {
     "": [
-      "enabled",
-      "relay_url"
+      "enabled"
     ]
   },
   "P2pStatus": {
@@ -1031,8 +1030,7 @@
       "listen_address"
     ],
     "SetP2p": [
-      "enabled",
-      "relay_url"
+      "enabled"
     ],
     "SetRelayAccount": [
       "account"

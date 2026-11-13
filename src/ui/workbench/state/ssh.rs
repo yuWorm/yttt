@@ -139,7 +139,6 @@ pub(in super::super) struct P2pPanelState {
     pub(in super::super) show_code: bool,
     pub(in super::super) copied: bool,
     pub(in super::super) polling: bool,
-    pub(in super::super) relay: Option<Entity<InputState>>,
     pub(in super::super) devices: Vec<yttt_protocol::p2p::PairedDevice>,
 }
 

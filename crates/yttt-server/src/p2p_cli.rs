@@ -26,9 +26,7 @@ const POLL: Duration = Duration::from_millis(500);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum P2pCommand {
     Status,
-    Enable {
-        relay_url: Option<String>,
-    },
+    Enable,
     Disable,
     Pair,
     Devices,
@@ -52,7 +50,7 @@ pub(crate) enum P2pCommand {
     },
 }
 
-pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable [--relay <url>]|disable|pair|devices|revoke <device key> [--reset-tls]|login <control url> [--password <email>]|logout|nodes|node <id>> [--profile <id>] [--state-root <absolute path>]";
+pub(crate) const P2P_USAGE: &str = "usage: yttt-server p2p <status|enable|disable|pair|devices|revoke <device key> [--reset-tls]|login <control url> [--password <email>]|logout|nodes|node <id>> [--profile <id>] [--state-root <absolute path>]";
 
 /// Parses what follows `p2p`, leaving `--profile` and `--state-root` for the caller.
 pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError> {
@@ -110,23 +108,12 @@ pub(crate) fn parse(args: &mut Vec<OsString>) -> Result<P2pCommand, ServerError>
             }
         }
         "enable" => {
-            let relay_url = match args.iter().position(|argument| argument == "--relay") {
-                Some(index) => {
-                    args.remove(index);
-                    if index >= args.len() {
-                        return Err(usage());
-                    }
-                    let url = args.remove(index).into_string().map_err(|_| usage())?;
-                    if !(url.starts_with("http://") || url.starts_with("https://")) {
-                        return Err(ServerError::InvalidArgument(
-                            "the relay must be an http:// or https:// URL".into(),
-                        ));
-                    }
-                    Some(url)
-                }
-                None => None,
-            };
-            P2pCommand::Enable { relay_url }
+            if args.iter().any(|argument| argument == "--relay") {
+                return Err(ServerError::InvalidArgument(
+                    "the relay comes from the relay account: `p2p login <control url>`, then `p2p node <id>`".into(),
+                ));
+            }
+            P2pCommand::Enable
         }
         "revoke" => {
             let reset_tls = take_flag("--reset-tls");
@@ -177,22 +164,15 @@ pub(crate) async fn run(paths: ServerPaths, command: P2pCommand) -> Result<(), S
     let admin = Admin(admin);
     match command {
         P2pCommand::Status => write_json(&Summary::of(&admin.status().await?)),
-        P2pCommand::Enable { relay_url } => {
+        P2pCommand::Enable => {
             admin
-                .send(RemoteAccessRequest::SetP2p {
-                    enabled: true,
-                    relay_url,
-                })
+                .send(RemoteAccessRequest::SetP2p { enabled: true })
                 .await?;
             write_json(&Summary::of(&admin.status().await?))
         }
         P2pCommand::Disable => {
-            let relay_url = admin.status().await?.settings.p2p.relay_url;
             admin
-                .send(RemoteAccessRequest::SetP2p {
-                    enabled: false,
-                    relay_url,
-                })
+                .send(RemoteAccessRequest::SetP2p { enabled: false })
                 .await?;
             write_json(&Summary::of(&admin.status().await?))
         }
@@ -358,8 +338,7 @@ impl Summary {
             endpoint_id: endpoint_id.map(|key| key.to_string()),
             relay_url: relay_account
                 .as_ref()
-                .and_then(|account| account.relay_url.clone())
-                .or_else(|| status.settings.p2p.relay_url.clone()),
+                .and_then(|account| account.relay_url.clone()),
             relay_account: relay_account
                 .as_ref()
                 .map(|account| format!("{} at {}", account.account_id, account.control_url)),
@@ -530,18 +509,9 @@ mod tests {
     #[test]
     fn p2p_commands_parse_and_leave_shared_options() {
         assert_eq!(
-            parsed(&[
-                "enable",
-                "--relay",
-                "https://relay.example",
-                "--profile",
-                "work"
-            ])
-            .unwrap(),
+            parsed(&["enable", "--profile", "work"]).unwrap(),
             (
-                P2pCommand::Enable {
-                    relay_url: Some("https://relay.example".into())
-                },
+                P2pCommand::Enable,
                 vec![OsString::from("--profile"), OsString::from("work")]
             )
         );
@@ -588,7 +558,7 @@ mod tests {
             &["node"],
             &["login", "control.example"],
             &["login", "https://control.example", "--password"],
-            &["enable", "--relay", "relay.example"],
+            &["enable", "--relay", "https://relay.example"],
             &["revoke", "abc"],
             &["revoke"],
             &["open"],

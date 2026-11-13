@@ -1,6 +1,6 @@
 //! Spike: a throwaway Host for trying the mobile link end to end without the
 //! desktop app or a real profile. It runs `yttt-host` on a temporary profile,
-//! turns P2P on (without a relay unless given one), prints pairing codes and
+//! turns P2P on (direct paths only unless signed in), prints pairing codes and
 //! confirms every device that asks, and opens a project "Spike" in the active
 //! workspace with a clean zsh (`spike:shell:1`), a demo that prints colors and
 //! CJK text (`spike:demo:1`), and two fake Agents that keep cycling through
@@ -9,7 +9,7 @@
 //! post Codex hook events with `curl`.
 //!
 //! ```text
-//! cargo run -p yttt-mobile-core --example spike_host [-- --relay http://<LAN IP>:3341] [--name A]
+//! cargo run -p yttt-mobile-core --example spike_host [-- --name A]
 //! cargo run -p yttt-mobile-core --example spike_host -- --account <control URL> <email> <password>
 //! ```
 //!
@@ -122,17 +122,7 @@ async fn new_invitation(admin: &ClientCore, code_file: &Path) {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
-    // `--relay <url>`: the Host uses this relay and names it in pairing codes.
-    // Give an address both the Host and the phone reach, such as the Mac's
-    // LAN address for an emulator.
     let args = std::env::args().collect::<Vec<_>>();
-    let relay_url = args
-        .iter()
-        .position(|arg| arg == "--relay")
-        .and_then(|at| args.get(at + 1).cloned());
-    if let Some(url) = &relay_url {
-        println!("relay: {url}");
-    }
     let name = args
         .iter()
         .position(|arg| arg == "--name")
@@ -201,10 +191,7 @@ async fn main() {
     }
     remote_access(
         &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: true,
-            relay_url: relay_url.clone(),
-        },
+        RemoteAccessRequest::SetP2p { enabled: true },
     )
     .await;
 

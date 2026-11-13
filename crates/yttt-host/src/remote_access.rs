@@ -39,7 +39,7 @@ use yttt_protocol::{
     remote_access::*,
 };
 use yttt_transport::{AuthToken, Credential, IngressKind};
-use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, RelaySetup, RelayTarget};
+use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, RelaySetup};
 use yttt_transport_tls::TlsListener;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -350,7 +350,7 @@ pub(crate) async fn run(
         manager.listener_failed(error.message);
     }
     if desired.p2p.enabled
-        && let Err(error) = manager.start_p2p(desired.p2p.relay_url.clone()).await
+        && let Err(error) = manager.start_p2p().await
     {
         manager.p2p_failed(error.message);
     }
@@ -519,20 +519,12 @@ impl Manager {
                 self.admission.cancel(|_, _| true);
                 self.admission.drain(|_, _| true).await;
             }
-            RemoteAccessRequest::SetP2p { enabled, relay_url } => {
-                if let Some(url) = &relay_url
-                    && (url.len() > MAX_RELAY_URL_BYTES || !url.starts_with("http"))
-                {
-                    return Err(failure("the relay URL must be an http or https URL"));
-                }
+            RemoteAccessRequest::SetP2p { enabled } => {
                 let mut settings = self.store.lock().settings().clone();
-                settings.p2p = P2pSettings {
-                    enabled,
-                    relay_url: relay_url.clone(),
-                };
+                settings.p2p = P2pSettings { enabled };
                 self.stop_p2p().await;
                 self.store.lock().save(settings).map_err(io_failure)?;
-                if enabled && let Err(error) = self.start_p2p(relay_url).await {
+                if enabled && let Err(error) = self.start_p2p().await {
                     self.p2p_failed(error.message.clone());
                     return Err(error);
                 }
@@ -728,7 +720,9 @@ impl Manager {
             expires_millis: invitation.expires_millis,
         })
     }
-    async fn start_p2p(&mut self, relay_url: Option<String>) -> Result<(), ProtocolFailure> {
+    /// Opens the P2P endpoint: with a relay account, on the node the Host
+    /// signed; without one, on direct paths only.
+    async fn start_p2p(&mut self) -> Result<(), ProtocolFailure> {
         self.p2p_effective = RemoteAccessState::Starting;
         self.p2p_error = None;
         let root = self.store.lock().root().to_path_buf();
@@ -738,7 +732,7 @@ impl Manager {
         let mut relay_account = None;
         let mut first_ticket = None;
         let relay = match &account {
-            None => RelaySetup::from(relay_url.map(|url| RelayTarget { url, token: None })),
+            None => RelaySetup::Off,
             Some(stored) => {
                 let mut status = RelayAccountStatus {
                     control_url: stored.session.control_url.clone(),
@@ -868,9 +862,8 @@ impl Manager {
     }
     /// Rebuilds the P2P endpoint with the current settings and relay account.
     async fn restart_p2p(&mut self) {
-        let relay_url = self.store.lock().settings().p2p.relay_url.clone();
         self.stop_p2p().await;
-        if let Err(error) = self.start_p2p(relay_url).await {
+        if let Err(error) = self.start_p2p().await {
             self.p2p_failed(error.message);
         }
     }

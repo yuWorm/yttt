@@ -44,11 +44,7 @@ impl WorkbenchView {
             .filter(|runtime| !runtime.is_remote())
     }
 
-    pub(super) fn p2p_settings_section(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    pub(super) fn p2p_settings_section(&mut self, cx: &mut Context<Self>) -> Div {
         let appearance = self.theme_runtime();
         let theme = appearance.ui;
         let style = appearance.style;
@@ -59,12 +55,6 @@ impl WorkbenchView {
             .remote_access
             .as_ref()
             .map(|status| status.p2p.clone());
-        let settings = self
-            .ssh
-            .remote_access
-            .as_ref()
-            .map(|status| status.settings.p2p.clone())
-            .unwrap_or_default();
         let listening = status
             .as_ref()
             .is_some_and(|status| status.effective == RemoteAccessState::Listening);
@@ -74,19 +64,6 @@ impl WorkbenchView {
         if pairing_active && !self.ssh.p2p.polling {
             self.poll_pairing(cx);
         }
-        let relay = self
-            .ssh
-            .p2p
-            .relay
-            .get_or_insert_with(|| {
-                let initial = settings.relay_url.clone().unwrap_or_default();
-                cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("https://relay.example")
-                        .default_value(initial)
-                })
-            })
-            .clone();
         let state_key = match status.as_ref().map(|status| status.effective) {
             Some(RemoteAccessState::Listening) => UiTextKey::RemoteAccessListening,
             Some(RemoteAccessState::Starting) => UiTextKey::RemoteAccessStarting,
@@ -191,44 +168,16 @@ impl WorkbenchView {
                     })
             });
 
-        let relay_row = div()
-            .flex()
-            .flex_col()
-            .gap(style.spacing.sm)
-            .child(
+        // Without a relay account, only direct paths reach this computer.
+        let relay_row = status
+            .as_ref()
+            .is_none_or(|status| status.relay_account.is_none())
+            .then(|| {
                 div()
                     .text_xs()
                     .text_color(theme.text_muted)
-                    .child(text.get(UiTextKey::P2pRelayLabel)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(style.spacing.sm)
-                    .child(
-                        yttt_input(&relay, YtttInputKind::Settings, theme, style)
-                            .disabled(busy || pairing_active)
-                            .w(gpui::rems(18.0)),
-                    )
-                    .child(
-                        yttt_button(
-                            "p2p-relay-apply",
-                            text.get(UiTextKey::RemoteAccessApply),
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            style,
-                        )
-                        .disabled(busy || pairing_active || !listening)
-                        .on_click(cx.listener(|root, _, _, cx| root.set_p2p(true, cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child(text.get(UiTextKey::P2pRelayHint)),
-            );
+                    .child(text.get(UiTextKey::P2pRelayHint))
+            });
 
         let pairing_view = self.pairing_view(pairing, listening, busy, cx);
         let devices = self.devices_view(busy, cx);
@@ -244,7 +193,7 @@ impl WorkbenchView {
             .child(header)
             .child(status_row)
             .children(relay_account)
-            .child(relay_row)
+            .children(relay_row)
             .child(pairing_view)
             .child(devices)
             .when_some(
@@ -574,23 +523,8 @@ impl WorkbenchView {
     }
 
     fn set_p2p(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        let relay_url = self
-            .ssh
-            .p2p
-            .relay
-            .as_ref()
-            .map(|input| input.read(cx).value().trim().to_string())
-            .filter(|url| !url.is_empty());
-        if let Some(url) = &relay_url
-            && !(url.starts_with("http://") || url.starts_with("https://"))
-        {
-            self.ssh.remote_access_error =
-                Some(self.ui_text.get(UiTextKey::PairedHostRelayInvalid).into());
-            cx.notify();
-            return;
-        }
         self.begin_remote_access_action(
-            Request::RemoteAccess(RemoteAccessRequest::SetP2p { enabled, relay_url }),
+            Request::RemoteAccess(RemoteAccessRequest::SetP2p { enabled }),
             cx,
         );
     }

@@ -192,7 +192,6 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url: None,
         },
     )
     .await;
@@ -365,7 +364,6 @@ async fn a_connected_phone_follows_its_host_to_another_node_and_connects_from_it
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url: None,
         },
     )
     .await;

@@ -22,8 +22,8 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use yttt_relay_ticket::{TicketVerifier, api::AccountStanding};
 
-pub use config::{AcmeSettings, ControlConfig, NodeConfig, OpenConfig, TlsFiles};
-pub use node::{AccountSnapshot, open_account_id};
+pub use config::{AcmeSettings, ControlConfig, NodeConfig, TlsFiles};
+pub use node::AccountSnapshot;
 
 const PRUNE_TICK: Duration = Duration::from_secs(10);
 
@@ -31,10 +31,8 @@ const PRUNE_TICK: Duration = Duration::from_secs(10);
 pub enum StartError {
     #[error("ticket key {0:?} is not 32 bytes of hex")]
     TicketKey(String),
-    #[error("a node needs at least one ticket key, or [open] for self-hosting")]
+    #[error("a node needs at least one ticket key: it admits only devices with a ticket")]
     NoTicketKeys,
-    #[error("[open] and [control] exclude each other: an open node bills no one")]
-    OpenWithControl,
     #[error("QUIC address discovery needs TLS")]
     QuicWithoutTls,
     #[error("set either [tls] or [acme], not both")]
@@ -71,21 +69,12 @@ impl RelayNode {
                 yttt_relay_ticket::parse_key(key).ok_or_else(|| StartError::TicketKey(key.clone()))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if keys.is_empty() && config.open.is_none() {
+        if keys.is_empty() {
             return Err(StartError::NoTicketKeys);
         }
-        if config.open.is_some() && config.control.is_some() {
-            return Err(StartError::OpenWithControl);
-        }
-        let verifier = if keys.is_empty() {
-            None
-        } else {
-            Some(TicketVerifier::new(&keys).map_err(|_| StartError::TicketKey(String::new()))?)
-        };
-        let open = config
-            .open
-            .map(|open| node::open_rate(open.rate_bps, open.burst_bytes));
-        let node = Arc::new(node::Node::new(config.node_id.clone(), verifier, open));
+        let verifier =
+            TicketVerifier::new(&keys).map_err(|_| StartError::TicketKey(String::new()))?;
+        let node = Arc::new(node::Node::new(config.node_id.clone(), verifier));
         let cancel = CancellationToken::new();
         let mut tasks = JoinSet::new();
         let (tls, server_config) = match (&config.tls, &config.acme) {

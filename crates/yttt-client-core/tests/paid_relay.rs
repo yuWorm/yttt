@@ -175,7 +175,6 @@ async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url: None,
         },
     )
     .await;
@@ -409,7 +408,6 @@ async fn a_host_moves_to_another_node_and_its_device_follows() {
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url: None,
         },
     )
     .await;

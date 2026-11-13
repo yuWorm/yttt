@@ -1116,15 +1116,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "The Host user should accept this device only if the numbers match."
         }
         UiTextKey::PairingCancelled => "Pairing was cancelled.",
-        UiTextKey::PairedHostRelayLabel => "Relay address (hint)",
         UiTextKey::PairedHostAddressesLabel => "Direct addresses (hint)",
         UiTextKey::PairedHostAddressesHint => {
             "Comma-separated host:port. Hints only help find the Host; they never change which Host is trusted."
         }
         UiTextKey::PairedHostAddressesInvalid => "Each direct address must be IP:port.",
-        UiTextKey::PairedHostRelayInvalid => {
-            "The relay address must start with http:// or https://."
-        }
         UiTextKey::PairedHostForgetTitle => "Forget this Host?",
         UiTextKey::PairedHostForgetDescription => {
             "This removes the pairing and this device's key for the Host. The Host keeps listing this device until it is revoked there."
@@ -1137,9 +1133,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::P2pDescription => {
             "Paired devices reach this computer by their device key, directly or through a relay. Traffic is end-to-end encrypted; a relay only forwards it."
         }
-        UiTextKey::P2pRelayLabel => "Relay (optional)",
         UiTextKey::P2pRelayHint => {
-            "Leave empty for direct connections only. Changing it restarts P2P and ends P2P sessions."
+            "Without a relay account, only direct connections work. Sign in to one and devices reach this computer through its relay from anywhere."
         }
         UiTextKey::P2pRelayAccount => "Using relay account {account}: {relay}",
         UiTextKey::P2pRelayAccountDevices => {

@@ -20,7 +20,7 @@ impl WorkbenchView {
         let style = appearance.style;
         let text = self.ui_text;
         let busy = self.ssh.remote_access_busy || runtime.is_none();
-        let p2p_section = self.p2p_settings_section(window, cx);
+        let p2p_section = self.p2p_settings_section(cx);
         let relay_account_section = self.relay_account_section(window, cx);
         let status = self.ssh.remote_access.as_ref();
         let enabled = status.is_some_and(|status| status.effective == RemoteAccessState::Listening);

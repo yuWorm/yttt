@@ -248,7 +248,6 @@ mod tests {
             environment_id: "environment".into(),
             profile_id: yttt_core::model::ids::ProfileId::new("default"),
             host_label: "environment".into(),
-            relay_url: Some("https://relay.example".into()),
             direct_addrs: vec!["192.168.1.20:4433".parse().unwrap()],
             placement: None,
             ticket: None,

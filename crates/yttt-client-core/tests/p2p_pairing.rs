@@ -98,7 +98,6 @@ async fn start_host(root: &Path) -> ClientCore {
     admin
         .request(Request::RemoteAccess(RemoteAccessRequest::SetP2p {
             enabled: true,
-            relay_url: None,
         }))
         .await
         .unwrap();
@@ -463,7 +462,6 @@ async fn turning_p2p_off_releases_connected_devices() {
         &admin,
         RemoteAccessRequest::SetP2p {
             enabled: false,
-            relay_url: None,
         },
     )
     .await;

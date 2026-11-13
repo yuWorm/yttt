@@ -32,10 +32,6 @@ pub struct PairedHost {
     pub environment_id: String,
     pub profile_id: ProfileId,
     pub host_label: String,
-    /// The relay the pairing code named. Not dialed: only a placement the
-    /// Host signed says where it relays.
-    #[serde(default)]
-    pub relay_url: Option<String>,
     pub direct_addrs: Vec<SocketAddr>,
     /// Where the Host relays, as it signed it; checked against `host`.
     #[serde(default)]
@@ -203,7 +199,6 @@ pub async fn pair(
                 environment_id,
                 profile_id,
                 host_label,
-                relay_url: None,
                 direct_addrs: code.direct_addrs.clone(),
                 placement: None,
                 ticket: None,
@@ -236,7 +231,6 @@ mod placement_tests {
             environment_id: "environment".into(),
             profile_id: ProfileId::new("default"),
             host_label: "mac".into(),
-            relay_url: Some("https://from-the-code.example".into()),
             direct_addrs: Vec::new(),
             placement: None,
             ticket: None,
