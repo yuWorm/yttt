@@ -171,13 +171,7 @@ async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
         },
     )
     .await;
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: true,
-        },
-    )
-    .await;
+    remote_access(&admin, RemoteAccessRequest::SetP2p { enabled: true }).await;
     let host_status = status(&admin).await.p2p;
     assert_eq!(host_status.effective, RemoteAccessState::Listening);
     let relay_account = host_status.relay_account.unwrap();
@@ -404,13 +398,7 @@ async fn a_host_moves_to_another_node_and_its_device_follows() {
         },
     )
     .await;
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: true,
-        },
-    )
-    .await;
+    remote_access(&admin, RemoteAccessRequest::SetP2p { enabled: true }).await;
     let host_key = status(&admin).await.p2p.endpoint_id.unwrap();
     let phone_kind = DeviceKind::Client { host: host_key.0 };
     session

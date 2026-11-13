@@ -189,11 +189,7 @@ async fn main() {
         .await;
         println!("relay account: {email}");
     }
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p { enabled: true },
-    )
-    .await;
+    remote_access(&admin, RemoteAccessRequest::SetP2p { enabled: true }).await;
 
     let project = root.path().join("project");
     fs::create_dir_all(&project).unwrap();

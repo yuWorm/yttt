@@ -458,13 +458,7 @@ async fn turning_p2p_off_releases_connected_devices() {
     device.request(Request::ListResources).await.unwrap();
     wait_for_reported_clients(&runtime_root, 2).await;
 
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: false,
-        },
-    )
-    .await;
+    remote_access(&admin, RemoteAccessRequest::SetP2p { enabled: false }).await;
     wait_for_reported_clients(&runtime_root, 1).await;
     drop(device);
 }

@@ -188,13 +188,7 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
         },
     )
     .await;
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: true,
-        },
-    )
-    .await;
+    remote_access(&admin, RemoteAccessRequest::SetP2p { enabled: true }).await;
     let host_status = status(&admin).await.p2p;
     assert_eq!(host_status.effective, RemoteAccessState::Listening);
     eventually("the Host on the node", async || {
@@ -360,13 +354,7 @@ async fn a_connected_phone_follows_its_host_to_another_node_and_connects_from_it
         },
     )
     .await;
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: true,
-        },
-    )
-    .await;
+    remote_access(&admin, RemoteAccessRequest::SetP2p { enabled: true }).await;
     eventually("the Host on the first node", async || {
         nodes[0]
             .account(host_session.account_id)

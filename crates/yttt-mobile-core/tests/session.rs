@@ -79,9 +79,7 @@ async fn start_host(root: &Path) -> ClientCore {
 
 /// Like `start_host`, also returning the Host's local connector, for a phone
 /// whose link a test cuts.
-async fn start_host_with_connector(
-    root: &Path,
-) -> (ClientCore, yttt_transport::MemoryConnector) {
+async fn start_host_with_connector(root: &Path) -> (ClientCore, yttt_transport::MemoryConnector) {
     let bootstrap = bootstrap(root);
     let (listener, connector) = memory_pair();
     let ready = bootstrap.ready_file();
@@ -115,13 +113,7 @@ async fn start_host_with_connector(
     )
     .await
     .unwrap();
-    remote_access(
-        &admin,
-        RemoteAccessRequest::SetP2p {
-            enabled: true,
-        },
-    )
-    .await;
+    remote_access(&admin, RemoteAccessRequest::SetP2p { enabled: true }).await;
     (admin, local)
 }
 
