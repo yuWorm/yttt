@@ -5,6 +5,7 @@
 uniffi::setup_scaffolding!();
 
 pub mod account;
+pub mod appearance;
 mod ffi;
 pub mod files;
 pub mod keys;
