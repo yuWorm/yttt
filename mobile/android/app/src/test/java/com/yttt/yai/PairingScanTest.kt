@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter

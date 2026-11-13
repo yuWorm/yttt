@@ -1,12 +1,14 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import android.app.Application
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,13 +21,13 @@ import uniffi.yttt_mobile_core.MobileCore
 import uniffi.yttt_mobile_core.Overview
 import uniffi.yttt_mobile_core.OverviewListener
 
-const val TAG = "yttt-spike"
+const val TAG = "yttt"
 
-class YtttSpikeApp : Application() {
+class YtttApp : Application() {
     val link by lazy { Link(this) }
 }
 
-val Context.link: Link get() = (applicationContext as YtttSpikeApp).link
+val Context.link: Link get() = (applicationContext as YtttApp).link
 
 /**
  * The process's one link with the paired Host, shared by the activity (the
@@ -40,10 +42,15 @@ class Link(context: Context) {
     /** Work that must outlive any screen, such as detaching a terminal. */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /** Spike automation: keep off direct paths. */
+    /** Debug automation: keep off direct paths. */
     @Volatile var relayOnly = false
 
-    private val hostStore = HostStore(storage.dir) { core.hostInfo(it).id }
+    /** What the Host lists this phone as: its name in Settings, else the model. */
+    val deviceName: String =
+        Settings.Global.getString(app.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() }
+            ?: Build.MODEL
+
+    private val hostStore = HostStore(storage.dir)
     /** The paired Hosts; the link is with the current one. */
     val hosts = MutableStateFlow(hostStore.load())
     /** The current Host's record. */

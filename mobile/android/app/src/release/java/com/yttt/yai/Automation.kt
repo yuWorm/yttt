@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 /** Release builds read no launch hooks; see the debug source set's. */
 @Suppress("UNUSED_PARAMETER")

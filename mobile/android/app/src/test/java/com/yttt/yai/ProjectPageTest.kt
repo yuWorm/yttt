@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

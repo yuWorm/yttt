@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 /**
  * What a debug build's launch asked for, for emulator runs: pair with this

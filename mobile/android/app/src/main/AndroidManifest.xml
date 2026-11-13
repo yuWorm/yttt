@@ -14,9 +14,11 @@
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <application
-        android:name=".YtttSpikeApp"
+        android:name=".YtttApp"
         android:allowBackup="false"
-        android:label="yttt spike"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="yttt"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"

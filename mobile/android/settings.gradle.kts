@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "yttt-spike"
+rootProject.name = "yttt"
 include(":app")

@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import android.Manifest
 import android.app.NotificationChannel
@@ -28,7 +28,7 @@ private const val LINK_CHANNEL = "link"
 private const val WAITING_CHANNEL = "agent-waiting"
 /** The same notifications while the app is on screen: in the shade, no banner. */
 private const val QUIET_WAITING_CHANNEL = "agent-waiting-quiet"
-private const val ACTION_STOP = "dev.yttt.spike.STOP_LINK"
+private const val ACTION_STOP = "com.yttt.yai.STOP_LINK"
 
 /**
  * Keeps the link with the Host while the app is in the background and posts
@@ -110,7 +110,7 @@ class LinkService : Service() {
                     manager.notify(
                         id,
                         NotificationCompat.Builder(this, if (change.quiet) QUIET_WAITING_CHANNEL else WAITING_CHANNEL)
-                            .setSmallIcon(android.R.drawable.stat_notify_chat)
+                            .setSmallIcon(R.drawable.ic_stat_yttt)
                             .setContentTitle(change.title)
                             .setContentText(change.text)
                             .setStyle(NotificationCompat.BigTextStyle().bigText(change.text))
@@ -129,7 +129,7 @@ class LinkService : Service() {
         link.hostNames(link.hosts.value).firstOrNull { it.first == link.hosts.value.current }?.second
 
     private fun ongoing() = NotificationCompat.Builder(this, LINK_CHANNEL)
-        .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+        .setSmallIcon(R.drawable.ic_stat_yttt)
         .setContentTitle(currentHostName()?.let { "保持与 $it 的连接" } ?: "保持与 Host 的连接")
         .setContentText("Agent 需要处理时会通知你")
         .setOngoing(true)

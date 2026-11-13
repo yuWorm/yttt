@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import android.Manifest
 import android.content.pm.PackageManager

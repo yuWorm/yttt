@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import java.io.File
 import java.util.Base64
@@ -41,20 +41,11 @@ class HostList(val hosts: List<HostEntry> = emptyList(), val current: String? = 
 
 /**
  * The list in `hosts.json`, in the app's private files (backups are off).
- * The spike's single `host.json` moves in as the only Host, then is deleted.
  */
-class HostStore(private val dir: File, private val idOf: (ByteArray) -> String) {
+class HostStore(private val dir: File) {
     private val file = File(dir, "hosts.json")
-    private val legacy = File(dir, "host.json")
 
-    fun load(): HostList {
-        if (file.exists()) return decode(file.readBytes())
-        val old = legacy.takeIf { it.exists() }?.readBytes() ?: return HostList()
-        val list = HostList().added(idOf(old), old)
-        save(list)
-        legacy.delete()
-        return list
-    }
+    fun load(): HostList = if (file.exists()) decode(file.readBytes()) else HostList()
 
     fun save(list: HostList) {
         val json = JSONObject()

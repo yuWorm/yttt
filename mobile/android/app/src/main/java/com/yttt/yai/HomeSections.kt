@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import uniffi.yttt_mobile_core.AgentState
 import uniffi.yttt_mobile_core.AgentSummary

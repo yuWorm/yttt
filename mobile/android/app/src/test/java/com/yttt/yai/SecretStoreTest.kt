@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -25,15 +25,6 @@ class SecretStoreTest {
         assertEquals(12 + 32 + 16, stored.size)
         // Not the secret in the clear.
         assertFalse(stored.toList().windowed(32).any { it == first.toList() })
-    }
-
-    @Test
-    fun theOldPlainFileMovesInAndIsDeleted() {
-        val old = ByteArray(32) { it.toByte() }
-        folder.root.resolve("device-secret").writeBytes(old)
-        assertArrayEquals(old, store().deviceSecret())
-        assertFalse(folder.root.resolve("device-secret").exists())
-        assertArrayEquals(old, store().deviceSecret())
     }
 
     @Test

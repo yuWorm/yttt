@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -16,19 +16,15 @@ private const val TAG_BITS = 128
 
 /**
  * The device secret, encrypted with `key` (AES-GCM) in `device-secret.enc`:
- * the IV, then the ciphertext and tag. The spike's plain `device-secret`
- * moves in once and is deleted once the encrypted copy reads back.
+ * the IV, then the ciphertext and tag. Made on first use.
  */
 class SecretStore(private val dir: File, private val key: () -> SecretKey) {
     private val encrypted = File(dir, "device-secret.enc")
-    private val legacy = File(dir, "device-secret")
 
     fun deviceSecret(): ByteArray {
         if (encrypted.exists()) return decrypt(encrypted.readBytes())
-        val old = legacy.takeIf { it.exists() }?.readBytes()?.takeIf { it.size == 32 }
-        val secret = old ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val secret = ByteArray(32).also { SecureRandom().nextBytes(it) }
         write(secret)
-        if (old != null && decrypt(encrypted.readBytes()).contentEquals(old)) legacy.delete()
         return secret
     }
 

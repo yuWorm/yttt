@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import android.Manifest
 import android.content.Context
@@ -83,7 +83,7 @@ import java.security.SecureRandom
 
 /** App-private files: the paired Hosts (`HostStore`), the device secret encrypted with a Keystore key. */
 class Storage(context: Context) {
-    val dir = File(context.filesDir, "yttt-spike").apply { mkdirs() }
+    val dir = File(context.filesDir, "yttt").apply { mkdirs() }
 
     /** Encrypted with a key that never leaves the Android Keystore. */
     fun deviceSecret(): ByteArray = SecretStore(dir, SecretStore::keystoreKey).deviceSecret()
@@ -206,7 +206,7 @@ fun App(
             }
         }
         try {
-            link.savePairing(link.core.pair(code.trim(), "Android spike", link.secret, link.relayOnly, listener))
+            link.savePairing(link.core.pair(code.trim(), link.deviceName, link.secret, link.relayOnly, listener))
             status = ""
             pairingDigits = null
             addingHost = false

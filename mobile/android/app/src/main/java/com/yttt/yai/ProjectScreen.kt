@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box

@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 /**
  * The key bar's Ctrl: armed by a tap, it turns the next key typed on the

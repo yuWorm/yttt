@@ -9,15 +9,15 @@ plugins {
 val coreOut = rootProject.layout.projectDirectory.dir("../../target/mobile/android")
 
 android {
-    namespace = "dev.yttt.spike"
+    namespace = "com.yttt.yai"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.yttt.spike"
+        applicationId = "com.yttt.yai"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1-spike"
+        versionName = "0.1.0"
         ndk { abiFilters += "arm64-v8a" }
     }
 

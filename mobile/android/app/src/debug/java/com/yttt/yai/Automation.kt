@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 /**
  * Debug builds only: automation for emulator runs, from the launch extras

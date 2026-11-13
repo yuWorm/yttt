@@ -1,8 +1,7 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
@@ -60,15 +59,12 @@ class HostListTest {
     }
 
     @Test
-    fun theListIsKeptAndTheOldSingleRecordMovesIn() {
-        val store = HostStore(folder.root) { record -> if (String(record) == "old") a else b }
-        folder.root.resolve("host.json").writeBytes(bytes("old"))
-        val migrated = store.load()
-        assertEquals(listOf(a), migrated.hosts.map { it.id })
-        assertEquals(a, migrated.current)
-        assertFalse(folder.root.resolve("host.json").exists())
+    fun theListIsKept() {
+        val store = HostStore(folder.root)
+        assertEquals(emptyList<HostEntry>(), store.load().hosts)
+        assertNull(store.load().current)
 
-        store.save(migrated.added(b, bytes("new")).selected(a))
+        store.save(HostList().added(a, bytes("old")).added(b, bytes("new")).selected(a))
         val loaded = store.load()
         assertEquals(listOf(a, b), loaded.hosts.map { it.id })
         assertEquals(a, loaded.current)

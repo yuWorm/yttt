@@ -1,4 +1,4 @@
-package dev.yttt.spike
+package com.yttt.yai
 
 import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
