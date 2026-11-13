@@ -10,6 +10,7 @@ import uniffi.yttt_mobile_core.PaneState
 import uniffi.yttt_mobile_core.PaneSummary
 import uniffi.yttt_mobile_core.ProjectSummary
 import uniffi.yttt_mobile_core.TabSummary
+import uniffi.yttt_mobile_core.TerminalInfo
 import uniffi.yttt_mobile_core.WaitingKind
 
 class ProjectPageTest {
@@ -79,5 +80,32 @@ class ProjectPageTest {
         assertEquals("接管终端", tipText(agent("dev", "logs", AgentState.WORKING)))
         assertEquals("等批准，接管后回复", tipText(agent("a", "b", AgentState.WAITING, WaitingKind.APPROVAL)))
         assertEquals("等回答，接管后回复", tipText(agent("a", "b", AgentState.WAITING, WaitingKind.USER_INPUT)))
+    }
+
+    @Test
+    fun aTabShowsItsAgentsLogoAndWhetherOneWaits() {
+        val marks = overview.tabMarks("web")
+        assertEquals(TabMark(provider = "codex", waiting = true), marks["agents"])
+        assertEquals(TabMark(provider = "codex", waiting = false), marks["dev"])
+        assertEquals(emptyMap<String, TabMark>(), overview.tabMarks("api"))
+    }
+
+    @Test
+    fun aProjectListsItsActiveAgentsOnceAndCountsWaits() {
+        val withClaude = overview.copy(
+            agents = overview.agents + agent("agents", "codex", AgentState.WORKING).copy(sessionId = "c2", provider = "claude"),
+        )
+        assertEquals(ProjectMark(providers = listOf("codex", "claude"), waiting = 1), withClaude.projectMark("web"))
+        // Finished Agents are not shown.
+        assertEquals(ProjectMark(providers = listOf("codex"), waiting = 0), overview.projectMark("api"))
+        assertEquals(ProjectMark(emptyList(), 0), overview.projectMark("none"))
+    }
+
+    @Test
+    fun anAgentOpensItsPaneElseItsTerminalElseNothing() {
+        val terminals = listOf(TerminalInfo("loose", "api", 80.toUShort(), 24.toUShort()))
+        assertEquals(Destination.Project(Place("web", "agents", "codex")), destination("web:agents:codex", overview, terminals))
+        assertEquals(Destination.Terminal(terminals[0]), destination("loose", overview, terminals))
+        assertNull(destination("gone", overview, terminals))
     }
 }

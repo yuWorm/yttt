@@ -4,6 +4,7 @@ import uniffi.yttt_mobile_core.AgentState
 import uniffi.yttt_mobile_core.AgentSummary
 import uniffi.yttt_mobile_core.Overview
 import uniffi.yttt_mobile_core.PaneSummary
+import uniffi.yttt_mobile_core.TerminalInfo
 import uniffi.yttt_mobile_core.WaitingKind
 
 /** A project's counts in the left drawer. */
@@ -65,3 +66,43 @@ fun tipText(agent: AgentSummary?): String =
         WaitingKind.USER_INPUT -> "等回答，接管后回复"
         else -> "等待中，接管后处理"
     }
+
+/** A terminal tab's mark: the logo of an Agent in it, and whether one waits. */
+data class TabMark(val provider: String?, val waiting: Boolean)
+
+/** A project's mark: its active Agents' providers, once each, and how many wait. */
+data class ProjectMark(val providers: List<String>, val waiting: Int)
+
+private val AgentSummary.active: Boolean
+    get() = state != AgentState.COMPLETED && state != AgentState.INTERRUPTED && state != AgentState.STALE
+
+/** Each tab of the project with an Agent in its panes: a waiting one's provider first. */
+fun Overview.tabMarks(projectId: String): Map<String, TabMark> {
+    val project = projects.firstOrNull { it.projectId == projectId } ?: return emptyMap()
+    val bySession = agents.associateBy { it.sessionId }
+    return project.tabs.mapNotNull { tab ->
+        val inTab = tab.panes.mapNotNull { bySession[it.sessionId] }
+        if (inTab.isEmpty()) return@mapNotNull null
+        val waiting = inTab.firstOrNull { it.state == AgentState.WAITING }
+        tab.tabId to TabMark(provider = (waiting ?: inTab.first()).provider, waiting = waiting != null)
+    }.toMap()
+}
+
+fun Overview.projectMark(projectId: String): ProjectMark {
+    val inProject = agents.filter { it.projectId == projectId }
+    return ProjectMark(
+        providers = inProject.filter { it.active }.map { it.provider }.distinct(),
+        waiting = inProject.count { it.state == AgentState.WAITING },
+    )
+}
+
+/** Where tapping an Agent or its notification leads. */
+sealed interface Destination {
+    data class Project(val place: Place) : Destination
+    data class Terminal(val info: TerminalInfo) : Destination
+}
+
+/** The pane the terminal runs in, else the terminal alone, else nothing: it has gone. */
+fun destination(sessionId: String, overview: Overview, terminals: List<TerminalInfo>): Destination? =
+    overview.placeOf(sessionId)?.let { Destination.Project(it) }
+        ?: terminals.firstOrNull { it.sessionId == sessionId }?.let { Destination.Terminal(it) }
