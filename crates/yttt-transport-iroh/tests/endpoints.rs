@@ -292,7 +292,7 @@ async fn a_connection_that_never_answered_a_handshake_is_dialed_anew() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_connection_that_answered_once_survives_a_failed_handshake() {
+async fn a_connection_another_session_still_uses_survives_a_failed_handshake() {
     let gate = Arc::new(ListGate::default());
     gate.allow(endpoint_key(&CLIENT_SECRET));
     let host = host(gate).await;
@@ -302,12 +302,42 @@ async fn a_connection_that_answered_once_survives_a_failed_handshake() {
     let mut first = connector.connect().await.unwrap();
     assert_eq!(echo(&mut first, b"one").await.unwrap(), b"one");
     connector.handshake_settled(true);
+    // Another handshake on the same connection, unanswered, while the first
+    // session still runs on it.
+    let failed = connector.connect().await.unwrap();
     connector.handshake_settled(false);
+    drop(failed);
 
     let mut second = connector.connect().await.unwrap();
     assert_eq!(echo(&mut second, b"two").await.unwrap(), b"two");
     assert_eq!(echo(&mut first, b"still").await.unwrap(), b"still");
     assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+    server.abort();
+}
+
+/// After a phone sleeps or changes networks, the connection it reconnects on
+/// can be dead though it answered before: its session's stream has ended, so
+/// an unanswered handshake dials anew instead of waiting out QUIC's idle
+/// timeout on it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_no_session_uses_is_dialed_anew_after_a_failed_handshake() {
+    let gate = Arc::new(ListGate::default());
+    gate.allow(endpoint_key(&CLIENT_SECRET));
+    let host = host(gate).await;
+    let (server, accepted) = serve_echo_after(host.clone(), 0);
+    let connector = IrohConnector::new(client().await, address_of(&host), ALPN);
+
+    let mut first = connector.connect().await.unwrap();
+    assert_eq!(echo(&mut first, b"one").await.unwrap(), b"one");
+    connector.handshake_settled(true);
+    drop(first);
+    let failed = connector.connect().await.unwrap();
+    connector.handshake_settled(false);
+    drop(failed);
+
+    let mut again = connector.connect().await.unwrap();
+    assert_eq!(echo(&mut again, b"again").await.unwrap(), b"again");
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
     server.abort();
 }
 

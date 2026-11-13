@@ -665,6 +665,56 @@ pub struct IrohConnector {
     connection: tokio::sync::Mutex<Option<Arc<PeerConnection>>>,
     /// The cached connection has carried a handshake the Host answered.
     answered: AtomicBool,
+    /// Streams this connector opened on the cached connection that are still
+    /// open; a new connection starts a new count.
+    live: tokio::sync::Mutex<Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+/// A stream that counts itself among its connection's live streams until it
+/// is dropped.
+struct CountedStream {
+    inner: TransportStream,
+    live: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for CountedStream {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl tokio::io::AsyncRead for CountedStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for CountedStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 impl IrohConnector {
@@ -675,6 +725,7 @@ impl IrohConnector {
             alpn: alpn.to_vec(),
             connection: tokio::sync::Mutex::new(None),
             answered: AtomicBool::new(false),
+            live: tokio::sync::Mutex::new(Arc::default()),
         }
     }
 
@@ -703,8 +754,19 @@ impl IrohConnector {
         }
         let connection = Arc::new(self.endpoint.connect(&self.peer, &self.alpn).await?);
         self.answered.store(false, Ordering::SeqCst);
+        *self.live.lock().await = Arc::default();
         *current = Some(connection.clone());
         Ok(connection)
+    }
+
+    /// Counts `stream` among the cached connection's live streams.
+    async fn counted(&self, stream: TransportStream) -> TransportStream {
+        let live = self.live.lock().await.clone();
+        live.fetch_add(1, Ordering::SeqCst);
+        Box::new(CountedStream {
+            inner: stream,
+            live,
+        })
     }
 }
 
@@ -712,14 +774,15 @@ impl TransportConnector for IrohConnector {
     fn connect(&self) -> BoxFuture<'_, Result<TransportStream, TransportError>> {
         Box::pin(async move {
             let connection = self.connection().await?;
-            match connection.open_stream().await {
-                Ok(stream) => Ok(stream),
+            let stream = match connection.open_stream().await {
+                Ok(stream) => stream,
                 Err(_) => {
                     // The cached connection died between the check and the open.
                     self.connection.lock().await.take();
-                    self.connection().await?.open_stream().await
+                    self.connection().await?.open_stream().await?
                 }
-            }
+            };
+            Ok(self.counted(stream).await)
         })
     }
 
@@ -728,17 +791,23 @@ impl TransportConnector for IrohConnector {
             self.answered.store(true, Ordering::SeqCst);
             return;
         }
-        if self.answered.load(Ordering::SeqCst) {
-            // Other streams run on it; the heartbeat judges its health.
+        // The unanswered handshake's own stream is still open now.
+        let others = self
+            .live
+            .try_lock()
+            .map_or(1, |live| live.load(Ordering::SeqCst).saturating_sub(1));
+        if self.answered.load(Ordering::SeqCst) && others > 0 {
+            // Another session runs on it; its heartbeat judges its health.
             return;
         }
         // QUIC can look established to this side while the peer never
-        // finished accepting it, and every stream on it then goes unanswered
-        // until the idle timeout.
+        // finished accepting it, or a connection that worked can die without
+        // closing (the phone slept, the network changed): every stream on it
+        // then goes unanswered until the idle timeout.
         if let Ok(mut current) = self.connection.try_lock()
             && let Some(connection) = current.take()
         {
-            tracing::debug!(peer = %self.peer.key, "dropping a connection the Host never answered on");
+            tracing::info!(peer = %self.peer.key, "dropping a connection the Host did not answer on; dialing anew");
             connection.close();
         }
     }
