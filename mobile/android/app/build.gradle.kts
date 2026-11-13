@@ -21,6 +21,15 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    buildTypes {
+        // Unsigned: signing needs the release key, kept out of the repo.
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -56,4 +65,12 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // The real org.json: the android.jar one only throws in JVM tests.
     testImplementation("org.json:json:20250517")
+}
+
+// Release's own unit tests check that it reads no launch hooks; AGP only runs
+// the debug build's by default.
+androidComponents {
+    beforeVariants(selector().withBuildType("release")) { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
+    }
 }
