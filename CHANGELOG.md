@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-13
+
+- 只读终端上点“接管”现在只取回这一个终端，不再把窗口里所有终端一起拿走；状态栏显示有几个终端正由其它设备控制。只旁观、从未输入的设备（例如手机）不会被自动设为控制方。
+- Taking control from a read-only terminal now takes back that terminal alone instead of every terminal in the window, and the status bar shows how many terminals another device controls. A device that only watches and has never typed, such as a phone, is never made the controller unasked.
+
+- 配对的设备看到的 Host 名称改为电脑名，不再是一串环境 ID。
+- Paired devices now see the computer's name as the Host's name instead of an environment ID.
+
+- 睡眠唤醒或换网络后，远程窗口重连不再卡在一条已经失效的 P2P 连接上等约 30 秒：握手没有回应、且这条连接上没有别的会话在用时，立即重新拨号。
+- After a sleep or a network change, a remote window no longer spends about 30 seconds reconnecting over a P2P connection that has died: when a handshake goes unanswered and no other session uses the connection, it dials again at once.
+
 ## 0.5.7 - 2026-11-11
 
 - 远程窗口在被强制结束后重开时连上得更快：Host 现在并行完成 P2P 握手，一个卡住的握手（例如来自刚被结束的窗口）不再让后续连接排队等它约 30 秒超时。
