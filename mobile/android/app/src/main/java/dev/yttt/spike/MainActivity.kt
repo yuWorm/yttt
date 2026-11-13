@@ -97,17 +97,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Spike-only automation for emulator runs (adb shell am start -e ...).
-        // `qrImage`: a picture in the app's files to pair from, read as the
-        // image picker reads one. With a Host paired already, it adds one
-        // more, as "添加 Host" does. Once per launch, not on recreation.
-        val autoPair = if (savedInstanceState != null) null else intent.getStringExtra("pair")
-            ?: intent.getStringExtra("qrImage")?.let { name ->
+        // Debug builds only (see `launchHooks`).
+        val hooks = launchHooks(
+            extra = intent::getStringExtra,
+            flag = { intent.getBooleanExtra(it, false) },
+            decodeImage = { name ->
                 BitmapFactory.decodeFile(java.io.File(filesDir, name).path)
                     ?.let { decodePairingCode(it.luminance(), it.width, it.height) }
-            }
-        autoType = intent.getStringExtra("type")
-        link.relayOnly = intent.getBooleanExtra("relayOnly", false)
+            },
+        )
+        // Pair once per launch, not again on recreation.
+        val autoPair = if (savedInstanceState != null) null else hooks.pair
+        autoType = hooks.type
+        link.relayOnly = hooks.relayOnly
         takeOpenRequest(intent)
         setContent {
             MaterialTheme {
