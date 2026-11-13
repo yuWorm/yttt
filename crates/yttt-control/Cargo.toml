@@ -24,6 +24,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 yttt-relay-ticket = { path = "../yttt-relay-ticket" }
 zeroize = "1"
+# test-support
+yttt-relay = { path = "../yttt-relay", optional = true }
+tempfile = { version = "3", optional = true }
+
+[features]
+# A control plane with relay nodes for other crates' integration tests.
+test-support = ["dep:yttt-relay", "dep:tempfile"]
 
 [dev-dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["any", "postgres", "sqlite", "runtime-tokio"] }

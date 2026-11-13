@@ -16,6 +16,8 @@ mod oauth;
 mod placement;
 mod plans;
 mod secrets;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 mod web;
 
 use std::{

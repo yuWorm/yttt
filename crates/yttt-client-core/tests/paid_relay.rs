@@ -1,9 +1,10 @@
-//! The whole paid-relay path: a control plane on PostgreSQL, a relay node
+//! The whole paid-relay path: a control plane, a relay node
 //! reporting to it, a Host and a phone on one account. The phone has no direct
 //! paths, so the session runs through the node, is billed, and ends when the
 //! account is suspended.
 //!
-//! Needs `YTTT_TEST_DATABASE_URL` (see packaging/relay-dev/docker-compose.full.yml).
+//! Runs on SQLite; set `YTTT_TEST_DATABASE_URL` to a PostgreSQL server (see
+//! packaging/relay-dev/docker-compose.full.yml) to run it there instead.
 
 use std::{fs, path::Path, sync::Arc, time::Duration};
 
@@ -12,7 +13,7 @@ use yttt_client_core::{
     control::{ControlClient, ControlSession, DeviceKind},
     p2p::pair,
 };
-use yttt_control::{Control, ControlConfig, NodeEntry, PlanConfig};
+use yttt_control::test_support::{self, TestRelay};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_protocol::{
     BuildIdentity, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
@@ -23,8 +24,7 @@ use yttt_protocol::{
     },
     workspace::WorkspaceProjectConfig,
 };
-use yttt_relay::{ControlConfig as NodeControl, NodeConfig, RelayNode};
-use yttt_relay_ticket::api::{AccountCreated, CreateAccount, SetSuspended};
+use yttt_relay_ticket::api::SetSuspended;
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
 use yttt_transport_iroh::{DirectPaths, EndpointConfig, IrohEndpoint, OpenGate, RelaySetup};
 
@@ -129,122 +129,31 @@ async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>) ->
     .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
 }
 
-/// A fresh database on the test server, a control plane on it, and a node
-/// reporting to it every second.
-async fn paid_relay() -> (Control, RelayNode, String) {
-    let (control, mut nodes, control_url) = paid_relay_nodes(&[NODE]).await;
-    (control, nodes.remove(0), control_url)
-}
-
 /// A control plane and one reporting relay node per id; the first is where
 /// accounts start.
-async fn paid_relay_nodes(ids: &[&str]) -> (Control, Vec<RelayNode>, String) {
-    let server = std::env::var("YTTT_TEST_DATABASE_URL")
-        .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
-    // Tests in this file run side by side, each on its own database.
-    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let name = format!(
-        "yttt_paid_relay_test_{}_{}",
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
-    let admin = sqlx::PgPool::connect(&server).await.unwrap();
-    let _ = sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {name}"))
-        .execute(&admin)
-        .await;
-    sqlx::raw_sql(&format!("CREATE DATABASE {name}"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    let (prefix, _) = server.rsplit_once('/').unwrap();
-
-    // The node needs the control URL and the control plane the node URL, so
-    // the control plane's port is chosen first.
-    let control_addr = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let control_url = format!("http://{control_addr}");
-    let ticket_secret = [3; 32];
-    let mut nodes = Vec::new();
-    for id in ids {
-        let mut node_config = NodeConfig::local(
-            *id,
-            "127.0.0.1:0".parse().unwrap(),
-            &[yttt_relay_ticket::public_key(&ticket_secret)],
-        );
-        node_config.control = Some(NodeControl::from_parts(
-            control_url.clone(),
-            format!("{id}-token"),
-            1,
-        ));
-        nodes.push(RelayNode::spawn(node_config).await.unwrap());
-    }
-    let control = Control::spawn(ControlConfig {
-        listen: control_addr,
-        public_url: None,
-        web_root: None,
-        relay_binaries_dir: None,
-        trusted_proxy: false,
-        signup: None,
-        database_url: format!("{prefix}/{name}"),
-        ticket_secret: yttt_relay_ticket::hex(&ticket_secret),
-        secrets_key: None,
-        ticket_ttl_secs: 30 * 24 * 3600,
-        session_ttl_secs: 3600,
-        dev_mode: true,
-        oauth: Default::default(),
-        plans: vec![PlanConfig {
-            id: "basic".into(),
-            rate_bps: 5_000_000,
-            burst_bytes: 1_000_000,
-            monthly_bytes: 1 << 30,
-            throttled_rate_bps: 10_000,
-            max_devices: 5,
-        }],
-        nodes: ids
-            .iter()
-            .zip(&nodes)
-            .map(|(id, node)| NodeEntry {
-                id: (*id).into(),
-                url: format!("http://{}", node.addr()),
-                token: format!("{id}-token"),
-            })
-            .collect(),
-    })
-    .await
-    .unwrap();
-    (control, nodes, control_url)
+async fn paid_relay_nodes(ids: &[&str]) -> TestRelay {
+    TestRelay::spawn(ids).await
 }
 
 async fn account(control_url: &str) -> ControlSession {
-    let created: AccountCreated = reqwest::Client::new()
-        .post(format!("{control_url}/v1/dev/accounts"))
-        .json(&CreateAccount {
-            email: "owner@example.com".into(),
-            password: "correct horse".into(),
-            plan: "basic".into(),
-            node: NODE.into(),
-        })
-        .send()
+    ControlClient::new(control_url)
+        .unwrap()
+        .login(test_support::EMAIL, test_support::PASSWORD)
         .await
         .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let session = ControlClient::new(control_url)
-        .unwrap()
-        .login("owner@example.com", "correct horse")
-        .await
-        .unwrap();
-    assert_eq!(session.account_id, created.account_id);
-    session
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
-    let (control, node, control_url) = paid_relay().await;
+    let relay = paid_relay_nodes(&[NODE]).await;
+    relay.create_account(NODE).await;
+    let TestRelay {
+        control,
+        mut nodes,
+        control_url,
+        ..
+    } = relay;
+    let node = nodes.remove(0);
     let relay_url = format!("http://{}", node.addr());
     let session = account(&control_url).await;
 
@@ -378,31 +287,17 @@ async fn a_paid_relay_carries_billed_sessions_until_the_account_is_suspended() {
     control.shutdown().await;
 }
 
-/// Signs in on the console and returns its cookie.
-async fn console(control_url: &str) -> String {
-    let response = reqwest::Client::new()
-        .post(format!("{control_url}/v1/web/session"))
-        .header("x-yttt-web", "1")
-        .json(&serde_json::json!({"email": "owner@example.com", "password": "correct horse"}))
-        .send()
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-    response.headers()["set-cookie"]
-        .to_str()
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_string()
-}
-
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn the_app_and_a_headless_device_sign_in_without_a_password() {
-    let (control, _node, control_url) = paid_relay().await;
+    let relay = paid_relay_nodes(&[NODE]).await;
+    relay.create_account(NODE).await;
+    let cookie = relay.console_cookie().await;
+    let TestRelay {
+        control,
+        control_url,
+        ..
+    } = relay;
     let session = account(&control_url).await;
-    let cookie = console(&control_url).await;
     let browser = reqwest::Client::new();
     let client = ControlClient::new(&control_url).unwrap();
 
@@ -484,9 +379,15 @@ async fn the_app_and_a_headless_device_sign_in_without_a_password() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_host_moves_to_another_node_and_its_device_follows() {
-    let (control, nodes, control_url) = paid_relay_nodes(&[NODE, "local-2"]).await;
+    let relay = paid_relay_nodes(&[NODE, "local-2"]).await;
+    relay.create_account(NODE).await;
+    let TestRelay {
+        control,
+        nodes,
+        control_url,
+        ..
+    } = relay;
     let (first, second) = (&nodes[0], &nodes[1]);
     let second_url = format!("http://{}", second.addr());
     let session = account(&control_url).await;

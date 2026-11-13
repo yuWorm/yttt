@@ -1,15 +1,16 @@
-//! A phone on a paid relay: a control plane on PostgreSQL, a relay node that
+//! A phone on a paid relay: a control plane, a relay node that
 //! admits only ticket holders, a Host on the account. The phone has no direct
 //! paths, so everything goes through the node. Signed out it cannot pair;
 //! signed in it pairs, connects and gives its device slot back when it
 //! forgets the Host. The harness follows `yttt-client-core/tests/paid_relay.rs`.
 //!
-//! Needs `YTTT_TEST_DATABASE_URL` (see packaging/relay-dev/docker-compose.full.yml).
+//! Runs on SQLite; set `YTTT_TEST_DATABASE_URL` to a PostgreSQL server (see
+//! packaging/relay-dev/docker-compose.full.yml) to run it there instead.
 
 use std::{fs, path::Path, time::Duration};
 
 use yttt_client_core::{ClientCore, control::ControlClient};
-use yttt_control::{Control, ControlConfig, NodeEntry, PlanConfig};
+use yttt_control::test_support::{EMAIL, PASSWORD, TestRelay};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_mobile_core::account::{self, Account};
 use yttt_mobile_core::session::{MobileError, MobileSession, RelayChoice, RelaySource, pair};
@@ -22,8 +23,6 @@ use yttt_protocol::{
     },
     workspace::WorkspaceProjectConfig,
 };
-use yttt_relay::{ControlConfig as NodeControl, NodeConfig, RelayNode};
-use yttt_relay_ticket::api::CreateAccount;
 use yttt_transport::{AuthToken, ClientIdentity, memory_pair};
 
 #[cfg(unix)]
@@ -33,8 +32,6 @@ const TOKEN: [u8; 32] = [0x7c; 32];
 const PROFILE: &str = "mobile-paid-relay";
 const NODE: &str = "local-1";
 const SECRET: [u8; 32] = [43; 32];
-const EMAIL: &str = "owner@example.com";
-const PASSWORD: &str = "correct horse";
 
 fn build() -> BuildIdentity {
     BuildIdentity {
@@ -125,80 +122,6 @@ async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>) ->
     .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
 }
 
-/// A fresh database, a control plane on it and a node reporting to it; the
-/// database's name, to drop at the end.
-async fn paid_relay() -> (Control, RelayNode, String, String) {
-    let server = std::env::var("YTTT_TEST_DATABASE_URL")
-        .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
-    let name = format!("yttt_mobile_paid_relay_test_{}", std::process::id());
-    let admin = sqlx::PgPool::connect(&server).await.unwrap();
-    let _ = sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {name}"))
-        .execute(&admin)
-        .await;
-    sqlx::raw_sql(&format!("CREATE DATABASE {name}"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    let (prefix, _) = server.rsplit_once('/').unwrap();
-    let control_addr = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let control_url = format!("http://{control_addr}");
-    let ticket_secret = [3; 32];
-    let mut node_config = NodeConfig::local(
-        NODE,
-        "127.0.0.1:0".parse().unwrap(),
-        &[yttt_relay_ticket::public_key(&ticket_secret)],
-    );
-    node_config.control = Some(NodeControl::from_parts(
-        control_url.clone(),
-        format!("{NODE}-token"),
-        1,
-    ));
-    let node = RelayNode::spawn(node_config).await.unwrap();
-    let control = Control::spawn(ControlConfig {
-        listen: control_addr,
-        public_url: None,
-        web_root: None,
-        relay_binaries_dir: None,
-        trusted_proxy: false,
-        signup: None,
-        database_url: format!("{prefix}/{name}"),
-        ticket_secret: yttt_relay_ticket::hex(&ticket_secret),
-        secrets_key: None,
-        ticket_ttl_secs: 30 * 24 * 3600,
-        session_ttl_secs: 3600,
-        dev_mode: true,
-        oauth: Default::default(),
-        plans: vec![PlanConfig {
-            id: "basic".into(),
-            rate_bps: 5_000_000,
-            burst_bytes: 1_000_000,
-            monthly_bytes: 1 << 30,
-            throttled_rate_bps: 10_000,
-            max_devices: 5,
-        }],
-        nodes: vec![NodeEntry {
-            id: NODE.into(),
-            url: format!("http://{}", node.addr()),
-            token: format!("{NODE}-token"),
-        }],
-    })
-    .await
-    .unwrap();
-    (control, node, control_url, name)
-}
-
-async fn drop_database(name: &str) {
-    let server = std::env::var("YTTT_TEST_DATABASE_URL").unwrap();
-    let admin = sqlx::PgPool::connect(&server).await.unwrap();
-    sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
-}
-
 /// Starts pairing on the Host; the code to give the phone.
 async fn invite(admin: &ClientCore) -> String {
     let RemoteAccessResponse::PairingInvitation { code, .. } =
@@ -232,22 +155,17 @@ async fn devices(account: &Account) -> usize {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
-    let (control, node, control_url, database) = paid_relay().await;
-    let relay_url = format!("http://{}", node.addr());
-    let created = reqwest::Client::new()
-        .post(format!("{control_url}/v1/dev/accounts"))
-        .json(&CreateAccount {
-            email: EMAIL.into(),
-            password: PASSWORD.into(),
-            plan: "basic".into(),
-            node: NODE.into(),
-        })
-        .send()
-        .await
-        .unwrap();
-    assert!(created.status().is_success());
+    let relay = TestRelay::spawn(&[NODE]).await;
+    relay.create_account(NODE).await;
+    let relay_url = relay.node_url(0);
+    let TestRelay {
+        control,
+        mut nodes,
+        control_url,
+        ..
+    } = relay;
+    let node = nodes.remove(0);
 
     // The Host joins the node with its own ticket.
     let host_session = ControlClient::new(&control_url)
@@ -366,5 +284,4 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
 
     node.shutdown().await;
     control.shutdown().await;
-    drop_database(&database).await;
 }

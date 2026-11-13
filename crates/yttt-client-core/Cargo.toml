@@ -30,8 +30,7 @@ yttt-transport-local = { path = "../yttt-transport-local" }
 yttt-transport-tls = { path = "../yttt-transport-tls" }
 rcgen = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
-yttt-control = { path = "../yttt-control" }
+yttt-control = { path = "../yttt-control", features = ["test-support"] }
 yttt-relay = { path = "../yttt-relay" }
 yttt-relay-ticket = { path = "../yttt-relay-ticket" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
