@@ -135,7 +135,6 @@ fun EditorScreen(
             AndroidView(
                 factory = { context ->
                     CodeEditor(context).apply {
-                        setEditorLanguage(TextMate.language(context, language))
                         loaded?.let { setText(it) }
                         subscribeEvent(ContentChangeEvent::class.java) { event, _ ->
                             // setText reports a whole-text change too.
@@ -144,7 +143,7 @@ fun EditorScreen(
                         editor = this
                     }
                 },
-                update = { editor -> applyLook(editor, context, look, palette) },
+                update = { editor -> applyLook(editor, context, look, palette, language) },
                 modifier = Modifier.fillMaxSize(),
             )
             when {
@@ -178,9 +177,14 @@ fun EditorScreen(
     }
 }
 
-/** The editor's font, size, wrapping, line numbers and colors, applied only when they change. */
-fun applyLook(editor: CodeEditor, context: Context, look: EditorAppearance, palette: Theme) {
-    val key = look to palette.id
+/**
+ * The editor's font, size, wrapping, line numbers, colors and language,
+ * applied only when they change. The language comes after the colors:
+ * TextMate tokens carry indexes into the current theme's colors, so text
+ * analyzed under another theme would show the wrong ones.
+ */
+fun applyLook(editor: CodeEditor, context: Context, look: EditorAppearance, palette: Theme, language: String?) {
+    val key = Triple(look, palette.id, language)
     if (editor.tag == key) return
     editor.tag = key
     editor.typefaceText = AppearanceSettings.typeface(context, look.font)
@@ -189,4 +193,5 @@ fun applyLook(editor: CodeEditor, context: Context, look: EditorAppearance, pale
     editor.isWordwrap = look.wrap
     editor.isLineNumberEnabled = look.lineNumbers
     editor.colorScheme = TextMate.colorScheme(context, palette)
+    editor.setEditorLanguage(TextMate.language(context, language))
 }

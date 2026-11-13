@@ -211,12 +211,11 @@ fun EditorAppearanceScreen(store: AppearanceStore, onBack: () -> Unit) {
             AndroidView(
                 factory = { context ->
                     CodeEditor(context).apply {
-                        setEditorLanguage(TextMate.language(context, "rust"))
                         setText(PREVIEW_CODE)
                         isEditable = false
                     }
                 },
-                update = { editor -> applyLook(editor, context, look, palette) },
+                update = { editor -> applyLook(editor, context, look, palette, "rust") },
                 modifier = Modifier.padding(16.dp).fillMaxWidth().height(220.dp).clip(RoundedCornerShape(10.dp)),
             )
         }
