@@ -78,3 +78,44 @@ iOS 模拟器不能点击。正式版不能用自动化参数，所以 iOS 只�
 - 签名、App 名字、图标、包名：要你提供或决定。
 - 把 spike 的目录和类名改成正式名字：等名字定了一次改完。
 - Rust 核心里的 `relay_only` 参数保留：它是连接选项，不是自动化入口；只是正式版的界面不会传 `true`。
+
+## 执行记录（2026-11-13）
+
+| 任务 | 提交 | 结果 |
+|---|---|---|
+| 1 Android 自动化参数 | cdfbc8b | debug 的 3 项测试在桩下失败 2 项，实现后通过；release 的 1 项测试读到的是空的。 |
+| 2 iOS 自动化参数 | 071ce07 | 3 项测试，读变量的那项在桩下失败，实现后通过，全部 22 项通过。 |
+| 3 Android 正式版 | 3c0c4a9 | R8 加 JNA、UniFFI 的保留规则，构建无警告。AGP 9 默认只跑 debug 的单元测试，为 release 另外打开。 |
+| 4 检查脚本 | 3c0c4a9、5ec1217 | 见下。 |
+| iOS Release 链接 | 071ce07 | Release 默认构建所有架构，x86_64 模拟器链接失败（核心只有 arm64）。模拟器构建排除 x86_64。 |
+
+### 检查脚本
+
+- Android：debug APK 在 `classes3.dex` 里找到 `qrImage`，失败；release APK 通过。
+- iOS：Debug 的 `YtttSpike.debug.dylib` 里找到 `YTTT_SPIKE`，失败；Release 通过。
+- 第一次 Release 链接失败时，留下的 `.app` 只有 92 KB、没有可执行文件，脚本却判为通过。改为先确认可执行文件存在，否则报错退出。
+
+### 模拟器验证
+
+体积：Android APK 从 40 MB（debug）到 22 MB（release）；iOS `.app` 从 46 MB（Debug）到 30 MB（Release）。两者用的都是 release 的 Rust 核心，差别来自压缩和 Swift 优化。
+
+- **Android 正式版**（R8 压缩，用调试密钥临时签名后安装）：
+  1. 带 `-e pair …` 启动，停在配对页，没有开始配对；
+  2. 把二维码图片 `adb push` 进相册，点“从图片识别”选中，配对成功，首页显示项目和两个 Agent；
+  3. 打开 `spike:shell:1`，接管，输入 `echo releaseOK`，Host 上执行了；
+  4. 右抽屉打开 `README.md`，加一行后保存，Host 上的文件变了；
+  5. 回到桌面后，Agent 等待时发出提醒通知、等待结束时撤回，持续了十几分钟。点开 Code review 的通知，进入那个 Tab。
+- **iOS Release**（模拟器不能点击）：
+  - 设了 `YTTT_SPIKE_PAIR_CODE` 启动，停在配对页，没有配对。对照：Debug 构建同样的启动直接配对，进入首页。
+  - 把 Release 覆盖安装在已配对的 Debug 上，不重新配对就连上了，首页的 Agent 状态随 Host 变化。说明 Release 的 Swift 代码、Keychain 里的密钥和存下的 Host 都能用。
+  - 打开终端、接管输入、编辑文件没有在 Release 上走过：要点击。
+
+### 两个误判
+
+- 第一次等后台通知时等了两分钟没看到，以为后台不通知。其实是检查脚本写错了：在 `dumpsys` 里通知标题离 channel 行不止 12 行。系统事件日志里这段时间的通知照常发出和撤回。
+- 点 Build 的通知却进了 Code review、或回到首页。点击日志表明，点到的分别是 Code review 的通知和分组摘要：Build 的等待只有约 16 秒，从找到它的位置到点击之间它已撤回，下面的通知移了上来。用调试版点 Build 进入 Build，正式版点 Code review 进入 Code review，行为一致。
+
+### 未验证
+
+- iOS Release 的点击操作（终端、接管、编辑）。
+- 真机上的正式版：两端都还没有签名。

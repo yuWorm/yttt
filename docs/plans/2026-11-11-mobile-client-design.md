@@ -70,6 +70,16 @@ FFI 约束：
 - 切换 Host 时，旧 Host 的等待通知随总控数据一起清掉；Android 的常驻通知显示当前 Host 的名字。
 - 不同时连多台：非当前 Host 的 Agent 等待不会通知。
 
+**构建类型（2026-11-13，`docs/plans/2026-11-13-mobile-release-build-plan.md`）：**
+
+- 验证用的自动化参数（iOS 的 `YTTT_SPIKE_*` 环境变量，Android 启动 Intent 的 `pair`、`qrImage`、`type`、`relayOnly`）只编进调试版：
+  - Android 放在 `debug` 源码集，`release` 源码集里同名函数什么也不读；
+  - iOS 在 `#if DEBUG` 里读。
+  - `scripts/mobile/check-release.sh` 在 APK 或 `.app` 里找这些名字，找到就失败。
+- Android 正式版用 R8 压缩，保留 JNA 和 UniFFI 生成的类；APK 从 40 MB 降到 22 MB。
+- iOS 模拟器构建只要 arm64：Rust 核心只编了 arm64 的模拟器库，Release 默认还要 x86_64。
+- 签名、App 名字、图标、包名还没定，正式版目前不签名。
+
 ## 4. 终端
 
 组件：iOS 用 SwiftTerm（MIT）；Android 用 ConnectBot termlib（Apache-2.0，Compose）。Termux 的组件 spike 后放弃，见 §8。
