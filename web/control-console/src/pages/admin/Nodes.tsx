@@ -255,7 +255,7 @@ export function AdminNodes() {
     }
     try {
       const moved = await post<number>(`/v1/admin/nodes/${moving.id}/accounts/move/${target}`);
-      Toast.success(`已迁移 ${moved} 个账号`);
+      Toast.success(`已更换 ${moved} 个账号的默认节点`);
       setMoving(undefined);
       setTarget(undefined);
       await load();
@@ -333,9 +333,9 @@ export function AdminNodes() {
                       <Dropdown.Item onClick={() => setEditing(node)}>编辑</Dropdown.Item>
                       <Dropdown.Item
                         onClick={() => setMoving(node)}
-                        disabled={node.accounts === 0 && node.devices === 0}
+                        disabled={node.accounts === 0}
                       >
-                        迁移到其他节点
+                        更换默认节点
                       </Dropdown.Item>
                       {node.status === "disabled" ? (
                         <Dropdown.Item onClick={() => setDisabled(node, false)}>启用</Dropdown.Item>
@@ -442,14 +442,14 @@ export function AdminNodes() {
       </SideSheet>
 
       <Modal
-        title={`迁移 ${moving?.id ?? ""} 上的设备与账号`}
+        title={`更换以 ${moving?.id ?? ""} 为默认节点的账号`}
         visible={moving !== undefined}
         onCancel={() => setMoving(undefined)}
         onOk={() => void move()}
         okButtonProps={{ disabled: !target }}
       >
         <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-          节点上的 Host、连接它们的设备，以及以它为默认节点的 {moving?.accounts ?? 0} 个账号一起迁到目标节点。旧节点在下次上报（约 15 秒）时断开它们，设备随即改连新节点；目标节点会自动向这些账号的套餐开放。
+          以它为默认节点的 {moving?.accounts ?? 0} 个账号改用目标节点，只影响之后登录的 Host；目标节点会自动向这些账号的套餐开放。已有的 Host 不会被移动：节点只由 Host 自己选择。要让 Host 离开这个节点，就停用它，Host 上会提示用户选择新节点。
         </Typography.Paragraph>
         <Select
           placeholder="目标节点"

@@ -53,28 +53,20 @@ cargo run --release -p yttt-client-core --example p2p_probe -- '<配对码>' --s
 
 | 场景 | 设置 | 预期 |
 |---|---|---|
-| 同一局域网 | Host 不设 relay | 连接后状态栏为“直连”，请求耗时在几毫秒级 |
-| 跨网络 | Host 与设备使用同一个 relay（见 §4） | 先“经 relay”，打洞成功后几秒内变为“直连”；打不通（对称 NAT 等）则一直“经 relay”，但能正常工作 |
+| 同一局域网 | Host 不登录 relay 账号 | 连接后状态栏为“直连”，请求耗时在几毫秒级 |
+| 跨网络 | Host 与设备登录同一个 relay 账号（见 §5） | 先“经 relay”，打洞成功后几秒内变为“直连”；打不通（对称 NAT 等）则一直“经 relay”，但能正常工作 |
 | 只走 relay | 用 `p2p_probe --relay-only` | 始终“经 relay”，Host 与设备都不暴露直连地址 |
 | 断网恢复 | 连接后切换 Wi-Fi 或断网再恢复 | 窗口提示重连，网络恢复后自动回到可用状态，`client.log` 记录断开与恢复耗时 |
 | 撤销 | 在 Host 上撤销设备 | 设备会话立即断开，之后无法再连；重新配对后恢复 |
-| 切换节点 | 付费 relay，Host 换到另一个节点（见 §5） | 只走 relay 的会话断开后自动重连到新节点；旧节点约 15 秒内断开留在上面的设备，并拒绝它们的旧 ticket |
+| 切换节点 | Host 换到另一个节点（见 §5） | 只走 relay 的会话几秒内经新节点恢复，不用操作设备；直连的会话不断 |
+| 节点停用 | 在控制台停用 Host 所在节点 | Host 不自动换节点，只走直连，并提示选择节点；选好后设备跟过去 |
+| 控制面不可达 | 停掉控制面后重连设备 | 设备用缓存的 ticket 和 Host 的记录照常经 relay 连上 |
 
-## 4. 自建 relay（跨网络测试需要）
+## 4. relay（跨网络测试需要）
 
-relay 只转发端到端加密的流量，看不到内容，也不能冒充任何一端。需要一台两端都能访问的机器（例如那台 SSH 服务器）：
+relay 只转发端到端加密的流量，看不到内容，也不能冒充任何一端。节点只接受控制面签发的 ticket，没有不需要账号的自建模式：要自建，就部署控制面和节点（见 §5 与 [`relay-operations.md`](./relay-operations.md)）。本机测试用 `packaging/relay-dev/docker-compose.full.yml` 起一整套。
 
-```sh
-cargo build --release -p yttt-relay
-./target/release/yttt-relay --config packaging/relay-selfhost/relay.toml
-```
-
-- 默认监听 TCP 3341，地址形如 `http://<公网 IP>:3341`。防火墙或云安全组需放行该端口。
-- 有证书时按配置文件里的注释改用 HTTPS，并开启 UDP 7842 的 QUIC 地址探测，打洞成功率更高。
-- 自建模式不需要账号，任何拿到地址的人都能用它的带宽（每台设备限速），不要公开地址。
-- 也可以用官方镜像 `n0computer/iroh-relay`（见 `packaging/relay-dev/docker-compose.yml`），但它的 `--dev` 模式只适合本机。
-
-Host 开启 P2P 时填这个地址；设备不用单独设置，配对码里带着 Host 的 relay 地址。
+不登录 relay 账号时，Host 与设备只走直连。
 
 ## 5. 付费 relay（账号）
 
@@ -83,9 +75,9 @@ Host 开启 P2P 时填这个地址；设备不用单独设置，配对码里带�
 1. 建账号（开发模式）：`curl -X POST http://<控制面>/v1/dev/accounts -H 'content-type: application/json' -d '{"email":"me@example.com","password":"至少八位密码","plan":"basic","node":"local-1"}'`。
 2. Host 与设备都在“远程访问此电脑”页的“relay 账号”一节填服务地址，用同一账号登录：点“在浏览器中登录”，在打开的控制台页面点“允许”；也可以改用邮箱密码。
 3. Host 上点“本机作为 Host 时使用此账号”。Host 会登记自己的密钥并取得 ticket，P2P 一节显示正在使用的 relay，随后列出套餐可用的节点（延迟、负载、是否满载），选一个即可，之后用“选择节点”更换。
-4. 照常配对：设备已登录时，配对与之后的连接都经 Host 所在的 relay 节点，即使配对码里的 relay 地址不同；设备不用选节点。
+4. 照常配对：设备已登录时，配对与之后的连接都经 Host 签名选定的节点；设备不用选节点。未登录的设备扫到带控制面地址的配对码时，会提示先登录，也可以只在局域网内配对。
 5. 在 Host 页面的账号信息里应能看到本月用量增长；在控制面封停账号（`POST /v1/dev/accounts/<id>/suspension {"suspended":true}`）后，只走 relay 的会话约 30 秒内断开。
-6. 测切换节点需要第二个节点：在控制台“节点”页新建并部署，把它加入套餐的“可用节点”。应用里切换后有 10 分钟冷却，控制台“设备”页不受限制。
+6. 测切换节点需要第二个节点：在控制台“节点”页新建并部署，把它加入套餐的“可用节点”。只能在 Host 上切换（应用或 `yttt-server p2p node <id>`），之后有 10 分钟冷却；控制台不能移动 Host。
 
 没有桌面时用命令行走同样的流程：
 

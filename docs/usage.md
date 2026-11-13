@@ -459,7 +459,7 @@ command line. The P2P setting persists across Host restarts:
 
 ```sh
 yttt-server ensure                                   # start the Host if it is not running
-yttt-server p2p enable [--relay https://relay.example.com]
+yttt-server p2p enable     # direct paths only until `p2p login <control url>`
 yttt-server p2p pair       # prints the QR code and invitation, then waits for a device
 yttt-server p2p status     # P2P state, relay and connected devices
 yttt-server p2p devices

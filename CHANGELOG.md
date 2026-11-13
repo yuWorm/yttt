@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- 节点只由 Host 决定：Host 签名自己的 relay 位置，控制面只保存转发，控制台和管理员都不能再移动 Host。节点停用、移出套餐或地址变更时，Host 提示选择节点，选好之前只走直连。
+- Only a Host decides its relay node: it signs where it relays and the control plane only stores and passes that on, so neither the console nor administrators can move a Host any more. When its node is disabled, leaves the plan or changes address, the Host asks its user to choose and relays through no node until then.
+
+- Host 换节点后，连接它的手机和桌面几秒内经新节点恢复，不用操作设备；此前经 relay 的会话可能要等最多 5 分钟。设备缓存 Host 的位置和 relay ticket，控制面暂时不可达也能连上。
+- After a Host moves to another node, the phones and desktops connected to it recover through the new node within seconds, with no one touching them; sessions through the relay could wait up to 5 minutes before. Devices cache where the Host relays and their relay ticket, so they still connect while the control plane is out of reach.
+
+- **不兼容**：去掉不需要账号的自建 relay 模式（节点的 `[open]` 配置、Host 手填的 relay 地址、`yttt-server p2p enable --relay`）。自建请部署控制面与节点；不登录 relay 账号时只走直连。配对码改为携带控制面地址，未登录的设备会提示先登录，也可以只在局域网内配对。已登录 relay 账号的 Host 升级后要在“远程访问 ▸ relay 账号 ▸ 节点”里选一次节点（或 `yttt-server p2p node <id>`），之后已有的配对照常使用。
+- **Breaking**: the self-hosted relay mode without accounts is gone (a node's `[open]` setting, a relay address typed on the Host, `yttt-server p2p enable --relay`). To self-host, run the control plane with your nodes; without a relay account, only direct connections work. Pairing codes name the Host's control plane instead of a relay, and a device that is not signed in asks to sign in first or pairs over the local network. A Host already signed in to a relay account asks for its node once after the upgrade ("Remote access ▸ Relay account ▸ Node", or `yttt-server p2p node <id>`); existing pairings then keep working.
+
 ## 0.5.7 - 2026-11-11
 
 - 远程窗口在被强制结束后重开时连上得更快：Host 现在并行完成 P2P 握手，一个卡住的握手（例如来自刚被结束的窗口）不再让后续连接排队等它约 30 秒超时。

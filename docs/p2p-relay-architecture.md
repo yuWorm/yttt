@@ -59,8 +59,8 @@ Phase 1 验收已完成：
 
 - TLS 入口（0.3.x）：Host 在本机端口提供 TLS 1.3 入口，配合连接码与通用 TCP 隧道使用；默认只绑定 loopback。
 - P2P（0.4.0）：基于 Iroh 的 QUIC 连接，Host 与设备用 Ed25519 设备密钥双向签名认证，每台设备对每台 Host 各有一把密钥。配对用一次性邀请（二维码或 `YTTT-PAIR:1:` 文本，5 分钟有效，第二台设备使用即作废）、双方比对六位数字、Host 逐台确认权限；撤销立即断开。配对走独立 ALPN 与 `FrameKind::Pairing`。能直连时直连，否则经 relay 转发。
-- Relay：自建模式（不需要账号，按端点限速）与付费模式。付费模式下控制面 `yttt-control`（PostgreSQL 或 SQLite）签发 Ed25519 ticket，节点 `yttt-relay` 凭 ticket 准入、按套餐限速并上报用量。账号只买传输，不参与 Host 授权（§9.3 末尾的原则）。
-- 节点归属（0.5.0）：每台 Host 选择自己的节点，设备的 ticket 总是落在它所连 Host 的节点上，Host 与设备不会分在两个节点。切换经撤销列表游标传到旧节点，旧节点断开离开的设备并拒绝它们的旧 ticket；节点有负载统计与容量上限。
+- Relay：只有控制面模式（0.6 起去掉了不需要账号的自建模式，自建就部署控制面）。控制面 `yttt-control`（PostgreSQL 或 SQLite）签发 Ed25519 ticket，节点 `yttt-relay` 凭 ticket 准入、按套餐限速并上报用量。账号只买传输，不参与 Host 授权（§9.3 末尾的原则）。不登录 relay 账号时只走直连。
+- 节点归属（0.5.0，0.6 起由 Host 签名）：Host 用设备密钥签名一条位置记录（节点、地址、递增序号），控制面只保存和转发；设备用配对时记下的 Host 公钥验签，只经最新的记录里的节点连接，所以控制面无法把设备引到 Host 没签过的节点。节点停用、移出套餐或地址变更时，Host 不自动跟随，提示用户选择。切换时 Host 先关闭经旧节点的连接再切过去，设备重拨前取新记录，几秒内恢复；记录同时经 P2P 会话推送（`ServerEvent::RelayPlacementChanged`），并和 ticket 一起缓存在设备上。设计见 [`plans/2026-11-13-host-relay-placement-design.md`](./plans/2026-11-13-host-relay-placement-design.md)。
 - 登录（0.5.0）：控制台支持 GitHub / Google；应用经浏览器登录（PKCE，回调只到 loopback），无屏 Host 用短码（设备码流程）。这两种得到的是只能使用 relay 的设备会话。
 - 部署（0.5.0）：控制面一键安装脚本 `install-control.sh`，节点为控制台生成的交互式部署命令，见 [`relay-operations.md`](./relay-operations.md)。
 

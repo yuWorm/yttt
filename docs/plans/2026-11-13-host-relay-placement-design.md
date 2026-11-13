@@ -137,11 +137,13 @@ struct PlacementNeeded {
 | **登录 relay 账号**（应用浏览器登录、短码、`yttt-server p2p login`） | 登录结果里显示的节点：已有记录就沿用；收到 `Missing` 就签 `suggested`，界面上要显示这个节点 |
 | **选择节点**（应用节点列表、`yttt-server p2p node <id>`），以及确认地址变更 | 用户选的节点 |
 
-用户选择节点时的步骤：
+用户选择节点时的步骤（实现时按测试中的实际行为调整过顺序，见 §10）：
 
-1. 预留 `seq`，签名，`PUT /node`，存盘，更新共享状态；
-2. 通过 `RelayPlacementChanged` 推给所有已连接的会话；
-3. 取新 ticket，对 Host 的 endpoint 调用 `set_relay`，**不重启 P2P**，现有会话保持不断。
+1. 预留 `seq`，签名，`PUT /node`，存盘；
+2. 取新 ticket；
+3. **关闭经 relay 的 P2P 连接**（`IrohEndpoint::close_relayed`）。此时旧节点还在，关闭帧送得到，这些设备立即重拨；
+4. 对 Host 的 endpoint 调用 `set_relay`，**不重启 P2P**，并等到新节点成为 home relay（最多 10 s）；
+5. 更新共享状态，通过 `RelayPlacementChanged` 推给仍在的会话（直连的会话不断，收到推送后更新地址）。
 
 **Host 收到 `NodeUnavailable` 或 `AddressChanged` 时不签名。**
 - Host 的 relay 关闭，只走直连；`RelayAccountStatus` 增加 `placement_needed: Option<PlacementNeeded>`。
@@ -158,7 +160,8 @@ struct PlacementNeeded {
 - Client 收到事件后先 `accept_placement`。记录变新、并且节点或地址变了时：
   1. 取新 ticket；
   2. `endpoint.set_relay(target)`；
-  3. `connector.set_peer_relay(url)`。
+  3. `connector.set_peer_relay(url)`：只关闭不是直连的连接，直连的会话继续用。
+- 经 relay 的会话收不到这条推送（Host 切换前已关闭它们），它们靠重拨前 hook 从控制面得知新位置（§6.6）。
 
 ### 6.6 连接层的改动（`yttt-transport-iroh`）
 
@@ -204,7 +207,15 @@ struct PlacementNeeded {
 - 去掉 `issued_unix`；
 - 按"删除最后一个使用者时再删除"重排计划，保证每一步都能编译。
 
-## 10. 以后可以做
+## 10. 实现与设计的差异（2026-11-13）
+
+- **切换顺序**：原设计是"先推送、再 `set_relay`"。集成测试中，经 relay 的会话在 Host 切换后静默失效，要等 20 s 心跳超时；手机若在 Host 完成 home relay 切换（iroh 约 3 s）之前重拨，新连接又会在切换完成时断开。现在的做法见 §6.4：Host 先关闭经 relay 的连接，再切换并等到新节点成为 home。
+- **设备等 Host 站稳**：重拨前 hook 发现 Host 刚换了节点（记录里的地址变了）时，先等 `HOST_SETTLE`（5 s）再拨。集成测试里手机在切换后约 2–5 s 恢复。
+- **桌面配对**：没登录时不弹出登录，而是先尝试直连配对；失败时错误信息说明要登录哪个控制面。
+- **`MAX_RELAY_URL_BYTES`**：没有把常量统一到 `yttt-relay-ticket`，两处各自保持 256。
+- **wire 兼容**：按 §7 有意删除 `P2pSettings.relay_url` 和 `SetP2p.relay_url`，没有升协议版本，已记入 `docs/wire-evolution.md`。
+
+## 11. 以后可以做
 
 - Host 替已授权设备申请 ticket，设备不用登录 Host 的账号就能使用 relay。
 - 控制面安装脚本的"个人模式"。

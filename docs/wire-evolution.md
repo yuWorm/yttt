@@ -117,6 +117,10 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   v22 内追加(未升版本):事件 `ServerEvent::RelayPlacementChanged(SignedPlacement)`,Host 签名的 relay 位置
   (`yttt_relay_ticket::placement`),P2P 会话握手后发一次、Host 换节点时再发,只保留最新一条。旧 Client 跳过。
   `RelayAccountStatus.placement_needed`(带缺省)说明 Host 为何没有 relay、等用户选择节点。
+  **有意的破坏(未升版本)**:删除 `P2pSettings.relay_url` 与 `RemoteAccessRequest::SetP2p.relay_url`。
+  自建 relay 改为部署控制面,Host 不再接受手填的 relay 地址;当时只有一个用户、所有组件一同升级,
+  所以没有按规则 7 升版本。两端的 serde 都会忽略多出的字段、把缺少的 `Option` 读作 `None`,
+  新旧端混用时只是旧端手填的 relay 不再生效。配对码(不在样本内)同时把 `relay_url` 换成 `control_url`。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

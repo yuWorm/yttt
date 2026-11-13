@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Badge, Button, Card, Modal, Popconfirm, Select, Table, Tag, Toast, Typography } from "@douyinfe/semi-ui";
+import { Badge, Button, Card, Popconfirm, Table, Tag, Toast, Typography } from "@douyinfe/semi-ui";
 import { IconDelete, IconMonitorStroked, IconServer } from "@douyinfe/semi-icons";
-import { type DeviceEntry, type NodeChoice, del, errorText, formatTime, get, put } from "../api";
+import { type DeviceEntry, type NodeChoice, del, errorText, formatTime, get } from "../api";
 import { useSession } from "../session";
 import { EmptyState, PageHeader } from "../components/ui";
 
@@ -35,27 +35,16 @@ export function Devices() {
     const node = nodes.find((choice) => choice.id === id);
     return node ? (node.region ? `${node.name}（${node.region}）` : node.name) : id;
   };
-  const moveHost = (device: DeviceEntry, nodeId: string) =>
-    Modal.confirm({
-      title: `把 ${device.label} 移到 ${nodeName(nodeId)}？`,
-      content:
-        "连接这台 Host 的设备会一起移过去，当前的远程会话会断开并自动重连。套餐只允许一个节点时，账号里的所有设备都会一起移动。",
-      onOk: async () => {
-        try {
-          await put(`/v1/devices/${device.endpoint_id}/node`, { node_id: nodeId });
-          Toast.success("已切换，约 15 秒内生效");
-          await Promise.all([load(), refresh()]);
-        } catch (failure) {
-          Toast.error(errorText(failure));
-        }
-      },
-    });
   const labelOf = (key?: string) => devices?.find((device) => device.endpoint_id === key)?.label ?? key?.slice(0, 8);
   return (
     <>
       <PageHeader
         title="设备"
-        description={me ? `已登记 ${me.devices} / ${me.max_devices}` : undefined}
+        description={
+          me
+            ? `已登记 ${me.devices} / ${me.max_devices}。节点由每台 Host 在 yttt 应用里自己选择，连接它的设备会跟随。`
+            : undefined
+        }
       />
       <Card bodyStyle={{ padding: devices?.length ? 0 : undefined }}>
         {devices && devices.length === 0 ? (
@@ -103,29 +92,15 @@ export function Devices() {
                   ),
               },
               {
+                // Only the Host chooses its node; the console shows it.
                 title: "节点",
                 dataIndex: "node_id",
-                render: (nodeId: string, device: DeviceEntry) =>
-                  device.role === "host" ? (
-                    <Select
-                      size="small"
-                      value={nodeId}
-                      style={{ minWidth: 180 }}
-                      onChange={(value) => value !== nodeId && moveHost(device, String(value))}
-                      optionList={nodes.map((node) => ({
-                        value: node.id,
-                        disabled: node.full && node.id !== nodeId,
-                        label:
-                          nodeName(node.id) +
-                          (node.full ? " · 已满" : node.load_percent !== undefined ? ` · ${node.load_percent}%` : ""),
-                      }))}
-                    />
-                  ) : (
-                    <Typography.Text type="tertiary">
-                      {nodeName(nodeId)}
-                      {device.role === "client" && "（跟随 Host）"}
-                    </Typography.Text>
-                  ),
+                render: (nodeId: string, device: DeviceEntry) => (
+                  <Typography.Text type={device.role === "host" ? undefined : "tertiary"}>
+                    {nodeName(nodeId)}
+                    {device.role === "client" && "（跟随 Host）"}
+                  </Typography.Text>
+                ),
               },
               {
                 title: "状态",
