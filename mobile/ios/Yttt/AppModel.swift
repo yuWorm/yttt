@@ -139,6 +139,14 @@ final class AppModel: ObservableObject {
 
     /// Back in the foreground: the network may have changed while suspended.
     func enterForeground() {
+        backgroundRelease?.cancel()
+        backgroundRelease = nil
+        if releasedInBackground {
+            releasedInBackground = false
+            Task { await connect() }
+            return
+        }
+        // The network may have changed meanwhile.
         session?.networkChanged()
     }
 
@@ -391,15 +399,36 @@ final class AppModel: ObservableObject {
 
     /// Leaving the foreground gives every terminal back to the computer, in
     /// the time iOS grants a task started on the way out.
+    /// How long the link stays up in the background, in the time iOS grants
+    /// a task started on the way out: a quick trip to another app keeps it.
+    static let keepLinkInBackground: Duration = .seconds(20)
+    /// Lets go of the link once the app has been away a while.
+    private var backgroundRelease: Task<Void, Never>?
+    /// The link was let go in the background; a fresh one is made on return.
+    private var releasedInBackground = false
+
+    /// Leaving the foreground gives every terminal back to the computer. After
+    /// a while away the link is closed cleanly: iOS would suspend the app and
+    /// leave the connection to die unseen, which the phone then takes long to
+    /// notice on return, while the Host waits out its own timeout. A fresh
+    /// one on return is quick, as leaving and coming back always was.
     func enterBackground() {
         guard let session else { return }
         var task = UIBackgroundTaskIdentifier.invalid
-        task = UIApplication.shared.beginBackgroundTask(withName: "give-back") {
+        task = UIApplication.shared.beginBackgroundTask(withName: "keep-link") {
             UIApplication.shared.endBackgroundTask(task)
         }
-        Task {
+        backgroundRelease?.cancel()
+        backgroundRelease = Task {
+            defer { UIApplication.shared.endBackgroundTask(task) }
             try? await session.giveBack(sessionIds: [])
-            UIApplication.shared.endBackgroundTask(task)
+            try? await Task.sleep(for: Self.keepLinkInBackground)
+            guard !Task.isCancelled, self.session === session else { return }
+            releasedInBackground = true
+            self.session = nil
+            link = .ready
+            downSince = nil
+            await session.disconnect()
         }
     }
 

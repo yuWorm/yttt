@@ -48,6 +48,9 @@ struct ProjectView: View {
                          onPane: { place = Place(projectId: place.projectId, tabId: place.tabId, paneId: $0) })
                     // A new session (a fresh connection) makes the pane again.
                     .id(model.sessionKey + info.sessionId)
+            } else if model.session == nil, pane != nil {
+                // Between links, as after coming back from the background.
+                ProgressView("正在连接…").frame(maxHeight: .infinity)
             } else {
                 ContentUnavailableView(pane == nil ? "这个项目没有终端" : "这个 pane 没有在运行",
                                        systemImage: "terminal")
@@ -357,6 +360,8 @@ struct TerminalAloneView: View {
                 AloneArea(session: session, info: info,
                           agent: model.overview.agents.first { $0.sessionId == info.sessionId })
                     .id(model.sessionKey + info.sessionId)
+            } else if model.session == nil {
+                ProgressView("正在连接…").frame(maxHeight: .infinity)
             } else {
                 ContentUnavailableView("终端已结束", systemImage: "terminal",
                                        description: Text("电脑上的这个终端已经不在了。"))
