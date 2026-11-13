@@ -64,3 +64,31 @@
 
 - 局域网直连在 TUN 代理下握手超时：另查。
 - 设备码登录（RFC 8628）：有浏览器登录后不需要；进程在浏览器期间被系统杀掉时，重新登录即可。
+
+## 执行记录（2026-11-13）
+
+提交：`0a24259` 真机脚本与 `YTTT_LOG`；`1463e23` 核心（账号、每台 Host 一把 key、配对与连接用 ticket）；`f9a3f23` iOS；`981ef50` 直连卡住时只经 relay；`ac55d5b` Android。
+
+**真机（iPhone 16 Pro，iOS 26.6.2，开着 TUN 代理）**
+- 登录前：付费 relay 拒绝手机（`a relay ticket is required`），局域网直连握手半通，配对 30 s 后失败。
+- 登录后：relay 接受手机，但默认模式仍先走直连并卡住；手机到 relay 的连接也被代理断过一次（`Ping timeout`）。同一台 Windows 直连、relay 都正常，问题在手机上的代理：它给域名分配 `198.18.x.x` 假 IP，并接管发往局域网的 UDP。
+- 只经 relay（调试参数 `YTTT_DEBUG_RELAY_ONLY`）：约 3 s 配对，连接正常。
+- 修复后（默认模式）：直连 8 s 无回应，自动改为只经 relay，约 9 s 连上（`981ef50`）。
+- 电脑是 0.5.7：不支持单终端接管（`TakeTerminal` 返回 `Unsupported`），其余正常。
+
+**本机测试栈**：控制面、控制台、只认 ticket 的 relay 节点（开发密钥），`spike_host --account` 作 Host；数据库在项目自己的 `relay-dev-postgres-1`。
+- 核心集成测试 `tests/paid_relay.rs`（`#[ignore]`，需 `YTTT_TEST_DATABASE_URL`）：未登录配对失败；登录后配对、连接经节点，console 上的标签是“iPhone → <Host>”，忘记后名额归还。测试结束删除自己的数据库。
+- iOS 模拟器 `YtttUITests/SignInTests`：在浏览器中打开控制台、点 Safari 的“取消”结束登录；邮箱密码登录；只经 relay 配对、连接；设置页显示账号。XCUITest 不能在 Safari 进程里打字，浏览器登录的完整流程在真机上由用户走通。
+- Android 模拟器（Android 15）：浏览器登录完整走通（Chrome 提示保存密码；允许后自动回到应用）；只经 relay 配对、连接；设置页账号与设备数；忘记 Host 后控制面只剩 Host 与 iOS 模拟器的 key。
+
+**发现并修好的问题**
+- Safari 用自己的“取消”关闭时，sheet 的 `onDismiss` 收不到，登录一直挂着：改由 `SFSafariViewControllerDelegate` 取消。
+- Android 15 起后台应用只通 loopback（`Background firewall chain enabled`）：浏览器的回调到了，换取会话的请求被拦。加 `SignInService`（`shortService`，Android 14+）在等浏览器时保住网络。
+- Android 设置页的设备数只在登录时取一次：改为每次连接后再取。
+- 代理下直连握手半通：配对 8 s 内没出现核对数字、连接 8 s 内没完成，就只经 relay 重试。
+
+**未做 / 未验证**
+- 代理下每次连接都要先等 8 s 直连；可记住“这个网络直连不通”。
+- 真机 Android、iOS 真机上的 Android 等价测试、蜂窝网络。
+- 签名过期后账号与 key 的去留（免费开发者证书 7 天）。
+

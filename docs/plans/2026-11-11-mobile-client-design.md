@@ -144,7 +144,7 @@ Host 下发的是语义增量（`SemanticDelta.changed_rows`，每行一组带�
 3. **iOS 上架限制。** `yttt-transport-iroh` 无条件启用 iroh 的 `fast-apple-datapath`，用到私有 API `sendmsg_x`/`recvmsg_x`，有被 App Store 拒审的风险，需要改为按 target 启用。portmapper 的 UPnP 在 iOS 上需要 multicast entitlement，移动端关掉。局域网直连需要 `NSLocalNetworkUsageDescription`。
 4. **网络变化（已接，2026-11-12，见 `docs/plans/2026-11-12-mobile-link-plan.md`）。** `HostSession.network_changed()` 让 iroh 重读网卡（`IrohEndpoint::network_change`）并让 ClientCore 立即探测连接（`probe_now`，与桌面 `link_watch` 相同）。原生侧只在网络**变为可用**时调用（Android `onAvailable`/`onLinkPropertiesChanged`，iOS 路径 `.satisfied`），去抖 500 ms。断网时不调用：探测得不到回音会换掉本来能撑过短暂断网的 QUIC 连接，模拟器上实测因此更慢。Android 上 SELinux 不让 App 读 netlink 与 `/sys/class/net`，iroh 自己看不到网卡变化，只能靠原生回调与 `probe_now`；Wi-Fi 与蜂窝之间换 IP 的情形需要真机验证。正式 App 里这个入口应放在 `MobileCore` 上，转给所有 endpoint。
 6. iOS 推送：APNs 只能由 App 发布者发送，需要官方推送网关，暂缓。
-7. Relay 账号登录：现有 OAuth 回调只到 loopback，手机先用设备码流程。不登录账号时，配对得到的 relay 提示只对自建 relay 有效。
+7. ~~Relay 账号登录~~（已解决，2026-11-13，[`2026-11-13-mobile-relay-account-plan.md`](2026-11-13-mobile-relay-account-plan.md)）。手机先登录再配对：浏览器登录（授权码 + PKCE，回调到核心的 loopback 端口；iOS 用 `SFSafariViewController`，Android 用 Custom Tab，都能用密码管理器）或邮箱密码。每台 Host 一把由 device secret 派生的 key（控制面的 Client key 只能跟一台 Host）。配对、连接都先登记 key、取 ticket，经 Host 的节点；`keep_ticket` 续期。直连 8 s 没有回应（手机上的 TUN 代理会让握手半通）就改为只经 relay。Android 15 起后台只通 loopback，浏览器登录期间用 `shortService` 保住网络。不登录时，配对码里的 relay 提示只对自建 relay 有效。
 
 ## 8. Spike 结论（2026-11-12）
 
