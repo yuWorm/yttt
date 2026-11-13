@@ -85,7 +85,7 @@ struct TerminalScreen: View {
             }
         }
         .task {
-            guard let line = AppModel.autoType else { return }
+            guard let line = AppModel.hooks.type else { return }
             try? await Task.sleep(for: .seconds(2))
             await takeControl()
             guard controlling else { return }

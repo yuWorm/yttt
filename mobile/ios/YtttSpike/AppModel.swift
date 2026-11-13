@@ -64,32 +64,17 @@ final class AppModel: ObservableObject {
     /// A project file open full screen.
     @Published var editing: EditingFile?
 
-    /// Spike-only automation for simulator runs, set through
-    /// `SIMCTL_CHILD_<name>`: pair with this code, open this terminal, then
-    /// take control and type this line.
-    static let autoPairCode = ProcessInfo.processInfo.environment["YTTT_SPIKE_PAIR_CODE"]
-        ?? ProcessInfo.processInfo.environment["YTTT_SPIKE_QR_IMAGE"].flatMap { path in
-            // Pair from a QR code image, through the same reader as the photo picker.
+    private var automated = false
+    /// Debug builds only: automation for simulator runs.
+    static let hooks = LaunchHooks.current
+    static var relayOnly: Bool { hooks.relayOnly }
+    /// The code to pair with at launch, given or read from a QR code image
+    /// through the same reader as the photo picker.
+    static var autoPairCode: String? {
+        hooks.pairCode ?? hooks.qrImage.flatMap { path in
             UIImage(contentsOfFile: path)?.cgImage.flatMap(pairingCode(in:))
         }
-    /// Switch to the paired Host whose id ends so, or forget the current
-    /// one, as the Host menu does.
-    static let autoSwitch = ProcessInfo.processInfo.environment["YTTT_SPIKE_SWITCH"]
-    static let autoForget = ProcessInfo.processInfo.environment["YTTT_SPIKE_FORGET"] == "1"
-    static let autoOpen = ProcessInfo.processInfo.environment["YTTT_SPIKE_OPEN"]
-    static let autoType = ProcessInfo.processInfo.environment["YTTT_SPIKE_TYPE"]
-    /// Open this project (and tab, pane) once the overview has it, and
-    /// optionally show the drawer, for screenshots.
-    static let autoProject = ProcessInfo.processInfo.environment["YTTT_SPIKE_PROJECT"]
-    static let autoTab = ProcessInfo.processInfo.environment["YTTT_SPIKE_TAB"]
-    static let autoPane = ProcessInfo.processInfo.environment["YTTT_SPIKE_PANE"]
-    static let autoDrawer = ProcessInfo.processInfo.environment["YTTT_SPIKE_DRAWER"] == "1"
-    /// Show the right drawer, or open this file, in the automated project.
-    static let autoFiles = ProcessInfo.processInfo.environment["YTTT_SPIKE_FILES"] == "1"
-    static let autoEdit = ProcessInfo.processInfo.environment["YTTT_SPIKE_EDIT"]
-    private var automated = false
-    /// Keep off direct paths: everything goes through the Host's relay.
-    static let relayOnly = ProcessInfo.processInfo.environment["YTTT_SPIKE_RELAY_ONLY"] == "1"
+    }
 
     init() {
         let core = try! MobileCore()
@@ -214,7 +199,7 @@ final class AppModel: ObservableObject {
         guard let session else { return }
         do {
             terminals = try await session.terminals()
-            if path.isEmpty, let open = Self.autoOpen,
+            if path.isEmpty, let open = Self.hooks.open,
                let terminal = terminals.first(where: { $0.sessionId == open }) {
                 path.append(terminal)
             }
@@ -242,16 +227,16 @@ final class AppModel: ObservableObject {
         self.overview = overview
         // The terminals change as panes start and stop.
         if terminalsChanged { Task { await refresh() } }
-        if !automated, let project = Self.autoProject,
+        if !automated, let project = Self.hooks.project,
            overview.projects.contains(where: { $0.projectId == project }) {
             automated = true
             var place = overview.initialPlace(project)
-            if let tab = Self.autoTab { place = overview.placeIn(project, tab) }
-            if let pane = Self.autoPane { place = Place(projectId: project, tabId: place.tabId, paneId: pane) }
+            if let tab = Self.hooks.tab { place = overview.placeIn(project, tab) }
+            if let pane = Self.hooks.pane { place = Place(projectId: project, tabId: place.tabId, paneId: pane) }
             root = .project(place)
-            drawerOpen = Self.autoDrawer
-            drawerFilesOpen = Self.autoFiles
-            if let path = Self.autoEdit { editing = EditingFile(projectId: project, path: path) }
+            drawerOpen = Self.hooks.drawer
+            drawerFilesOpen = Self.hooks.files
+            if let path = Self.hooks.edit { editing = EditingFile(projectId: project, path: path) }
         }
     }
 

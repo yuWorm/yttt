@@ -18,6 +18,9 @@ settings:
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
+    # The core is built for arm64 simulators only (scripts/mobile/build-ios.sh);
+    # Release builds every architecture unless told otherwise.
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
 targets:
   YtttSpike:
     type: application
@@ -63,6 +66,7 @@ targets:
       - YtttSpike/SecretStore.swift
       - YtttSpike/PairingScan.swift
       - YtttSpike/HostList.swift
+      - YtttSpike/Automation.swift
       - path: ../../target/mobile/ios/swift
         group: Generated
     dependencies:
