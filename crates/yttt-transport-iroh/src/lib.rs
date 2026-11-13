@@ -656,12 +656,19 @@ impl PeerConnection {
     }
 }
 
+/// Runs before each redial; see [`IrohConnector::with_before_redial`].
+pub type RedialHook = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+
 /// Opens one stream per `connect`, all on one QUIC connection that is redialed
 /// when it closes.
 pub struct IrohConnector {
     endpoint: IrohEndpoint,
-    peer: PeerAddr,
+    /// Where the peer is; its relay can change while the connector lives.
+    peer: parking_lot::Mutex<PeerAddr>,
     alpn: Vec<u8>,
+    /// Whether a connection was ever dialed, so the next dial is a redial.
+    dialed: AtomicBool,
+    before_redial: Option<RedialHook>,
     connection: tokio::sync::Mutex<Option<Arc<PeerConnection>>>,
     /// The cached connection has carried a handshake the Host answered.
     answered: AtomicBool,
@@ -721,11 +728,44 @@ impl IrohConnector {
     pub fn new(endpoint: IrohEndpoint, peer: PeerAddr, alpn: &[u8]) -> Self {
         Self {
             endpoint,
-            peer,
+            peer: parking_lot::Mutex::new(peer),
             alpn: alpn.to_vec(),
+            dialed: AtomicBool::new(false),
+            before_redial: None,
             connection: tokio::sync::Mutex::new(None),
             answered: AtomicBool::new(false),
             live: tokio::sync::Mutex::new(Arc::default()),
+        }
+    }
+
+    /// Awaits `hook` before every dial after the first, e.g. to learn where
+    /// the peer relays now and call [`Self::set_peer_relay`]. Bound its time:
+    /// connecting waits for it.
+    pub fn with_before_redial(mut self, hook: RedialHook) -> Self {
+        self.before_redial = Some(hook);
+        self
+    }
+
+    /// Where the peer is dialed.
+    pub fn peer(&self) -> PeerAddr {
+        self.peer.lock().clone()
+    }
+
+    /// Dials the peer through `relay_url` from now on. A connection still
+    /// open is closed, so the next `connect` dials the new address.
+    pub fn set_peer_relay(&self, relay_url: Option<String>) {
+        {
+            let mut peer = self.peer.lock();
+            if peer.relay_url == relay_url {
+                return;
+            }
+            peer.relay_url = relay_url;
+        }
+        // While a dial is in progress it already reads the new address.
+        if let Ok(mut current) = self.connection.try_lock()
+            && let Some(connection) = current.take()
+        {
+            connection.close();
         }
     }
 
@@ -752,7 +792,13 @@ impl IrohConnector {
         {
             return Ok(connection.clone());
         }
-        let connection = Arc::new(self.endpoint.connect(&self.peer, &self.alpn).await?);
+        if self.dialed.swap(true, Ordering::SeqCst)
+            && let Some(hook) = &self.before_redial
+        {
+            hook().await;
+        }
+        let peer = self.peer();
+        let connection = Arc::new(self.endpoint.connect(&peer, &self.alpn).await?);
         self.answered.store(false, Ordering::SeqCst);
         *self.live.lock().await = Arc::default();
         *current = Some(connection.clone());
@@ -807,7 +853,7 @@ impl TransportConnector for IrohConnector {
         if let Ok(mut current) = self.connection.try_lock()
             && let Some(connection) = current.take()
         {
-            tracing::info!(peer = %self.peer.key, "dropping a connection the Host did not answer on; dialing anew");
+            tracing::info!(peer = %self.peer.lock().key, "dropping a connection the Host did not answer on; dialing anew");
             connection.close();
         }
     }

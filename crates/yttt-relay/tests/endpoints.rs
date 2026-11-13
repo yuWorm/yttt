@@ -311,3 +311,154 @@ async fn a_self_hosted_node_relays_for_endpoints_without_tickets() {
     ));
     assert!(RelayNode::spawn(both).await.is_err());
 }
+
+fn ticket_on(secret: &[u8; 32], node: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    TicketSigner::from_secret(CONTROL_SECRET).issue(&Ticket {
+        account_id: ACCOUNT,
+        endpoint_id: public_key(secret),
+        node_id: node.into(),
+        rate_bps: 50_000_000,
+        burst_bytes: 50_000_000,
+        issued_unix: now,
+        expires_unix: now + 600,
+    })
+}
+
+/// Echoes five bytes on every stream of every connection.
+fn echo(host: IrohEndpoint) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(connection) = host.accept().await {
+            tokio::spawn(async move {
+                while let Some(mut stream) = connection.accept_stream().await {
+                    let mut buffer = [0_u8; 5];
+                    if stream.read_exact(&mut buffer).await.is_ok() {
+                        let _ = stream.write_all(&buffer).await;
+                        let _ = stream.flush().await;
+                    }
+                }
+            });
+        }
+    })
+}
+
+async fn round_trip(connector: &IrohConnector) {
+    let mut stream = tokio::time::timeout(Duration::from_secs(15), connector.connect())
+        .await
+        .expect("a stream in time")
+        .unwrap();
+    stream.write_all(b"hello").await.unwrap();
+    let mut reply = [0_u8; 5];
+    tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&reply, b"hello");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connector_follows_its_peer_to_another_relay_and_asks_before_each_redial() {
+    let keys = [TicketSigner::from_secret(CONTROL_SECRET).public_key()];
+    let first = RelayNode::spawn(NodeConfig::local(
+        NODE,
+        "127.0.0.1:0".parse().unwrap(),
+        &keys,
+    ))
+    .await
+    .unwrap();
+    let second = RelayNode::spawn(NodeConfig::local(
+        "local-2",
+        "127.0.0.1:0".parse().unwrap(),
+        &keys,
+    ))
+    .await
+    .unwrap();
+    let first_url = format!("http://{}", first.addr());
+    let second_url = format!("http://{}", second.addr());
+
+    let host = endpoint(
+        DirectPaths::Off,
+        HOST,
+        &first_url,
+        Some(ticket_on(&HOST, NODE)),
+        vec![ALPN.to_vec()],
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(10), host.online())
+        .await
+        .unwrap();
+    let server = echo(host.clone());
+    let phone = endpoint(
+        DirectPaths::Off,
+        PHONE,
+        &first_url,
+        Some(ticket_on(&PHONE, NODE)),
+        Vec::new(),
+    )
+    .await;
+    let redials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connector = IrohConnector::new(
+        phone.clone(),
+        PeerAddr {
+            key: host.id(),
+            relay_url: Some(first_url.clone()),
+            direct_addrs: Vec::new(),
+        },
+        ALPN,
+    )
+    .with_before_redial({
+        let redials = redials.clone();
+        Arc::new(move || {
+            redials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async {})
+        })
+    });
+    round_trip(&connector).await;
+    round_trip(&connector).await;
+    assert_eq!(
+        redials.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the first dial and a cached connection ask nothing"
+    );
+
+    // The Host moves; the phone follows it and dials it at the new relay.
+    host.set_relay(&RelayTarget {
+        url: second_url.clone(),
+        token: Some(ticket_on(&HOST, "local-2")),
+    })
+    .await
+    .unwrap();
+    phone
+        .set_relay(&RelayTarget {
+            url: second_url.clone(),
+            token: Some(ticket_on(&PHONE, "local-2")),
+        })
+        .await
+        .unwrap();
+    connector.set_peer_relay(Some(second_url.clone()));
+    assert_eq!(
+        connector.peer().relay_url.as_deref(),
+        Some(second_url.as_str())
+    );
+    round_trip(&connector).await;
+    assert_eq!(redials.load(std::sync::atomic::Ordering::SeqCst), 1);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !second
+            .account(ACCOUNT)
+            .is_some_and(|account| account.relayed_bytes > 0)
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the new connection runs through the second node");
+
+    phone.close().await;
+    host.close().await;
+    server.abort();
+    first.shutdown().await;
+    second.shutdown().await;
+}
