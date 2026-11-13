@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds yttt-mobile-core for Android arm64 and generates the Kotlin bindings
-# the spike app compiles.
+# the Android app compiles.
 #
 # Output (under target/, not tracked):
 #   target/mobile/android/jniLibs/arm64-v8a/libyttt_mobile_core.so

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails if a mobile build still carries the spike's launch hooks: the names
+# Fails if a mobile build still carries the debug launch hooks: the names
 # only debug builds may read. Run it on a debug build first to see it find them.
 #
 # Usage: scripts/mobile/check-release.sh <app.apk | App.app>
@@ -17,7 +17,7 @@ case "$build" in
     ;;
   *.app | *.app/)
     # The environment variables of the Debug configuration's hooks.
-    markers=(YTTT_SPIKE)
+    markers=(YTTT_DEBUG_)
     dir="${build%/}"
     # A failed link leaves an .app without its executable, which would pass.
     exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$dir/Info.plist" 2>/dev/null || true)"

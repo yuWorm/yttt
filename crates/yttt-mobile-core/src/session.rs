@@ -208,7 +208,7 @@ pub struct TerminalInfo {
     pub rows: u16,
 }
 
-/// `drain` timing and volume, for the spike's on-screen counters.
+/// `drain` timing and volume, for the on-screen counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, uniffi::Record)]
 pub struct DrainStats {
     pub bytes: u64,
