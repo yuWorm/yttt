@@ -8,7 +8,7 @@
     android:viewportHeight="24">
     <group android:translateX="0" android:translateY="0">
         <path
-            android:pathData="M16 6H8v12h8V6zm4 16H4V2h16v20z"
+            android:pathData="M16 6 H8 v12 h8 V6 z m4 16 H4 V2 h16 v20 z"
             android:fillType="evenOdd"
             android:fillColor="#FF000000"/>
     </group>

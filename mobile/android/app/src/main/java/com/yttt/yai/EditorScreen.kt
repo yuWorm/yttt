@@ -86,7 +86,8 @@ fun EditorScreen(session: HostSession, projectId: String, projectName: String, p
     BackHandler(enabled = dirty) { confirmClose = true }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
+        // Above the keyboard, where saving usually happens.
+        snackbarHost = { SnackbarHost(snackbar, Modifier.imePadding()) },
         topBar = {
             TopAppBar(
                 navigationIcon = { IconButton(onClick = ::close) { Icon(Icons.Filled.Close, "关闭") } },

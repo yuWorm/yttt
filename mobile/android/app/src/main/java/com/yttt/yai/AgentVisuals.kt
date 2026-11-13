@@ -30,7 +30,7 @@ import uniffi.yttt_mobile_core.AgentSummary
 import uniffi.yttt_mobile_core.WaitingKind
 
 /** An Agent provider's logo, from scripts/build-mobile-agent-logos.py, and whether it keeps its colours. */
-private fun logoOf(provider: String): Pair<Int, Boolean>? = when (provider) {
+fun logoOf(provider: String): Pair<Int, Boolean>? = when (provider) {
     "codex" -> R.drawable.agent_codex to true
     "claude" -> R.drawable.agent_claude to true
     "grok" -> R.drawable.agent_grok to false

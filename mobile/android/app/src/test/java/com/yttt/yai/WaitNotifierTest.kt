@@ -41,6 +41,8 @@ class WaitNotifierTest {
         assertEquals("a", post.sessionId)
         assertEquals("Website · Build", post.title)
         assertEquals("等批准：Run npm install?", post.text)
+        // Its logo becomes the notification's large icon.
+        assertEquals("codex", post.provider)
         assertEquals(emptyList<NotificationChange>(), notifier.update(waiting, null))
     }
 

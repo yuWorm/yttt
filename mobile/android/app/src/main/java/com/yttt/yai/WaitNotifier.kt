@@ -9,8 +9,14 @@ const val LINK_NOTIFICATION_ID = 1
 
 sealed interface NotificationChange {
     /** `quiet`: posted while the app is on screen, to the shade without a banner. */
-    data class Post(val sessionId: String, val title: String, val text: String, val quiet: Boolean = false) :
-        NotificationChange
+    data class Post(
+        val sessionId: String,
+        val title: String,
+        val text: String,
+        val quiet: Boolean = false,
+        /** The Agent's provider, for its logo. */
+        val provider: String? = null,
+    ) : NotificationChange
     data class Cancel(val sessionId: String) : NotificationChange
 }
 
@@ -56,6 +62,7 @@ class WaitNotifier {
                 title = "${overview.projectName(agent.projectId)} · ${overview.tabTitle(agent.projectId, agent.tabId)}",
                 text = if (detail != null) "$what：$detail" else what,
                 quiet = foreground,
+                provider = agent.provider,
             )
         }
         return changes

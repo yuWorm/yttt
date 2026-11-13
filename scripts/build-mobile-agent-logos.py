@@ -61,6 +61,44 @@ def circle_path(cx, cy, r):
     return f"M{cx - r},{cy}a{r},{r} 0 1 0 {2 * r},0a{r},{r} 0 1 0 {-2 * r},0z"
 
 
+NUMBER = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
+ARITY = {"M": 2, "L": 2, "T": 2, "H": 1, "V": 1, "C": 6, "S": 4, "Q": 4, "A": 7, "Z": 0}
+
+
+def normalize_path(data):
+    """Path data with every number spelled out and separated.
+
+    SVG lets an arc's two flags run into the next number ("0 000 4.496" is
+    0, 0, 0, 0, 4.496); Android's framework parser rejects that, and a
+    notification's icon goes through it.
+    """
+    out = []
+    for command, args in re.findall(r"([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)", data):
+        arity = ARITY[command.upper()]
+        values = []
+        rest = args
+        while True:
+            rest = rest.lstrip(" ,\t\n")
+            if not rest:
+                break
+            # An arc's 4th and 5th values are flags: one character each.
+            if command.upper() == "A" and len(values) % 7 in (3, 4):
+                if rest[0] not in "01":
+                    fail(f"arc flag expected in: {data}")
+                values.append(rest[0])
+                rest = rest[1:]
+                continue
+            match = NUMBER.match(rest)
+            if not match:
+                fail(f"path data not understood near {rest[:20]!r} in: {data}")
+            values.append(match.group())
+            rest = rest[match.end():]
+        if arity and len(values) % arity:
+            fail(f"{command} takes {arity} values at a time, found {len(values)}: {data}")
+        out.append(command + " ".join(values))
+    return " ".join(out)
+
+
 def num(element, name, default=0.0):
     return float(element.get(name, default))
 
@@ -82,7 +120,7 @@ def android(name, text):
     for element in root.iter():
         tag = element.tag.replace(SVG, "")
         if tag == "path":
-            data = element.get("d")
+            data = normalize_path(element.get("d"))
         elif tag == "rect":
             data = rect_path(num(element, "x"), num(element, "y"), num(element, "width"), num(element, "height"), num(element, "rx"))
         elif tag == "circle":

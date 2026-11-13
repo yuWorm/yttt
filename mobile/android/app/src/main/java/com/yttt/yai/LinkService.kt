@@ -9,12 +9,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -117,12 +119,21 @@ class LinkService : Service() {
                             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                             .setPriority(if (change.quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
                             .setContentIntent(open)
+                            .apply { change.provider?.let(::logoBitmap)?.let(::setLargeIcon) }
                             .setAutoCancel(true)
                             .build(),
                     )
                 }
             }
         }
+    }
+
+    /** The Agent's logo as a notification's large icon; monochrome ones in a neutral grey. */
+    private fun logoBitmap(provider: String): Bitmap? {
+        val (resource, colored) = logoOf(provider) ?: return null
+        val drawable = ContextCompat.getDrawable(this, resource)?.mutate() ?: return null
+        if (!colored) drawable.setTint(0xFF5F6368.toInt())
+        return drawable.toBitmap(128, 128)
     }
 
     private fun currentHostName(): String? =
