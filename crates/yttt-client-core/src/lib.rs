@@ -187,6 +187,7 @@ struct ClientCoreInner {
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
     workspace_layouts: WorkspaceLayouts,
+    relay_placement: RelayPlacementSlot,
     next_request_id: Arc<AtomicU64>,
     shutdown: watch::Sender<bool>,
     /// Wakes a reconnect that is backing off or stuck connecting.
@@ -270,6 +271,9 @@ enum PendingRequest {
     Reopen(WorkspaceId),
 }
 
+/// The newest relay placement a Host sent.
+type RelayPlacementSlot = Arc<watch::Sender<Option<yttt_control_client::SignedPlacement>>>;
+
 struct ClientSessionContext {
     catalog_requests: mpsc::Sender<()>,
     events: broadcast::Sender<ClientEvent>,
@@ -281,6 +285,7 @@ struct ClientSessionContext {
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
     workspace_layouts: WorkspaceLayouts,
+    relay_placement: RelayPlacementSlot,
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     visibility: watch::Receiver<Option<Arc<VisibleTerminals>>>,
@@ -317,6 +322,7 @@ impl ClientCore {
         let agent_snapshots = Arc::new(RwLock::new(HashMap::new()));
         let project_token_usage = Arc::new(RwLock::new(HashMap::new()));
         let workspace_layouts = WorkspaceLayouts::default();
+        let relay_placement: RelayPlacementSlot = Arc::new(watch::channel(None).0);
         let next_request_id = Arc::new(AtomicU64::new(1));
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
         let (visibility, visibility_rx) = watch::channel(None);
@@ -338,6 +344,7 @@ impl ClientCore {
             agent_snapshots.clone(),
             project_token_usage.clone(),
             workspace_layouts.clone(),
+            relay_placement.clone(),
             next_request_id.clone(),
             diagnostics.clone(),
             shutdown.clone(),
@@ -356,6 +363,7 @@ impl ClientCore {
             agent_snapshots,
             project_token_usage,
             workspace_layouts,
+            relay_placement,
             shutdown,
             retry,
             probe,
@@ -496,6 +504,12 @@ impl ClientCore {
 
     pub fn subscribe_state(&self) -> watch::Receiver<ConnectionState> {
         self.inner.state.clone()
+    }
+
+    /// The newest relay placement the Host sent on this connection, not yet
+    /// checked against the Host's key.
+    pub fn relay_placement(&self) -> watch::Receiver<Option<yttt_control_client::SignedPlacement>> {
+        self.inner.relay_placement.subscribe()
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<ClientEvent> {
@@ -693,6 +707,7 @@ async fn run_supervisor(
     agent_snapshots: Arc<RwLock<HashMap<String, AgentSnapshotUpdate>>>,
     project_token_usage: Arc<RwLock<HashMap<String, ProjectTokenUsage>>>,
     workspace_layouts: WorkspaceLayouts,
+    relay_placement: RelayPlacementSlot,
     next_request_id: Arc<AtomicU64>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
     shutdown_tx: watch::Sender<bool>,
@@ -788,6 +803,7 @@ async fn run_supervisor(
             agent_snapshots: agent_snapshots.clone(),
             project_token_usage: project_token_usage.clone(),
             workspace_layouts: workspace_layouts.clone(),
+            relay_placement: relay_placement.clone(),
             next_request_id: next_request_id.clone(),
             diagnostics: diagnostics.clone(),
             visibility: visibility.clone(),
@@ -1661,6 +1677,11 @@ fn handle_state_event(event: HostEvent, context: &ClientSessionContext) -> Resul
             Ok(()) | Err(mpsc::error::TrySendError::Full(())) => {}
             Err(mpsc::error::TrySendError::Closed(())) => return Err(()),
         }
+    }
+    if let ServerEvent::RelayPlacementChanged(placement) = &event.body {
+        context
+            .relay_placement
+            .send_replace(Some((**placement).clone()));
     }
     if let ServerEvent::AgentStateCleared(update) = &event.body {
         context

@@ -62,6 +62,7 @@ fn context() -> TestContext {
             agent_snapshots: Arc::default(),
             project_token_usage: Arc::default(),
             workspace_layouts: Arc::default(),
+            relay_placement: Arc::new(watch::channel(None).0),
             next_request_id: Arc::new(AtomicU64::new(1)),
             diagnostics: Arc::default(),
             visibility: watch::channel(None).1,

@@ -812,6 +812,7 @@ impl Manager {
                 status.clone(),
                 relay_url.clone(),
                 restart_after_unix.clone(),
+                self.context.relay_placement.clone(),
             ))),
             _ => None,
         };
@@ -893,6 +894,10 @@ impl Manager {
         placements
             .adopt(&root, &signed.placement.host, &signed)
             .map_err(io_failure)?;
+        // Connected devices hear of it before the Host moves.
+        self.context
+            .relay_placement
+            .send_replace(Some(signed.clone()));
         tracing::info!(node = node_id, seq, "relay node chosen");
         Ok(signed)
     }
@@ -907,10 +912,14 @@ impl Manager {
         else {
             return Ok(());
         };
-        if let Some(current) = &needed.current {
-            PlacementStore::load(&root)
+        if let Some(current) = &needed.current
+            && PlacementStore::load(&root)
                 .and_then(|mut store| store.adopt(&root, &current.placement.host, current))
-                .map_err(io_failure)?;
+                .map_err(io_failure)?
+        {
+            self.context
+                .relay_placement
+                .send_replace(Some(current.clone()));
         }
         match (needed.reason, needed.suggested) {
             (PlacementReason::Missing, Some(node)) => {
@@ -1285,14 +1294,19 @@ struct HostTicketEvents {
     restart_after_unix: Arc<AtomicU64>,
     /// The node of the ticket the endpoint's relay connection started with.
     node: String,
+    placement: Arc<watch::Sender<Option<SignedPlacement>>>,
 }
 
 impl HostTicketEvents {
     fn adopt(&self, signed: &SignedPlacement) {
-        let kept = PlacementStore::load(&self.root)
-            .and_then(|mut store| store.adopt(&self.root, &signed.placement.host, signed));
-        if let Err(error) = kept {
-            tracing::warn!("could not keep the Host's placement: {error}");
+        match PlacementStore::load(&self.root)
+            .and_then(|mut store| store.adopt(&self.root, &signed.placement.host, signed))
+        {
+            Ok(true) => {
+                self.placement.send_replace(Some(signed.clone()));
+            }
+            Ok(false) => {}
+            Err(error) => tracing::warn!("could not keep the Host's placement: {error}"),
         }
     }
 }
@@ -1359,8 +1373,10 @@ async fn keep_relay_ticket(
     status: Arc<Mutex<RelayAccountStatus>>,
     relay_url: Arc<Mutex<Option<String>>>,
     restart_after_unix: Arc<AtomicU64>,
+    placement: Arc<watch::Sender<Option<SignedPlacement>>>,
 ) {
     let events = HostTicketEvents {
+        placement,
         root,
         session: session.clone(),
         status,

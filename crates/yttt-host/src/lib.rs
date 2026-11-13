@@ -400,6 +400,10 @@ where
         tokio::task::spawn_blocking(move || startup.ensure_all());
     }
     let (remote_access, remote_commands) = remote_access::RemoteAccessHandle::channel();
+    let placement = p2p::PlacementStore::load(device_settings.lock().root())
+        .map_err(|error| tracing::warn!("could not read the relay placement: {error}"))
+        .ok()
+        .and_then(|store| store.current);
     let connection_context = ConnectionContext {
         identity: (*identity).clone(),
         profile_id: bootstrap.profile_id.clone(),
@@ -423,6 +427,7 @@ where
         runtime: runtime.clone(),
         lifecycle: lifecycle.clone(),
         audit: audit.clone(),
+        relay_placement: Arc::new(watch::channel(placement).0),
         stop: stop_rx.clone(),
     };
     let remote_task = tokio::spawn(remote_access::run(
@@ -589,6 +594,8 @@ struct ConnectionContext {
     runtime: Arc<HostRuntime>,
     lifecycle: Arc<HostLifecycle>,
     audit: Arc<HostAuditLog>,
+    /// Where the Host relays, as it signed it; P2P sessions pass it on.
+    relay_placement: Arc<watch::Sender<Option<yttt_control_client::SignedPlacement>>>,
     stop: watch::Receiver<bool>,
 }
 
@@ -1384,6 +1391,32 @@ async fn serve_session_connection(
             });
             writer.send_reliable_latest(&key, &message).is_ok()
         })
+    });
+    // A paired device learns where the Host relays, now and after each move.
+    let _placement = context.device.is_some().then(|| {
+        let mut placement = context.relay_placement.subscribe();
+        let writer = writer.clone();
+        let host_sequence = context.host_sequence.clone();
+        AbortOnDrop(tokio::spawn(async move {
+            loop {
+                let current = placement.borrow_and_update().clone();
+                if let Some(current) = current {
+                    let message = ControlMessage::Event(HostEvent {
+                        host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
+                        body: ServerEvent::RelayPlacementChanged(Box::new(current)),
+                    });
+                    if writer
+                        .send_reliable_latest("relay-placement", &message)
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                if placement.changed().await.is_err() {
+                    return;
+                }
+            }
+        }))
     });
     let _state_events = AbortOnDrop(tokio::spawn({
         let events = forward_state_events(

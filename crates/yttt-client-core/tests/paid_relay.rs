@@ -463,6 +463,14 @@ async fn a_host_moves_to_another_node_and_its_device_follows() {
     .await
     .unwrap();
     client.request(Request::ListResources).await.unwrap();
+    // The phone hears where the Host relays, signed by the Host.
+    let mut placement = client.relay_placement();
+    let first_placement = eventually("the Host's placement", async || {
+        placement.borrow_and_update().clone()
+    })
+    .await;
+    assert_eq!(status(&admin).await.p2p.endpoint_id, Some(host_key));
+    assert_eq!(first_placement.verify(&host_key.0).unwrap().node_id, NODE);
 
     // The Host lists the nodes it may move to, then moves.
     let RemoteAccessResponse::RelayNodes(choices) =
@@ -482,6 +490,24 @@ async fn a_host_moves_to_another_node_and_its_device_follows() {
     let account = status(&admin).await.p2p.relay_account.unwrap();
     assert_eq!(account.node_id.as_deref(), Some("local-2"));
     assert_eq!(account.relay_url.as_deref(), Some(second_url.as_str()));
+    // Connected, the phone hears of the move, newer and signed.
+    let moved = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(moved) = placement.borrow_and_update().clone()
+                && moved.placement.seq > first_placement.placement.seq
+            {
+                return moved;
+            }
+            placement.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the move within 5 s");
+    let moved = moved.verify(&host_key.0).unwrap();
+    assert_eq!(
+        (moved.node_id.as_str(), moved.relay_url.as_str()),
+        ("local-2", second_url.as_str())
+    );
 
     // The old node lets go of both: the Host left, and the phone is refused.
     eventually("the old node dropping the account", async || {

@@ -1544,6 +1544,7 @@
     "HostStopping": [],
     "ProjectChanged": [],
     "ProjectTokenUsage": [],
+    "RelayPlacementChanged": [],
     "ResourceCatalogChanged": [],
     "SshCredentialSaved": [
       "connection_id",

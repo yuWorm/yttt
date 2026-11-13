@@ -114,6 +114,9 @@ v22 起资源协议是稳定基线:**追加不升版本,删除、改名或改变
   v22 内追加(未升版本):`WorkspaceResponse::Opened.agent_summaries`(带缺省)为
   `AgentStateSummary { reference, snapshot }` 列表,`snapshot` 是 pane 当前 Agent 状态、board 为空。旧 Client 忽略该字段;
   旧 Host 不发,新 Client 在摘要不覆盖全部 `agent_states` 时照旧以 `GetAgentState` 读取完整状态。
+  v22 内追加(未升版本):事件 `ServerEvent::RelayPlacementChanged(SignedPlacement)`,Host 签名的 relay 位置
+  (`yttt_relay_ticket::placement`),P2P 会话握手后发一次、Host 换节点时再发,只保留最新一条。旧 Client 跳过。
+  `RelayAccountStatus.placement_needed`(带缺省)说明 Host 为何没有 relay、等用户选择节点。
   v21 追加 `MutateAgentSession`
   请求（provider、session_id、project_root、Rename/Delete 操作）与
   `AgentSessionMutated` 响应；按工作区写权限授权，由目标 Host 校验会话归属并执行，

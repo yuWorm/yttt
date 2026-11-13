@@ -597,6 +597,10 @@ pub enum ServerEvent {
     TerminalControllerChanged(TerminalController),
     /// An Agent's newer state with only what changed on its board.
     AgentSnapshotPatch(Box<crate::agent::AgentSnapshotPatch>),
+    /// Where the Host relays now, signed by the Host: sent to a P2P device
+    /// once it connects and whenever the Host's user chooses another node.
+    /// The device checks it against the Host key it pinned when pairing.
+    RelayPlacementChanged(Box<yttt_relay_ticket::placement::SignedPlacement>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
