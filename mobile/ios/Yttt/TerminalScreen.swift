@@ -7,25 +7,31 @@ final class TerminalHandle {
     weak var container: TerminalContainer?
 }
 
-struct TerminalScreen: View {
+/// Whether the phone controls one terminal: shared by the terminal, the bar
+/// that takes it, and the navigation bar's "交还电脑".
+@MainActor
+final class TerminalControl: ObservableObject {
     let session: HostSession
-    let terminal: TerminalInfo
-    /// What the take-control button says, such as what a waiting Agent wants.
-    var tip = "接管终端"
-    @State private var controlling = false
-    @State private var hostTooOld = false
-    @State private var stats = ""
-    @State private var error: String?
-    @State private var handle = TerminalHandle()
+    let sessionId: String
+    let handle = TerminalHandle()
+    @Published var controlling = false
+    @Published var hostTooOld = false
+    @Published var error: String?
 
-    /// Takes this terminal at the size the view has once it fits the screen;
+    init(session: HostSession, sessionId: String) {
+        self.session = session
+        self.sessionId = sessionId
+    }
+
+    /// Takes the terminal at the size the view has once it fits the screen;
     /// keys go out only after the Host applied that size.
-    private func takeControl() async {
+    func take() async {
         guard let container = handle.container else { return }
         let (cols, rows) = container.fitScreen()
         do {
-            try await session.takeControl(sessionId: terminal.sessionId, cols: cols, rows: rows)
+            try await session.takeControl(sessionId: sessionId, cols: cols, rows: rows)
             controlling = true
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         } catch MobileCoreError.HostTooOld {
             container.observeHostSize()
             hostTooOld = true
@@ -35,69 +41,94 @@ struct TerminalScreen: View {
         }
     }
 
+    func giveBack() {
+        controlling = false
+        handle.container?.observeHostSize()
+        let id = sessionId
+        Task { try? await session.giveBack(sessionIds: [id]) }
+    }
+}
+
+/// The terminal, observed at the Host's size until taken.
+struct TerminalScreen: View {
+    let terminal: TerminalInfo
+    @ObservedObject var control: TerminalControl
+    @State private var stats = ""
+
     var body: some View {
-        ZStack(alignment: .bottom) {
-            TerminalHost(session: session, terminal: terminal, controlling: controlling, handle: handle,
-                         onStats: { stats = $0 },
-                         onControlLost: { controlling = false })
-                .ignoresSafeArea(.container, edges: .bottom)
-            if hostTooOld {
-                Text("电脑上的 yttt 版本太旧，不能只接管一个终端。升级后再试。")
-                    .font(.caption)
-                    .padding()
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                    .padding()
-            } else if !controlling {
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text("正在观察这个终端").font(.headline)
-                        Text("接管后可以输入，电脑上这个终端会改成手机尺寸")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(tip) { Task { await takeControl() } }
-                    .buttonStyle(.borderedProminent)
+        TerminalHost(session: control.session, terminal: terminal, controlling: control.controlling,
+                     handle: control.handle,
+                     onStats: { stats = $0 },
+                     onControlLost: { control.controlling = false })
+            .overlay(alignment: .topTrailing) {
+                #if DEBUG
+                if !stats.isEmpty {
+                    Text(stats)
+                        .font(.system(size: 10, design: .monospaced))
+                        .padding(6)
+                        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+                        .foregroundStyle(.white)
+                        .padding(8)
+                        .allowsHitTesting(false)
                 }
-                .padding()
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                .padding()
+                #endif
             }
-        }
-        .overlay(alignment: .topTrailing) {
-            Text(stats)
-                .font(.system(size: 10, design: .monospaced))
-                .padding(6)
-                .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
-                .foregroundStyle(.white)
-                .padding(8)
-                .allowsHitTesting(false)
-        }
-        .toolbar {
-            if controlling {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("交还电脑") {
-                        controlling = false
-                        handle.container?.observeHostSize()
-                        let id = terminal.sessionId
-                        Task { try? await session.giveBack(sessionIds: [id]) }
-                    }
+            .task {
+                guard let line = AppModel.hooks.type else { return }
+                try? await Task.sleep(for: .seconds(2))
+                await control.take()
+                guard control.controlling else { return }
+                try? control.session.sendInput(sessionId: terminal.sessionId, bytes: Data((line + "\r").utf8))
+            }
+            .alert("接管失败", isPresented: .constant(control.error != nil)) {
+                Button("好") { control.error = nil }
+            } message: { Text(control.error ?? "") }
+    }
+}
+
+/// The bar along the bottom while observing: what the Agent waits for, and
+/// the button that takes the terminal.
+struct TakeControlBar: View {
+    let agent: AgentSummary?
+    @ObservedObject var control: TerminalControl
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if control.hostTooOld {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("电脑上的 yttt 版本太旧，不能只接管一个终端。升级后再试。").font(.footnote)
+                Spacer(minLength: 0)
+            } else {
+                if let agent, agent.state == .waiting {
+                    IconTile(systemName: agent.stateSymbol, color: .orange)
+                } else {
+                    IconTile(systemName: "eye.fill", color: .gray)
                 }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.subheadline.weight(.semibold))
+                    Text("接管后可以输入，电脑上这个终端会变成手机的尺寸")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Button { Task { await control.take() } } label: {
+                    Label("接管", systemImage: "keyboard")
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
             }
         }
-        .task {
-            guard let line = AppModel.hooks.type else { return }
-            try? await Task.sleep(for: .seconds(2))
-            await takeControl()
-            guard controlling else { return }
-            do {
-                try session.sendInput(sessionId: terminal.sessionId, bytes: Data((line + "\r").utf8))
-            } catch {
-                self.error = "自动输入失败：\(error)"
-            }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private var title: String {
+        guard let agent, agent.state == .waiting else { return "正在观察" }
+        switch agent.waiting {
+        case .approval: return "等批准"
+        case .userInput: return "等回答"
+        default: return "等待中"
         }
-        .alert("接管失败", isPresented: .constant(error != nil)) {
-            Button("好") { error = nil }
-        } message: { Text(error ?? "") }
     }
 }
 

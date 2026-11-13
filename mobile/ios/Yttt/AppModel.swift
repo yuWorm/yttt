@@ -32,9 +32,9 @@ final class OverviewSink: OverviewListener, @unchecked Sendable {
     func onOverview(overview: Overview) { onOverview(overview) }
 }
 
-enum Root: Equatable {
-    case home
-    case project(Place)
+/// The tab bar's three tabs.
+enum AppTab: Hashable {
+    case overview, projects, settings
 }
 
 @MainActor
@@ -54,14 +54,16 @@ final class AppModel: ObservableObject {
     @Published var session: HostSession?
     @Published var terminals: [TerminalInfo] = []
     @Published var overview = Overview(projects: [], agents: [], terminals: 0)
-    @Published var path: [TerminalInfo] = []
-    /// The root page, switched from the left drawer.
-    @Published var root: Root = .home
-    @Published var drawerOpen = false
-    /// The right drawer of the project page: files and sessions.
-    @Published var drawerFilesOpen = false
+    /// The selected tab, and the pages pushed in the two that push.
+    @Published var tab: AppTab = .overview
+    @Published var overviewPath: [Destination] = []
+    @Published var projectsPath: [Destination] = []
+    /// Direct or through the relay, refreshed while connected.
+    @Published var linkPath: LinkPath = .unknown
     /// A project file open full screen.
     @Published var editing: EditingFile?
+    /// Debug automation: the project page opens its files sheet once.
+    var autoFilesPending = false
 
     private var automated = false
     /// Debug builds only: automation for simulator runs.
@@ -98,10 +100,16 @@ final class AppModel: ObservableObject {
         await changeHosts(hosts.selected(id))
     }
 
-    /// Forgets the current Host; the link moves to the first one left, if any.
-    func forget() async {
-        guard let current = hosts.current else { return }
-        await changeHosts(hosts.removed(current))
+    /// Forgets a Host. Forgetting the current one moves the link to the
+    /// first one left, if any; another one just leaves the list.
+    func forget(_ id: String) async {
+        let list = hosts.removed(id)
+        if id == hosts.current {
+            await changeHosts(list)
+        } else {
+            hostStore.save(list)
+            hosts = list
+        }
     }
 
     /// Drops the link and everything the old Host showed, stores the list,
@@ -111,10 +119,8 @@ final class AppModel: ObservableObject {
         session = nil
         terminals = []
         overview = Overview(projects: [], agents: [], terminals: 0)
-        path = []
-        root = .home
-        drawerOpen = false
-        drawerFilesOpen = false
+        overviewPath = []
+        projectsPath = []
         editing = nil
         hostStore.save(list)
         hosts = list
@@ -182,27 +188,62 @@ final class AppModel: ObservableObject {
         status = "正在连接…"
         defer { busy = false }
         do {
-            session = try await core.connect(record: record, deviceSecret: secret, relayOnly: Self.relayOnly)
+            let connected = try await core.connect(record: record, deviceSecret: secret, relayOnly: Self.relayOnly)
+            // The Host changed while connecting (paired, switched, forgot):
+            // this link is to the old one; connect to the current one instead.
+            guard self.record == record else {
+                await connected.disconnect()
+                connecting = false
+                await connect()
+                return
+            }
+            session = connected
             status = ""
-            _ = try? await session?.openActiveWorkspace()
-            session?.watchOverview(listener: OverviewSink { overview in
-                Task { @MainActor in self.apply(overview) }
+            _ = try? await connected.openActiveWorkspace()
+            connected.watchOverview(listener: OverviewSink { overview in
+                Task { @MainActor in
+                    // A link dropped since (a Host change) may still deliver one.
+                    guard self.session === connected else { return }
+                    self.apply(overview)
+                }
             })
             await refresh()
+            watchLinkPath()
         } catch {
+            guard self.record == record else {
+                connecting = false
+                await connect()
+                return
+            }
             status = "连接失败：\(error.localizedDescription)"
+        }
+    }
+
+    private var pathWatch: Task<Void, Never>?
+
+    /// Follows whether the link goes direct or through the relay.
+    private func watchLinkPath() {
+        pathWatch?.cancel()
+        pathWatch = Task {
+            while !Task.isCancelled, let session {
+                linkPath = await session.path()
+                try? await Task.sleep(for: .seconds(3))
+            }
         }
     }
 
     func refresh() async {
         guard let session else { return }
+        let asked = session
         do {
             terminals = try await session.terminals()
-            if path.isEmpty, let open = Self.hooks.open,
+            if overviewPath.isEmpty, let open = Self.hooks.open,
                let terminal = terminals.first(where: { $0.sessionId == open }) {
-                path.append(terminal)
+                overviewPath.append(.terminal(terminal))
             }
         } catch {
+            // A link dropped since (a Host change, a reconnect) says nothing about this one.
+            guard self.session === asked else { return }
             status = "读取终端失败：\(error.localizedDescription)"
         }
     }
@@ -232,40 +273,32 @@ final class AppModel: ObservableObject {
             var place = overview.initialPlace(project)
             if let tab = Self.hooks.tab { place = overview.placeIn(project, tab) }
             if let pane = Self.hooks.pane { place = Place(projectId: project, tabId: place.tabId, paneId: pane) }
-            root = .project(place)
-            drawerOpen = Self.hooks.drawer
-            drawerFilesOpen = Self.hooks.files
+            tab = .overview
+            overviewPath = [.project(place)]
+            autoFilesPending = Self.hooks.files
             if let path = Self.hooks.edit { editing = EditingFile(projectId: project, path: path) }
         }
     }
 
-    var currentProject: String? {
-        if case .project(let place) = root { return place.projectId }
-        return nil
-    }
-
+    /// Back to the overview, with nothing pushed.
     func goHome() {
-        root = .home
-        drawerOpen = false
+        tab = .overview
+        overviewPath = []
     }
 
-    func openProject(_ projectId: String) {
-        root = .project(overview.initialPlace(projectId))
-        drawerOpen = false
-    }
-
-    /// Opens the pane an Agent runs in, or its terminal alone.
+    /// Opens where an Agent runs, over the overview: its pane, or its
+    /// terminal alone.
     func open(agent: AgentSummary) async {
-        if let place = overview.placeOf(agent.sessionId) {
-            root = .project(place)
+        var target = destination(agent.sessionId, overview, terminals)
+        if target == nil {
+            await refresh()
+            target = destination(agent.sessionId, overview, terminals)
+        }
+        guard let target else {
+            status = "这个 Agent 的终端已经不在了"
             return
         }
-        if !terminals.contains(where: { $0.sessionId == agent.sessionId }) { await refresh() }
-        if let terminal = terminals.first(where: { $0.sessionId == agent.sessionId }) {
-            path.append(terminal)
-        } else {
-            status = "这个 Agent 的终端已经不在了"
-        }
+        tab = .overview
+        overviewPath = [target]
     }
-
 }

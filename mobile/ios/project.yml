@@ -3,6 +3,8 @@
 name: Yttt
 options:
   bundleIdPrefix: dev.yttt
+  # The app's strings are Chinese; system ones (Cancel, Paste) follow.
+  developmentLanguage: zh-Hans
   deploymentTarget:
     iOS: "17.0"
 packages:
@@ -41,6 +43,8 @@ targets:
       path: Yttt/Info.plist
       properties:
         CFBundleDisplayName: yttt
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleLocalizations: [zh-Hans]
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -90,7 +94,28 @@ targets:
         OTHER_LDFLAGS: ["-lc++"]
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Yttt.app/Yttt"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  # Taps through the app against a running spike Host; its own scheme, as it
+  # needs one: TEST_RUNNER_YTTT_PAIR_CODE=<code> xcodebuild test -scheme YtttUITests
+  YtttUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - YtttUITests
+    dependencies:
+      - target: Yttt
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Yttt
 schemes:
+  YtttUITests:
+    build:
+      targets:
+        Yttt: all
+        YtttUITests: [test]
+    test:
+      targets:
+        - YtttUITests
   Yttt:
     build:
       targets:

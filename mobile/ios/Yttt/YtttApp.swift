@@ -12,14 +12,7 @@ struct YtttApp: App {
                 if model.record == nil {
                     NavigationStack { PairView() }
                 } else {
-                    SideDrawer(isOpen: $model.drawerOpen) {
-                        RootPage()
-                    } drawer: {
-                        LeftDrawerView()
-                    }
-                    .sheet(isPresented: $model.addingHost) {
-                        NavigationStack { PairView() }.environmentObject(model)
-                    }
+                    MainTabs()
                 }
             }
             .environmentObject(model)
@@ -32,12 +25,46 @@ struct YtttApp: App {
                    let host = model.hosts.hosts.first(where: { $0.id.hasSuffix(suffix) }) {
                     await model.switchTo(host.id)
                 }
-                if AppModel.hooks.forget { await model.forget() }
+                if AppModel.hooks.forget, let current = model.hosts.current { await model.forget(current) }
+                switch AppModel.hooks.tabBar {
+                case "projects": model.tab = .projects
+                case "settings": model.tab = .settings
+                default: break
+                }
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { model.enterBackground() }
         }
+    }
+}
+
+/// The tab bar: the overview, the projects and settings, each with its own
+/// navigation stack; how many Agents need the user shows on the overview's tab.
+struct MainTabs: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let attention = HomeSections(model.overview).attention.count
+        TabView(selection: $model.tab) {
+            NavigationStack(path: $model.overviewPath) { OverviewView() }
+                .tabItem { Label("总控", systemImage: "square.grid.2x2") }
+                .badge(attention)
+                .tag(AppTab.overview)
+            NavigationStack(path: $model.projectsPath) { ProjectsView() }
+                .tabItem { Label("项目", systemImage: "folder") }
+                .tag(AppTab.projects)
+            NavigationStack { SettingsView() }
+                .tabItem { Label("设置", systemImage: "gear") }
+                .tag(AppTab.settings)
+        }
+        .sheet(isPresented: $model.addingHost) {
+            NavigationStack { PairView() }.environmentObject(model)
+        }
+        .fullScreenCover(item: $model.editing) { file in
+            EditorView(file: file).environmentObject(model)
+        }
+        .task { await model.connect() }
     }
 }
 
@@ -50,36 +77,71 @@ struct PairView: View {
 
     var body: some View {
         Form {
-            Section("扫码") {
-                Button { scanning = true } label: { Label("扫描电脑上的二维码", systemImage: "qrcode.viewfinder") }
-                    .disabled(!PairingScanner.available || model.busy)
-                if !PairingScanner.available {
-                    Text("这台设备不能用相机扫码，可以从照片识别或粘贴配对码。")
-                        .font(.caption).foregroundStyle(.secondary)
+            Section {
+                Button { scanning = true } label: {
+                    HStack(spacing: 12) {
+                        IconTile(systemName: "qrcode.viewfinder", color: .blue)
+                        Text("扫描二维码")
+                    }
                 }
+                .disabled(!PairingScanner.available || model.busy)
                 PhotosPicker(selection: $photo, matching: .images) {
-                    Label("从照片识别", systemImage: "photo")
+                    HStack(spacing: 12) {
+                        IconTile(systemName: "photo", color: .green)
+                        Text("从照片识别")
+                    }
                 }
                 .disabled(model.busy)
                 if let scanError { Text(scanError).font(.caption).foregroundStyle(.red) }
+            } header: {
+                VStack(spacing: 10) {
+                    IconTile(systemName: "qrcode", color: .blue).scaleEffect(1.6).padding(.vertical, 8)
+                    Text("在电脑上打开 yttt 的“设置 ▸ 远程访问 ▸ 配对设备”，会显示一个二维码。")
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .textCase(nil)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 8)
+            } footer: {
+                if !PairingScanner.available {
+                    Text("这台设备不能用相机扫码，可以从照片识别或粘贴配对码。")
+                }
             }
             Section("配对码") {
-                TextField("YTTT-PAIR:1:…", text: $code, axis: .vertical)
-                    .font(.system(.footnote, design: .monospaced))
-                    .lineLimit(3...6)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                HStack(alignment: .top) {
+                    TextField("YTTT-PAIR:1:…", text: $code, axis: .vertical)
+                        .font(.system(.footnote, design: .monospaced))
+                        .lineLimit(3...6)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    PasteButton(payloadType: String.self) { strings in
+                        code = strings.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonBorderShape(.circle)
+                }
                 Button("配对") { Task { await model.pair(code: code) } }
                     .disabled(model.busy || code.isEmpty)
             }
             if let shortCode = model.shortCode {
-                Section("核对数字") {
+                Section {
                     Text(String(format: "%06d", shortCode))
                         .font(.system(.largeTitle, design: .monospaced))
+                        .frame(maxWidth: .infinity)
+                } header: {
+                    Text("核对数字")
+                } footer: {
+                    Text("和电脑上显示的一样，就在电脑上点“确认”。")
                 }
             }
             if !model.status.isEmpty {
-                Section { Text(model.status).foregroundStyle(.secondary) }
+                Section {
+                    HStack {
+                        if model.busy { ProgressView() }
+                        Text(model.status).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .navigationTitle(model.record == nil ? "配对 Host" : "添加 Host")
@@ -112,159 +174,5 @@ struct PairView: View {
                 await model.pair(code: found)
             }
         }
-    }
-}
-
-/// The overview or a project, the two root pages the drawer switches.
-struct RootPage: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        switch model.root {
-        case .home:
-            NavigationStack(path: $model.path) { TerminalListView() }
-        case .project(let place):
-            SideDrawer(edge: .trailing, isOpen: $model.drawerFilesOpen) {
-                NavigationStack { ProjectView(place: place) }
-            } drawer: {
-                // A new project starts a new tree; the same project keeps its own
-                // while a file is open.
-                FilesDrawerView(projectId: place.projectId).id(place.projectId)
-            }
-            .fullScreenCover(item: $model.editing) { file in
-                EditorView(file: file).environmentObject(model)
-            }
-        }
-    }
-}
-
-/// The home screen: counts, then what needs the user, what runs and what
-/// ended; tapping an Agent opens its terminal.
-struct TerminalListView: View {
-    @EnvironmentObject private var model: AppModel
-    @State private var showFinished = false
-    @State private var showTerminals = false
-    @State private var confirmForget = false
-
-    var body: some View {
-        let sections = HomeSections(model.overview)
-        List {
-            Section {
-                hostMenu
-                if !model.status.isEmpty {
-                    Text(model.status).foregroundStyle(.secondary)
-                }
-                HStack {
-                    count(sections.projects, "项目")
-                    count(sections.tabs, "Tab")
-                    count(sections.terminals, "终端")
-                    count(sections.agents, "Agent")
-                }
-            }
-            if !sections.attention.isEmpty {
-                Section("需要处理") { ForEach(sections.attention, id: \.sessionId, content: row) }
-            }
-            if !sections.running.isEmpty {
-                Section("运行中") { ForEach(sections.running, id: \.sessionId, content: row) }
-            }
-            if !sections.finished.isEmpty {
-                Section {
-                    DisclosureGroup("已结束（\(sections.finished.count)）", isExpanded: $showFinished) {
-                        ForEach(sections.finished, id: \.sessionId, content: row)
-                    }
-                }
-            }
-            Section {
-                DisclosureGroup("所有终端（\(model.terminals.count)）", isExpanded: $showTerminals) {
-                    ForEach(model.terminals, id: \.sessionId) { terminal in
-                        NavigationLink(value: terminal) {
-                            VStack(alignment: .leading) {
-                                Text(terminal.sessionId).font(.system(.body, design: .monospaced))
-                                Text("\(terminal.cols)×\(terminal.rows) · \(terminal.projectId)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .navigationTitle("总控")
-        .navigationDestination(for: TerminalInfo.self) { terminal in
-            if let session = model.session {
-                TerminalScreen(session: session, terminal: terminal,
-                               tip: tipText(model.overview.agents.first { $0.sessionId == terminal.sessionId }))
-                    .navigationTitle(terminal.sessionId)
-                    .navigationBarTitleDisplayMode(.inline)
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { model.drawerOpen = true } label: { Image(systemName: "line.3.horizontal") }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("刷新") { Task { await model.refresh() } }
-                } label: { Image(systemName: "ellipsis.circle") }
-            }
-        }
-        .task { await model.connect() }
-        .refreshable { await model.refresh() }
-    }
-
-    /// The current Host; the menu switches, adds and forgets Hosts.
-    private var hostMenu: some View {
-        Menu {
-            ForEach(model.hostNames, id: \.id) { host in
-                Button { Task { await model.switchTo(host.id) } } label: {
-                    if host.id == model.hosts.current { Label(host.name, systemImage: "checkmark") } else { Text(host.name) }
-                }
-            }
-            Divider()
-            Button { model.addingHost = true } label: { Label("添加 Host", systemImage: "plus") }
-            Button(role: .destructive) { confirmForget = true } label: { Label("忘记这台 Host", systemImage: "trash") }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "desktopcomputer")
-                Text(model.hostLabel).lineLimit(1)
-                Image(systemName: "chevron.down").font(.caption)
-            }
-            .font(.subheadline)
-        }
-        .confirmationDialog("忘记 \(model.hostLabel)？", isPresented: $confirmForget, titleVisibility: .visible) {
-            Button("忘记", role: .destructive) { Task { await model.forget() } }
-        } message: {
-            Text("这台手机不再连接它。要再用，需要在电脑上重新配对。")
-        }
-    }
-
-    private func count(_ value: Int, _ label: String) -> some View {
-        VStack {
-            Text("\(value)").font(.title2.monospacedDigit())
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func row(_ agent: AgentSummary) -> some View {
-        Button {
-            Task { await model.open(agent: agent) }
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text("\(model.overview.projectName(agent.projectId)) · \(model.overview.tabTitle(project: agent.projectId, tab: agent.tabId))")
-                        .font(.headline)
-                    Spacer()
-                    Text(agent.stateLabel)
-                        .font(.caption.bold())
-                        .foregroundStyle(agent.state == .waiting || agent.state == .failed ? .orange : .secondary)
-                }
-                if let text = agent.task ?? agent.waitingMessage {
-                    Text(text).font(.subheadline).lineLimit(2)
-                }
-                Text("\(agent.provider) · \(agent.elapsed())\(agent.currentAction.map { " · " + $0 } ?? "")")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-        }
-        .foregroundStyle(.primary)
     }
 }

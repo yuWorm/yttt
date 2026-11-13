@@ -13,7 +13,7 @@ final class AutomationTests: XCTestCase {
             "YTTT_DEBUG_PROJECT": "p",
             "YTTT_DEBUG_TAB": "t",
             "YTTT_DEBUG_PANE": "n",
-            "YTTT_DEBUG_DRAWER": "1",
+            "YTTT_DEBUG_TAB_BAR": "projects",
             "YTTT_DEBUG_FILES": "1",
             "YTTT_DEBUG_EDIT": "README.md",
             "YTTT_DEBUG_RELAY_ONLY": "1",
@@ -27,7 +27,7 @@ final class AutomationTests: XCTestCase {
         XCTAssertEqual(hooks.project, "p")
         XCTAssertEqual(hooks.tab, "t")
         XCTAssertEqual(hooks.pane, "n")
-        XCTAssertTrue(hooks.drawer)
+        XCTAssertEqual(hooks.tabBar, "projects")
         XCTAssertTrue(hooks.files)
         XCTAssertEqual(hooks.edit, "README.md")
         XCTAssertTrue(hooks.relayOnly)
@@ -37,7 +37,8 @@ final class AutomationTests: XCTestCase {
         let hooks = LaunchHooks(environment: [:])
         XCTAssertEqual(hooks, LaunchHooks(environment: ["PATH": "/usr/bin"]))
         XCTAssertNil(hooks.pairCode)
-        XCTAssertFalse(hooks.forget || hooks.drawer || hooks.files || hooks.relayOnly)
+        XCTAssertNil(hooks.tabBar)
+        XCTAssertFalse(hooks.forget || hooks.files || hooks.relayOnly)
     }
 
     func testOnlyOneTurnsAFlagOn() {

@@ -15,16 +15,17 @@ struct LaunchHooks: Equatable {
     /// Open this terminal, then take control and type this line.
     var open: String?
     var type: String?
-    /// Open this project (and tab, pane) once the overview has it; show the
-    /// left drawer, the right drawer, or this file in it, for screenshots.
+    /// Open this project (and tab, pane) once the overview has it; then its
+    /// files sheet, or this file, for screenshots.
     var project: String?
     var tab: String?
     var pane: String?
-    var drawer = false
     var files = false
     var edit: String?
     /// Keep off direct paths: everything goes through the Host's relay.
     var relayOnly = false
+    /// Select this tab of the tab bar: overview, projects or settings.
+    var tabBar: String?
 
     init(environment: [String: String]) {
         #if DEBUG
@@ -39,10 +40,10 @@ struct LaunchHooks: Equatable {
         project = value("PROJECT")
         tab = value("TAB")
         pane = value("PANE")
-        drawer = flag("DRAWER")
         files = flag("FILES")
         edit = value("EDIT")
         relayOnly = flag("RELAY_ONLY")
+        tabBar = value("TAB_BAR")
         #endif
     }
 
