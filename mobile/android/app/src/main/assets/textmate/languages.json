@@ -1,0 +1,124 @@
+{
+  "languages": [
+    {
+      "name": "rust",
+      "scopeName": "source.rust",
+      "grammar": "textmate/rust.tmLanguage.json"
+    },
+    {
+      "name": "javascript",
+      "scopeName": "source.js",
+      "grammar": "textmate/javascript.tmLanguage.json"
+    },
+    {
+      "name": "typescript",
+      "scopeName": "source.ts",
+      "grammar": "textmate/typescript.tmLanguage.json"
+    },
+    {
+      "name": "tsx",
+      "scopeName": "source.tsx",
+      "grammar": "textmate/tsx.tmLanguage.json"
+    },
+    {
+      "name": "json",
+      "scopeName": "source.json",
+      "grammar": "textmate/json.tmLanguage.json"
+    },
+    {
+      "name": "python",
+      "scopeName": "source.python",
+      "grammar": "textmate/python.tmLanguage.json"
+    },
+    {
+      "name": "go",
+      "scopeName": "source.go",
+      "grammar": "textmate/go.tmLanguage.json"
+    },
+    {
+      "name": "swift",
+      "scopeName": "source.swift",
+      "grammar": "textmate/swift.tmLanguage.json"
+    },
+    {
+      "name": "java",
+      "scopeName": "source.java",
+      "grammar": "textmate/java.tmLanguage.json"
+    },
+    {
+      "name": "c",
+      "scopeName": "source.c",
+      "grammar": "textmate/c.tmLanguage.json"
+    },
+    {
+      "name": "cpp",
+      "scopeName": "source.cpp",
+      "grammar": "textmate/cpp.tmLanguage.json"
+    },
+    {
+      "name": "csharp",
+      "scopeName": "source.cs",
+      "grammar": "textmate/csharp.tmLanguage.json"
+    },
+    {
+      "name": "ruby",
+      "scopeName": "source.ruby",
+      "grammar": "textmate/ruby.tmLanguage.json"
+    },
+    {
+      "name": "lua",
+      "scopeName": "source.lua",
+      "grammar": "textmate/lua.tmLanguage.json"
+    },
+    {
+      "name": "shell",
+      "scopeName": "source.shell",
+      "grammar": "textmate/shell.tmLanguage.json"
+    },
+    {
+      "name": "markdown",
+      "scopeName": "text.html.markdown",
+      "grammar": "textmate/markdown.tmLanguage.json"
+    },
+    {
+      "name": "yaml",
+      "scopeName": "source.yaml",
+      "grammar": "textmate/yaml.tmLanguage.json"
+    },
+    {
+      "name": "html",
+      "scopeName": "text.html.basic",
+      "grammar": "textmate/html.tmLanguage.json"
+    },
+    {
+      "name": "css",
+      "scopeName": "source.css",
+      "grammar": "textmate/css.tmLanguage.json"
+    },
+    {
+      "name": "xml",
+      "scopeName": "text.xml",
+      "grammar": "textmate/xml.tmLanguage.json"
+    },
+    {
+      "name": "sql",
+      "scopeName": "source.sql",
+      "grammar": "textmate/sql.tmLanguage.json"
+    },
+    {
+      "name": "dockerfile",
+      "scopeName": "source.dockerfile",
+      "grammar": "textmate/dockerfile.tmLanguage.json"
+    },
+    {
+      "name": "makefile",
+      "scopeName": "source.makefile",
+      "grammar": "textmate/makefile.tmLanguage.json"
+    },
+    {
+      "name": "php",
+      "scopeName": "source.php",
+      "grammar": "textmate/php.tmLanguage.json"
+    }
+  ]
+}

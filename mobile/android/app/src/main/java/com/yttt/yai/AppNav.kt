@@ -50,6 +50,8 @@ private const val SETTINGS = "settings"
 private const val PAIR = "pair"
 private const val LICENSES = "licenses"
 private const val SIGN_IN = "sign-in"
+private const val TERMINAL_LOOK = "terminal-look"
+private const val EDITOR_LOOK = "editor-look"
 
 private class TopLevel(val route: String, val label: String, val selected: ImageVector, val unselected: ImageVector)
 
@@ -95,6 +97,8 @@ fun App(
     val account by link.account.collectAsState()
     val accountNotice by link.accountNotice.collectAsState()
     val relaySource by link.relaySource.collectAsState()
+    val terminalLook by link.appearance.terminal.collectAsState()
+    val editorLook by link.appearance.editor.collectAsState()
     var details by remember { mutableStateOf<AccountDetails?>(null) }
     // Again after each connect: pairing registers a device.
     LaunchedEffect(account, session) {
@@ -242,9 +246,15 @@ fun App(
                     details = details,
                     onSignIn = { nav.navigate(SIGN_IN) },
                     onSignOut = { scope.launch { link.signOut() } },
+                    terminalTheme = terminalLook.theme,
+                    editorTheme = editorLook.theme,
+                    onTerminalLook = { nav.navigate(TERMINAL_LOOK) },
+                    onEditorLook = { nav.navigate(EDITOR_LOOK) },
                 )
             }
             composable(LICENSES) { LicensesScreen(onBack = { nav.popBackStack() }) }
+            composable(TERMINAL_LOOK) { TerminalAppearanceScreen(link.appearance) { nav.popBackStack() } }
+            composable(EDITOR_LOOK) { EditorAppearanceScreen(link.appearance) { nav.popBackStack() } }
             composable(SIGN_IN) {
                 SignInScreen(signIn, onBack = { nav.popBackStack() }, onSignIn = signInWith { nav.popBackStack() })
             }
@@ -289,7 +299,7 @@ fun App(
                 val (project, path) = Routes.file(backStack.arguments.toArguments(Routes.ARG_PROJECT, Routes.ARG_PATH))
                 val current = session
                 if (current != null) {
-                    EditorScreen(current, project, overview.projectName(project), path) { nav.popBackStack() }
+                    EditorScreen(current, link.appearance, project, overview.projectName(project), path) { nav.popBackStack() }
                 }
             }
         }

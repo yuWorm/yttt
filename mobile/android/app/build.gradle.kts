@@ -40,6 +40,8 @@ android {
     sourceSets.getByName("main") {
         kotlin.directories.add(coreOut.dir("kotlin").asFile.absolutePath)
         jniLibs.directories.add(coreOut.dir("jniLibs").asFile.absolutePath)
+        // JetBrains Mono, shared with iOS (mobile/fonts/README.md).
+        assets.directories.add(rootProject.file("../fonts").absolutePath)
     }
 }
 
@@ -51,6 +53,8 @@ dependencies {
     implementation("org.connectbot:termlib:0.3.13")
     // The file editor. LGPL-2.1: used as a separate, unmodified library.
     implementation("io.github.Rosemoe.sora-editor:editor:0.23.6")
+    // Syntax highlighting with the TextMate grammars in assets/textmate (same LGPL-2.1 project).
+    implementation("io.github.Rosemoe.sora-editor:language-textmate:0.23.6")
     // Pairing QR codes: ZXing decodes the camera's frames (no Google services).
     implementation("com.google.zxing:core:3.5.4")
     implementation("androidx.camera:camera-camera2:1.6.2")

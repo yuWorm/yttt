@@ -1,5 +1,11 @@
 package com.yttt.yai
 
+import uniffi.yttt_mobile_core.theme
+
+import androidx.compose.ui.platform.LocalContext
+
+import androidx.compose.foundation.isSystemInDarkTheme
+
 import android.util.Log
 import android.view.Choreographer
 import androidx.compose.foundation.background
@@ -90,6 +96,11 @@ fun TerminalPane(
     val ctrl = remember(id) { CtrlKey() }
     var ctrlArmed by remember(id) { mutableStateOf(false) }
     var keyboardShown by remember(id) { mutableStateOf(true) }
+    val look by link.appearance.terminal.collectAsState()
+    val systemDark = isSystemInDarkTheme()
+    val palette = remember(look.theme, systemDark) { theme(look.theme, systemDark) }
+    val context = LocalContext.current
+    val typeface = remember(look.font) { AppearanceSettings.typeface(context, look.font) }
     val emulator = remember(id) {
         TerminalEmulatorFactory.create(
             initialRows = info.rows.toInt(),
@@ -216,6 +227,12 @@ fun TerminalPane(
         session.repaint(id)
     }
 
+    // The palette's colors, and everything repainted in them.
+    LaunchedEffect(emulator, palette) {
+        emulator.applyColorScheme(palette.ansi.map(::argb).toIntArray(), argb(palette.foreground), argb(palette.background))
+        session.repaint(id)
+    }
+
     LaunchedEffect(autoType) {
         val line = autoType ?: return@LaunchedEffect
         delay(2000)
@@ -227,12 +244,16 @@ fun TerminalPane(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(Color(argb(palette.background)))
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
     ) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             Terminal(
                 terminalEmulator = emulator,
+                typeface = typeface,
+                initialFontSize = look.size.sp,
+                backgroundColor = Color(argb(palette.background)),
+                foregroundColor = Color(argb(palette.foreground)),
                 modifier = Modifier.fillMaxSize(),
                 keyboardEnabled = controlling && keyboardShown,
                 forcedSize = if (controlling || fitting) null else info.rows.toInt() to info.cols.toInt(),

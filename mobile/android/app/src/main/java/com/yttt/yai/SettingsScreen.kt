@@ -13,7 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.filled.CheckCircle
@@ -71,6 +73,10 @@ fun SettingsScreen(
     details: AccountDetails?,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
+    terminalTheme: String,
+    editorTheme: String,
+    onTerminalLook: () -> Unit,
+    onEditorLook: () -> Unit,
 ) {
     val context = LocalContext.current
     val version = remember {
@@ -119,6 +125,23 @@ fun SettingsScreen(
                     leadingContent = { Icon(Icons.Outlined.Add, null) },
                     headlineContent = { Text("添加 Host") },
                     modifier = Modifier.clickable(onClick = onAdd),
+                )
+            }
+            item { Header("外观") }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Outlined.Terminal, null) },
+                    headlineContent = { Text("终端") },
+                    supportingContent = { Text("字体、字号、${themeLabel(terminalTheme)}") },
+                    modifier = Modifier.clickable(onClick = onTerminalLook),
+                )
+            }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Outlined.Code, null) },
+                    headlineContent = { Text("编辑器") },
+                    supportingContent = { Text("语法高亮、字体、${themeLabel(editorTheme)}") },
+                    modifier = Modifier.clickable(onClick = onEditorLook),
                 )
             }
             item { Header("Relay 账号") }
@@ -277,7 +300,9 @@ private fun Header(text: String) {
 }
 
 private val LICENSES = listOf(
-    "sora-editor" to "LGPL-2.1，未修改，作为独立库使用",
+    "sora-editor（含 language-textmate）" to "LGPL-2.1，未修改，作为独立库使用",
+    "VS Code 语法文件（TextMate）" to "MIT",
+    "JetBrains Mono" to "SIL OFL 1.1",
     "ConnectBot termlib" to "Apache-2.0",
     "JNA" to "Apache-2.0 / LGPL-2.1",
     "ZXing" to "Apache-2.0",

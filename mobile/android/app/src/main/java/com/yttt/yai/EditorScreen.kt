@@ -1,6 +1,19 @@
 package com.yttt.yai
 
-import android.graphics.Typeface
+import uniffi.yttt_mobile_core.theme
+
+import uniffi.yttt_mobile_core.editorLanguage
+
+import uniffi.yttt_mobile_core.Theme
+
+import androidx.compose.runtime.collectAsState
+
+import androidx.compose.ui.platform.LocalContext
+
+import androidx.compose.foundation.isSystemInDarkTheme
+
+import android.content.Context
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,7 +60,19 @@ import uniffi.yttt_mobile_core.SaveOutcome
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditorScreen(session: HostSession, projectId: String, projectName: String, path: String, onClose: () -> Unit) {
+fun EditorScreen(
+    session: HostSession,
+    appearance: AppearanceStore,
+    projectId: String,
+    projectName: String,
+    path: String,
+    onClose: () -> Unit,
+) {
+    val look by appearance.editor.collectAsState()
+    val systemDark = isSystemInDarkTheme()
+    val palette = remember(look.theme, systemDark) { theme(look.theme, systemDark) }
+    val context = LocalContext.current
+    val language = remember(path) { editorLanguage(path) }
     var editor by remember { mutableStateOf<CodeEditor?>(null) }
     var loaded by remember { mutableStateOf<String?>(null) }
     var dirty by remember { mutableStateOf(false) }
@@ -110,7 +135,7 @@ fun EditorScreen(session: HostSession, projectId: String, projectName: String, p
             AndroidView(
                 factory = { context ->
                     CodeEditor(context).apply {
-                        typefaceText = Typeface.MONOSPACE
+                        setEditorLanguage(TextMate.language(context, language))
                         loaded?.let { setText(it) }
                         subscribeEvent(ContentChangeEvent::class.java) { event, _ ->
                             // setText reports a whole-text change too.
@@ -119,6 +144,7 @@ fun EditorScreen(session: HostSession, projectId: String, projectName: String, p
                         editor = this
                     }
                 },
+                update = { editor -> applyLook(editor, context, look, palette) },
                 modifier = Modifier.fillMaxSize(),
             )
             when {
@@ -150,4 +176,17 @@ fun EditorScreen(session: HostSession, projectId: String, projectName: String, p
             dismissButton = { TextButton(onClick = { confirmClose = false }) { Text("继续编辑") } },
         )
     }
+}
+
+/** The editor's font, size, wrapping, line numbers and colors, applied only when they change. */
+fun applyLook(editor: CodeEditor, context: Context, look: EditorAppearance, palette: Theme) {
+    val key = look to palette.id
+    if (editor.tag == key) return
+    editor.tag = key
+    editor.typefaceText = AppearanceSettings.typeface(context, look.font)
+    editor.typefaceLineNumber = AppearanceSettings.typeface(context, look.font)
+    editor.setTextSize(look.size)
+    editor.isWordwrap = look.wrap
+    editor.isLineNumberEnabled = look.lineNumbers
+    editor.colorScheme = TextMate.colorScheme(context, palette)
 }

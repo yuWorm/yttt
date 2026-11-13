@@ -45,6 +45,9 @@ class Link(context: Context) {
     /** Work that must outlive any screen, such as detaching a terminal. */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    /** Fonts, sizes and themes of the terminal and the editor. */
+    val appearance = AppearanceStore(app.getSharedPreferences("appearance", Context.MODE_PRIVATE))
+
     /** Debug automation: keep off direct paths. */
     @Volatile var relayOnly = false
 
