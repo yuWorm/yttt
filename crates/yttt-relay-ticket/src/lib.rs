@@ -11,6 +11,7 @@
 //! node's usage reports, see [`api`].
 
 pub mod api;
+pub mod placement;
 
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
