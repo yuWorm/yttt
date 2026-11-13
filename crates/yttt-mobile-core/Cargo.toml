@@ -35,7 +35,7 @@ alacritty_terminal = "0.25.1"
 yttt-terminal-core = { path = "../yttt-terminal-core" }
 libc = "0.2"
 tempfile = "3"
-tokio = { version = "1", features = ["signal"] }
+tokio = { version = "1", features = ["signal", "test-util"] }
 yttt-host = { path = "../yttt-host" }
 # A self-hosted relay node, for the relay-only test.
 yttt-relay = { path = "../yttt-relay" }

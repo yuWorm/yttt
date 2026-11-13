@@ -125,8 +125,9 @@ async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>) ->
     .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
 }
 
-/// A fresh database, a control plane on it and a node reporting to it.
-async fn paid_relay() -> (Control, RelayNode, String) {
+/// A fresh database, a control plane on it and a node reporting to it; the
+/// database's name, to drop at the end.
+async fn paid_relay() -> (Control, RelayNode, String, String) {
     let server = std::env::var("YTTT_TEST_DATABASE_URL")
         .expect("YTTT_TEST_DATABASE_URL names a PostgreSQL server");
     let name = format!("yttt_mobile_paid_relay_test_{}", std::process::id());
@@ -186,7 +187,16 @@ async fn paid_relay() -> (Control, RelayNode, String) {
     })
     .await
     .unwrap();
-    (control, node, control_url)
+    (control, node, control_url, name)
+}
+
+async fn drop_database(name: &str) {
+    let server = std::env::var("YTTT_TEST_DATABASE_URL").unwrap();
+    let admin = sqlx::PgPool::connect(&server).await.unwrap();
+    sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .unwrap();
 }
 
 /// Starts pairing on the Host; the code to give the phone.
@@ -224,7 +234,7 @@ async fn devices(account: &Account) -> usize {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs PostgreSQL in YTTT_TEST_DATABASE_URL"]
 async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
-    let (control, node, control_url) = paid_relay().await;
+    let (control, node, control_url, database) = paid_relay().await;
     let relay_url = format!("http://{}", node.addr());
     let created = reqwest::Client::new()
         .post(format!("{control_url}/v1/dev/accounts"))
@@ -356,4 +366,5 @@ async fn a_signed_in_phone_pairs_and_works_through_a_ticket_relay() {
 
     node.shutdown().await;
     control.shutdown().await;
+    drop_database(&database).await;
 }

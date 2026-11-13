@@ -45,6 +45,13 @@ use yttt_protocol::{
     },
 };
 
+/// How long a link that may go direct has to reach the Host before the phone
+/// tries the relay alone. A proxy or VPN on the phone (a TUN in fake-IP mode)
+/// can pass the first packets to a LAN address and drop the rest: the phone
+/// thinks the handshake is done, the Host never hears the end of it, and the
+/// connection stalls for its whole timeout while the relay would have worked.
+const DIRECT_GRACE: Duration = Duration::from_secs(8);
+
 /// The visibility scope this Client reports; it has one screen.
 const VISIBILITY_SCOPE: u64 = 1;
 
@@ -185,6 +192,46 @@ pub struct HostInfo {
 }
 
 #[cfg(test)]
+mod grace_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_link_that_answers_in_time_is_kept() {
+        let quick = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            7
+        };
+        assert_eq!(
+            within_grace(quick, Some(DIRECT_GRACE), || false).await,
+            Some(7)
+        );
+        assert_eq!(within_grace(async { 8 }, None, || false).await, Some(8));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_link_that_never_answers_gives_way_at_the_grace() {
+        let started = tokio::time::Instant::now();
+        let stalled =
+            within_grace(std::future::pending::<()>(), Some(DIRECT_GRACE), || false).await;
+        assert_eq!(stalled, None);
+        assert_eq!(started.elapsed(), DIRECT_GRACE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_link_the_host_answered_runs_past_the_grace() {
+        // Pairing waits on the desktop user after the short code shows.
+        let slow = async {
+            tokio::time::sleep(DIRECT_GRACE * 3).await;
+            "accepted"
+        };
+        assert_eq!(
+            within_grace(slow, Some(DIRECT_GRACE), || true).await,
+            Some("accepted")
+        );
+    }
+}
+
+#[cfg(test)]
 mod record_tests {
     use super::*;
     use yttt_core::model::ids::ProfileId;
@@ -264,9 +311,37 @@ pub async fn pair(
         }
         _ => hint(code.relay_url.as_ref()),
     };
-    let endpoint = bind(key, relay.setup(target)?).await?;
-    let result = yttt_client_core::p2p::pair(&endpoint, &code, device_label, on_short_code).await;
-    endpoint.close().await;
+    // The short code shows once the Host has answered twice: until then the
+    // link may be one a proxy stalls, and the relay alone gets a second try.
+    let on_short_code = Mutex::new(Some(on_short_code));
+    let shown = std::sync::atomic::AtomicBool::new(false);
+    let show = |short_code| {
+        shown.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(show) = on_short_code.lock().take() {
+            show(short_code);
+        }
+    };
+    let grace = (relay == RelayChoice::FromHost && target.is_some()).then_some(DIRECT_GRACE);
+    let endpoint = bind(key, relay.setup(target.clone())?).await?;
+    let attempt = yttt_client_core::p2p::pair(&endpoint, &code, device_label, &show);
+    let result = match within_grace(attempt, grace, || {
+        shown.load(std::sync::atomic::Ordering::SeqCst)
+    })
+    .await
+    {
+        Some(result) => {
+            endpoint.close().await;
+            result
+        }
+        None => {
+            endpoint.close().await;
+            tracing::warn!("pairing heard nothing from the Host directly; trying the relay alone");
+            let endpoint = bind(key, RelayChoice::OnlyFromHost.setup(target)?).await?;
+            let result = yttt_client_core::p2p::pair(&endpoint, &code, device_label, &show).await;
+            endpoint.close().await;
+            result
+        }
+    };
     match result {
         Ok(host) => Ok(PairedHostRecord { host }),
         Err(error) => {
@@ -278,6 +353,25 @@ pub async fn pair(
                 Err(ticket) => format!("{error} (relay account: {ticket})"),
                 Ok(_) => error.to_string(),
             }))
+        }
+    }
+}
+
+/// `work`, or `None` when `grace` passed first and `started` still says no:
+/// the link stalled before the Host answered. Once started it runs to the end.
+async fn within_grace<T>(
+    work: impl std::future::Future<Output = T>,
+    grace: Option<Duration>,
+    started: impl Fn() -> bool,
+) -> Option<T> {
+    let Some(grace) = grace else {
+        return Some(work.await);
+    };
+    tokio::pin!(work);
+    tokio::select! {
+        result = &mut work => Some(result),
+        () = tokio::time::sleep(grace) => {
+            if started() { Some(work.await) } else { None }
         }
     }
 }
@@ -395,9 +489,24 @@ impl MobileSession {
             (Some(_), _, _) => RelaySource::Account,
             (None, Some(_), _) => RelaySource::PairingHint,
         };
-        let endpoint = bind(key, relay.setup(target)?).await?;
-        let connector = Arc::new(host.connector(endpoint.clone()));
-        let session = Self::connect_with(connector.clone(), record, host.credential(key)).await;
+        let grace = (relay == RelayChoice::FromHost && target.is_some()).then_some(DIRECT_GRACE);
+        let mut endpoint = bind(key, relay.setup(target.clone())?).await?;
+        let mut connector = Arc::new(host.connector(endpoint.clone()));
+        let first = Self::connect_with(connector.clone(), record, host.credential(key));
+        let session = match within_grace(first, grace, || false).await {
+            Some(session) => session,
+            None => {
+                // As in pairing: a proxy can stall the direct path; the
+                // relay alone carries this session instead.
+                endpoint.close().await;
+                tracing::warn!(
+                    "the Host did not answer directly; connecting through the relay alone"
+                );
+                endpoint = bind(key, RelayChoice::OnlyFromHost.setup(target)?).await?;
+                connector = Arc::new(host.connector(endpoint.clone()));
+                Self::connect_with(connector.clone(), record, host.credential(key)).await
+            }
+        };
         match session {
             Ok(mut session) => {
                 if let (Some(account), Some(ticket), true) =
