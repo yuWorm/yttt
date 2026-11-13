@@ -75,10 +75,28 @@ pub struct MobileCore {
     runtime: tokio::runtime::Runtime,
 }
 
+/// Logs to stderr, filtered by `YTTT_LOG` (as `RUST_LOG`), when it is set:
+/// a diagnostic for a debug run, as `devicectl … --console` shows stderr.
+fn log_from_env() {
+    let Ok(filter) = std::env::var("YTTT_LOG") else {
+        return;
+    };
+    let Ok(filter) = tracing_subscriber::EnvFilter::try_new(filter) else {
+        return;
+    };
+    // A second core in the same process keeps the first one's subscriber.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
 #[uniffi::export]
 impl MobileCore {
     #[uniffi::constructor]
     pub fn new() -> Result<Arc<Self>, MobileCoreError> {
+        log_from_env();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
