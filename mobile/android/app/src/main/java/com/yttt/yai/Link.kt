@@ -50,7 +50,7 @@ class Link(context: Context) {
         Settings.Global.getString(app.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() }
             ?: Build.MODEL
 
-    private val hostStore = HostStore(storage.dir)
+    private val hostStore = HostStore(storage.dir) { Log.w(TAG, "the paired Hosts could not be read", it) }
     /** The paired Hosts; the link is with the current one. */
     val hosts = MutableStateFlow(hostStore.load())
     /** The current Host's record. */

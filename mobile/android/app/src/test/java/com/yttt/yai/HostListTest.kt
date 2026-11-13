@@ -70,4 +70,13 @@ class HostListTest {
         assertEquals(a, loaded.current)
         assertArrayEquals(bytes("new"), loaded.hosts[1].record)
     }
+
+    @Test
+    fun aDamagedListReadsAsNoHostsRatherThanFailing() {
+        // As a power cut can leave a file renamed into place before its data reached the disk.
+        folder.root.resolve("hosts.json").writeText("")
+        assertEquals(emptyList<HostEntry>(), HostStore(folder.root).load().hosts)
+        folder.root.resolve("hosts.json").writeText("{\"hosts\": [")
+        assertEquals(emptyList<HostEntry>(), HostStore(folder.root).load().hosts)
+    }
 }

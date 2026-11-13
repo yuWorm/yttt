@@ -32,9 +32,7 @@ class SecretStore(private val dir: File, private val key: () -> SecretKey) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
         val sealed = cipher.iv + cipher.doFinal(secret)
-        val partial = File(dir, "device-secret.enc.partial")
-        partial.writeBytes(sealed)
-        check(partial.renameTo(encrypted)) { "could not store the device secret" }
+        writeDurably(File(dir, "device-secret.enc.partial"), sealed, encrypted)
     }
 
     private fun decrypt(sealed: ByteArray): ByteArray {

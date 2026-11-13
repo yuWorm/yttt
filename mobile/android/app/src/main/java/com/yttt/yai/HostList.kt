@@ -1,6 +1,7 @@
 package com.yttt.yai
 
 import java.io.File
+import java.io.FileOutputStream
 import java.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
@@ -42,10 +43,16 @@ class HostList(val hosts: List<HostEntry> = emptyList(), val current: String? = 
 /**
  * The list in `hosts.json`, in the app's private files (backups are off).
  */
-class HostStore(private val dir: File) {
+class HostStore(private val dir: File, private val onDamaged: (Throwable) -> Unit = {}) {
     private val file = File(dir, "hosts.json")
 
-    fun load(): HostList = if (file.exists()) decode(file.readBytes()) else HostList()
+    /** The stored list; one that cannot be read counts as none, rather than failing every launch. */
+    fun load(): HostList {
+        if (!file.exists()) return HostList()
+        return runCatching { decode(file.readBytes()) }
+            .onFailure(onDamaged)
+            .getOrDefault(HostList())
+    }
 
     fun save(list: HostList) {
         val json = JSONObject()
@@ -53,9 +60,7 @@ class HostStore(private val dir: File) {
         json.put("hosts", JSONArray(list.hosts.map {
             JSONObject().put("id", it.id).put("record", Base64.getEncoder().encodeToString(it.record))
         }))
-        val partial = File(dir, "hosts.json.partial")
-        partial.writeText(json.toString())
-        check(partial.renameTo(file)) { "could not store the paired Hosts" }
+        writeDurably(File(dir, "hosts.json.partial"), json.toString().toByteArray(), file)
     }
 
     private fun decode(bytes: ByteArray): HostList {
@@ -67,4 +72,17 @@ class HostStore(private val dir: File) {
         }
         return HostList(entries, json.optString("current").takeIf { it.isNotEmpty() })
     }
+}
+
+/**
+ * Writes `bytes` to `partial`, flushes it to the disk, then renames it over
+ * `target`: without the flush, a power cut can leave `target` renamed into
+ * place but empty.
+ */
+fun writeDurably(partial: File, bytes: ByteArray, target: File) {
+    FileOutputStream(partial).use { out ->
+        out.write(bytes)
+        out.fd.sync()
+    }
+    check(partial.renameTo(target)) { "could not store ${target.name}" }
 }
