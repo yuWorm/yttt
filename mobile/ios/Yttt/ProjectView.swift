@@ -124,50 +124,50 @@ private struct TabStrip: View {
     let onOverview: () -> Void
 
     var body: some View {
-        ScrollViewReader { reader in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(tabs, id: \.tabId) { tab in
-                        let mark = marks[tab.tabId]
-                        let label = HStack(spacing: 5) {
-                            if let provider = mark?.provider {
-                                AgentLogo(provider: provider, size: 14)
+        // The tabs scroll in their own space beside the button, never under it,
+        // and the whole strip shares one background.
+        HStack(spacing: 0) {
+            ScrollViewReader { reader in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(tabs, id: \.tabId) { tab in
+                            let mark = marks[tab.tabId]
+                            let label = HStack(spacing: 5) {
+                                if let provider = mark?.provider {
+                                    AgentLogo(provider: provider, size: 14)
+                                } else {
+                                    Image(systemName: "terminal").font(.caption)
+                                }
+                                Text(tab.title).lineLimit(1)
+                                if mark?.waiting == true {
+                                    Circle().fill(.orange).frame(width: 7, height: 7)
+                                }
+                            }
+                            if tab.tabId == selected {
+                                Button { onTab(tab.tabId) } label: { label }
+                                    .buttonStyle(.borderedProminent)
+                                    .id(tab.tabId)
                             } else {
-                                Image(systemName: "terminal").font(.caption)
+                                Button { onTab(tab.tabId) } label: { label }
+                                    .buttonStyle(.bordered)
+                                    .tint(.primary)
+                                    .id(tab.tabId)
                             }
-                            Text(tab.title).lineLimit(1)
-                            if mark?.waiting == true {
-                                Circle().fill(.orange).frame(width: 7, height: 7)
-                            }
-                        }
-                        if tab.tabId == selected {
-                            Button { onTab(tab.tabId) } label: { label }
-                                .buttonStyle(.borderedProminent)
-                                .id(tab.tabId)
-                        } else {
-                            Button { onTab(tab.tabId) } label: { label }
-                                .buttonStyle(.bordered)
-                                .tint(.primary)
-                                .id(tab.tabId)
                         }
                     }
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
                 }
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .onAppear { if let selected { reader.scrollTo(selected, anchor: .center) } }
+                .onChange(of: selected) { _, id in
+                    if let id { withAnimation { reader.scrollTo(id, anchor: .center) } }
+                }
             }
-            .onAppear { if let selected { reader.scrollTo(selected, anchor: .center) } }
-            .onChange(of: selected) { _, id in
-                if let id { withAnimation { reader.scrollTo(id, anchor: .center) } }
-            }
-        }
-        // Always in reach, however far the tabs scroll.
-        .safeAreaInset(edge: .trailing, spacing: 0) {
             Button(action: onOverview) { Image(systemName: "square.grid.2x2") }
                 .accessibilityLabel("全部 Tab")
                 .padding(.horizontal, 12)
-                .frame(maxHeight: .infinity)
         }
         .fixedSize(horizontal: false, vertical: true)
         .background(.bar)
