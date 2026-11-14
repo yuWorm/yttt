@@ -13,6 +13,7 @@ use crate::account::{Account, AccountError};
 use crate::files::{FileEntry, OpenedFile, SaveOutcome, SessionEntry};
 use crate::keys::TerminalKey;
 use crate::overview::Overview;
+use crate::projects::{HostDirectory, RecentProject};
 use crate::session::{
     DrainStats, HostInfo, LinkPath, LinkState, MobileError, MobileSession, PairedHostRecord,
     RelayChoice, RelaySource, TerminalInfo,
@@ -476,6 +477,47 @@ impl HostSession {
         let session = self.session.clone();
         self.runtime
             .spawn(async move { session.agent_sessions(&project_id).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// The Host user's home folder, where choosing a project folder starts.
+    pub async fn host_home(&self) -> Result<String, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.host_home().await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// The folders in a folder on the Host.
+    pub async fn browse_host(&self, path: String) -> Result<HostDirectory, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.browse_host(&path).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// The projects the Host opened before, most recent first.
+    pub async fn recent_projects(&self) -> Result<Vec<RecentProject>, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.recent_projects().await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// Opens a Host folder as a project in the Host's window and gives its
+    /// project ID; a project already open is left as it is.
+    pub async fn open_project(&self, path: String) -> Result<String, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.open_project(&path).await })
             .await
             .map_err(|error| failed(error.to_string()))?
             .map_err(Into::into)

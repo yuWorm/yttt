@@ -29,7 +29,7 @@ final class ProjectPageTests: XCTestCase {
             agent("x", "y", .idle, project: "api"),
             agent("x", "z", .completed, project: "api"),
         ],
-        terminals: 3)
+        terminals: 3, terminalIds: [])
 
     func testBadgesCountWaitingFailedAndRunningPerProject() {
         let badges = overview.badges()

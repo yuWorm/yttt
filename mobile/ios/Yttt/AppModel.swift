@@ -485,6 +485,22 @@ final class AppModel: ObservableObject {
         overviewPath = []
     }
 
+    /// Opens a Host folder as a project in the Host's window, then shows it
+    /// on the projects tab once the overview has it. Nil on success, else
+    /// what went wrong.
+    func openProject(path: String) async -> String? {
+        guard let session else { return "还没连上 Host" }
+        let projectId: String
+        do { projectId = try await session.openProject(path: path) } catch { return error.message }
+        // The workspace update follows the answer; give it a moment.
+        for _ in 0..<50 where !overview.projects.contains(where: { $0.projectId == projectId }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        tab = .projects
+        projectsPath = [.project(overview.initialPlace(projectId))]
+        return nil
+    }
+
     /// Opens where an Agent runs, over the overview: its pane, or its
     /// terminal alone.
     func open(agent: AgentSummary) async {

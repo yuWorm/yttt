@@ -77,12 +77,65 @@ extension AgentSummary {
         }
     }
 
+    /// Working or starting: shown in blue, with a light sweeping across.
+    var isRunning: Bool { state == .working || state == .starting }
+
     var stateColor: Color {
         switch state {
         case .waiting: return .orange
         case .failed: return .red
         case .completed: return .green
+        case .working, .starting: return .blue
         default: return .secondary
         }
+    }
+}
+
+/// A light sweeping across the content, over and over, while `active`;
+/// still when Reduce Motion is on.
+struct Shimmer: ViewModifier {
+    var active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var phase: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        if active && !reduceMotion {
+            content
+                .overlay {
+                    GeometryReader { geometry in
+                        let width = geometry.size.width
+                        LinearGradient(colors: [.clear, .white.opacity(0.9), .clear],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .frame(width: width * 0.6)
+                            .offset(x: -width * 0.6 + phase * width * 1.6)
+                    }
+                    .mask(content)
+                    .allowsHitTesting(false)
+                }
+                .onAppear {
+                    phase = 0
+                    withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { phase = 1 }
+                }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func shimmer(_ active: Bool = true) -> some View { modifier(Shimmer(active: active)) }
+}
+
+/// An Agent's state as a coloured label; a running one shimmers.
+struct AgentStateLabel: View {
+    let agent: AgentSummary
+
+    var body: some View {
+        Label(agent.stateLabel, systemImage: agent.stateSymbol)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(agent.stateColor)
+            .labelStyle(.titleAndIcon)
+            .symbolEffect(.pulse, isActive: agent.isRunning)
+            .shimmer(agent.isRunning)
     }
 }

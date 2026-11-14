@@ -39,7 +39,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.yttt_mobile_core.AccountDetails
 import uniffi.yttt_mobile_core.LinkState
 import uniffi.yttt_mobile_core.MobileCoreException
@@ -55,6 +57,8 @@ private const val CONNECTION_LOG = "connection-log"
 private const val SIGN_IN = "sign-in"
 private const val TERMINAL_LOOK = "terminal-look"
 private const val EDITOR_LOOK = "editor-look"
+private const val OPEN_FOLDER = "open-folder"
+private const val OPEN_HISTORY = "open-history"
 
 private class TopLevel(val route: String, val label: String, val selected: ImageVector, val unselected: ImageVector)
 
@@ -171,6 +175,26 @@ fun App(
         }
     }
 
+    /**
+     * Opens a Host folder as a project, then shows it in place of the picker
+     * once the overview has it. Null on success, else what went wrong.
+     */
+    suspend fun openProject(path: String): String? {
+        val current = session ?: return "还没连上 Host"
+        val projectId = try {
+            current.openProject(path)
+        } catch (error: Exception) {
+            return error.message ?: "打开失败"
+        }
+        // The workspace update follows the answer; give it a moment.
+        withTimeoutOrNull(5000) {
+            link.overview.first { overview -> overview.projects.any { it.projectId == projectId } }
+        }
+        nav.popBackStack(PROJECTS, inclusive = false)
+        nav.navigate(Routes.project(link.overview.value.initialPlace(projectId)))
+        return null
+    }
+
     // A tapped notification names a terminal: open it over 总控, so back returns there.
     LaunchedEffect(session, overview.projects.isNotEmpty()) {
         if (session == null) return@LaunchedEffect
@@ -235,7 +259,18 @@ fun App(
                 )
             }
             composable(PROJECTS) {
-                ProjectsScreen(overview) { id -> nav.navigate(Routes.project(overview.initialPlace(id))) }
+                ProjectsScreen(
+                    overview,
+                    canAdd = session != null,
+                    onAddFolder = { nav.navigate(OPEN_FOLDER) },
+                    onAddHistory = { nav.navigate(OPEN_HISTORY) },
+                ) { id -> nav.navigate(Routes.project(overview.initialPlace(id))) }
+            }
+            composable(OPEN_FOLDER) {
+                session?.let { current -> HostFolderScreen(current, onBack = { nav.popBackStack() }, onOpen = ::openProject) }
+            }
+            composable(OPEN_HISTORY) {
+                session?.let { current -> RecentProjectsScreen(current, onBack = { nav.popBackStack() }, onOpen = ::openProject) }
             }
             composable(SETTINGS) {
                 SettingsScreen(

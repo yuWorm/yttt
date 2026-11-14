@@ -8,21 +8,28 @@ use crate::{
     config::{
         default_layout::{DefaultLayoutState, LayoutLoadWarning},
         paths::{AppConfigPaths, canonicalize_path},
-        personal_layout::{self, PersonalLayoutFileError},
     },
     model::{
         ids::{ConnectionId, ProjectId},
-        layout::{
-            LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
-            ProjectLayout, TabConfig, TabStartup, TerminalExecutionMode,
-        },
+        layout::{LayoutError, ProjectLayout},
         project::{ProjectDescriptor, ProjectLocation, RemotePathBuf},
     },
 };
 
-pub use crate::config::personal_layout::PersonalLayout;
+use yttt_layout::{
+    compose::{Personal, PersonalSource, PersonalWarning, apply_personal},
+    personal::{self as personal_layout, PersonalLayoutFileError},
+    project::{ProjectLayoutError, project_name, resolve_layout_variables},
+};
+pub use yttt_layout::{
+    overrides::{
+        LayoutMerge, LayoutNodeOverride, LayoutOverride, MergeWarning, PaneOverride,
+        ProjectOverride, TabOverride, merge_layouts,
+    },
+    personal::PersonalLayout,
+    recent::{ProjectReferenceConfig, RecentProjectConfig, RecentProjectsConfig},
+};
 
-const PROJECT_DIR_VARIABLE: &str = "<ProjectDir>";
 const PROJECT_LAYOUT_GUIDE_FILE_NAME: &str = "README.md";
 const PROJECT_LAYOUT_GUIDE: &str = r#"# yttt Project Layout
 
@@ -96,59 +103,6 @@ layout = { type = "pane", id = "shell", title = "Shell", command = "", execution
 6. Do not invent services or commands that are not present in the repository.
 "#;
 
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
-pub struct LayoutOverride {
-    pub project: Option<ProjectOverride>,
-    #[serde(default)]
-    pub tabs: Vec<TabOverride>,
-}
-
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
-pub struct ProjectOverride {
-    pub name: Option<String>,
-    pub default_tab: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
-pub struct TabOverride {
-    pub id: String,
-    pub title: Option<String>,
-    pub cwd: Option<PathBuf>,
-    pub startup: Option<TabStartup>,
-    pub layout: Option<LayoutNodeOverride>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum LayoutNodeOverride {
-    Pane(PaneOverride),
-}
-
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
-pub struct PaneOverride {
-    pub id: String,
-    pub title: Option<String>,
-    pub command: Option<String>,
-    pub args: Option<Vec<String>>,
-    pub execution_mode: Option<TerminalExecutionMode>,
-    pub exit_behavior: Option<ProcessExitBehavior>,
-    pub kind: Option<PaneKind>,
-    pub notify_on_exit: Option<bool>,
-    pub detector: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MergeWarning {
-    StaleTabOverride(String),
-    StalePaneOverride(String),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct LayoutMerge {
-    pub layout: ProjectLayout,
-    pub warnings: Vec<MergeWarning>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutSource {
     GlobalDefault(PathBuf),
@@ -172,124 +126,6 @@ pub struct ProjectOpenConfig {
     pub layout_source: LayoutSource,
     pub warnings: Vec<LayoutLoadWarning>,
     pub recent_projects: RecentProjectsConfig,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
-pub struct RecentProjectsConfig {
-    #[serde(default = "recent_projects_version")]
-    pub version: u32,
-    #[serde(default)]
-    pub projects: Vec<RecentProjectConfig>,
-    #[serde(default)]
-    pub last_opened_projects: Vec<ProjectReferenceConfig>,
-    #[serde(default)]
-    pub last_restorable_projects: Vec<ProjectReferenceConfig>,
-}
-
-impl Default for RecentProjectsConfig {
-    fn default() -> Self {
-        Self {
-            version: recent_projects_version(),
-            projects: Vec::new(),
-            last_opened_projects: Vec::new(),
-            last_restorable_projects: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
-pub struct ProjectReferenceConfig {
-    pub id: ProjectId,
-    #[serde(flatten)]
-    pub location: ProjectLocation,
-}
-
-impl ProjectReferenceConfig {
-    pub fn new(id: ProjectId, location: ProjectLocation) -> Self {
-        Self { id, location }
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for ProjectReferenceConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Representation {
-            Current {
-                id: ProjectId,
-                #[serde(flatten)]
-                location: ProjectLocation,
-            },
-            Legacy(PathBuf),
-        }
-
-        match Representation::deserialize(deserializer)? {
-            Representation::Current { id, location } => Ok(Self { id, location }),
-            Representation::Legacy(path) => {
-                let location = ProjectLocation::local(path);
-                let id = ProjectId::from_legacy_location(&location.display_path());
-                Ok(Self { id, location })
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
-pub struct RecentProjectConfig {
-    pub id: ProjectId,
-    pub title: String,
-    #[serde(flatten)]
-    pub location: ProjectLocation,
-}
-
-impl<'de> serde::Deserialize<'de> for RecentProjectConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Representation {
-            Current {
-                id: ProjectId,
-                title: String,
-                #[serde(flatten)]
-                location: ProjectLocation,
-            },
-            Legacy {
-                title: String,
-                path: PathBuf,
-            },
-        }
-
-        match Representation::deserialize(deserializer)? {
-            Representation::Current {
-                id,
-                title,
-                location,
-            } => Ok(Self {
-                id,
-                title,
-                location,
-            }),
-            Representation::Legacy { title, path } => {
-                let location = ProjectLocation::local(path);
-                let id = ProjectId::from_legacy_location(&location.display_path());
-                Ok(Self {
-                    id,
-                    title,
-                    location,
-                })
-            }
-        }
-    }
-}
-
-fn recent_projects_version() -> u32 {
-    1
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -482,7 +318,8 @@ pub fn load_recent_projects(
             return Err(ProjectOpenError::ReadRecentProjects { path, source });
         }
     };
-    toml::from_str(&source).map_err(|source| ProjectOpenError::ParseRecentProjects { path, source })
+    RecentProjectsConfig::parse(&source)
+        .map_err(|source| ProjectOpenError::ParseRecentProjects { path, source })
 }
 
 pub fn save_local_layout(
@@ -658,90 +495,6 @@ pub fn export_project_layout(
     Ok(path)
 }
 
-pub fn merge_layouts(
-    base: &ProjectLayout,
-    local_override: &LayoutOverride,
-) -> Result<LayoutMerge, LayoutError> {
-    let mut layout = base.clone();
-    let mut warnings = Vec::new();
-
-    if let Some(project_override) = &local_override.project {
-        if let Some(name) = &project_override.name {
-            layout.project.name = name.clone();
-        }
-        if let Some(default_tab) = &project_override.default_tab {
-            layout.project.default_tab = Some(default_tab.clone());
-        }
-    }
-
-    for tab_override in &local_override.tabs {
-        let Some(tab) = layout.tabs.iter_mut().find(|tab| tab.id == tab_override.id) else {
-            warnings.push(MergeWarning::StaleTabOverride(tab_override.id.clone()));
-            continue;
-        };
-
-        if let Some(title) = &tab_override.title {
-            tab.title = title.clone();
-        }
-        if let Some(cwd) = &tab_override.cwd {
-            tab.cwd = Some(cwd.clone());
-        }
-        if let Some(startup) = tab_override.startup {
-            tab.startup = startup;
-        }
-
-        if let Some(layout_override) = &tab_override.layout {
-            match layout_override {
-                LayoutNodeOverride::Pane(pane_override) => {
-                    if !apply_pane_override(&mut tab.layout, pane_override) {
-                        warnings.push(MergeWarning::StalePaneOverride(pane_override.id.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    layout.validate()?;
-
-    Ok(LayoutMerge { layout, warnings })
-}
-
-fn apply_pane_override(layout: &mut LayoutNode, pane_override: &PaneOverride) -> bool {
-    let Some(pane) = layout.find_pane_mut(&pane_override.id) else {
-        return false;
-    };
-
-    merge_pane(pane, pane_override);
-    true
-}
-
-fn merge_pane(pane: &mut PaneConfig, pane_override: &PaneOverride) {
-    if let Some(title) = &pane_override.title {
-        pane.title = title.clone();
-    }
-    if let Some(command) = &pane_override.command {
-        pane.command = command.clone();
-    }
-    if let Some(args) = &pane_override.args {
-        pane.args = args.clone();
-    }
-    if let Some(execution_mode) = pane_override.execution_mode {
-        pane.execution_mode = execution_mode;
-    }
-    if let Some(exit_behavior) = pane_override.exit_behavior {
-        pane.exit_behavior = exit_behavior;
-    }
-    if let Some(kind) = &pane_override.kind {
-        pane.kind = kind.clone();
-    }
-    if let Some(notify_on_exit) = pane_override.notify_on_exit {
-        pane.notify_on_exit = notify_on_exit;
-    }
-    if let Some(detector) = &pane_override.detector {
-        pane.detector = Some(detector.clone());
-    }
-}
-
 fn load_project_layout(
     paths: &AppConfigPaths,
     project_path: &Path,
@@ -771,146 +524,59 @@ fn load_project_layout(
         };
 
     let local_layout_file = paths.local_layout_file(project_path);
-    let source = match crate::config::storage::read_to_string(&local_layout_file) {
-        Ok(source) => source,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(LoadedProjectLayout {
-                layout: base,
-                source: base_source,
-                warnings,
-            });
-        }
+    let read = crate::config::storage::read_to_string(&local_layout_file);
+    let read_error;
+    let personal_source = match &read {
+        Ok(source) => PersonalSource::Text(source),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => PersonalSource::Missing,
         Err(error) => {
-            warnings.push(LayoutLoadWarning::PersonalOverrideRead {
-                path: local_layout_file,
-                message: error.to_string(),
-            });
-            return Ok(LoadedProjectLayout {
-                layout: base,
-                source: base_source,
-                warnings,
-            });
+            read_error = error.to_string();
+            PersonalSource::Unreadable(&read_error)
         }
     };
-
-    let personal = match parse_personal_layout(&local_layout_file, &source) {
-        Ok(personal) => personal,
-        Err(error) => {
-            warnings.push(personal_error_warning(error));
-            return Ok(LoadedProjectLayout {
-                layout: base,
-                source: base_source,
-                warnings,
-            });
+    let applied = apply_personal(base, personal_source);
+    warnings.extend(applied.warnings.into_iter().map(|warning| {
+        let path = local_layout_file.clone();
+        match warning {
+            PersonalWarning::Read(message) => {
+                LayoutLoadWarning::PersonalOverrideRead { path, message }
+            }
+            PersonalWarning::Parse(message) => {
+                LayoutLoadWarning::PersonalOverrideParse { path, message }
+            }
+            PersonalWarning::Validation(message) => {
+                LayoutLoadWarning::PersonalOverrideValidation { path, message }
+            }
+            PersonalWarning::StaleTab(tab_id) => {
+                LayoutLoadWarning::StaleOverrideTab { path, tab_id }
+            }
+            PersonalWarning::StalePane(pane_id) => {
+                LayoutLoadWarning::StaleOverridePane { path, pane_id }
+            }
         }
+    }));
+    let source = match (applied.personal, base_source) {
+        (Personal::None, base_source) => base_source,
+        (Personal::Replace, _) => LayoutSource::PersonalReplace(local_layout_file),
+        (Personal::Patch, LayoutSource::GlobalDefault(global)) => {
+            LayoutSource::GlobalDefaultWithPersonalPatch {
+                global,
+                local: local_layout_file,
+            }
+        }
+        (Personal::Patch, LayoutSource::ProjectConfig(project)) => {
+            LayoutSource::ProjectConfigWithPersonalPatch {
+                project,
+                local: local_layout_file,
+            }
+        }
+        (Personal::Patch, _) => unreachable!("personal patch base must be project or global"),
     };
-
-    match personal {
-        PersonalLayout::Replace(layout) => Ok(LoadedProjectLayout {
-            layout,
-            source: LayoutSource::PersonalReplace(local_layout_file),
-            warnings,
-        }),
-        PersonalLayout::Patch(patch) => match merge_layouts(&base, &patch) {
-            Ok(merged) => {
-                warnings.extend(merged.warnings.into_iter().map(|warning| match warning {
-                    MergeWarning::StaleTabOverride(tab_id) => LayoutLoadWarning::StaleOverrideTab {
-                        path: local_layout_file.clone(),
-                        tab_id,
-                    },
-                    MergeWarning::StalePaneOverride(pane_id) => {
-                        LayoutLoadWarning::StaleOverridePane {
-                            path: local_layout_file.clone(),
-                            pane_id,
-                        }
-                    }
-                }));
-                let source = match base_source {
-                    LayoutSource::GlobalDefault(global) => {
-                        LayoutSource::GlobalDefaultWithPersonalPatch {
-                            global,
-                            local: local_layout_file,
-                        }
-                    }
-                    LayoutSource::ProjectConfig(project) => {
-                        LayoutSource::ProjectConfigWithPersonalPatch {
-                            project,
-                            local: local_layout_file,
-                        }
-                    }
-                    _ => unreachable!("personal patch base must be project or global"),
-                };
-                Ok(LoadedProjectLayout {
-                    layout: merged.layout,
-                    source,
-                    warnings,
-                })
-            }
-            Err(error) => {
-                warnings.push(LayoutLoadWarning::PersonalOverrideValidation {
-                    path: local_layout_file,
-                    message: error.to_string(),
-                });
-                Ok(LoadedProjectLayout {
-                    layout: base,
-                    source: base_source,
-                    warnings,
-                })
-            }
-        },
-    }
-}
-
-fn resolve_layout_variables(layout: &mut ProjectLayout, project_path: &Path) {
-    for tab in &mut layout.tabs {
-        if let Some(cwd) = tab.cwd.take() {
-            tab.cwd = Some(resolve_cwd(cwd, project_path));
-        }
-    }
-}
-
-fn resolve_cwd(cwd: PathBuf, project_path: &Path) -> PathBuf {
-    if let Ok(suffix) = cwd.strip_prefix(PROJECT_DIR_VARIABLE) {
-        project_path.join(suffix)
-    } else if cwd.is_relative() {
-        project_path.join(cwd)
-    } else {
-        cwd
-    }
-}
-
-fn project_name(project_path: &Path) -> String {
-    project_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Project")
-        .to_string()
-}
-
-fn personal_error_warning(error: ProjectOpenError) -> LayoutLoadWarning {
-    match error {
-        ProjectOpenError::PersonalOverrideParse { path, message } => {
-            LayoutLoadWarning::PersonalOverrideParse { path, message }
-        }
-        ProjectOpenError::PersonalOverrideValidation { path, message } => {
-            LayoutLoadWarning::PersonalOverrideValidation { path, message }
-        }
-        other => unreachable!("unexpected personal layout error: {other}"),
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct ProjectLayoutFile {
-    project: ProjectLayoutFileProject,
-    #[serde(default)]
-    tabs: Vec<TabConfig>,
-}
-
-#[derive(serde::Deserialize)]
-struct ProjectLayoutFileProject {
-    name: Option<String>,
-    default_tab: Option<String>,
+    Ok(LoadedProjectLayout {
+        layout: applied.layout,
+        source,
+        warnings,
+    })
 }
 
 fn read_project_layout(
@@ -934,29 +600,16 @@ fn parse_project_layout(
     project_path: &Path,
     source: &str,
 ) -> Result<ProjectLayout, ProjectOpenError> {
-    let file: ProjectLayoutFile =
-        toml::from_str(source).map_err(|source| ProjectOpenError::ParseProjectLayout {
+    yttt_layout::project::parse_project_layout(source, project_path).map_err(|error| match error {
+        ProjectLayoutError::Parse(source) => ProjectOpenError::ParseProjectLayout {
             path: path.to_path_buf(),
             source,
-        })?;
-    let layout = ProjectLayout {
-        project: ProjectConfig {
-            name: file
-                .project
-                .name
-                .unwrap_or_else(|| project_name(project_path)),
-            default_tab: file.project.default_tab,
         },
-        tabs: file.tabs,
-    };
-    layout
-        .validate()
-        .map_err(|source| ProjectOpenError::InvalidProjectLayout {
+        ProjectLayoutError::Invalid(source) => ProjectOpenError::InvalidProjectLayout {
             path: path.to_path_buf(),
             source,
-        })?;
-
-    Ok(layout)
+        },
+    })
 }
 
 fn write_project_layout(path: &Path, layout: &ProjectLayout) -> Result<(), ProjectOpenError> {
@@ -989,24 +642,7 @@ fn record_recent_project(
     title: &str,
 ) -> Result<(ProjectId, RecentProjectsConfig), ProjectOpenError> {
     let mut recent_projects = load_recent_projects(paths)?;
-    let project_id = recent_projects
-        .projects
-        .iter()
-        .find(|project| &project.location == location)
-        .map(|project| project.id.clone())
-        .unwrap_or_else(ProjectId::random);
-    recent_projects
-        .projects
-        .retain(|project| &project.location != location);
-    recent_projects.projects.insert(
-        0,
-        RecentProjectConfig {
-            id: project_id.clone(),
-            title: title.to_string(),
-            location: location.clone(),
-        },
-    );
-    recent_projects.projects.truncate(20);
+    let project_id = recent_projects.record(location, title);
     write_recent_projects(paths, &recent_projects)?;
     Ok((project_id, recent_projects))
 }

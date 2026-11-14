@@ -26,7 +26,7 @@ final class HomeSectionsTests: XCTestCase {
                 agent("idle", .idle, startedAt: 4),
                 agent("done", .completed, startedAt: 2),
             ],
-            terminals: 6)
+            terminals: 6, terminalIds: [])
         let sections = HomeSections(overview)
         XCTAssertEqual([sections.projects, sections.tabs, sections.terminals, sections.agents],
                        [2, 2, 6, 7])
@@ -37,7 +37,7 @@ final class HomeSectionsTests: XCTestCase {
     }
 
     func testNamesFallBackToIds() {
-        let overview = Overview(projects: [], agents: [], terminals: 0)
+        let overview = Overview(projects: [], agents: [], terminals: 0, terminalIds: [])
         XCTAssertEqual(overview.projectName("web"), "web")
         XCTAssertEqual(overview.tabTitle(project: "web", tab: "dev"), "dev")
     }

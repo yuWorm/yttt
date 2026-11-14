@@ -1,25 +1,28 @@
 package com.yttt.yai
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.LaptopMac
@@ -36,9 +39,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -51,9 +56,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -86,7 +91,7 @@ fun OverviewScreen(
     banner: @Composable () -> Unit = {},
 ) {
     val sections = HomeSections(overview)
-    var showFinished by remember { mutableStateOf(false) }
+    var showAllFinished by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var path by remember { mutableStateOf(LinkPath.UNKNOWN) }
     val scope = rememberCoroutineScope()
@@ -120,19 +125,22 @@ fun OverviewScreen(
                 if (overview.agents.isEmpty()) {
                     item { EmptyAgents(session != null) }
                 }
-                agentSection("需要处理", sections.attention, overview, onAgent)
-                agentSection("运行中", sections.running, overview, onAgent)
-                if (sections.finished.isNotEmpty()) {
-                    item {
-                        ListItem(
-                            leadingContent = { Icon(Icons.Outlined.TaskAlt, null) },
-                            headlineContent = { Text("已结束（${sections.finished.size}）") },
-                            trailingContent = { Icon(if (showFinished) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null) },
-                            modifier = Modifier.clickable { showFinished = !showFinished },
-                        )
-                    }
-                    if (showFinished) agentRows(sections.finished, overview, onAgent)
-                }
+                agentCard("attention", "需要处理", Icons.Filled.PanTool, AgentGroupTone.ATTENTION,
+                    sections.attention, sections.attention.size, overview, onAgent)
+                agentCard("running", "执行中", Icons.Filled.Bolt, AgentGroupTone.RUNNING,
+                    sections.running, sections.running.size, overview, onAgent)
+                val finishedShown = if (showAllFinished) sections.finished else sections.finished.take(FINISHED_SHOWN)
+                agentCard("finished", "已结束", Icons.Outlined.TaskAlt, AgentGroupTone.FINISHED,
+                    finishedShown, sections.finished.size, overview, onAgent,
+                    footer = if (sections.finished.size > FINISHED_SHOWN) {
+                        {
+                            TextButton(onClick = { showAllFinished = !showAllFinished }, Modifier.padding(horizontal = 8.dp)) {
+                                Text(if (showAllFinished) "收起" else "显示全部 ${sections.finished.size} 个")
+                            }
+                        }
+                    } else null,
+                )
+                item { Spacer(Modifier.height(16.dp)) }
             }
         }
     }
@@ -218,58 +226,91 @@ private fun EmptyAgents(connected: Boolean) {
     }
 }
 
-private fun LazyListScope.agentSection(
+/** How many ended Agents show before "show all". */
+private const val FINISHED_SHOWN = 5
+
+private enum class AgentGroupTone { ATTENTION, RUNNING, FINISHED }
+
+/**
+ * A group of Agents as a card: a title row with a tile, the name and how
+ * many, then the rows. The running card's title is blue and shimmers.
+ */
+private fun LazyListScope.agentCard(
+    key: String,
     title: String,
+    icon: ImageVector,
+    tone: AgentGroupTone,
     agents: List<AgentSummary>,
+    count: Int,
     overview: Overview,
     onAgent: (AgentSummary) -> Unit,
+    footer: (@Composable () -> Unit)? = null,
 ) {
-    if (agents.isEmpty()) return
-    item {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
-        )
+    if (count == 0) return
+    item(key = "card-$key") {
+        val color = when (tone) {
+            AgentGroupTone.ATTENTION -> MaterialTheme.colorScheme.error
+            AgentGroupTone.RUNNING -> runningBlue
+            AgentGroupTone.FINISHED -> Color(0xFF34A853)
+        }
+        val live = tone == AgentGroupTone.RUNNING
+        Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).animateContentSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    Modifier.size(28.dp).background(color, RoundedCornerShape(7.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(icon, null, Modifier.size(16.dp), tint = Color.White)
+                }
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (live) color else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f, fill = false).shimmer(live),
+                )
+                Spacer(Modifier.weight(1f))
+                Text("$count", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            for (agent in agents) {
+                HorizontalDivider(Modifier.padding(start = 16.dp))
+                AgentRow(agent, overview, onAgent)
+            }
+            footer?.let {
+                HorizontalDivider(Modifier.padding(start = 16.dp))
+                it()
+            }
+        }
     }
-    agentRows(agents, overview, onAgent)
 }
 
-private fun LazyListScope.agentRows(
-    agents: List<AgentSummary>,
-    overview: Overview,
-    onAgent: (AgentSummary) -> Unit,
-) {
-    items(agents, key = { "agent-" + it.sessionId }) { agent ->
-        ListItem(
-            leadingContent = { AgentTile(agent.provider) },
-            headlineContent = {
+@Composable
+private fun AgentRow(agent: AgentSummary, overview: Overview, onAgent: (AgentSummary) -> Unit) {
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = { AgentTile(agent.provider) },
+        headlineContent = {
+            Text(
+                "${overview.projectName(agent.projectId)} · ${overview.tabTitle(agent.projectId, agent.tabId)}",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        supportingContent = {
+            Column {
+                (agent.waitingMessage ?: agent.task)?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                 Text(
-                    "${overview.projectName(agent.projectId)} · ${overview.tabTitle(agent.projectId, agent.tabId)}",
+                    listOfNotNull(agent.elapsed(), agent.currentAction).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            },
-            supportingContent = {
-                Column {
-                    (agent.waitingMessage ?: agent.task)?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                    Text(
-                        listOfNotNull(agent.elapsed(), agent.currentAction).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            },
-            trailingContent = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Icon(agent.stateIcon, null, Modifier.size(16.dp), tint = agent.stateColor())
-                    Text(agent.stateLabel, color = agent.stateColor(), fontWeight = FontWeight.Medium,
-                        style = MaterialTheme.typography.labelMedium)
-                }
-            },
-            modifier = Modifier.clickable { onAgent(agent) },
-        )
-    }
+            }
+        },
+        trailingContent = { AgentStateLabel(agent) },
+        modifier = Modifier.clickable { onAgent(agent) },
+    )
 }

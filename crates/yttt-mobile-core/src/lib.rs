@@ -11,6 +11,7 @@ pub mod files;
 pub mod keys;
 pub mod logging;
 pub mod overview;
+pub mod projects;
 pub mod session;
 pub mod vt;
 

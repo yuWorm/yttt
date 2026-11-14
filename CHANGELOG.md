@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 手机（iOS、Android）可以在项目页添加项目：从电脑上的目录选一个，或从电脑打开过的项目里选。打开时用的布局与桌面一致（项目自己的布局、个人布局、默认布局）。总控改成按组显示的卡片，“已结束”不再折叠，默认显示最近 5 个，可以展开全部；新增“执行中”卡片，运行中的 Agent 用蓝色标出，并有流光动效。
+- Phones (iOS and Android) can add a project from the projects page: pick a folder on the computer, or one the computer opened before. It opens with the same layout the desktop would use (the project's own layout, the personal layout, the default layout). The overview now shows each group as a card: ended Agents are no longer folded away, showing the 5 most recent with a "show all" button, and a new "Running" card marks running Agents in blue with a shimmer.
+
 - 节点只由 Host 决定：Host 签名自己的 relay 位置，控制面只保存转发，控制台和管理员都不能再移动 Host。节点停用、移出套餐或地址变更时，Host 提示选择节点，选好之前只走直连。
 - Only a Host decides its relay node: it signs where it relays and the control plane only stores and passes that on, so neither the console nor administrators can move a Host any more. When its node is disabled, leaves the plan or changes address, the Host asks its user to choose and relays through no node until then.
 

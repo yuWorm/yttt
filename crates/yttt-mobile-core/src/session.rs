@@ -1265,6 +1265,35 @@ impl MobileSession {
             .collect())
     }
 
+    /// Sends one workspace request.
+    pub(crate) async fn workspace_request(
+        &self,
+        request: WorkspaceRequest,
+    ) -> Result<WorkspaceResponse, MobileError> {
+        match self.request(Request::Workspace(request)).await? {
+            Response::Workspace(response) => Ok(response),
+            _ => Err(MobileError::Host("unexpected workspace response".into())),
+        }
+    }
+
+    /// The open workspace and the projects open in it.
+    pub(crate) fn open_projects(
+        &self,
+    ) -> Option<(
+        WorkspaceId,
+        Vec<(ProjectId, yttt_core::model::project::ProjectLocation)>,
+    )> {
+        self.shared.workspace.lock().as_ref().map(|(id, layout)| {
+            let projects = layout
+                .workspace
+                .opened_projects
+                .iter()
+                .map(|project| (project.id.clone(), project.location.clone()))
+                .collect();
+            (id.clone(), projects)
+        })
+    }
+
     /// The home screen's data as it is now.
     pub fn overview(&self) -> Overview {
         current_overview(&self.client, &self.shared)

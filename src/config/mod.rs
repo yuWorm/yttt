@@ -24,7 +24,7 @@ pub mod default_layout;
 pub mod keybindings;
 pub mod layout_loader;
 pub mod paths;
-pub mod personal_layout;
+pub use yttt_layout::personal as personal_layout;
 pub mod profile;
 pub mod project_settings;
 pub mod scope;

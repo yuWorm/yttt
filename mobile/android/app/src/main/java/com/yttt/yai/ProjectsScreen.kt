@@ -2,6 +2,7 @@ package com.yttt.yai
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -14,28 +15,75 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.PanTool
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material3.Badge
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import uniffi.yttt_mobile_core.Overview
 
-/** The projects, each with its running Agents' logos, waits and runs. */
+/**
+ * The projects, each with its running Agents' logos, waits and runs; the add
+ * menu opens another from a Host folder or from the Host's history.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProjectsScreen(overview: Overview, onProject: (String) -> Unit) {
+fun ProjectsScreen(
+    overview: Overview,
+    canAdd: Boolean,
+    onAddFolder: () -> Unit,
+    onAddHistory: () -> Unit,
+    onProject: (String) -> Unit,
+) {
     val badges = overview.badges()
-    Scaffold(contentWindowInsets = WindowInsets(0), topBar = { TopAppBar(title = { Text("项目") }) }) { padding ->
+    var menu by remember { mutableStateOf(false) }
+    Scaffold(
+        contentWindowInsets = WindowInsets(0),
+        topBar = {
+            TopAppBar(
+                title = { Text("项目") },
+                actions = {
+                    Box {
+                        IconButton(onClick = { menu = true }, enabled = canAdd) { Icon(Icons.Outlined.Add, "添加项目") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, null) },
+                                text = { Text("从目录打开") },
+                                onClick = { menu = false; onAddFolder() },
+                            )
+                            DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Outlined.History, null) },
+                                text = { Text("从历史打开") },
+                                onClick = { menu = false; onAddHistory() },
+                            )
+                        }
+                    }
+                },
+            )
+        },
+    ) { padding ->
         if (overview.projects.isEmpty()) {
             Column(
                 Modifier.padding(padding).fillMaxSize().padding(32.dp),
@@ -44,6 +92,11 @@ fun ProjectsScreen(overview: Overview, onProject: (String) -> Unit) {
             ) {
                 Icon(Icons.Outlined.Folder, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("电脑上还没有打开的项目", style = MaterialTheme.typography.titleMedium)
+                if (canAdd) {
+                    Text("从电脑上的目录或打开过的项目里选一个。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = onAddFolder) { Text("从目录打开") }
+                    OutlinedButton(onClick = onAddHistory) { Text("从历史打开") }
+                }
             }
             return@Scaffold
         }
@@ -65,10 +118,7 @@ fun ProjectsScreen(overview: Overview, onProject: (String) -> Unit) {
                                 }
                             }
                             badge?.running?.takeIf { it > 0 }?.let {
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                ) {
+                                Badge(containerColor = runningBlue, contentColor = Color.White) {
                                     Icon(Icons.Filled.Bolt, null, Modifier.size(10.dp))
                                     Text(" $it")
                                 }

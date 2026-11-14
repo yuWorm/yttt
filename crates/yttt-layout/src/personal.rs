@@ -1,13 +1,13 @@
+//! Personal layouts: a user's own patch over, or replacement of, a project's layout.
+
 use std::path::PathBuf;
 
-use crate::{
-    config::layout_loader::{
-        LayoutNodeOverride, LayoutOverride, PaneOverride, ProjectOverride, TabOverride,
-    },
-    model::layout::{
-        LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig, ProjectLayout,
-        SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
-    },
+use crate::overrides::{
+    LayoutNodeOverride, LayoutOverride, PaneOverride, ProjectOverride, TabOverride,
+};
+use yttt_core::model::layout::{
+    LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig, ProjectLayout,
+    SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
 };
 
 const PERSONAL_LAYOUT_VERSION: i64 = 1;
@@ -19,12 +19,12 @@ pub enum PersonalLayout {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum PersonalLayoutFileError {
+pub enum PersonalLayoutFileError {
     Parse(String),
     Validation(String),
 }
 
-pub(crate) fn parse(source: &str) -> Result<PersonalLayout, PersonalLayoutFileError> {
+pub fn parse(source: &str) -> Result<PersonalLayout, PersonalLayoutFileError> {
     let value: toml::Value = toml::from_str(source)
         .map_err(|error| PersonalLayoutFileError::Parse(error.to_string()))?;
     let table = value.as_table().ok_or_else(|| {
@@ -108,7 +108,7 @@ fn parse_legacy(
         .map(|layout| Ok(PersonalLayout::Patch(layout)))
 }
 
-pub(crate) fn serialize_patch(layout: &LayoutOverride) -> Result<String, toml::ser::Error> {
+pub fn serialize_patch(layout: &LayoutOverride) -> Result<String, toml::ser::Error> {
     toml::to_string_pretty(&PatchFileV1 {
         version: PERSONAL_LAYOUT_VERSION as u32,
         mode: "patch".to_string(),
@@ -116,7 +116,7 @@ pub(crate) fn serialize_patch(layout: &LayoutOverride) -> Result<String, toml::s
     })
 }
 
-pub(crate) fn serialize_replace(layout: &ProjectLayout) -> Result<String, toml::ser::Error> {
+pub fn serialize_replace(layout: &ProjectLayout) -> Result<String, toml::ser::Error> {
     toml::to_string_pretty(&ReplaceFileV1 {
         version: PERSONAL_LAYOUT_VERSION as u32,
         mode: "replace".to_string(),

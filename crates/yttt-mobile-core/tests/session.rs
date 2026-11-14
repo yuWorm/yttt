@@ -1040,3 +1040,114 @@ async fn control_and_the_workspace_survive_a_short_drop() {
     drain_until(&phone, &terminal, "got:again").await;
     phone.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_phone_opens_a_host_folder_as_a_project_with_the_desktops_layout() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+
+    // A window is open on the Host, with no project yet.
+    let workspace_id = WorkspaceId::new("mobile-open").unwrap();
+    admin
+        .request(Request::Workspace(WorkspaceRequest::Register {
+            workspace_id: workspace_id.clone(),
+            name: "Window".into(),
+        }))
+        .await
+        .unwrap();
+    admin
+        .request(Request::Workspace(WorkspaceRequest::SetActive {
+            workspace_id,
+        }))
+        .await
+        .unwrap();
+
+    // Two folders, one with its own layout that the user patched.
+    let code = fs::canonicalize(temp.path()).unwrap().join("code");
+    let app = code.join("app");
+    fs::create_dir_all(app.join(".yttt")).unwrap();
+    fs::create_dir_all(code.join("notes")).unwrap();
+    fs::write(code.join("todo.txt"), "files are not projects\n").unwrap();
+    fs::write(
+        app.join(".yttt/layout.toml"),
+        r#"
+        [project]
+        name = "App"
+
+        [[tabs]]
+        id = "dev"
+        title = "Dev"
+        layout = { type = "pane", id = "dev", title = "Dev", command = "sleep 60" }
+        "#,
+    )
+    .unwrap();
+    let personal = temp.path().join("state/config/projects").join(
+        yttt_protocol::workspace::encode_project_path(&app),
+    );
+    fs::create_dir_all(&personal).unwrap();
+    fs::write(
+        personal.join("layout.toml"),
+        "version = 1\nmode = \"patch\"\n[layout.project]\nname = \"My App\"\n",
+    )
+    .unwrap();
+
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
+    phone.open_active_workspace().await.unwrap();
+
+    // Choosing a folder: folders only, by name, with the way up.
+    let listing = phone.browse_host(code.to_str().unwrap()).await.unwrap();
+    let names = listing
+        .folders
+        .iter()
+        .map(|folder| folder.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["app", "notes"]);
+    assert_eq!(listing.parent.as_deref(), code.parent().unwrap().to_str());
+    assert!(!phone.host_home().await.unwrap().is_empty());
+
+    // Opening it gives the project layout with the personal patch over it.
+    let project_id = phone.open_project(app.to_str().unwrap()).await.unwrap();
+    let project = eventually("the opened project", async || {
+        phone
+            .overview()
+            .projects
+            .into_iter()
+            .find(|project| project.project_id == project_id)
+    })
+    .await;
+    assert_eq!(project.name, "My App");
+    assert_eq!(project.tabs[0].title, "Dev");
+
+    // It is first in the Host's history, marked open; opening it again
+    // changes nothing.
+    let recent = phone.recent_projects().await.unwrap();
+    assert_eq!(recent[0].path, app.to_str().unwrap());
+    assert_eq!(recent[0].title, "My App");
+    assert_eq!(recent[0].open_project_id.as_deref(), Some(project_id.as_str()));
+    eventually("the workspace update", async || {
+        (phone.open_project(app.to_str().unwrap()).await.unwrap() == project_id).then_some(())
+    })
+    .await;
+    assert_eq!(phone.recent_projects().await.unwrap().len(), 1);
+
+    // A folder without a layout gets the default one, named after it.
+    let notes = phone
+        .open_project(code.join("notes").to_str().unwrap())
+        .await
+        .unwrap();
+    let project = eventually("the second project", async || {
+        phone
+            .overview()
+            .projects
+            .into_iter()
+            .find(|project| project.project_id == notes)
+    })
+    .await;
+    assert_eq!(project.name, "notes");
+    assert_eq!(project.tabs[0].title, "Shell");
+    phone.close().await;
+}

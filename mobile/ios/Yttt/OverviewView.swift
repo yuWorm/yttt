@@ -4,7 +4,9 @@ import SwiftUI
 /// what runs and what ended. Tapping an Agent pushes where it runs.
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var showFinished = false
+    @State private var showAllFinished = false
+    /// How many ended Agents show before "show all".
+    private static let finishedShown = 5
 
     var body: some View {
         let sections = HomeSections(model.overview)
@@ -28,17 +30,30 @@ struct OverviewView: View {
                 }
             }
             if !sections.attention.isEmpty {
-                Section("需要处理") { ForEach(sections.attention, id: \.sessionId, content: row) }
+                Section {
+                    GroupTitle(title: "需要处理", symbol: "hand.raised.fill", color: .orange,
+                               count: sections.attention.count)
+                    ForEach(sections.attention, id: \.sessionId, content: row)
+                }
             }
             if !sections.running.isEmpty {
-                Section("运行中") { ForEach(sections.running, id: \.sessionId, content: row) }
+                Section {
+                    GroupTitle(title: "执行中", symbol: "bolt.fill", color: .blue,
+                               count: sections.running.count, live: true)
+                    ForEach(sections.running, id: \.sessionId, content: row)
+                }
             }
             if !sections.finished.isEmpty {
+                let shown = showAllFinished ? sections.finished : Array(sections.finished.prefix(Self.finishedShown))
                 Section {
-                    DisclosureGroup(isExpanded: $showFinished) {
-                        ForEach(sections.finished, id: \.sessionId, content: row)
-                    } label: {
-                        Label { Text("已结束（\(sections.finished.count)）") } icon: { IconTile(systemName: "checkmark", color: .green) }
+                    GroupTitle(title: "已结束", symbol: "checkmark", color: .green,
+                               count: sections.finished.count)
+                    ForEach(shown, id: \.sessionId, content: row)
+                    if sections.finished.count > Self.finishedShown {
+                        Button(showAllFinished ? "收起" : "显示全部 \(sections.finished.count) 个") {
+                            withAnimation { showAllFinished.toggle() }
+                        }
+                        .font(.subheadline)
                     }
                 }
             }
@@ -92,10 +107,7 @@ struct OverviewView: View {
                             .font(.headline)
                             .lineLimit(1)
                         Spacer(minLength: 4)
-                        Label(agent.stateLabel, systemImage: agent.stateSymbol)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(agent.stateColor)
-                            .labelStyle(.titleAndIcon)
+                        AgentStateLabel(agent: agent)
                     }
                     if let text = agent.waitingMessage ?? agent.task {
                         Text(text).font(.subheadline).lineLimit(2)
@@ -108,6 +120,31 @@ struct OverviewView: View {
         .foregroundStyle(.primary)
         .contextMenu {
             Button { Task { await model.open(agent: agent) } } label: { Label("打开终端", systemImage: "terminal") }
+        }
+    }
+}
+
+/// A group's title row, as a card's heading: a tile, the name and how many.
+/// A live group's tile pulses.
+private struct GroupTitle: View {
+    let title: String
+    let symbol: String
+    let color: Color
+    let count: Int
+    var live = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .symbolEffect(.pulse, isActive: live)
+                .frame(width: 29, height: 29)
+                .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text(title).font(.headline).foregroundStyle(live ? color : .primary)
+                .shimmer(live)
+            Spacer(minLength: 4)
+            Text("\(count)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
         }
     }
 }
@@ -175,16 +212,27 @@ struct HostMenuRow: View, Equatable {
     }
 }
 
-/// The projects, each with its running Agents' logos, waits and runs.
+/// The projects, each with its running Agents' logos, waits and runs; the
+/// add menu opens another from a Host folder or from the Host's history.
 struct ProjectsView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var adding: OpenProjectSource?
 
     var body: some View {
         let overview = model.overview
         let badges = overview.badges()
         Group {
             if overview.projects.isEmpty {
-                ContentUnavailableView("电脑上还没有打开的项目", systemImage: "folder")
+                ContentUnavailableView {
+                    Label("电脑上还没有打开的项目", systemImage: "folder")
+                } description: {
+                    Text("从电脑上的目录或打开过的项目里选一个。")
+                } actions: {
+                    if model.session != nil {
+                        Button("从目录打开") { adding = .folder }.buttonStyle(.borderedProminent)
+                        Button("从历史打开") { adding = .history }
+                    }
+                }
             } else {
                 List(overview.projects, id: \.projectId) { project in
                     let mark = overview.projectMark(project.projectId)
@@ -201,7 +249,7 @@ struct ProjectsView: View {
                             }
                             if mark.waiting > 0 { pill("hand.raised.fill", mark.waiting, .orange) }
                             if let running = badges[project.projectId]?.running, running > 0 {
-                                pill("bolt.fill", running, Color(uiColor: .systemGray3))
+                                pill("bolt.fill", running, .blue)
                             }
                         }
                     }
@@ -211,6 +259,27 @@ struct ProjectsView: View {
         }
         .navigationTitle("项目")
         .navigationDestination(for: Destination.self) { DestinationView(destination: $0) }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { adding = .folder } label: { Label("从目录打开", systemImage: "folder.badge.plus") }
+                    Button { adding = .history } label: { Label("从历史打开", systemImage: "clock.arrow.circlepath") }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(model.session == nil)
+                .accessibilityLabel("添加项目")
+            }
+        }
+        .sheet(item: $adding) { source in
+            Group {
+                switch source {
+                case .folder: HostFolderPicker()
+                case .history: RecentProjectsPicker()
+                }
+            }
+            .environmentObject(model)
+        }
     }
 
     private func pill(_ symbol: String, _ value: Int, _ color: Color) -> some View {

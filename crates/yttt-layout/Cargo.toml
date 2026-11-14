@@ -1,0 +1,10 @@
+[package]
+name = "yttt-layout"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
+yttt-core = { path = "../yttt-core" }
