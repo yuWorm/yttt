@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 手机接管的终端在离开终端页、切换 pane 后仍归手机，回来时不用再接管；接管后同一项目里打开的其它终端也直接可输入。“交还电脑”、进后台或断开连接时，手机接管的终端立即交还给电脑；此前离开终端页会让这个终端谁都不能输入，断开后也要等约 60 秒。
+- A terminal the phone took stays the phone's after leaving its screen or switching panes, so coming back needs no second take, and once the phone types in a project the other terminals opened in it take input at once. "Give back to computer", going to the background or disconnecting hands the phone's terminals back to the computer right away; before, leaving the screen left the terminal writable by no one, and a disconnect took about 60 seconds to hand it back.
+
 - 手机（iOS、Android）可以在项目页添加项目：从电脑上的目录选一个，或从电脑打开过的项目里选。打开时用的布局与桌面一致（项目自己的布局、个人布局、默认布局）。总控改成按组显示的卡片，“已结束”不再折叠，默认显示最近 5 个，可以展开全部；新增“执行中”卡片，运行中的 Agent 用蓝色标出，并有流光动效。
 - Phones (iOS and Android) can add a project from the projects page: pick a folder on the computer, or one the computer opened before. It opens with the same layout the desktop would use (the project's own layout, the personal layout, the default layout). The overview now shows each group as a card: ended Agents are no longer folded away, showing the 5 most recent with a "show all" button, and a new "Running" card marks running Agents in blue with a shimmer.
 

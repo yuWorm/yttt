@@ -77,6 +77,12 @@ class Link(context: Context) {
     val foreground = MutableStateFlow(false)
     /** A terminal to open, from a notification or automation. */
     val openRequest = MutableStateFlow<String?>(null)
+    /**
+     * The projects whose terminals the phone types into: each terminal opened
+     * in one is taken as it shows. Ends when the phone gives the terminals
+     * back, the computer takes one back, or the session ends.
+     */
+    val controlledProjects = MutableStateFlow<Set<String>>(emptySet())
 
     private val accountStore = storage.accountStore()
     /** The signed-in relay account, if any: pairing and connecting go through the Host's relay node with its tickets. */
@@ -308,6 +314,7 @@ class Link(context: Context) {
 
     suspend fun disconnect() {
         val current = connecting.withLock { session.value.also { session.value = null } } ?: return
+        controlledProjects.value = emptySet()
         relaySource.value = RelaySource.DIRECT_ONLY
         runCatching { current.disconnect() }
     }

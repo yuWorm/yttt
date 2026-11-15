@@ -2766,16 +2766,18 @@ async fn handle_request(
                     .get(&attach.session_id)
                     .is_some_and(|attachment| attachment.mode == TerminalLeaseMode::Interactive)
             {
-                runtime.release_lease(&attach.session_id, client_id);
+                runtime.leave_terminal(&attach.session_id, client_id);
             }
             attach_terminal(runtime, client_id, attach).map_err(runtime_failure)
         }
+        // A terminal the Client took on its own stays its own: leaving its
+        // screen is not giving it back.
         Request::DetachTerminal { session_id } => {
             if attachments
                 .get(&session_id)
                 .is_some_and(|attachment| attachment.mode == TerminalLeaseMode::Interactive)
             {
-                runtime.release_lease(&session_id, client_id);
+                runtime.leave_terminal(&session_id, client_id);
             }
             Ok(Response::TerminalDetached)
         }
@@ -3442,7 +3444,9 @@ fn attach_terminal(
         }
         Err(error) => return Err(error),
     };
-    if lease.mode == TerminalLeaseMode::Interactive {
+    // An observer handed back the lease it kept leaves the PTY as it is.
+    if lease.mode == TerminalLeaseMode::Interactive && attach.mode == TerminalLeaseMode::Interactive
+    {
         terminal.set_query_palette(attach.query_palette, attach.palette_revision);
         let current_geometry_epoch = terminal
             .latest_viewport()

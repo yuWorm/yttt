@@ -47,6 +47,7 @@ struct TakenLease {
 | 第一次写入（`claim_locked` 首次请求，现有） | 成为主控，移走全部 lease，**但跳过 `taken` 的 lease**：隐式操作不推翻显式接管。 |
 | 主控离开（`release_client`，现有） | 先把离开者单独持有的 lease 交给各自的归还目标；清除其他 lease 里指向离开者的 `returns_to`；再按原规则选继任主控，继任者只拿不是 `taken` 的 lease。**继任候选只限请求过写入的 Client（`writers`）**，只观察过的手机不会被动成为主控。 |
 | 断线（`suspend_client`） | 不变：60 s 内保留全部 lease，包括单独接管的。 |
+| 离开终端（`DetachTerminal`、Observer 重新 attach，2026-11-15 追加） | 单独接管的 lease 留给请求方，再以 Observer attach 时回答这个 Interactive lease；其他 lease 照旧放掉。显式放掉（`ReleaseTerminalLease`、`ReleaseTerminalControl`）单独接管的 lease 时交给归还目标，不再无人持有。 |
 
 **归还目标**：`returns_to` 仍是已知 Client（在线或挂起）则交给它；否则交给主控（不是请求方本身时）；否则放掉。交给主控时 `taken = None`；交给 `returns_to` 时，如果它不是主控，`taken = Some(TakenLease { returns_to: None })`，仍不受隐式移交影响。
 
@@ -95,6 +96,7 @@ ReturnTerminals { session_ids: Vec<TerminalSessionId> },
 ## 6. 移动端（`spike/mobile-client` 分支，本计划之后做）
 
 - `take_control(session)` 改发 `TakeTerminal`，得到该终端的 lease epoch 后再 resize、放行输入。
+- 接管某个终端后，项目进入控制模式：同一项目里之后打开的终端显示时自动 `TakeTerminal`。电脑拿回某个终端、交还或进后台时结束（2026-11-15）。关闭会话（`close`）前先发 `ReturnTerminals([])`，不必等 60 s 宽限期。
 - 交还按钮和进后台时发 `ReturnTerminals { session_ids: [] }`。iOS 在 `beginBackgroundTask` 内发，Android 在 `onStop` 发。进程被杀来不及发时，由 Host 的 60 s 宽限期兜底，之后按 §3.1 交还。
 - `Unsupported` 时隐藏接管入口。
 - 同时更新移动端设计 §7 第 1、2 条。

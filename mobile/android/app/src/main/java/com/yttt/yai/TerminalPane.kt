@@ -50,6 +50,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.connectbot.terminal.Terminal
@@ -59,11 +60,25 @@ import uniffi.yttt_mobile_core.LinkPath
 import uniffi.yttt_mobile_core.MobileCoreException
 import uniffi.yttt_mobile_core.TerminalInfo
 
-/** Whether the phone controls a terminal, shared with the screen's top bar for "交还电脑". */
-class TerminalControl {
+/**
+ * Whether the phone controls the terminal on screen, shared with the top bar
+ * for "交还电脑". Taking one terminal of `projectId` puts the project in
+ * control mode: the next terminal opened in it is taken as it shows.
+ */
+class TerminalControl(private val link: Link, private val projectId: String?) {
     var controlling by mutableStateOf(false)
     /** Set by the terminal pane while it is on screen. */
     var giveBack: () -> Unit = {}
+
+    val inMode: Boolean get() = projectId != null && projectId in link.controlledProjects.value
+
+    fun enterMode() {
+        if (projectId != null) link.controlledProjects.update { it + projectId }
+    }
+
+    fun leaveMode() {
+        if (projectId != null) link.controlledProjects.update { it - projectId }
+    }
 }
 
 /**
@@ -126,22 +141,11 @@ fun TerminalPane(
             },
         )
     }
+    // Every terminal the phone took goes back, and typing ends everywhere.
     control.giveBack = {
         control.controlling = false
-        scope.launch { runCatching { session.giveBack(listOf(id)) } }
-    }
-
-    // Attached while on screen: in the background only the Agent overview
-    // stays, so the Host stops sending this terminal's frames.
-    val foreground by link.foreground.collectAsState()
-    LaunchedEffect(id, foreground) {
-        if (foreground) {
-            runCatching { session.attach(id) }.onFailure { stats = "attach failed: ${it.message}" }
-            link.viewing.value = id
-        } else {
-            link.viewing.value = null
-            runCatching { session.detach(id) }
-        }
+        link.controlledProjects.value = emptySet()
+        link.scope.launch { runCatching { session.giveBack(emptyList()) } }
     }
 
     DisposableEffect(id) {
@@ -157,8 +161,12 @@ fun TerminalPane(
             override fun doFrame(frameTimeNanos: Long) {
                 if (!running) return
                 frames++
-                // The computer took the terminal back, or the connection dropped.
-                if (control.controlling && !session.inControl(id)) control.controlling = false
+                // The computer took the terminal back, or a new Host forgot it:
+                // the project leaves control mode.
+                if (control.controlling && !session.inControl(id)) {
+                    control.controlling = false
+                    control.leaveMode()
+                }
                 // Logged with timestamps, to time recovery after a network change.
                 val nowReady = session.isReady()
                 if (nowReady != ready) {
@@ -210,6 +218,7 @@ fun TerminalPane(
         runCatching { session.takeControl(id, cols.toUShort(), rows.toUShort()) }
             .onSuccess {
                 control.controlling = true
+                control.enterMode()
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             }
             .onFailure {
@@ -217,6 +226,23 @@ fun TerminalPane(
                 else stats = "接管失败：${it.message}"
             }
         fitting = false
+    }
+
+    // Attached while on screen: in the background only the Agent overview
+    // stays, so the Host stops sending this terminal's frames.
+    val foreground by link.foreground.collectAsState()
+    LaunchedEffect(id, foreground) {
+        if (foreground) {
+            runCatching { session.attach(id) }.onFailure { stats = "attach failed: ${it.message}" }
+            link.viewing.value = id
+            // Still the phone's from before, or taken now as the project is
+            // in control mode.
+            if (session.inControl(id)) control.controlling = true
+            else if (control.inMode) takeControl()
+        } else {
+            link.viewing.value = null
+            runCatching { session.detach(id) }
+        }
     }
 
     // termlib clears its grid when the forced size changes; once it has laid

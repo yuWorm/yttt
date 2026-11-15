@@ -1329,7 +1329,12 @@ impl MobileSession {
         }
     }
 
+    /// Ends the session. Terminals this device took go back to the computer
+    /// first, so it need not wait out the Host's reconnect grace period.
     pub async fn close(&self) {
+        if self.is_ready() {
+            let _ = tokio::time::timeout(CLOSE_GIVE_BACK, self.give_back(Vec::new())).await;
+        }
         self.events.abort();
         if let Some(renewal) = &self.ticket_renewal {
             renewal.abort();
@@ -1397,6 +1402,9 @@ fn checkpoint_geometry() -> TerminalGeometry {
         cell_height: 0,
     }
 }
+
+/// How long closing waits for the Host to take back this device's terminals.
+const CLOSE_GIVE_BACK: Duration = Duration::from_secs(1);
 
 /// Records an Interactive lease. The answer to `TakeTerminal` and the grant
 /// event that follows carry the same lease: only a new one restarts the input

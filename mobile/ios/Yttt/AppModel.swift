@@ -66,7 +66,10 @@ final class AppModel: ObservableObject {
     @Published var shortCode: UInt32?
     @Published var status = ""
     @Published var busy = false
-    @Published var session: HostSession?
+    @Published var session: HostSession? {
+        // A new session holds none of the old one's terminals.
+        didSet { if session !== oldValue { ControlMode.projects.removeAll() } }
+    }
     @Published var terminals: [TerminalInfo] = []
     @Published var overview = Overview(projects: [], agents: [], terminals: 0, terminalIds: [])
     /// The selected tab, and the pages pushed in the two that push.
@@ -447,6 +450,7 @@ final class AppModel: ObservableObject {
             UIApplication.shared.endBackgroundTask(task)
         }
         backgroundRelease?.cancel()
+        ControlMode.projects.removeAll()
         backgroundRelease = Task {
             defer { UIApplication.shared.endBackgroundTask(task) }
             try? await session.giveBack(sessionIds: [])

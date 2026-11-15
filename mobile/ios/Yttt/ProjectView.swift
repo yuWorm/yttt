@@ -42,7 +42,7 @@ struct ProjectView: View {
             }
             if let pane, let session = model.session,
                let info = model.terminals.first(where: { $0.sessionId == pane.sessionId }) {
-                PaneArea(session: session, info: info,
+                PaneArea(session: session, info: info, projectId: place.projectId,
                          agent: overview.agents.first { $0.sessionId == info.sessionId },
                          panes: panes, pane: pane, overview: overview,
                          onPane: { place = Place(projectId: place.projectId, tabId: place.tabId, paneId: $0) })
@@ -190,15 +190,16 @@ private struct PaneArea: View {
     let onPane: (String?) -> Void
     @StateObject private var control: TerminalControl
 
-    init(session: HostSession, info: TerminalInfo, agent: AgentSummary?, panes: [PaneSummary], pane: PaneSummary,
-         overview: Overview, onPane: @escaping (String?) -> Void) {
+    init(session: HostSession, info: TerminalInfo, projectId: String, agent: AgentSummary?, panes: [PaneSummary],
+         pane: PaneSummary, overview: Overview, onPane: @escaping (String?) -> Void) {
         self.info = info
         self.agent = agent
         self.panes = panes
         self.pane = pane
         self.overview = overview
         self.onPane = onPane
-        _control = StateObject(wrappedValue: TerminalControl(session: session, sessionId: info.sessionId))
+        _control = StateObject(wrappedValue: TerminalControl(session: session, sessionId: info.sessionId,
+                                                             projectId: projectId))
     }
 
     var body: some View {

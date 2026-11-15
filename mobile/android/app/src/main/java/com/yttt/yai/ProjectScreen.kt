@@ -93,7 +93,7 @@ fun ProjectScreen(
     val pane = panes.firstOrNull { it.paneId == place.paneId } ?: panes.firstOrNull()
     val marks = overview.tabMarks(place.projectId)
     val info = pane?.let { candidate -> terminals.firstOrNull { it.sessionId == candidate.sessionId } }
-    val control = remember(info?.sessionId) { TerminalControl() }
+    val control = remember(info?.sessionId) { TerminalControl(link, place.projectId) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0),
@@ -290,7 +290,7 @@ private fun PaneBar(panes: List<PaneSummary>, current: PaneSummary, overview: Ov
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(session: HostSession, link: Link, overview: Overview, info: TerminalInfo, onBack: () -> Unit) {
-    val control = remember(info.sessionId) { TerminalControl() }
+    val control = remember(info.sessionId) { TerminalControl(link, null) }
     Scaffold(
         contentWindowInsets = WindowInsets(0),
         topBar = {

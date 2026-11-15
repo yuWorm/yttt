@@ -482,6 +482,34 @@ async fn a_phone_observes_without_disturbing_the_desktop_then_takes_control() {
     again.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminal_the_phone_took_stays_its_own_until_given_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+    let terminal = desktop_terminals(&admin, temp.path(), &["project:tab:pane"]).await[0].clone();
+    let id = terminal.to_string();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
+    phone.attach(&id).await.unwrap();
+    drain_until(&phone, &id, "desktop-ready").await;
+    phone.take_control(&id, 50, 20).await.unwrap();
+
+    // Leaving the terminal's screen keeps it; coming back is still in control.
+    phone.detach(&id).await.unwrap();
+    assert!(!desktop_holds(&admin, &terminal).await);
+    phone.attach(&id).await.unwrap();
+    assert!(phone.in_control(&id));
+    phone.send_input(&id, b"back\r".to_vec()).unwrap();
+    drain_until(&phone, &id, "got:back").await;
+
+    // Closing the session gives it back at once, not after the grace period.
+    phone.close().await;
+    assert!(desktop_holds(&admin, &terminal).await);
+}
+
 /// Waits until `probe` yields a value.
 async fn eventually<T>(what: &str, mut probe: impl AsyncFnMut() -> Option<T>) -> T {
     tokio::time::timeout(Duration::from_secs(20), async {

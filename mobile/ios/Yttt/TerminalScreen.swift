@@ -7,12 +7,22 @@ final class TerminalHandle {
     weak var container: TerminalContainer?
 }
 
+/// The projects whose terminals the phone types into: each terminal opened
+/// in one is taken as it shows. Ends when the phone gives the terminals back,
+/// the computer takes one back, or the session ends.
+@MainActor
+enum ControlMode {
+    static var projects: Set<String> = []
+}
+
 /// Whether the phone controls one terminal: shared by the terminal, the bar
 /// that takes it, and the navigation bar's "交还电脑".
 @MainActor
 final class TerminalControl: ObservableObject {
     let session: HostSession
     let sessionId: String
+    /// The project whose control mode this terminal follows, if any.
+    let projectId: String?
     let handle = TerminalHandle()
     @Published var controlling = false
     @Published var hostTooOld = false
@@ -21,9 +31,10 @@ final class TerminalControl: ObservableObject {
     @Published var keyboardShown = false
     private var observers: [NSObjectProtocol] = []
 
-    init(session: HostSession, sessionId: String) {
+    init(session: HostSession, sessionId: String, projectId: String? = nil) {
         self.session = session
         self.sessionId = sessionId
+        self.projectId = projectId
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { [weak self] _ in
@@ -52,6 +63,7 @@ final class TerminalControl: ObservableObject {
         do {
             try await session.takeControl(sessionId: sessionId, cols: cols, rows: rows)
             controlling = true
+            if let projectId { ControlMode.projects.insert(projectId) }
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         } catch MobileCoreError.HostTooOld {
             container.observeHostSize()
@@ -62,11 +74,30 @@ final class TerminalControl: ObservableObject {
         }
     }
 
+    /// Once attached: still the phone's from before, or taken now as the
+    /// project is in control mode.
+    func attached() async {
+        if session.inControl(sessionId: sessionId) {
+            controlling = true
+        } else if let projectId, ControlMode.projects.contains(projectId) {
+            await take()
+        }
+    }
+
+    /// The computer took the terminal back, or a new Host forgot it: the
+    /// project leaves control mode.
+    func lost() {
+        controlling = false
+        if let projectId { ControlMode.projects.remove(projectId) }
+    }
+
+    /// Every terminal the phone took goes back, and typing ends everywhere.
     func giveBack() {
         controlling = false
+        ControlMode.projects.removeAll()
         handle.container?.observeHostSize()
-        let id = sessionId
-        Task { try? await session.giveBack(sessionIds: [id]) }
+        let session = session
+        Task { try? await session.giveBack(sessionIds: []) }
     }
 }
 
@@ -86,7 +117,8 @@ struct TerminalScreen: View {
         TerminalHost(session: control.session, terminal: terminal, controlling: control.controlling,
                      look: look, handle: control.handle,
                      onStats: { stats = $0 },
-                     onControlLost: { control.controlling = false })
+                     onAttached: { Task { await control.attached() } },
+                     onControlLost: { control.lost() })
             .overlay(alignment: .topTrailing) {
                 #if DEBUG
                 if !stats.isEmpty {
@@ -169,11 +201,12 @@ struct TerminalHost: UIViewRepresentable {
     let look: TerminalLook
     let handle: TerminalHandle
     let onStats: (String) -> Void
+    let onAttached: () -> Void
     let onControlLost: () -> Void
 
     func makeUIView(context: Context) -> TerminalContainer {
         let view = TerminalContainer(session: session, terminal: terminal, look: look, onStats: onStats,
-                                     onControlLost: onControlLost)
+                                     onAttached: onAttached, onControlLost: onControlLost)
         handle.container = view
         return view
     }
@@ -192,6 +225,7 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
     private let session: HostSession
     private let info: TerminalInfo
     private let onStats: (String) -> Void
+    private let onAttached: () -> Void
     private let onControlLost: () -> Void
     private let scroll = UIScrollView()
     private let terminalView = TerminalView(frame: .zero)
@@ -209,10 +243,11 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
     private var look: TerminalLook?
 
     init(session: HostSession, terminal: TerminalInfo, look: TerminalLook, onStats: @escaping (String) -> Void,
-         onControlLost: @escaping () -> Void) {
+         onAttached: @escaping () -> Void, onControlLost: @escaping () -> Void) {
         self.session = session
         self.info = terminal
         self.onStats = onStats
+        self.onAttached = onAttached
         self.onControlLost = onControlLost
         super.init(frame: .zero)
         scroll.alwaysBounceHorizontal = true
@@ -229,6 +264,7 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
         Task { @MainActor in
             do {
                 try await session.attach(sessionId: terminal.sessionId)
+                onAttached()
             } catch {
                 onStats("attach failed: \(error.message)")
             }

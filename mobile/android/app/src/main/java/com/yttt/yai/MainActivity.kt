@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         link.foreground.value = false
+        link.controlledProjects.value = emptySet()
         val session = link.session.value ?: return
         link.scope.launch { runCatching { session.giveBack(emptyList()) } }
     }

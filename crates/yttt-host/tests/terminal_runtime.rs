@@ -976,3 +976,61 @@ async fn attachment_lag_while_scrolled_is_exported_in_diagnostics() {
     );
     runtime.terminate(&session_id).unwrap();
 }
+
+#[tokio::test]
+async fn a_terminal_taken_on_its_own_stays_through_leaving_it() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&desktop, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "leave-taken", &desktop);
+    let taken = runtime.take_terminal(&a, &phone).unwrap();
+
+    // The phone stops showing it: the terminal stays the phone's.
+    runtime.leave_terminal(&a, &phone);
+    assert!(holds(&runtime, &a, &phone));
+    // Showing it again answers with the lease it kept.
+    let again = runtime
+        .acquire_lease(&a, &phone, TerminalLeaseMode::Observer)
+        .unwrap();
+    assert_eq!(again.mode, TerminalLeaseMode::Interactive);
+    assert_eq!(again.lease_epoch, taken.lease_epoch);
+
+    // The controller leaving its own terminal still lets it go.
+    runtime.leave_terminal(&b, &desktop);
+    assert!(!holds(&runtime, &b, &desktop));
+    // And observing a terminal it holds as the controller stays observing.
+    runtime
+        .acquire_lease(&b, &desktop, TerminalLeaseMode::Interactive)
+        .unwrap();
+    assert_eq!(
+        runtime
+            .acquire_lease(&b, &desktop, TerminalLeaseMode::Observer)
+            .unwrap()
+            .mode,
+        TerminalLeaseMode::Observer
+    );
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}
+
+#[tokio::test]
+async fn releasing_a_terminal_taken_on_its_own_gives_it_back() {
+    let runtime = HostRuntime::new();
+    let desktop = ClientInstanceId::new("desktop");
+    let phone = ClientInstanceId::new("phone");
+    for client in [&desktop, &phone] {
+        runtime.resume_client(client);
+    }
+    let (a, b) = two_terminals(&runtime, "release-taken", &desktop);
+    runtime.take_terminal(&a, &phone).unwrap();
+    let mut events = runtime.subscribe_control();
+
+    runtime.release_control(&a, &phone).unwrap();
+    assert!(holds(&runtime, &a, &desktop));
+    assert!(granted(&a, &desktop, &sent(&mut events)));
+    runtime.terminate(&a).unwrap();
+    runtime.terminate(&b).unwrap();
+}

@@ -508,6 +508,17 @@ impl HostRuntime {
             return Err(HostRuntimeError::NotFound(session_id.clone()));
         }
         if mode == TerminalLeaseMode::Observer {
+            // A terminal this Client took on its own stays its own while it
+            // looks away: showing it again answers with that lease.
+            if let Some(lease) = self
+                .control
+                .lock()
+                .leases
+                .get(session_id)
+                .filter(|lease| lease.holder == *client_id && lease.taken.is_some())
+            {
+                return Ok(wire_lease(session_id, lease));
+            }
             return Ok(TerminalLease {
                 session_id: session_id.clone(),
                 owner: client_id.clone(),
@@ -598,8 +609,27 @@ impl HostRuntime {
                 holder: current.holder,
             });
         }
-        self.yield_lease_locked(&mut control, session_id, current.holder);
+        if current.taken.is_some() {
+            self.return_lease_locked(&mut control, session_id, client_id);
+        } else {
+            self.yield_lease_locked(&mut control, session_id, current.holder);
+        }
         Ok(())
+    }
+
+    /// `client_id` stops showing a terminal. A terminal it took on its own
+    /// stays with it until it returns it or leaves; any other lease it holds
+    /// is let go.
+    pub fn leave_terminal(&self, session_id: &TerminalSessionId, client_id: &ClientInstanceId) {
+        let taken = self
+            .control
+            .lock()
+            .leases
+            .get(session_id)
+            .is_some_and(|lease| lease.holder == *client_id && lease.taken.is_some());
+        if !taken {
+            self.release_lease(session_id, client_id);
+        }
     }
 
     /// Releases everything `client_id` holds, including its leases. A
