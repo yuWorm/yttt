@@ -615,11 +615,42 @@ impl MobileSession {
         let host_id = record.host.host;
         let key = host_key(&device_secret, &host_id);
         let label = crate::account::device_label(device_label, &record.host.host_label);
-        let (ticket, changed) =
-            prepare_record(account, &device_secret, &host, &label, Some(TICKET_WAIT)).await?;
-        if changed {
-            on_record(&host.lock().clone());
-        }
+        // A stored ticket still good for the Host's signed node connects at
+        // once; registering and a fresh ticket come in the background, as a
+        // slow control plane would otherwise hold every reconnect for up to
+        // TICKET_WAIT. The follower renews the ticket from then on.
+        let cached = host
+            .lock()
+            .relay_target(None, yttt_client_core::control::now_unix())
+            .is_ok();
+        let ticket = match account {
+            Some(account) if cached => {
+                let (account, host, label, on_record) = (
+                    account.clone(),
+                    host.clone(),
+                    label.clone(),
+                    on_record.clone(),
+                );
+                tokio::spawn(async move {
+                    match prepare_record(Some(&account), &device_secret, &host, &label, None).await
+                    {
+                        Ok((_, true)) => on_record(&host.lock().clone()),
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(%error, "could not refresh the relay ticket"),
+                    }
+                });
+                None
+            }
+            _ => {
+                let (ticket, changed) =
+                    prepare_record(account, &device_secret, &host, &label, Some(TICKET_WAIT))
+                        .await?;
+                if changed {
+                    on_record(&host.lock().clone());
+                }
+                ticket
+            }
+        };
         let target = host
             .lock()
             .relay_target(ticket.as_ref(), yttt_client_core::control::now_unix());

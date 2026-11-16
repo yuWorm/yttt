@@ -480,6 +480,43 @@ async fn a_connected_phone_follows_its_host_to_another_node_and_connects_from_it
         .await
         .unwrap();
     phone.close().await;
+
+    // A control plane that accepts and never answers does not hold up a
+    // phone whose stored ticket is still good: it connects at once and
+    // asks in the background.
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent_url = format!("http://{}", silent.local_addr().unwrap());
+    let _held = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = silent.accept().await {
+            held.push(stream);
+        }
+    });
+    let mut stalled = account.clone();
+    stalled.session.control_url = silent_url;
+    let (sink, _) = record_store();
+    let started = std::time::Instant::now();
+    let phone = MobileSession::connect(
+        &latest,
+        SECRET,
+        RelayChoice::OnlyFromHost,
+        Some(&stalled),
+        "iPhone",
+        sink,
+    )
+    .await
+    .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "waited {:?} on a silent control plane",
+        started.elapsed()
+    );
+    phone
+        .client()
+        .request(Request::ListResources)
+        .await
+        .unwrap();
+    phone.close().await;
     for node in nodes {
         node.shutdown().await;
     }

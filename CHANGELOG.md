@@ -8,6 +8,9 @@
 - iOS 上接管 Agent TUI（codex 等会跟踪鼠标的程序）后，点一下终端立即弹出键盘；此前第一下只当作鼠标点击，要再点一次，而且要等约半秒。键盘弹出、收起时终端尺寸只在稳定后发给电脑一次，TUI 不再连续重画。
 - On iOS, after taking an Agent TUI (codex and other programs that track the mouse), one tap on the terminal raises the keyboard at once; before, the first tap only went to the program as a click, and a second came after about half a second. While the keyboard comes up or goes away, the terminal sends its size to the computer once it settles, so the TUI no longer redraws over and over.
 
+- 手机重连 Host 不再先等 relay 账号服务：缓存的 relay ticket 还有效时立即连接，登记设备和刷新 ticket 在后台进行。此前账号服务慢时每次重连要多等最多 5 秒。
+- A phone reconnecting to its Host no longer waits on the relay account service first: with a stored relay ticket still good it connects at once, and registers and renews the ticket in the background. Before, a slow account service held every reconnect for up to 5 more seconds.
+
 ## 0.7.0 - 2026-11-16
 
 - 手机接管的终端在离开终端页、切换 pane 后仍归手机，回来时不用再接管；接管后同一项目里打开的其它终端也直接可输入。“交还电脑”、进后台或断开连接时，手机接管的终端立即交还给电脑；此前离开终端页会让这个终端谁都不能输入，断开后也要等约 60 秒。
