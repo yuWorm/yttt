@@ -1714,6 +1714,21 @@ mod tests {
     }
 
     #[test]
+    fn cursor_on_the_right_half_of_a_wide_character_covers_the_character() {
+        let mut fixture = TerminalFixture::new(4, 1);
+        fixture.feed("你".as_bytes());
+        fixture.feed(b"\x1b[1D");
+
+        let snapshot = snapshot(&fixture);
+        assert_eq!(snapshot.cursor.point.column.0, 0);
+        assert_eq!(snapshot.cursor.width.get(), 2);
+        let cells = &snapshot.rows[0].cells;
+        assert_eq!(cells[0].background, snapshot.cursor.cursor_color);
+        assert_eq!(cells[0].foreground, snapshot.cursor.text_color);
+        assert_eq!(cells[1].background, snapshot.cursor.cursor_color);
+    }
+
+    #[test]
     fn render_snapshot_applies_selection_and_cursor_precedence() {
         let mut fixture = TerminalFixture::new(4, 1);
         fixture.feed(b"ABC\x1b[2D");

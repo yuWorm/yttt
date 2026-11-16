@@ -454,42 +454,16 @@ impl TerminalRenderSnapshot {
         let cursor_row_index = rows
             .iter()
             .position(|row| row.line == cursor_grid_point.line);
-        let cursor_cell = cursor_row_index
-            .and_then(|row_index| rows[row_index].cells.get_mut(cursor_point.column.0));
-        let (cursor_color, text_color, cursor_width) = if let Some(cell) = cursor_cell {
-            let mut cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), &colors);
-            let mut text_color = palette.cursor_text().unwrap_or(cell.background);
-            if contrast(cursor_color, cell.background) < 1.5 {
-                cursor_color = default_foreground;
-                text_color = default_background;
-            }
-            let width = NonZeroU32::new(cell.width.columns() as u32).unwrap();
-            if cursor_shape == CursorShape::Block {
-                cell.foreground = text_color;
-                cell.background = cursor_color;
-            }
-            (cursor_color, text_color, width)
-        } else {
-            (
-                palette.resolve(Color::Named(NamedColor::Cursor), &colors),
-                default_background,
-                NonZeroU32::new(1).unwrap(),
-            )
-        };
-
-        if cursor_shape == CursorShape::Block
-            && cursor_width.get() > 1
-            && let Some(row_index) = cursor_row_index
-        {
-            for column_offset in 1..cursor_width.get() as usize {
-                if let Some(cell) = rows[row_index]
-                    .cells
-                    .get_mut(cursor_point.column.0 + column_offset)
-                {
-                    cell.background = cursor_color;
-                }
-            }
-        }
+        let cursor = paint_cursor_cells(
+            &mut rows,
+            cursor_row_index,
+            cursor_point,
+            cursor_shape,
+            palette,
+            &colors,
+            default_foreground,
+            default_background,
+        );
 
         Self {
             rows,
@@ -498,13 +472,7 @@ impl TerminalRenderSnapshot {
             kitty_placements,
             reference_cell_width: reference_cell_width.max(1),
             reference_cell_height: reference_cell_height.max(1),
-            cursor: RenderableCursor {
-                point: cursor_point,
-                shape: cursor_shape,
-                cursor_color,
-                text_color,
-                width: cursor_width,
-            },
+            cursor,
             display_offset,
             cols,
             screen_lines,
@@ -672,30 +640,19 @@ impl TerminalRenderSnapshot {
         } else if !focused && cursor_unfocused_hollow && cursor_shape == CursorShape::Block {
             cursor_shape = CursorShape::HollowBlock;
         }
-        let cursor_cell = rows
-            .iter_mut()
-            .find(|row| row.line.0 + display_offset as i32 == cursor_point.line as i32)
-            .and_then(|row| row.cells.get_mut(cursor_point.column.0));
-        let (cursor_color, text_color, cursor_width) = if let Some(cell) = cursor_cell {
-            let mut cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), &colors);
-            let mut text_color = palette.cursor_text().unwrap_or(cell.background);
-            if contrast(cursor_color, cell.background) < 1.5 {
-                cursor_color = default_foreground;
-                text_color = default_background;
-            }
-            let width = NonZeroU32::new(cell.width.columns() as u32).unwrap();
-            if cursor_shape == CursorShape::Block {
-                cell.foreground = text_color;
-                cell.background = cursor_color;
-            }
-            (cursor_color, text_color, width)
-        } else {
-            (
-                palette.resolve(Color::Named(NamedColor::Cursor), &colors),
-                default_background,
-                NonZeroU32::new(1).unwrap(),
-            )
-        };
+        let cursor_row_index = rows
+            .iter()
+            .position(|row| row.line.0 + display_offset as i32 == cursor_point.line as i32);
+        let cursor = paint_cursor_cells(
+            &mut rows,
+            cursor_row_index,
+            cursor_point,
+            cursor_shape,
+            palette,
+            &colors,
+            default_foreground,
+            default_background,
+        );
 
         let mut kitty_placements = viewport
             .placements
@@ -710,13 +667,7 @@ impl TerminalRenderSnapshot {
             kitty_placements,
             reference_cell_width: viewport.geometry.cell_width.max(1),
             reference_cell_height: viewport.geometry.cell_height.max(1),
-            cursor: RenderableCursor {
-                point: cursor_point,
-                shape: cursor_shape,
-                cursor_color,
-                text_color,
-                width: cursor_width,
-            },
+            cursor,
             display_offset,
             cols,
             screen_lines,
@@ -735,6 +686,70 @@ impl TerminalRenderSnapshot {
             ),
             history_size: viewport.history_size as usize,
         }
+    }
+}
+
+/// Resolves the cursor's colors and width and, for a block cursor, paints every
+/// column of the character under it. A cursor on the right half of a wide
+/// character moves to the character's first column so it covers the whole glyph.
+#[allow(clippy::too_many_arguments)]
+fn paint_cursor_cells(
+    rows: &mut [RenderableRow],
+    row_index: Option<usize>,
+    mut point: AlacPoint<usize>,
+    shape: CursorShape,
+    palette: &ColorPalette,
+    colors: &Colors,
+    default_foreground: Hsla,
+    default_background: Hsla,
+) -> RenderableCursor {
+    let mut cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), colors);
+    let Some(cells) = row_index.map(|index| &mut rows[index].cells) else {
+        return RenderableCursor {
+            point,
+            shape,
+            cursor_color,
+            text_color: default_background,
+            width: NonZeroU32::MIN,
+        };
+    };
+    let column = point.column.0;
+    if column > 0
+        && cells.get(column).map(|cell| cell.width) == Some(TerminalCellWidth::Spacer)
+        && cells.get(column - 1).map(|cell| cell.width) == Some(TerminalCellWidth::Wide)
+    {
+        point.column = Column(column - 1);
+    }
+    let Some(cell) = cells.get(point.column.0) else {
+        return RenderableCursor {
+            point,
+            shape,
+            cursor_color,
+            text_color: default_background,
+            width: NonZeroU32::MIN,
+        };
+    };
+    let mut text_color = palette.cursor_text().unwrap_or(cell.background);
+    if contrast(cursor_color, cell.background) < 1.5 {
+        cursor_color = default_foreground;
+        text_color = default_background;
+    }
+    let columns = cell.width.columns();
+    if shape == CursorShape::Block {
+        let start = point.column.0;
+        for (offset, cell) in cells.iter_mut().skip(start).take(columns).enumerate() {
+            if offset == 0 {
+                cell.foreground = text_color;
+            }
+            cell.background = cursor_color;
+        }
+    }
+    RenderableCursor {
+        point,
+        shape,
+        cursor_color,
+        text_color,
+        width: NonZeroU32::new(columns as u32).unwrap_or(NonZeroU32::MIN),
     }
 }
 
@@ -1101,6 +1116,98 @@ mod semantic_tests {
     };
 
     use super::*;
+
+    fn wide_cursor_viewport(cursor_column: u16) -> SemanticViewport {
+        let style = SemanticStyle {
+            foreground: SemanticColor::Named(NamedColor::Foreground as u16),
+            background: SemanticColor::Named(NamedColor::Background as u16),
+            flags: 0,
+            underline_color: SemanticColor::Named(NamedColor::Foreground as u16),
+        };
+        SemanticViewport {
+            session_id: TerminalSessionId::new("semantic-wide-cursor"),
+            session_epoch: 1,
+            sequence: 1,
+            geometry: TerminalGeometry {
+                cols: 4,
+                rows: 1,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            geometry_epoch: 1,
+            scrollback_epoch: 1,
+            history_size: 0,
+            display_offset: 0,
+            rows: vec![SemanticRow {
+                line_id: 1,
+                viewport_row: 0,
+                spans: vec![SemanticSpan {
+                    start_column: 0,
+                    text: "A界".to_string(),
+                    width: 3,
+                    style,
+                    hyperlink: None,
+                }],
+                graphics: Vec::new(),
+            }],
+            images: Vec::new(),
+            placements: Vec::new(),
+            cursor: SemanticCursor {
+                row: 0,
+                column: cursor_column,
+                shape: SemanticCursorShape::Block,
+                visible: true,
+                blinking: false,
+            },
+            modes: TerminalModes {
+                bits: 0,
+                title: None,
+                cwd: None,
+            },
+            palette: TerminalPalette {
+                colors: Vec::new(),
+                revision: 0,
+            },
+            process_state: TerminalProcessState::Running,
+        }
+    }
+
+    fn semantic_frame(viewport: &SemanticViewport) -> TerminalRenderSnapshot {
+        TerminalRenderSnapshot::from_semantic(
+            viewport,
+            &[0],
+            &ColorPalette::default(),
+            &RenderOverlayState::default(),
+            true,
+            true,
+            true,
+            1,
+        )
+    }
+
+    #[test]
+    fn semantic_block_cursor_covers_both_columns_of_a_wide_character() {
+        let frame = semantic_frame(&wide_cursor_viewport(1));
+
+        assert_eq!(frame.cursor.point.column.0, 1);
+        assert_eq!(frame.cursor.width.get(), 2);
+        let cells = &frame.rows[0].cells;
+        assert_eq!(cells[1].background, frame.cursor.cursor_color);
+        assert_eq!(cells[2].background, frame.cursor.cursor_color);
+        assert_ne!(cells[3].background, frame.cursor.cursor_color);
+    }
+
+    #[test]
+    fn semantic_cursor_on_the_right_half_of_a_wide_character_covers_the_character() {
+        let frame = semantic_frame(&wide_cursor_viewport(2));
+
+        assert_eq!(frame.cursor.point.column.0, 1);
+        assert_eq!(frame.cursor.width.get(), 2);
+        let cells = &frame.rows[0].cells;
+        assert_eq!(cells[1].background, frame.cursor.cursor_color);
+        assert_eq!(cells[1].foreground, frame.cursor.text_color);
+        assert_eq!(cells[2].background, frame.cursor.cursor_color);
+    }
 
     #[test]
     fn semantic_adapter_preserves_wide_cells_and_style_runs() {
