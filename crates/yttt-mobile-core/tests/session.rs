@@ -1110,9 +1110,10 @@ async fn a_phone_opens_a_host_folder_as_a_project_with_the_desktops_layout() {
         "#,
     )
     .unwrap();
-    let personal = temp.path().join("state/config/projects").join(
-        yttt_protocol::workspace::encode_project_path(&app),
-    );
+    let personal = temp
+        .path()
+        .join("state/config/projects")
+        .join(yttt_protocol::workspace::encode_project_path(&app));
     fs::create_dir_all(&personal).unwrap();
     fs::write(
         personal.join("layout.toml"),
@@ -1155,7 +1156,10 @@ async fn a_phone_opens_a_host_folder_as_a_project_with_the_desktops_layout() {
     let recent = phone.recent_projects().await.unwrap();
     assert_eq!(recent[0].path, app.to_str().unwrap());
     assert_eq!(recent[0].title, "My App");
-    assert_eq!(recent[0].open_project_id.as_deref(), Some(project_id.as_str()));
+    assert_eq!(
+        recent[0].open_project_id.as_deref(),
+        Some(project_id.as_str())
+    );
     eventually("the workspace update", async || {
         (phone.open_project(app.to_str().unwrap()).await.unwrap() == project_id).then_some(())
     })
