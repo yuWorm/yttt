@@ -46,6 +46,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -116,6 +117,7 @@ fun TerminalPane(
     val palette = remember(look.theme, systemDark) { theme(look.theme, systemDark) }
     val context = LocalContext.current
     val typeface = remember(look.font) { AppearanceSettings.typeface(context, look.font) }
+    var pendingResize by remember(id) { mutableStateOf<Job?>(null) }
     val emulator = remember(id) {
         TerminalEmulatorFactory.create(
             initialRows = info.rows.toInt(),
@@ -130,8 +132,13 @@ fun TerminalPane(
             onResize = { dimensions ->
                 if (dimensions.columns > 0 && dimensions.rows > 0) {
                     fitted.value = dimensions.columns to dimensions.rows
-                    if (session.inControl(id)) {
-                        scope.launch {
+                    // The keyboard's inset moves the grid on every frame of
+                    // its animation; each resize makes an Agent TUI redraw,
+                    // so only the size it settles on goes out.
+                    pendingResize?.cancel()
+                    pendingResize = scope.launch {
+                        delay(RESIZE_SETTLE_MS)
+                        if (session.inControl(id)) {
                             runCatching {
                                 session.resize(id, dimensions.columns.toUShort(), dimensions.rows.toUShort())
                             }
@@ -322,3 +329,6 @@ fun TerminalPane(
         }
     }
 }
+
+/** How long the grid holds still before its size goes to the Host. */
+private const val RESIZE_SETTLE_MS = 120L

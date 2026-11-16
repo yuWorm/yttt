@@ -10,9 +10,9 @@ import uniffi.yttt_mobile_core.TabSummary
 import uniffi.yttt_mobile_core.WaitingKind
 
 class HomeSectionsTest {
-    private fun agent(id: String, state: AgentState, waiting: WaitingKind? = null, startedAt: Long) =
+    private fun agent(id: String, state: AgentState, waiting: WaitingKind? = null, startedAt: Long, project: String = "p") =
         AgentSummary(
-            sessionId = id, projectId = "p", tabId = "t", paneId = id, provider = "codex",
+            sessionId = id, projectId = project, tabId = "t", paneId = id, provider = "codex",
             state = state, waiting = waiting, waitingMessage = null, task = null,
             currentAction = null, stateStartedAtMs = startedAt.toULong(), updatedAtMs = startedAt.toULong(),
         )
@@ -39,8 +39,51 @@ class HomeSectionsTest {
         val sections = HomeSections(overview)
         assertEquals(listOf(2, 2, 6, 7), listOf(sections.projects, sections.tabs, sections.terminals, sections.agents))
         assertEquals(listOf("new-approval", "old-approval", "answer", "failed"), sections.attention.map { it.sessionId })
-        assertEquals(listOf("idle", "working"), sections.running.map { it.sessionId })
-        assertEquals(listOf("done"), sections.finished.map { it.sessionId })
+        assertEquals(listOf("working"), sections.running.map { it.sessionId })
+    }
+
+    @Test
+    fun runningLeavesIdleOut() {
+        val overview = Overview(
+            emptyList(),
+            listOf(
+                agent("idle", AgentState.IDLE, startedAt = 9),
+                agent("starting", AgentState.STARTING, startedAt = 2),
+                agent("working", AgentState.WORKING, startedAt = 1),
+            ),
+            0u,
+            emptyList(),
+        )
+        assertEquals(listOf("starting", "working"), HomeSections(overview).running.map { it.sessionId })
+    }
+
+    @Test
+    fun groupsFollowProjectOrderAndSortByUrgency() {
+        val overview = Overview(
+            projects = listOf(
+                ProjectSummary("q", "Q", emptyList(), "main"),
+                ProjectSummary("empty", "E", emptyList(), "main"),
+                ProjectSummary("p", "P", emptyList(), "main"),
+            ),
+            agents = listOf(
+                agent("p-done", AgentState.COMPLETED, startedAt = 9, project = "p"),
+                agent("p-idle", AgentState.IDLE, startedAt = 8, project = "p"),
+                agent("p-working", AgentState.WORKING, startedAt = 1, project = "p"),
+                agent("p-approval", AgentState.WAITING, WaitingKind.APPROVAL, 2, project = "p"),
+                agent("p-working-new", AgentState.WORKING, startedAt = 5, project = "p"),
+                agent("q-idle", AgentState.IDLE, startedAt = 1, project = "q"),
+                agent("gone", AgentState.WORKING, startedAt = 1, project = "gone"),
+            ),
+            terminals = 0u,
+            terminalIds = emptyList(),
+        )
+        val groups = HomeSections(overview).groups
+        assertEquals(listOf("q", "p", "gone"), groups.map { it.projectId })
+        assertEquals(listOf("Q", "P", "gone"), groups.map { it.name })
+        assertEquals(
+            listOf("p-approval", "p-working-new", "p-working", "p-idle", "p-done"),
+            groups[1].agents.map { it.sessionId },
+        )
     }
 
     @Test

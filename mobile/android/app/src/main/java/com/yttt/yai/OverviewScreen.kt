@@ -1,6 +1,8 @@
 package com.yttt.yai
 
+import android.content.Context
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +20,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
@@ -29,7 +33,6 @@ import androidx.compose.material.icons.outlined.LaptopMac
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Tab
-import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -43,7 +46,6 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -56,6 +58,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -77,7 +81,10 @@ class HostMenu(
     val onManage: () -> Unit,
 )
 
-/** The overview: the Host and its link, counts, then what needs the user, what runs and what ended. */
+/**
+ * The overview: the Host and its link, counts, what runs right now, then
+ * every Agent under its project, each project foldable.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OverviewScreen(
@@ -91,7 +98,10 @@ fun OverviewScreen(
     banner: @Composable () -> Unit = {},
 ) {
     val sections = HomeSections(overview)
-    var showAllFinished by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(OVERVIEW_PREFS, Context.MODE_PRIVATE) }
+    // Project ids whose Agent group is folded; kept across launches.
+    var collapsed by remember { mutableStateOf(prefs.getStringSet(COLLAPSED_PROJECTS, emptySet()).orEmpty().toSet()) }
     var refreshing by remember { mutableStateOf(false) }
     var path by remember { mutableStateOf(LinkPath.UNKNOWN) }
     val scope = rememberCoroutineScope()
@@ -125,21 +135,13 @@ fun OverviewScreen(
                 if (overview.agents.isEmpty()) {
                     item { EmptyAgents(session != null) }
                 }
-                agentCard("attention", "需要处理", Icons.Filled.PanTool, AgentGroupTone.ATTENTION,
-                    sections.attention, sections.attention.size, overview, onAgent)
-                agentCard("running", "执行中", Icons.Filled.Bolt, AgentGroupTone.RUNNING,
-                    sections.running, sections.running.size, overview, onAgent)
-                val finishedShown = if (showAllFinished) sections.finished else sections.finished.take(FINISHED_SHOWN)
-                agentCard("finished", "已结束", Icons.Outlined.TaskAlt, AgentGroupTone.FINISHED,
-                    finishedShown, sections.finished.size, overview, onAgent,
-                    footer = if (sections.finished.size > FINISHED_SHOWN) {
-                        {
-                            TextButton(onClick = { showAllFinished = !showAllFinished }, Modifier.padding(horizontal = 8.dp)) {
-                                Text(if (showAllFinished) "收起" else "显示全部 ${sections.finished.size} 个")
-                            }
-                        }
-                    } else null,
-                )
+                runningCard(sections.running, overview, onAgent)
+                for (group in sections.groups) {
+                    projectCard(group, group.projectId in collapsed, overview, onAgent) {
+                        collapsed = if (group.projectId in collapsed) collapsed - group.projectId else collapsed + group.projectId
+                        prefs.edit().putStringSet(COLLAPSED_PROJECTS, collapsed).apply()
+                    }
+                }
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
@@ -217,7 +219,7 @@ private fun EmptyAgents(connected: Boolean) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Icon(Icons.Outlined.SmartToy, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(if (connected) "没有运行中的 Agent" else "还没连上 Host", style = MaterialTheme.typography.titleMedium)
+        Text(if (connected) "还没有 Agent" else "还没连上 Host", style = MaterialTheme.typography.titleMedium)
         Text(
             if (connected) "在电脑上启动一个 Agent，它会出现在这里。" else "连上以后，这里会列出电脑上的 Agent。",
             style = MaterialTheme.typography.bodyMedium,
@@ -226,34 +228,13 @@ private fun EmptyAgents(connected: Boolean) {
     }
 }
 
-/** How many ended Agents show before "show all". */
-private const val FINISHED_SHOWN = 5
+private const val OVERVIEW_PREFS = "overview"
+private const val COLLAPSED_PROJECTS = "collapsedProjects"
 
-private enum class AgentGroupTone { ATTENTION, RUNNING, FINISHED }
-
-/**
- * A group of Agents as a card: a title row with a tile, the name and how
- * many, then the rows. The running card's title is blue and shimmers.
- */
-private fun LazyListScope.agentCard(
-    key: String,
-    title: String,
-    icon: ImageVector,
-    tone: AgentGroupTone,
-    agents: List<AgentSummary>,
-    count: Int,
-    overview: Overview,
-    onAgent: (AgentSummary) -> Unit,
-    footer: (@Composable () -> Unit)? = null,
-) {
-    if (count == 0) return
-    item(key = "card-$key") {
-        val color = when (tone) {
-            AgentGroupTone.ATTENTION -> MaterialTheme.colorScheme.error
-            AgentGroupTone.RUNNING -> runningBlue
-            AgentGroupTone.FINISHED -> Color(0xFF34A853)
-        }
-        val live = tone == AgentGroupTone.RUNNING
+/** The working and starting Agents as a card; its title is blue and shimmers. */
+private fun LazyListScope.runningCard(agents: List<AgentSummary>, overview: Overview, onAgent: (AgentSummary) -> Unit) {
+    if (agents.isEmpty()) return
+    item(key = "card-running") {
         Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).animateContentSize()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -261,40 +242,99 @@ private fun LazyListScope.agentCard(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Box(
-                    Modifier.size(28.dp).background(color, RoundedCornerShape(7.dp)),
+                    Modifier.size(28.dp).background(runningBlue, RoundedCornerShape(7.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(icon, null, Modifier.size(16.dp), tint = Color.White)
+                    Icon(Icons.Filled.Bolt, null, Modifier.size(16.dp), tint = Color.White)
                 }
                 Text(
-                    title,
+                    "执行中",
                     style = MaterialTheme.typography.titleMedium,
-                    color = if (live) color else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f, fill = false).shimmer(live),
+                    color = runningBlue,
+                    modifier = Modifier.weight(1f, fill = false).shimmer(true),
                 )
                 Spacer(Modifier.weight(1f))
-                Text("$count", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${agents.size}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             for (agent in agents) {
                 HorizontalDivider(Modifier.padding(start = 16.dp))
-                AgentRow(agent, overview, onAgent)
+                AgentRow(agent, overview, onAgent, showProject = true)
             }
-            footer?.let {
-                HorizontalDivider(Modifier.padding(start = 16.dp))
-                it()
+        }
+    }
+}
+
+/**
+ * A project's Agents as a card, as the desktop sidebar groups them: the
+ * title row folds it and shows its waits and runs.
+ */
+private fun LazyListScope.projectCard(
+    group: HomeSections.ProjectGroup,
+    collapsed: Boolean,
+    overview: Overview,
+    onAgent: (AgentSummary) -> Unit,
+    onToggle: () -> Unit,
+) {
+    item(key = "project-${group.projectId}") {
+        val waiting = group.agents.count { HomeSections.attentionRank(it) != null }
+        val running = group.agents.count { HomeSections.isRunning(it) }
+        val chevron by animateFloatAsState(if (collapsed) 0f else 90f, label = "chevron")
+        Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).animateContentSize()) {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    Modifier.size(28.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(7.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.Folder, null, Modifier.size(16.dp), tint = Color.White)
+                }
+                Text(
+                    group.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (waiting > 0) Mark(Icons.Filled.PanTool, waiting, MaterialTheme.colorScheme.error)
+                if (running > 0) Mark(Icons.Filled.Bolt, running, runningBlue)
+                Text("${group.agents.size}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    if (collapsed) "展开" else "收起",
+                    Modifier.size(20.dp).rotate(chevron),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (!collapsed) {
+                for (agent in group.agents) {
+                    HorizontalDivider(Modifier.padding(start = 16.dp))
+                    AgentRow(agent, overview, onAgent, showProject = false)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun AgentRow(agent: AgentSummary, overview: Overview, onAgent: (AgentSummary) -> Unit) {
+private fun Mark(icon: ImageVector, value: Int, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Icon(icon, null, Modifier.size(14.dp), tint = color)
+        Text("$value", style = MaterialTheme.typography.labelLarge, color = color)
+    }
+}
+
+@Composable
+private fun AgentRow(agent: AgentSummary, overview: Overview, onAgent: (AgentSummary) -> Unit, showProject: Boolean) {
     ListItem(
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         leadingContent = { AgentTile(agent.provider) },
         headlineContent = {
+            val tab = overview.tabTitle(agent.projectId, agent.tabId)
             Text(
-                "${overview.projectName(agent.projectId)} · ${overview.tabTitle(agent.projectId, agent.tabId)}",
+                if (showProject) "${overview.projectName(agent.projectId)} · $tab" else tab,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

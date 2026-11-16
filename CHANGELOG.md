@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-- iOS 总控的“执行中”只列工作中和启动中的 Agent，空闲的不再算进去；下面按项目分组列出全部 Agent（与桌面侧边栏一样），等待处理的排在组内最前，项目组可以折叠，折叠状态会保留。原来的“需要处理”“已结束”分组去掉。
-- On iOS, the overview's "Running" card lists only working and starting Agents, no longer idle ones; below it every Agent is grouped under its project, as in the desktop sidebar, with those waiting on the user first. Project groups fold, and stay folded across launches. The separate "Needs you" and "Ended" groups are gone.
+- 手机（iOS、Android）总控的“执行中”只列工作中和启动中的 Agent，空闲的不再算进去；下面按项目分组列出全部 Agent（与桌面侧边栏一样），等待处理的排在组内最前，项目组可以折叠，折叠状态会保留。原来的“需要处理”“已结束”分组去掉。
+- On phones (iOS and Android), the overview's "Running" card lists only working and starting Agents, no longer idle ones; below it every Agent is grouped under its project, as in the desktop sidebar, with those waiting on the user first. Project groups fold, and stay folded across launches. The separate "Needs you" and "Ended" groups are gone.
 
-- iOS 上接管 Agent TUI（codex 等会跟踪鼠标的程序）后，点一下终端立即弹出键盘；此前第一下只当作鼠标点击，要再点一次，而且要等约半秒。键盘弹出、收起时终端尺寸只在稳定后发给电脑一次，TUI 不再连续重画。
-- On iOS, after taking an Agent TUI (codex and other programs that track the mouse), one tap on the terminal raises the keyboard at once; before, the first tap only went to the program as a click, and a second came after about half a second. While the keyboard comes up or goes away, the terminal sends its size to the computer once it settles, so the TUI no longer redraws over and over.
+- iOS 上接管 Agent TUI（codex 等会跟踪鼠标的程序）后，点一下终端立即弹出键盘；此前第一下只当作鼠标点击，要再点一次，而且要等约半秒。键盘弹出、收起时终端尺寸只在稳定后发给电脑一次，TUI 不再连续重画；Android 也一样。
+- On iOS, after taking an Agent TUI (codex and other programs that track the mouse), one tap on the terminal raises the keyboard at once; before, the first tap only went to the program as a click, and a second came after about half a second. While the keyboard comes up or goes away, the terminal sends its size to the computer once it settles, so the TUI no longer redraws over and over; Android does the same.
 
 - 手机重连 Host 不再先等 relay 账号服务：缓存的 relay ticket 还有效时立即连接，登记设备和刷新 ticket 在后台进行。此前账号服务慢时每次重连要多等最多 5 秒。
 - A phone reconnecting to its Host no longer waits on the relay account service first: with a stored relay ticket still good it connects at once, and registers and renews the ticket in the background. Before, a slow account service held every reconnect for up to 5 more seconds.
