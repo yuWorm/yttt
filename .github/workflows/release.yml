@@ -29,7 +29,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       ref: ${{ steps.version.outputs.ref }}
-      validated: ${{ steps.build.outputs.result }}
+      build_run: ${{ steps.build.outputs.result }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@v7
@@ -59,32 +59,87 @@ jobs:
           echo "ref=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$head_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Find successful default-branch Build for this exact commit
+      - name: Find the default-branch Build for this exact commit
         id: build
         uses: actions/github-script@v8
         env:
           RELEASE_SHA: ${{ steps.version.outputs.sha }}
         with:
+          result-encoding: string
           script: |
+            // Pushing master and the tag together starts Build and Release at
+            // once. Release waits for that Build's validation instead of
+            // running the same validation a second time.
             const { owner, repo } = context.repo;
-            const { data } = await github.rest.actions.listWorkflowRuns({
-              owner, repo, workflow_id: 'build.yml',
-              head_sha: process.env.RELEASE_SHA,
-              branch: context.payload.repository.default_branch,
-              event: 'push', status: 'success', per_page: 1,
-            });
-            const run = data.workflow_runs.find(run =>
-              run.head_sha === process.env.RELEASE_SHA &&
-              run.head_repository?.full_name === `${owner}/${repo}` &&
-              run.conclusion === 'success'
-            );
-            core.info(run ? `Reusing successful Build: ${run.html_url}` : 'Running full release validation');
-            return Boolean(run);
+            const findBuild = async () => {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id: 'build.yml',
+                head_sha: process.env.RELEASE_SHA,
+                branch: context.payload.repository.default_branch,
+                event: 'push', per_page: 20,
+              });
+              return data.workflow_runs.find(run =>
+                run.head_sha === process.env.RELEASE_SHA &&
+                run.head_repository?.full_name === `${owner}/${repo}` &&
+                (run.status !== 'completed' || run.conclusion === 'success')
+              );
+            };
+            // The Build of a push made together with the tag can show up a
+            // few seconds after this run starts.
+            let run = await findBuild();
+            for (let attempt = 0; !run && attempt < 3; attempt++) {
+              await new Promise(resolve => setTimeout(resolve, 15000));
+              run = await findBuild();
+            }
+            core.info(run ? `Reusing Build validation: ${run.html_url}` : 'Running full release validation');
+            return run ? String(run.id) : '';
+
+  build-validation:
+    name: Wait for Build validation
+    needs: metadata
+    if: needs.metadata.outputs.build_run != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    outputs:
+      result: ${{ steps.wait.outputs.result }}
+    steps:
+      - name: Wait for the Build's required validation job
+        id: wait
+        uses: actions/github-script@v8
+        env:
+          BUILD_RUN: ${{ needs.metadata.outputs.build_run }}
+        with:
+          result-encoding: string
+          script: |
+            // passed: the Build validated this commit.
+            // failed: it validated and found a failure, so Release stops.
+            // gone:   the Build ended without validating (cancelled by a newer
+            //         push, for one), so Release validates on its own.
+            const { owner, repo } = context.repo;
+            const run_id = Number(process.env.BUILD_RUN);
+            const gateName = 'Validation / Required validation';
+            for (;;) {
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner, repo, run_id, filter: 'latest', per_page: 100,
+              });
+              const gate = jobs.find(job => job.name === gateName);
+              if (gate?.status === 'completed') {
+                core.info(`${gateName}: ${gate.conclusion} (${gate.html_url})`);
+                if (gate.conclusion === 'success') return 'passed';
+                return gate.conclusion === 'cancelled' ? 'gone' : 'failed';
+              }
+              const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id });
+              if (run.status === 'completed') {
+                core.info(`Build ended ${run.conclusion} before validating`);
+                return 'gone';
+              }
+              await new Promise(resolve => setTimeout(resolve, 30000));
+            }
 
   validation:
     name: Validation
-    needs: metadata
-    if: needs.metadata.outputs.validated != 'true'
+    needs: [metadata, build-validation]
+    if: ${{ !cancelled() && needs.metadata.result == 'success' && (needs.metadata.outputs.build_run == '' || needs.build-validation.outputs.result == 'gone') }}
     uses: ./.github/workflows/validation.yml
     with:
       ref: ${{ needs.metadata.outputs.ref }}
@@ -92,29 +147,25 @@ jobs:
   validation-gate:
     name: Require validated release commit
     if: ${{ !cancelled() }}
-    needs: [metadata, validation]
+    needs: [metadata, build-validation, validation]
     runs-on: ubuntu-24.04
     steps:
-      - name: Require fresh validation or exact-commit Build success
+      - name: Require the Build's validation or a fresh one
         env:
           METADATA_RESULT: ${{ needs.metadata.result }}
-          REUSED_BUILD: ${{ needs.metadata.outputs.validated }}
+          BUILD_VALIDATION: ${{ needs.build-validation.outputs.result }}
           VALIDATION_RESULT: ${{ needs.validation.result }}
         run: |
           test "$METADATA_RESULT" = success
-          if [ "$REUSED_BUILD" = true ]; then
+          if [ "$BUILD_VALIDATION" = passed ]; then
             test "$VALIDATION_RESULT" = skipped
           else
             test "$VALIDATION_RESULT" = success
           fi
 
-
   macos:
     name: Package macOS DMG
-    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
-    needs:
-      - metadata
-      - validation-gate
+    needs: metadata
     runs-on: macos-26
     steps:
       - name: Check out release tag
@@ -146,10 +197,7 @@ jobs:
 
   windows:
     name: Package Windows installer
-    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
-    needs:
-      - metadata
-      - validation-gate
+    needs: metadata
     runs-on: windows-2025
     steps:
       - name: Check out release tag
@@ -186,10 +234,7 @@ jobs:
 
   linux:
     name: Package Linux tarball
-    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
-    needs:
-      - metadata
-      - validation-gate
+    needs: metadata
     runs-on: ubuntu-24.04
     steps:
       - name: Check out release tag
@@ -244,10 +289,7 @@ jobs:
 
   server:
     name: Package headless Server (${{ matrix.platform }}-${{ matrix.arch }})
-    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
-    needs:
-      - metadata
-      - validation-gate
+    needs: metadata
     strategy:
       fail-fast: false
       matrix:
@@ -292,10 +334,7 @@ jobs:
 
   relay:
     name: Build relay service (linux-${{ matrix.arch }})
-    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
-    needs:
-      - metadata
-      - validation-gate
+    needs: metadata
     strategy:
       fail-fast: false
       matrix:
@@ -350,10 +389,7 @@ jobs:
 
   console:
     name: Build relay web console
-    if: ${{ !cancelled() && needs.validation-gate.result == 'success' }}
-    needs:
-      - metadata
-      - validation-gate
+    needs: metadata
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
