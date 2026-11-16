@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- iOS 总控的“执行中”只列工作中和启动中的 Agent，空闲的不再算进去；下面按项目分组列出全部 Agent（与桌面侧边栏一样），等待处理的排在组内最前，项目组可以折叠，折叠状态会保留。原来的“需要处理”“已结束”分组去掉。
+- On iOS, the overview's "Running" card lists only working and starting Agents, no longer idle ones; below it every Agent is grouped under its project, as in the desktop sidebar, with those waiting on the user first. Project groups fold, and stay folded across launches. The separate "Needs you" and "Ended" groups are gone.
+
 ## 0.7.0 - 2026-11-16
 
 - 手机接管的终端在离开终端页、切换 pane 后仍归手机，回来时不用再接管；接管后同一项目里打开的其它终端也直接可输入。“交还电脑”、进后台或断开连接时，手机接管的终端立即交还给电脑；此前离开终端页会让这个终端谁都不能输入，断开后也要等约 60 秒。

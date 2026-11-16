@@ -1,12 +1,22 @@
 import SwiftUI
 
-/// The overview: the Host and its link, counts, then what needs the user,
-/// what runs and what ended. Tapping an Agent pushes where it runs.
+/// The overview: the Host and its link, counts, what runs right now, then
+/// every Agent under its project, each project foldable. Tapping an Agent
+/// pushes where it runs.
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var showAllFinished = false
-    /// How many ended Agents show before "show all".
-    private static let finishedShown = 5
+    /// Project ids whose Agent group is folded, one per line; kept across launches.
+    @AppStorage("overview.collapsedProjects") private var collapsedRaw = ""
+
+    private var collapsedProjects: Set<String> {
+        Set(collapsedRaw.split(separator: "\n").map(String.init))
+    }
+
+    private func toggle(_ project: String) {
+        var ids = collapsedProjects
+        if ids.remove(project) == nil { ids.insert(project) }
+        collapsedRaw = ids.sorted().joined(separator: "\n")
+    }
 
     var body: some View {
         let sections = HomeSections(model.overview)
@@ -24,36 +34,29 @@ struct OverviewView: View {
             if model.overview.agents.isEmpty {
                 Section {
                     ContentUnavailableView(
-                        model.session == nil ? "还没连上 Host" : "没有运行中的 Agent",
+                        model.session == nil ? "还没连上 Host" : "还没有 Agent",
                         systemImage: model.session == nil ? "bolt.horizontal.circle" : "cpu",
                         description: Text(model.session == nil ? "连上以后，这里会列出电脑上的 Agent。" : "在电脑上启动一个 Agent，它会出现在这里。"))
-                }
-            }
-            if !sections.attention.isEmpty {
-                Section {
-                    GroupTitle(title: "需要处理", symbol: "hand.raised.fill", color: .orange,
-                               count: sections.attention.count)
-                    ForEach(sections.attention, id: \.sessionId, content: row)
                 }
             }
             if !sections.running.isEmpty {
                 Section {
                     GroupTitle(title: "执行中", symbol: "bolt.fill", color: .blue,
                                count: sections.running.count, live: true)
-                    ForEach(sections.running, id: \.sessionId, content: row)
+                    ForEach(sections.running, id: \.sessionId) { row($0, showProject: true) }
                 }
             }
-            if !sections.finished.isEmpty {
-                let shown = showAllFinished ? sections.finished : Array(sections.finished.prefix(Self.finishedShown))
+            ForEach(sections.groups, id: \.projectId) { group in
+                let collapsed = collapsedProjects.contains(group.projectId)
                 Section {
-                    GroupTitle(title: "已结束", symbol: "checkmark", color: .green,
-                               count: sections.finished.count)
-                    ForEach(shown, id: \.sessionId, content: row)
-                    if sections.finished.count > Self.finishedShown {
-                        Button(showAllFinished ? "收起" : "显示全部 \(sections.finished.count) 个") {
-                            withAnimation { showAllFinished.toggle() }
-                        }
-                        .font(.subheadline)
+                    Button {
+                        withAnimation { toggle(group.projectId) }
+                    } label: {
+                        ProjectGroupTitle(name: group.name, agents: group.agents, collapsed: collapsed)
+                    }
+                    .foregroundStyle(.primary)
+                    if !collapsed {
+                        ForEach(group.agents, id: \.sessionId) { row($0, showProject: false) }
                     }
                 }
             }
@@ -95,7 +98,7 @@ struct OverviewView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func row(_ agent: AgentSummary) -> some View {
+    private func row(_ agent: AgentSummary, showProject: Bool) -> some View {
         Button {
             Task { await model.open(agent: agent) }
         } label: {
@@ -103,7 +106,8 @@ struct OverviewView: View {
                 AgentTile(provider: agent.provider)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("\(model.overview.projectName(agent.projectId)) · \(model.overview.tabTitle(project: agent.projectId, tab: agent.tabId))")
+                        let tab = model.overview.tabTitle(project: agent.projectId, tab: agent.tabId)
+                        Text(showProject ? "\(model.overview.projectName(agent.projectId)) · \(tab)" : tab)
                             .font(.headline)
                             .lineLimit(1)
                         Spacer(minLength: 4)
@@ -146,6 +150,38 @@ private struct GroupTitle: View {
             Spacer(minLength: 4)
             Text("\(count)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// A project group's heading: the folder, the name, its waits and runs, and
+/// whether it is folded.
+private struct ProjectGroupTitle: View {
+    let name: String
+    let agents: [AgentSummary]
+    let collapsed: Bool
+
+    var body: some View {
+        let waiting = agents.filter { HomeSections.attentionRank($0) != nil }.count
+        let running = agents.filter { [.working, .starting].contains($0.state) }.count
+        HStack(spacing: 12) {
+            IconTile(systemName: "folder.fill", color: .blue)
+            Text(name).font(.headline).lineLimit(1)
+            Spacer(minLength: 4)
+            if waiting > 0 {
+                Label("\(waiting)", systemImage: "hand.raised.fill").foregroundStyle(.orange)
+            }
+            if running > 0 {
+                Label("\(running)", systemImage: "bolt.fill").foregroundStyle(.blue)
+            }
+            Text("\(agents.count)").foregroundStyle(.secondary)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(collapsed ? 0 : 90))
+        }
+        .font(.subheadline.monospacedDigit())
+        .labelStyle(.titleAndIcon)
+        .contentShape(Rectangle())
     }
 }
 

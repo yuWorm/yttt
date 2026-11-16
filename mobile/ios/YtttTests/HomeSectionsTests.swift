@@ -2,8 +2,8 @@ import XCTest
 
 final class HomeSectionsTests: XCTestCase {
     private func agent(_ id: String, _ state: AgentState, _ waiting: WaitingKind? = nil,
-                       startedAt: UInt64) -> AgentSummary {
-        AgentSummary(sessionId: id, projectId: "p", tabId: "t", paneId: id, provider: "codex",
+                       startedAt: UInt64, project: String = "p") -> AgentSummary {
+        AgentSummary(sessionId: id, projectId: project, tabId: "t", paneId: id, provider: "codex",
                      state: state, waiting: waiting, waitingMessage: nil, task: nil,
                      currentAction: nil, stateStartedAtMs: startedAt, updatedAtMs: startedAt)
     }
@@ -32,8 +32,40 @@ final class HomeSectionsTests: XCTestCase {
                        [2, 2, 6, 7])
         XCTAssertEqual(sections.attention.map(\.sessionId),
                        ["new-approval", "old-approval", "answer", "failed"])
-        XCTAssertEqual(sections.running.map(\.sessionId), ["idle", "working"])
-        XCTAssertEqual(sections.finished.map(\.sessionId), ["done"])
+        XCTAssertEqual(sections.running.map(\.sessionId), ["working"])
+    }
+
+    func testRunningLeavesIdleOut() {
+        let overview = Overview(projects: [], agents: [
+            agent("idle", .idle, startedAt: 9),
+            agent("starting", .starting, startedAt: 2),
+            agent("working", .working, startedAt: 1),
+        ], terminals: 0, terminalIds: [])
+        XCTAssertEqual(HomeSections(overview).running.map(\.sessionId), ["starting", "working"])
+    }
+
+    func testGroupsFollowProjectOrderAndSortByUrgency() {
+        let overview = Overview(
+            projects: [
+                ProjectSummary(projectId: "q", name: "Q", tabs: [], selectedTabId: "main"),
+                ProjectSummary(projectId: "empty", name: "E", tabs: [], selectedTabId: "main"),
+                ProjectSummary(projectId: "p", name: "P", tabs: [], selectedTabId: "main"),
+            ],
+            agents: [
+                agent("p-done", .completed, startedAt: 9, project: "p"),
+                agent("p-idle", .idle, startedAt: 8, project: "p"),
+                agent("p-working", .working, startedAt: 1, project: "p"),
+                agent("p-approval", .waiting, .approval, startedAt: 2, project: "p"),
+                agent("p-working-new", .working, startedAt: 5, project: "p"),
+                agent("q-idle", .idle, startedAt: 1, project: "q"),
+                agent("gone", .working, startedAt: 1, project: "gone"),
+            ],
+            terminals: 0, terminalIds: [])
+        let groups = HomeSections(overview).groups
+        XCTAssertEqual(groups.map(\.projectId), ["q", "p", "gone"])
+        XCTAssertEqual(groups.map(\.name), ["Q", "P", "gone"])
+        XCTAssertEqual(groups[1].agents.map(\.sessionId),
+                       ["p-approval", "p-working-new", "p-working", "p-idle", "p-done"])
     }
 
     func testNamesFallBackToIds() {

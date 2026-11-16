@@ -1,8 +1,16 @@
 import Foundation
 
 /// The home screen's groups, counted and sorted natively from the core's
-/// overview: what needs the user first, then what runs, then what ended.
+/// overview: what runs right now, then every Agent under its project, as the
+/// desktop sidebar groups them.
 struct HomeSections {
+    /// A project's Agents, most urgent first.
+    struct ProjectGroup {
+        let projectId: String
+        let name: String
+        let agents: [AgentSummary]
+    }
+
     let projects: Int
     let tabs: Int
     let terminals: Int
@@ -10,29 +18,46 @@ struct HomeSections {
     /// Waiting for approval, then for an answer, then for anything else,
     /// then failed; most recent change first within each.
     let attention: [AgentSummary]
+    /// Working or starting; an idle Agent is not running.
     let running: [AgentSummary]
-    let finished: [AgentSummary]
+    /// Projects in the Host's order, then Agents of projects no longer
+    /// listed; projects without Agents are left out.
+    let groups: [ProjectGroup]
 
     init(_ overview: Overview) {
         projects = overview.projects.count
         tabs = overview.projects.reduce(0) { $0 + $1.tabs.count }
         terminals = Int(overview.terminals)
         agents = overview.agents.count
-        let recentFirst: (AgentSummary, AgentSummary) -> Bool = {
-            $0.stateStartedAtMs > $1.stateStartedAtMs
+        let urgentFirst: (AgentSummary, AgentSummary) -> Bool = {
+            let (left, right) = (Self.rank($0), Self.rank($1))
+            return left != right ? left < right : $0.stateStartedAtMs > $1.stateStartedAtMs
         }
-        attention = overview.agents
-            .filter { Self.attentionRank($0) != nil }
-            .sorted {
-                let (left, right) = (Self.attentionRank($0)!, Self.attentionRank($1)!)
-                return left != right ? left < right : recentFirst($0, $1)
-            }
-        running = overview.agents
-            .filter { [.working, .starting, .idle].contains($0.state) }
-            .sorted(by: recentFirst)
-        finished = overview.agents
-            .filter { [.completed, .interrupted, .stale].contains($0.state) }
-            .sorted(by: recentFirst)
+        attention = overview.agents.filter { Self.attentionRank($0) != nil }.sorted(by: urgentFirst)
+        running = overview.agents.filter { [.working, .starting].contains($0.state) }.sorted(by: urgentFirst)
+
+        let byProject = Dictionary(grouping: overview.agents, by: \.projectId)
+        let listed = overview.projects.map { ($0.projectId, $0.name) }
+        let known = Set(listed.map(\.0))
+        var unlisted: [(String, String)] = []
+        for agent in overview.agents where !known.contains(agent.projectId)
+            && !unlisted.contains(where: { $0.0 == agent.projectId }) {
+            unlisted.append((agent.projectId, agent.projectId))
+        }
+        groups = (listed + unlisted).compactMap { id, name in
+            guard let agents = byProject[id] else { return nil }
+            return ProjectGroup(projectId: id, name: name, agents: agents.sorted(by: urgentFirst))
+        }
+    }
+
+    /// Needs the user (0–3), runs (4), idles (5), ended (6).
+    static func rank(_ agent: AgentSummary) -> Int {
+        if let rank = attentionRank(agent) { return rank }
+        switch agent.state {
+        case .working, .starting: return 4
+        case .idle: return 5
+        default: return 6
+        }
     }
 
     static func attentionRank(_ agent: AgentSummary) -> Int? {
