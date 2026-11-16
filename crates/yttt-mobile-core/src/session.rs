@@ -20,8 +20,8 @@ use yttt_protocol::{
     Request, Response, ServerEvent, TerminalLease,
     p2p::PairingCode,
     terminal::{
-        AttachTerminal, ResizeTerminal, TerminalGeometry, TerminalInput, TerminalLeaseMode,
-        TerminalMutationContext,
+        AttachTerminal, ReadTerminalViewport, ResizeTerminal, SemanticRow, TerminalGeometry,
+        TerminalInput, TerminalLeaseMode, TerminalMutationContext, TerminalViewportAnchor,
     },
     workspace::{WorkspaceId, WorkspaceRequest, WorkspaceResponse, WorkspaceSummary},
 };
@@ -33,6 +33,7 @@ use yttt_transport_iroh::{
 
 use crate::{
     account::{Account, AccountError, TICKET_WAIT, host_key},
+    copy::{PagedText, TerminalText, TextCursor},
     files::{FileEntry, OpenedFile, SESSION_PROVIDERS, SaveOutcome, SessionEntry},
     keys::TerminalKey,
     overview::Overview,
@@ -1108,6 +1109,196 @@ impl MobileSession {
     pub fn send_key(&self, session_id: &str, key: TerminalKey) -> Result<(), MobileError> {
         let bytes = crate::keys::encode(key, self.app_cursor(session_id));
         self.send_input(session_id, bytes.to_vec())
+    }
+
+    /// The terminal's text for copy mode: the screen and, on the primary
+    /// screen, up to `pages` screens of the Host's history above it.
+    pub async fn terminal_text(
+        &self,
+        session_id: &str,
+        pages: u32,
+    ) -> Result<TerminalText, MobileError> {
+        let viewport = self
+            .client
+            .terminal_snapshot(&TerminalSessionId::new(session_id))
+            .ok_or(MobileError::NotAttached)?;
+        let alternate_screen = crate::copy::alternate_screen(viewport.modes.bits);
+        let mut rows = viewport.rows.clone();
+        rows.sort_by_key(|row| row.viewport_row);
+        let (mut lines, _) = crate::copy::lines(&rows);
+        crate::copy::trim_trailing_blank(&mut lines);
+        let last_line = lines.len().saturating_sub(1) as u32;
+        let mut row_lines: Vec<u32> = crate::copy::row_lines(&rows)
+            .into_iter()
+            .map(|line| line.min(last_line))
+            .collect();
+        let has_history = !alternate_screen && viewport.display_offset < viewport.history_size;
+        let cursor = rows.first().filter(|_| has_history).map(|top| TextCursor {
+            session_epoch: viewport.session_epoch,
+            scrollback_epoch: viewport.scrollback_epoch,
+            top_line_id: top.line_id,
+        });
+        let screen = TerminalText {
+            lines,
+            last_line_continues: false,
+            older: cursor,
+            alternate_screen,
+            row_lines: row_lines.clone(),
+        };
+        let Some(cursor) = screen.older.clone().filter(|_| pages > 0) else {
+            return Ok(screen);
+        };
+        let mut older = self.older_text(session_id, cursor, pages).await?;
+        let mut lines = std::mem::take(&mut older.lines);
+        let mut screen_lines = screen.lines.into_iter();
+        // The screen's first line joins the history's last when it wraps.
+        let shift = if older.last_line_continues
+            && let (Some(last), Some(first)) = (lines.last_mut(), screen_lines.next())
+        {
+            last.push_str(&first);
+            lines.len() as u32 - 1
+        } else {
+            lines.len() as u32
+        };
+        lines.extend(screen_lines);
+        for line in &mut row_lines {
+            *line += shift;
+        }
+        Ok(TerminalText {
+            lines,
+            last_line_continues: false,
+            older: older.older,
+            alternate_screen,
+            row_lines,
+        })
+    }
+
+    /// Up to `pages` screens of history above `cursor`, oldest first.
+    pub async fn older_text(
+        &self,
+        session_id: &str,
+        cursor: TextCursor,
+        pages: u32,
+    ) -> Result<TerminalText, MobileError> {
+        let id = TerminalSessionId::new(session_id);
+        let read = |anchor| {
+            self.request(Request::ReadTerminalViewport(ReadTerminalViewport {
+                session_id: id.clone(),
+                session_epoch: cursor.session_epoch,
+                scrollback_epoch: cursor.scrollback_epoch,
+                anchor,
+            }))
+        };
+        let viewport = |response| match response {
+            Response::TerminalViewport(read) => Ok(read.viewport),
+            _ => Err(MobileError::Host("unexpected viewport response".into())),
+        };
+        // A line anchor puts that line at the top of the screen read: its
+        // offset now, as output may have moved it.
+        let mut top = cursor.top_line_id;
+        let mut offset = viewport(read(TerminalViewportAnchor::LineId(top)).await?)?.display_offset;
+        let mut rows: Vec<SemanticRow> = Vec::new();
+        let mut more = true;
+        for _ in 0..pages.max(1) {
+            // One screen up, overlapping by the known top line, which shows
+            // the two reads still line up.
+            let geometry_rows = self
+                .client
+                .terminal_snapshot(&id)
+                .map_or(1, |snapshot| u64::from(snapshot.geometry.rows.max(1)));
+            let block = viewport(
+                read(TerminalViewportAnchor::DisplayOffset(
+                    offset + geometry_rows - 1,
+                ))
+                .await?,
+            )?;
+            let mut block_rows = block.rows;
+            block_rows.sort_by_key(|row| row.viewport_row);
+            let above = crate::copy::rows_above(&block_rows, top)
+                .ok_or_else(|| MobileError::Host("the history moved; read it again".into()))?;
+            more = block.display_offset < block.history_size && !above.is_empty();
+            let Some(first) = above.first() else { break };
+            top = first.line_id;
+            offset = block.display_offset;
+            let mut joined = above.to_vec();
+            joined.append(&mut rows);
+            rows = joined;
+            if !more {
+                break;
+            }
+        }
+        let (lines, last_line_continues) = crate::copy::lines(&rows);
+        Ok(TerminalText {
+            lines,
+            last_line_continues,
+            older: more.then_some(TextCursor {
+                top_line_id: top,
+                ..cursor
+            }),
+            alternate_screen: false,
+            row_lines: Vec::new(),
+        })
+    }
+
+    /// The screen's lines as copy mode shows them.
+    fn screen_lines(&self, session_id: &str) -> Result<Vec<String>, MobileError> {
+        let viewport = self
+            .client
+            .terminal_snapshot(&TerminalSessionId::new(session_id))
+            .ok_or(MobileError::NotAttached)?;
+        let mut rows = viewport.rows;
+        rows.sort_by_key(|row| row.viewport_row);
+        let (mut lines, _) = crate::copy::lines(&rows);
+        crate::copy::trim_trailing_blank(&mut lines);
+        Ok(lines)
+    }
+
+    /// Pages a program that scrolls itself up one screen and returns what
+    /// that adds above `previous`, the screen read before; only while in
+    /// control.
+    pub async fn page_up_text(
+        &self,
+        session_id: &str,
+        previous: Vec<String>,
+    ) -> Result<PagedText, MobileError> {
+        let before = self.screen_lines(session_id)?;
+        self.scroll_program(session_id, -1)?;
+        // The program redraws, maybe over a few frames: wait until the
+        // screen changed and then held still, or the program did not move.
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        let mut last = before.clone();
+        let screen = loop {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let now = self.screen_lines(session_id)?;
+            if (now != before && now == last) || Instant::now() >= deadline {
+                break now;
+            }
+            last = now;
+        };
+        let stitched = crate::copy::stitch(&screen, &previous);
+        Ok(PagedText {
+            above: stitched.above,
+            header: stitched.header,
+            gap: stitched.gap,
+            at_top: stitched.unchanged,
+            screen,
+        })
+    }
+
+    /// Scrolls the program by `pages` screens, negative up; only while in
+    /// control.
+    pub fn scroll_program(&self, session_id: &str, pages: i32) -> Result<(), MobileError> {
+        let viewport = self
+            .client
+            .terminal_snapshot(&TerminalSessionId::new(session_id))
+            .ok_or(MobileError::NotAttached)?;
+        let bytes = crate::copy::scroll_bytes(
+            viewport.modes.bits,
+            viewport.geometry.cols,
+            viewport.geometry.rows,
+            pages,
+        );
+        self.send_input(session_id, bytes)
     }
 
     /// Resizes the PTY to this device's screen; only while in control.

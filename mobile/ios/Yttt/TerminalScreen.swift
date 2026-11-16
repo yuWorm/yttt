@@ -29,6 +29,10 @@ final class TerminalControl: ObservableObject {
     @Published var error: String?
     /// The system keyboard is up, for the button that puts it away.
     @Published var keyboardShown = false
+    /// The copy view is open.
+    @Published var copying = false
+    /// The screen row the long press that opened it was on.
+    var copyRow: Int?
     private var observers: [NSObjectProtocol] = []
 
     init(session: HostSession, sessionId: String, projectId: String? = nil) {
@@ -53,6 +57,13 @@ final class TerminalControl: ObservableObject {
     /// Puts the keyboard away; tapping the terminal brings it back.
     func hideKeyboard() {
         handle.container?.hideKeyboard()
+    }
+
+    /// Opens the copy view at `row`, the keyboard put away.
+    func startCopy(row: Int?) {
+        hideKeyboard()
+        copyRow = row
+        copying = true
     }
 
     /// Takes the terminal at the size the view has once it fits the screen;
@@ -118,7 +129,8 @@ struct TerminalScreen: View {
                      look: look, handle: control.handle,
                      onStats: { stats = $0 },
                      onAttached: { Task { await control.attached() } },
-                     onControlLost: { control.lost() })
+                     onControlLost: { control.lost() },
+                     onLongPress: { control.startCopy(row: $0) })
             .overlay(alignment: .topTrailing) {
                 #if DEBUG
                 if !stats.isEmpty {
@@ -138,6 +150,9 @@ struct TerminalScreen: View {
                 await control.take()
                 guard control.controlling else { return }
                 try? control.session.sendInput(sessionId: terminal.sessionId, bytes: Data((line + "\r").utf8))
+            }
+            .fullScreenCover(isPresented: $control.copying) {
+                CopyModeView(control: control, look: look, pressedRow: control.copyRow)
             }
             .alert("接管失败", isPresented: .constant(control.error != nil)) {
                 Button("好") { control.error = nil }
@@ -203,10 +218,12 @@ struct TerminalHost: UIViewRepresentable {
     let onStats: (String) -> Void
     let onAttached: () -> Void
     let onControlLost: () -> Void
+    let onLongPress: (Int) -> Void
 
     func makeUIView(context: Context) -> TerminalContainer {
         let view = TerminalContainer(session: session, terminal: terminal, look: look, onStats: onStats,
-                                     onAttached: onAttached, onControlLost: onControlLost)
+                                     onAttached: onAttached, onControlLost: onControlLost,
+                                     onLongPress: onLongPress)
         handle.container = view
         return view
     }
@@ -227,6 +244,7 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
     private let onStats: (String) -> Void
     private let onAttached: () -> Void
     private let onControlLost: () -> Void
+    private let onLongPress: (Int) -> Void
     private let scroll = UIScrollView()
     private let terminalView = TrackingTerminalView(frame: .zero)
     /// The size SwiftTerm settled on, sent once the layout stops moving.
@@ -245,7 +263,9 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
     private var look: TerminalLook?
 
     init(session: HostSession, terminal: TerminalInfo, look: TerminalLook, onStats: @escaping (String) -> Void,
-         onAttached: @escaping () -> Void, onControlLost: @escaping () -> Void) {
+         onAttached: @escaping () -> Void, onControlLost: @escaping () -> Void,
+         onLongPress: @escaping (Int) -> Void) {
+        self.onLongPress = onLongPress
         self.session = session
         self.info = terminal
         self.onStats = onStats
@@ -267,6 +287,11 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
         // first tap as a click instead of raising the keyboard; its tap also
         // waits out a double and a triple tap. This one raises the keyboard
         // on touch-up, and SwiftTerm still forwards the click.
+        // A long press opens the copy view at the pressed line.
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
+        press.minimumPressDuration = 0.45
+        press.delegate = self
+        addGestureRecognizer(press)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
         tap.delegate = self
         tap.cancelsTouchesInView = false
@@ -322,6 +347,12 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
     @objc private func tapped() {
         guard controlling, terminalView.mouseTracking, !terminalView.isFirstResponder else { return }
         _ = terminalView.becomeFirstResponder()
+    }
+
+    @objc private func pressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onLongPress(terminalView.row(at: gesture.location(in: terminalView)))
     }
 
     @objc private func swipedDown() {

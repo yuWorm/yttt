@@ -42,6 +42,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -54,6 +56,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import org.connectbot.terminal.Terminal
 import org.connectbot.terminal.TerminalEmulatorFactory
 import uniffi.yttt_mobile_core.HostSession
@@ -112,6 +116,9 @@ fun TerminalPane(
     val ctrl = remember(id) { CtrlKey() }
     var ctrlArmed by remember(id) { mutableStateOf(false) }
     var keyboardShown by remember(id) { mutableStateOf(true) }
+    var copying by remember(id) { mutableStateOf(false) }
+    // The screen row the long press that opened the copy view was on.
+    var copyRow by remember(id) { mutableStateOf<Int?>(null) }
     val look by link.appearance.terminal.collectAsState()
     val systemDark = isSystemInDarkTheme()
     val palette = remember(look.theme, systemDark) { theme(look.theme, systemDark) }
@@ -280,7 +287,38 @@ fun TerminalPane(
             .background(Color(argb(palette.background)))
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
     ) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(
+            Modifier.weight(1f).fillMaxWidth().pointerInput(id) {
+                // A long press opens the copy view at the pressed line; it
+                // is taken before termlib sees it.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    // Lifted, or moved into a scroll, before the long press time.
+                    val ended = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        var over = false
+                        while (!over) {
+                            val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                                .firstOrNull { it.id == down.id }
+                            over = change == null || !change.pressed ||
+                                (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                        }
+                        true
+                    }
+                    val pressed = ended == null
+                    if (pressed) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val rows = if (controlling) fitted.value?.second ?: info.rows.toInt() else info.rows.toInt()
+                        copyRow = (down.position.y / (size.height.toFloat() / rows)).toInt().coerceIn(0, rows - 1)
+                        copying = true
+                        // The rest of the press is the copy view's, not termlib's.
+                        do {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            event.changes.forEach { it.consume() }
+                        } while (event.changes.any { it.pressed })
+                    }
+                }
+            },
+        ) {
             Terminal(
                 terminalEmulator = emulator,
                 typeface = typeface,
@@ -318,6 +356,20 @@ fun TerminalPane(
             }
         }
         above()
+        if (copying) {
+            CopyModeDialog(
+                session = session,
+                sessionId = id,
+                background = argb(palette.background),
+                foreground = argb(palette.foreground),
+                typeface = typeface,
+                fontSize = look.size,
+                controlling = controlling,
+                pressedRow = copyRow,
+                onTake = { takeControl() },
+                onDismiss = { copying = false },
+            )
+        }
         if (controlling) {
             KeyBar(
                 ctrlArmed = ctrlArmed,

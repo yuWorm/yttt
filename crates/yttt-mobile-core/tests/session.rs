@@ -1183,3 +1183,189 @@ async fn a_phone_opens_a_host_folder_as_a_project_with_the_desktops_layout() {
     assert_eq!(project.tabs[0].title, "Shell");
     phone.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_mode_reads_the_whole_history_back_in_order_while_observing() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+    // 300 numbered lines, one that wraps at the 100 columns, then the prompt.
+    let long = "w".repeat(150);
+    let script = format!(
+        "i=1; while [ $i -le 300 ]; do echo line-$i; i=$((i+1)); done; echo {long}; printf copy-ready; sleep 30"
+    );
+    let terminal = desktop_terminals_running(&admin, temp.path(), &["project:tab:pane"], &script)
+        .await[0]
+        .clone();
+    let id = terminal.to_string();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
+    phone.attach(&id).await.unwrap();
+    drain_until(&phone, &id, "copy-ready").await;
+
+    let first = phone.terminal_text(&id, 2).await.unwrap();
+    assert!(!first.alternate_screen);
+    let mut lines = first.lines;
+    let mut older = first.older;
+    while let Some(cursor) = older {
+        let text = phone.older_text(&id, cursor, 3).await.unwrap();
+        let mut merged = text.lines;
+        if text.last_line_continues {
+            let next = lines.remove(0);
+            merged.last_mut().unwrap().push_str(&next);
+        }
+        merged.extend(lines);
+        lines = merged;
+        older = text.older;
+    }
+    let numbered: Vec<String> = lines
+        .iter()
+        .filter(|line| line.starts_with("line-"))
+        .cloned()
+        .collect();
+    let expected: Vec<String> = (1..=300).map(|i| format!("line-{i}")).collect();
+    assert_eq!(numbered, expected);
+    assert!(lines.contains(&long), "the wrapped line comes back whole");
+    assert_eq!(lines.last().map(String::as_str), Some("copy-ready"));
+    phone.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_mode_on_the_alternate_screen_has_only_the_screen() {
+    let temp = tempfile::tempdir().unwrap();
+    let admin = start_host(temp.path()).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+    let script = "echo before; printf '\\033[?1049h\\033[Halt-ready'; sleep 30";
+    let terminal = desktop_terminals_running(&admin, temp.path(), &["project:tab:pane"], script)
+        .await[0]
+        .clone();
+    let id = terminal.to_string();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
+    phone.attach(&id).await.unwrap();
+    drain_until(&phone, &id, "alt-ready").await;
+    let text = phone.terminal_text(&id, 5).await.unwrap();
+    assert!(text.alternate_screen);
+    assert!(text.older.is_none());
+    assert_eq!(text.lines, ["alt-ready"]);
+    phone.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_mode_pages_a_full_screen_program_with_page_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("numbers.txt");
+    let numbers: Vec<String> = (1..=200).map(|i| format!("entry-{i}")).collect();
+    fs::write(&file, numbers.join("\n") + "\n").unwrap();
+    // Started once the phone sized the terminal, at the end of the file.
+    let script = format!(
+        "sleep 2; TERM=xterm-256color LESS= exec less -+F -+X +G {}",
+        file.display()
+    );
+    page_and_stitch(temp, &script, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_mode_pages_a_mouse_program_with_the_wheel_and_pages_overlap() {
+    let temp = tempfile::tempdir().unwrap();
+    // An Agent TUI's shape: a title, 200 lines of content scrolled three
+    // lines a wheel notch, an input box and a status line that changes.
+    let program = temp.path().join("tui.py");
+    fs::write(
+        &program,
+        r#"
+import os, re, signal, sys, tty
+fd = sys.stdin.fileno()
+tty.setraw(fd)
+N = 200
+state = {"top": None}
+def draw(*_):
+    cols, rows = os.get_terminal_size(fd)
+    body = rows - 3
+    if state["top"] is None:
+        top = N - body
+    else:
+        top = max(0, min(state["top"], N - body))
+        state["top"] = top
+    lines = ["Agent TUI"] + ["entry-%d" % (i + 1) for i in range(top, top + body)]
+    lines += ["> input box", "status %d" % top]
+    os.write(1, ("\x1b[H\x1b[2J" + "\r\n".join(lines)).encode())
+signal.signal(signal.SIGWINCH, draw)
+os.write(1, b"\x1b[?1049h\x1b[?1000h\x1b[?1006h")
+draw()
+while True:
+    data = os.read(fd, 4096)
+    if not data:
+        break
+    for button in re.findall(rb"\x1b\[<(\d+);\d+;\d+M", data):
+        cols, rows = os.get_terminal_size(fd)
+        if state["top"] is None:
+            state["top"] = N - (rows - 3)
+        state["top"] += -3 if int(button) == 64 else 3 if int(button) == 65 else 0
+    draw()
+"#,
+    )
+    .unwrap();
+    let script = format!("sleep 2; exec python3 {}", program.display());
+    page_and_stitch(temp, &script, true).await;
+}
+
+/// Runs `script` (a full-screen program showing entry-1..entry-200 that
+/// starts at the end), pages it up from the phone and stitches the pages;
+/// with `overlapping`, every page must overlap the one below it.
+async fn page_and_stitch(temp: tempfile::TempDir, script: &str, overlapping: bool) {
+    let admin = start_host(temp.path()).await;
+    let record = pair_device(&admin, RelayChoice::Off).await;
+    let terminal = desktop_terminals_running(&admin, temp.path(), &["project:tab:pane"], script)
+        .await[0]
+        .clone();
+    let id = terminal.to_string();
+    let phone =
+        MobileSession::connect(&record, SECRET, RelayChoice::Off, None, "phone", no_store())
+            .await
+            .unwrap();
+    phone.attach(&id).await.unwrap();
+    phone.take_control(&id, 40, 12).await.unwrap();
+    drain_until(&phone, &id, "entry-200").await;
+    let first = eventually("the program on the alternate screen", async || {
+        let text = phone.terminal_text(&id, 0).await.ok()?;
+        (text.alternate_screen && text.lines.iter().any(|line| line == "entry-200")).then_some(text)
+    })
+    .await;
+
+    let mut document = first.lines.clone();
+    let mut screen = first.lines;
+    let mut first_page = true;
+    let mut reached_top = false;
+    for _ in 0..120 {
+        let paged = phone.page_up_text(&id, screen).await.unwrap();
+        if paged.at_top {
+            reached_top = true;
+            break;
+        }
+        assert!(
+            !overlapping || !paged.gap,
+            "pages overlap: {:?}",
+            paged.screen
+        );
+        let drop = if first_page { paged.header as usize } else { 0 };
+        first_page = false;
+        let mut next = paged.above;
+        next.extend(document.into_iter().skip(drop));
+        document = next;
+        screen = paged.screen;
+    }
+    assert!(reached_top);
+    let entries: Vec<String> = document
+        .iter()
+        .filter(|line| line.starts_with("entry-"))
+        .cloned()
+        .collect();
+    let expected: Vec<String> = (1..=200).map(|i| format!("entry-{i}")).collect();
+    assert_eq!(entries, expected);
+    phone.close().await;
+}

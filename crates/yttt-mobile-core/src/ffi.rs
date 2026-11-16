@@ -10,6 +10,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::account::{Account, AccountError};
+use crate::copy::{PagedText, TerminalText, TextCursor};
 use crate::files::{FileEntry, OpenedFile, SaveOutcome, SessionEntry};
 use crate::keys::TerminalKey;
 use crate::overview::Overview;
@@ -630,6 +631,57 @@ impl HostSession {
     /// A key-bar key, encoded for the program's cursor-key mode.
     pub fn send_key(&self, session_id: String, key: TerminalKey) -> Result<(), MobileCoreError> {
         Ok(self.session.send_key(&session_id, key)?)
+    }
+
+    /// The terminal's text for copy mode, with up to `pages` screens of
+    /// history on the primary screen.
+    pub async fn terminal_text(
+        &self,
+        session_id: String,
+        pages: u32,
+    ) -> Result<TerminalText, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.terminal_text(&session_id, pages).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// Up to `pages` screens of history above `cursor`.
+    pub async fn older_text(
+        &self,
+        session_id: String,
+        cursor: TextCursor,
+        pages: u32,
+    ) -> Result<TerminalText, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.older_text(&session_id, cursor, pages).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// Pages a program that scrolls itself up one screen; what that adds
+    /// above `previous`, the screen read before.
+    pub async fn page_up_text(
+        &self,
+        session_id: String,
+        previous: Vec<String>,
+    ) -> Result<PagedText, MobileCoreError> {
+        let session = self.session.clone();
+        self.runtime
+            .spawn(async move { session.page_up_text(&session_id, previous).await })
+            .await
+            .map_err(|error| failed(error.to_string()))?
+            .map_err(Into::into)
+    }
+
+    /// Scrolls the program by `pages` screens, negative up: wheel when it
+    /// tracks the mouse, Page Up / Page Down otherwise.
+    pub fn scroll_program(&self, session_id: String, pages: i32) -> Result<(), MobileCoreError> {
+        Ok(self.session.scroll_program(&session_id, pages)?)
     }
 
     pub fn send_input(&self, session_id: String, bytes: Vec<u8>) -> Result<(), MobileCoreError> {

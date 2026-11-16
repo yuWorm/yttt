@@ -27,7 +27,7 @@ use yttt_protocol::terminal::{
 /// semantic capture and alacritty's `TermMode`. Named here so the mobile core
 /// needs neither crate (alacritty does not build for Android); a test checks
 /// they still match.
-mod wire {
+pub(crate) mod wire {
     pub const STYLE_INVERSE: u16 = 1 << 0;
     pub const STYLE_BOLD: u16 = 1 << 1;
     pub const STYLE_ITALIC: u16 = 1 << 2;
@@ -39,6 +39,8 @@ mod wire {
     pub const STYLE_UNDERCURL: u16 = 1 << 8;
     pub const STYLE_DOTTED_UNDERLINE: u16 = 1 << 9;
     pub const STYLE_DASHED_UNDERLINE: u16 = 1 << 10;
+    /// The row continues on the next one (soft wrap).
+    pub const STYLE_WRAPLINE: u16 = 1 << 11;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct TermMode(u32);
@@ -51,6 +53,7 @@ mod wire {
         pub const SGR_MOUSE: Self = Self(1 << 5);
         pub const MOUSE_MOTION: Self = Self(1 << 6);
         pub const FOCUS_IN_OUT: Self = Self(1 << 11);
+        pub const ALT_SCREEN: Self = Self(1 << 12);
         pub const MOUSE_DRAG: Self = Self(1 << 13);
         pub const MOUSE_MODE: Self =
             Self(Self::MOUSE_REPORT_CLICK.0 | Self::MOUSE_MOTION.0 | Self::MOUSE_DRAG.0);
@@ -527,6 +530,7 @@ mod tests {
             (wire::STYLE_UNDERCURL, host::STYLE_UNDERCURL),
             (wire::STYLE_DOTTED_UNDERLINE, host::STYLE_DOTTED_UNDERLINE),
             (wire::STYLE_DASHED_UNDERLINE, host::STYLE_DASHED_UNDERLINE),
+            (wire::STYLE_WRAPLINE, host::STYLE_WRAPLINE),
         ] {
             assert_eq!(local, host);
         }
@@ -543,6 +547,7 @@ mod tests {
             (wire::TermMode::FOCUS_IN_OUT, TermMode::FOCUS_IN_OUT),
             (wire::TermMode::MOUSE_DRAG, TermMode::MOUSE_DRAG),
             (wire::TermMode::MOUSE_MODE, TermMode::MOUSE_MODE),
+            (wire::TermMode::ALT_SCREEN, TermMode::ALT_SCREEN),
         ] {
             assert_eq!(local.bits(), host.bits());
         }

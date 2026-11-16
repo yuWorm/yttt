@@ -15,6 +15,17 @@ final class TrackingTerminalView: TerminalView {
         composition.isHidden = true
         composition.isUserInteractionEnabled = false
         addSubview(composition)
+        // A long press opens the app's copy view instead of SwiftTerm's menu.
+        for recognizer in gestureRecognizers ?? [] where recognizer is UILongPressGestureRecognizer {
+            recognizer.isEnabled = false
+        }
+    }
+
+    /// The screen row at `point`, in this view's coordinates.
+    func row(at point: CGPoint) -> Int {
+        let rows = max(terminalDimensions.rows, 1)
+        let height = caretFrame.height > 0 ? caretFrame.height : bounds.height / CGFloat(rows)
+        return max(0, min(rows - 1, Int((point.y - bounds.minY) / height)))
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
