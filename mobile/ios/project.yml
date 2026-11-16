@@ -134,6 +134,7 @@ targets:
       - Yttt/HostList.swift
       - Yttt/Automation.swift
       - Yttt/AppearanceSettings.swift
+      - Yttt/TrackingTerminalView.swift
       - path: ../../target/mobile/ios/swift
         group: Generated
     dependencies:

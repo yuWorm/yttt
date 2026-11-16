@@ -409,6 +409,7 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
             fedBytes += bytes.count
             terminalView.feed(byteArray: ArraySlice([UInt8](bytes)))
         }
+        terminalView.refreshComposition()
         let now = CACurrentMediaTime()
         if now - lastReport >= 0.5 {
             let stats = session.drainStats()
@@ -460,15 +461,4 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
         if let url = URL(string: link) { UIApplication.shared.open(url) }
     }
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
-}
-
-/// SwiftTerm's view, telling whether the application tracks the mouse.
-final class TrackingTerminalView: TerminalView {
-    private(set) var mouseTracking = false
-
-    nonisolated override func mouseModeChanged(source: Terminal) {
-        super.mouseModeChanged(source: source)
-        let tracking = source.mouseMode != .off
-        DispatchQueue.main.async { [weak self] in self?.mouseTracking = tracking }
-    }
 }
