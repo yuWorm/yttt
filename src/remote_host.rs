@@ -474,6 +474,23 @@ async fn within_ticket_wait<T, E: std::fmt::Display>(
     }
 }
 
+/// Runs the control-plane `lookup` for a connection. Without a usable
+/// stored ticket (`cached` false) it is awaited for at most [`TICKET_WAIT`]
+/// and its result returned; with one it runs in the background, `done`
+/// receives its result, and nothing is waited on.
+async fn ticket_lookup<T: Send + 'static>(
+    cached: bool,
+    lookup: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+    done: impl FnOnce(Result<T, String>) + Send + 'static,
+) -> Option<Result<T, String>> {
+    if cached {
+        tokio::spawn(async move { done(lookup.await) });
+        None
+    } else {
+        Some(within_ticket_wait(lookup, TICKET_WAIT).await)
+    }
+}
+
 fn connect_paired(
     launch: RemoteLaunch,
     host: yttt_client_core::p2p::PairedHost,
@@ -524,29 +541,51 @@ fn connect_paired(
     let mut ticket = None;
     if let Some(session) = &account {
         let device = crate::relay_account::device_label(&label);
-        let prepared = runtime.block_on(within_ticket_wait(
-            async {
-                crate::relay_account::register_for(session, &secret, &device, host.host.0).await?;
-                Ok::<_, yttt_control_client::ControlError>(
-                    yttt_client_core::relay_follow::refresh_record(
-                        session, &secret, &shared, None, &note,
-                    )
-                    .await,
+        let lookup = {
+            let (session, secret, shared, note) =
+                (session.clone(), *secret, shared.clone(), note.clone());
+            let host_key = host.host.0;
+            async move {
+                crate::relay_account::register_for(&session, &secret, &device, host_key)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(yttt_client_core::relay_follow::refresh_record(
+                    &session, &secret, &shared, None, &note,
                 )
-            },
-            TICKET_WAIT,
-        ));
-        match prepared {
-            Ok((fresh, changed)) => {
-                if changed {
-                    on_changed(&shared.lock().clone());
-                }
-                ticket = fresh;
+                .await)
             }
-            Err(error) => note(&format!(
-                "relay account unavailable, using the cached ticket: {error}"
-            )),
-        }
+        };
+        let apply = {
+            let (shared, note, on_changed) = (shared.clone(), note.clone(), on_changed.clone());
+            move |prepared: Result<(Option<yttt_control_client::RelayTicket>, bool), String>| {
+                match prepared {
+                    Ok((fresh, changed)) => {
+                        if changed {
+                            on_changed(&shared.lock().clone());
+                        }
+                        fresh
+                    }
+                    Err(error) => {
+                        note(&format!(
+                            "relay account unavailable, using the cached ticket: {error}"
+                        ));
+                        None
+                    }
+                }
+            }
+        };
+        // A stored ticket still good for the Host's node connects at once;
+        // the record is refreshed behind the connection.
+        let cached = shared
+            .lock()
+            .relay_target(None, yttt_control_client::now_unix())
+            .is_ok();
+        let later = apply.clone();
+        ticket = runtime
+            .block_on(ticket_lookup(cached, lookup, move |prepared| {
+                later(prepared);
+            }))
+            .and_then(apply);
     }
     let target = shared
         .lock()
@@ -1252,6 +1291,44 @@ mod tests {
             Err("the control plane did not answer within 5 s".to_string())
         );
         assert_eq!(started.elapsed(), TICKET_WAIT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_usable_stored_ticket_does_not_wait_on_the_control_plane() {
+        let started = tokio::time::Instant::now();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let result = ticket_lookup(
+            true,
+            async {
+                tokio::time::sleep(TICKET_WAIT * 2).await;
+                Ok::<_, String>(7)
+            },
+            move |result| {
+                let _ = sent.send(result);
+            },
+        )
+        .await;
+        assert_eq!(result, None);
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        // The lookup still finishes, in the background.
+        assert_eq!(received.await.unwrap(), Ok(7));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_a_stored_ticket_the_lookup_is_awaited() {
+        let result = ticket_lookup(false, async { Ok::<_, String>(7) }, |_| {
+            panic!("an awaited lookup is not handed on")
+        })
+        .await;
+        assert_eq!(result, Some(Ok(7)));
+        let result =
+            ticket_lookup(false, std::future::pending::<Result<(), String>>(), |_| {}).await;
+        assert_eq!(
+            result,
+            Some(Err(
+                "the control plane did not answer within 5 s".to_string()
+            ))
+        );
     }
 
     #[tokio::test]
