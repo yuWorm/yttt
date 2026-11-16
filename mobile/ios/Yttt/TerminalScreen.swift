@@ -228,7 +228,9 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
     private let onAttached: () -> Void
     private let onControlLost: () -> Void
     private let scroll = UIScrollView()
-    private let terminalView = TerminalView(frame: .zero)
+    private let terminalView = TrackingTerminalView(frame: .zero)
+    /// The size SwiftTerm settled on, sent once the layout stops moving.
+    private var pendingResize: Task<Void, Never>?
     private var link: CADisplayLink?
     private var controlling = false
     /// Sized to the screen while a take is in flight.
@@ -261,6 +263,14 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
         swipe.direction = .down
         swipe.delegate = self
         addGestureRecognizer(swipe)
+        // An Agent TUI tracks the mouse, and SwiftTerm then forwards the
+        // first tap as a click instead of raising the keyboard; its tap also
+        // waits out a double and a triple tap. This one raises the keyboard
+        // on touch-up, and SwiftTerm still forwards the click.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        tap.delegate = self
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
         Task { @MainActor in
             do {
                 try await session.attach(sessionId: terminal.sessionId)
@@ -309,11 +319,20 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
         _ = terminalView.resignFirstResponder()
     }
 
+    @objc private func tapped() {
+        guard controlling, terminalView.mouseTracking, !terminalView.isFirstResponder else { return }
+        _ = terminalView.becomeFirstResponder()
+    }
+
     @objc private func swipedDown() {
         if controlling { hideKeyboard() }
     }
 
+    /// How long the grid holds still before its size goes to the Host.
+    private static let resizeSettle = 120
+
     func stop() {
+        pendingResize?.cancel()
         link?.invalidate()
         link = nil
         let id = info.sessionId
@@ -355,10 +374,19 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
         self.controlling = controlling
         if controlling {
             setNeedsLayout()
-            _ = terminalView.becomeFirstResponder()
         } else {
-            _ = terminalView.resignFirstResponder()
+            pendingResize?.cancel()
             observeHostSize()
+        }
+        // Called from SwiftUI's update: the keyboard's notifications would
+        // change observed state inside it, so the responder changes after.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.controlling == controlling else { return }
+            if controlling {
+                _ = self.terminalView.becomeFirstResponder()
+            } else {
+                _ = self.terminalView.resignFirstResponder()
+            }
         }
     }
 
@@ -414,8 +442,15 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
         guard controlling, newCols > 0, newRows > 0 else { return }
-        let id = info.sessionId
-        Task { try? await session.resize(sessionId: id, cols: UInt16(newCols), rows: UInt16(newRows)) }
+        // The keyboard and the layout move the grid several times in a row;
+        // each resize makes an Agent TUI redraw, so only the last goes out.
+        let (id, session) = (info.sessionId, session)
+        pendingResize?.cancel()
+        pendingResize = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.resizeSettle))
+            guard !Task.isCancelled, self?.controlling == true else { return }
+            try? await session.resize(sessionId: id, cols: UInt16(newCols), rows: UInt16(newRows))
+        }
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
@@ -425,4 +460,15 @@ final class TerminalContainer: UIView, TerminalViewDelegate, UIGestureRecognizer
         if let url = URL(string: link) { UIApplication.shared.open(url) }
     }
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+}
+
+/// SwiftTerm's view, telling whether the application tracks the mouse.
+final class TrackingTerminalView: TerminalView {
+    private(set) var mouseTracking = false
+
+    nonisolated override func mouseModeChanged(source: Terminal) {
+        super.mouseModeChanged(source: source)
+        let tracking = source.mouseMode != .off
+        DispatchQueue.main.async { [weak self] in self?.mouseTracking = tracking }
+    }
 }
