@@ -1034,3 +1034,26 @@ async fn releasing_a_terminal_taken_on_its_own_gives_it_back() {
     runtime.terminate(&a).unwrap();
     runtime.terminate(&b).unwrap();
 }
+
+#[tokio::test]
+async fn an_unterminated_synchronized_update_is_shown_after_its_timeout() {
+    let runtime = HostRuntime::new();
+    let mut events = runtime.subscribe();
+    let session = TerminalSessionId::new("sync-timeout");
+    let terminal = runtime
+        .spawn(spec(
+            "sync-timeout",
+            "printf '\\033[?25lhidden'; sleep 0.3; printf '\\033[?2026h\\033[?25hunterminated'; sleep 30",
+        ))
+        .unwrap();
+    terminal.set_subscriber_count(1);
+
+    wait_for_text(&mut events, "unterminated").await;
+    let checkpoint = runtime.terminal(&session).unwrap().checkpoint().unwrap();
+    assert!(
+        checkpoint.viewport.cursor.visible,
+        "the cursor shown inside the update must come back"
+    );
+
+    runtime.terminate(&session).unwrap();
+}

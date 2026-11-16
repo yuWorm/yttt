@@ -36,7 +36,7 @@ use yttt_ssh::{
     RemoteTerminalSession, TransportService,
 };
 use yttt_terminal_core::{
-    TerminalState,
+    TerminalParser, TerminalState,
     semantic::{SemanticAccessError, SemanticCaptureContext, SemanticSnapshotter},
 };
 
@@ -234,6 +234,12 @@ struct HostedTerminalInner {
     spec: TerminalSpawnSpec,
     session_epoch: u64,
     state: Mutex<TerminalState<HostEventProxy>>,
+    /// Shared by the PTY reader, which feeds it, and the output publisher, which
+    /// ends a synchronized update (DEC 2026) the program never closed.
+    parser: Mutex<TerminalParser<HostEventProxy>>,
+    /// The parser's pending synchronized-update deadline, written under the parser
+    /// lock so the publisher can wait on it without contending with parsing.
+    sync_deadline: Mutex<Option<Instant>>,
     snapshots: Mutex<SemanticSnapshotter>,
     metadata: Mutex<TerminalMetadata>,
     query_palette: Mutex<Vec<u32>>,
@@ -427,6 +433,8 @@ impl HostedTerminal {
             query_palette: Mutex::new(spec.query_palette.clone()),
             spec,
             session_epoch,
+            parser: Mutex::new(state.parser()),
+            sync_deadline: Mutex::new(None),
             state: Mutex::new(state),
             backend,
             writer: writer_tx,
@@ -747,6 +755,28 @@ fn validate_geometry(geometry: TerminalGeometry) -> Result<(), HostedTerminalErr
 }
 
 impl HostedTerminalInner {
+    /// Applies a synchronized update that outlived its timeout, as a terminal
+    /// would, so a program that never sends the end marker cannot freeze the
+    /// screen (and leave the cursor hidden) indefinitely.
+    fn stop_expired_sync(&self, now: Instant) -> bool {
+        if self
+            .sync_deadline
+            .lock()
+            .is_none_or(|deadline| now < deadline)
+        {
+            return false;
+        }
+        let mut parser = self.parser.lock();
+        let expired = parser
+            .sync_deadline()
+            .is_some_and(|deadline| now >= deadline);
+        if expired {
+            parser.stop_sync();
+        }
+        *self.sync_deadline.lock() = parser.sync_deadline();
+        expired
+    }
+
     fn request_output_capture(&self) {
         self.capture_requested.store(true, Ordering::Release);
         self.capture_notify.notify_one();
@@ -829,7 +859,6 @@ fn spawn_reader(
     thread::Builder::new()
         .name(format!("yttt-host-pty-read-{}", inner.spec.session_id))
         .spawn(move || {
-            let mut parser = inner.state.lock().parser();
             let mut buffer = vec![0_u8; u16::MAX as usize];
             loop {
                 match reader.read(&mut buffer) {
@@ -837,13 +866,24 @@ fn spawn_reader(
                     Ok(length) => {
                         let bytes = &buffer[..length];
                         let started_at = Instant::now();
-                        parser.advance(bytes);
+                        let stats = {
+                            let mut parser = inner.parser.lock();
+                            let stats = parser.advance(bytes);
+                            *inner.sync_deadline.lock() = parser.sync_deadline();
+                            stats
+                        };
                         inner.diagnostics.parser.record(started_at.elapsed());
                         inner
                             .diagnostics
                             .bytes_parsed
                             .fetch_add(length as u64, Ordering::Relaxed);
-                        inner.request_output_capture();
+                        if stats.unsynchronized_output {
+                            inner.request_output_capture();
+                        } else {
+                            // Everything went into a synchronized update: nothing new to
+                            // capture, but the publisher must learn its deadline.
+                            inner.capture_notify.notify_one();
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
@@ -866,12 +906,20 @@ fn spawn_output_publisher(inner: Arc<HostedTerminalInner>) {
                 break;
             }
             let graphics_deadline = if inner.diagnostics.subscribers.load(Ordering::Acquire) > 0 {
-                inner.state.lock().graphics_deadline()
+                inner
+                    .state
+                    .lock()
+                    .graphics_deadline()
+                    .map(|deadline| deadline.max(last_graphics_tick + GRAPHICS_FRAME_INTERVAL))
             } else {
                 None
             };
-            let animation_due = if let Some(deadline) = graphics_deadline {
-                let deadline = deadline.max(last_graphics_tick + GRAPHICS_FRAME_INTERVAL);
+            let sync_deadline = *inner.sync_deadline.lock();
+            let wake_at = match (graphics_deadline, sync_deadline) {
+                (Some(graphics), Some(sync)) => Some(graphics.min(sync)),
+                (graphics, sync) => graphics.or(sync),
+            };
+            let timer_due = if let Some(deadline) = wake_at {
                 tokio::select! {
                     _ = inner.capture_notify.notified() => false,
                     _ = tokio::time::sleep_until(deadline.into()) => true,
@@ -883,6 +931,11 @@ fn spawn_output_publisher(inner: Arc<HostedTerminalInner>) {
             if inner.stopped.load(Ordering::Acquire) {
                 break;
             }
+            if timer_due && inner.stop_expired_sync(Instant::now()) {
+                inner.capture_requested.store(true, Ordering::Release);
+            }
+            let animation_due =
+                timer_due && graphics_deadline.is_some_and(|deadline| Instant::now() >= deadline);
             if animation_due {
                 last_graphics_tick = Instant::now();
                 if inner.state.lock().advance_graphics(last_graphics_tick) {
