@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-17
+
+- 项目面板的“端口”“搜索”“Git”页可以用了：端口页列出项目里终端打开的监听端口，并记住项目常用的端口，关闭时也会显示；搜索页在项目文件中搜索文本（跳过 Git 忽略的、二进制和大文件），支持区分大小写、全词和正则，点结果打开文件并定位到匹配处；Git 页列出改动的文件，点一个打开它的 diff。SSH 项目和旧版 Host 上这些页提示暂不可用。
+- The project panel's Ports, Search and Git pages now work. Ports lists the listening ports the project's terminals opened, and remembers the project's usual ports so they show while closed. Search finds text in the project's files (skipping what Git ignores, binary and large files), with case, whole-word and regex options; a result opens the file at the match. Git lists changed files, and one opens its diff. SSH projects and older Hosts show that these pages are unavailable.
+
+- 标签页显示其终端设置的标题（程序设置的窗口标题或 Agent 会话标题）；手动重命名过的标签页保留名字，不再跟随。
+- A tab shows the title its terminal sets (the window title a program sets, or an Agent session's title). A tab someone renamed keeps that name and stops following.
+
+- 手机长按终端进入复制模式，用系统的选择手柄选择、复制文本，按住的那一行已选中；向上滚动可以读更早的输出，包括自己处理滚动的程序（全屏 TUI）的前几页。退出后程序恢复原样。
+- On phones, a long press on the terminal opens copy mode: select and copy its text with the system's handles, the pressed line already selected. Scrolling up reads further back, also through earlier pages of a program that scrolls itself (a full-screen TUI). Leaving puts the program back as it was.
+
+- 远程窗口里切换标签页、聚焦 pane、切换项目立即生效，不再等 Host 回应；此前经 relay 时每次点击会让窗口卡住 1–2.5 秒。Host 拒绝的操作会恢复原布局并说明原因。
+- In a remote window, switching tabs, focusing a pane or changing project shows at once instead of waiting on the Host; over a relay each click froze the window for 1–2.5 seconds before. A change the Host refuses restores its layout and says why.
+
+- 远程窗口没能打开时，连接对话框保留并说明原因；此前对话框直接关闭，看起来像点击没有反应。
+- When a remote window does not open, the connect dialog stays and says why; before, it closed and the click seemed to do nothing.
+
+- 远程列表里点记录的“⋯”菜单只打开菜单，不再同时连接这条记录。
+- In the remote list, the "⋯" menu on a record only opens the menu; it no longer also connects to that record.
+
+- 很长的提示（例如 Agent 的完整 prompt）会换行显示，不再铺满整个窗口。
+- A long tooltip, such as an Agent's full prompt, wraps instead of filling the window.
+
+- Host 终端里程序开始同步更新却没有结束时，150 ms 后照常显示，不再卡住画面、隐藏光标。
+- On Host terminals, a synchronized update its program never ends shows after 150 ms, as other terminals do, instead of freezing the screen with the cursor hidden.
+
+- Host 终端里光标在宽字符（中文等）上时覆盖整个字符的两列。
+- On Host terminals, a cursor on a wide character (such as Chinese) covers both of its columns.
+
+- iOS 上输入法正在组字（拼音、假名）时，终端在光标处显示带下划线的组字内容，上屏前也能看到。
+- On iOS, what the input method is still composing (pinyin, kana) shows underlined at the terminal's cursor before it commits.
+
 - 手机（iOS、Android）总控的“执行中”只列工作中和启动中的 Agent，空闲的不再算进去；下面按项目分组列出全部 Agent（与桌面侧边栏一样），等待处理的排在组内最前，项目组可以折叠，折叠状态会保留。原来的“需要处理”“已结束”分组去掉。
 - On phones (iOS and Android), the overview's "Running" card lists only working and starting Agents, no longer idle ones; below it every Agent is grouped under its project, as in the desktop sidebar, with those waiting on the user first. Project groups fold, and stay folded across launches. The separate "Needs you" and "Ended" groups are gone.
 
