@@ -1031,6 +1031,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteInvalidPort => "SSH 端口必须介于 1 和 65535 之间。",
         UiTextKey::RemoteInvalidRoot => "远程根目录必须是绝对 POSIX 路径。",
         UiTextKey::RemoteLaunchFailed => "无法打开远程工作区",
+        UiTextKey::RemoteClientAlreadyOpen => "此连接的远程窗口已打开或仍在关闭，请稍后再试。",
+        UiTextKey::RemoteClientExitedWhileStarting => {
+            "远程窗口启动时退出（退出码 {code}），详情见 client.log。"
+        }
         UiTextKey::RemoteWrongHostCode => "此连接码属于另一个 Host。",
         UiTextKey::RemoteCredentialStoreFailed => {
             "系统凭据库不可用，未保存任何明文凭据。关闭「记住凭据」可仅保存连接"

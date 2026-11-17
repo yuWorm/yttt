@@ -901,6 +901,7 @@ impl ExistingHostForm {
     ) {
         let profile = self.profile.clone();
         let appearance = RemoteAppearance::capture(cx, self.text);
+        let text = self.text;
         let credential_id = match &source {
             LaunchSource::Saved { credential_id }
             | LaunchSource::Full { credential_id, .. }
@@ -917,7 +918,7 @@ impl ExistingHostForm {
                     connection_info,
                 },
             })
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.describe(text))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

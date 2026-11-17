@@ -346,8 +346,9 @@ impl PairedHostForm {
                 host: record.host,
             },
         };
+        let text = self.text;
         let task = cx.background_spawn(async move {
-            crate::remote_launch::spawn_remote_client(launch).map_err(|error| error.to_string())
+            crate::remote_launch::spawn_remote_client(launch).map_err(|error| error.describe(text))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

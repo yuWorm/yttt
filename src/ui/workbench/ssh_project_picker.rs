@@ -439,10 +439,7 @@ impl WorkbenchView {
                         root.close_ssh_connection_manager();
                     }
                     Err(error) => {
-                        root.ssh.project_picker.error = Some(format!(
-                            "{}: {error}",
-                            root.ui_text.get(UiTextKey::RemoteLaunchFailed)
-                        ))
+                        root.ssh.project_picker.error = Some(error.describe(root.ui_text))
                     }
                 }
                 cx.notify();

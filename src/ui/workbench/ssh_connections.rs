@@ -1018,12 +1018,7 @@ impl WorkbenchView {
                 root.ssh.connecting = None;
                 match result {
                     Ok(()) => root.close_ssh_connection_manager(),
-                    Err(error) => {
-                        root.ssh.error = Some(format!(
-                            "{}: {error}",
-                            root.ui_text.get(UiTextKey::RemoteLaunchFailed)
-                        ))
-                    }
+                    Err(error) => root.ssh.error = Some(error.describe(root.ui_text)),
                 }
                 cx.notify();
             });

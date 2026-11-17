@@ -190,30 +190,39 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
         version = env!("CARGO_PKG_VERSION"),
         "remote window starting"
     );
+    // Every early return below ends the process before it opens a window;
+    // the log is the only place that says why.
     let appearance = match launch.appearance.theme_runtime() {
         Ok(runtime) => AppearanceState::new(runtime),
         Err(error) => {
-            eprintln!("invalid remote Client appearance: {error}");
+            tracing::error!(%error, "invalid remote Client appearance");
             return;
         }
     };
 
     let profile = launch.local_profile.clone();
     if let Err(error) = crate::config::scope::bind_device_profile(&profile) {
-        eprintln!("failed to initialize device preferences: {error}");
+        tracing::error!(%error, "failed to initialize device preferences");
         return;
     }
     let registration = match launch.saved_target.clone() {
         Some(target) => match crate::remote_restore::Registration::acquire(&profile, target) {
             Ok(Some(registration)) => Some(registration),
-            Ok(None) => return,
+            Ok(None) => {
+                tracing::warn!(
+                    "another remote window still serves this target; not opening a second one"
+                );
+                crate::remote_launch::announce_remote_client(false);
+                return;
+            }
             Err(error) => {
-                eprintln!("cannot acquire remote Client restore lease: {error}");
+                tracing::error!(%error, "cannot acquire remote Client restore lease");
                 return;
             }
         },
         None => None,
     };
+    crate::remote_launch::announce_remote_client(true);
     let assets = assets::app_assets(&profile.config_paths());
     gpui_platform::application()
         .with_quit_mode(QuitMode::LastWindowClosed)

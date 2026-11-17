@@ -928,6 +928,8 @@ pub enum UiTextKey {
     RemoteInvalidPort,
     RemoteInvalidRoot,
     RemoteLaunchFailed,
+    RemoteClientAlreadyOpen,
+    RemoteClientExitedWhileStarting,
     RemoteWrongHostCode,
     RemoteCredentialStoreFailed,
     RemoteRuntimeUnavailable,

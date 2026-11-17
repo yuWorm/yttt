@@ -2,6 +2,7 @@ use std::{
     io::{self, Read as _, Write as _},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     process::{Command, Stdio},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,7 @@ use crate::{
         theme::{parse_theme_snapshot, serialize_theme_file},
     },
     ui::{
-        i18n::Locale,
+        i18n::{Locale, UiText, UiTextKey},
         theme::{AppearanceState, ThemeRuntime, UiTypography},
     },
 };
@@ -342,8 +343,63 @@ impl Drop for RemoteLaunch {
     }
 }
 
-/// Starts an isolated remote Client and transfers its launch configuration through stdin.
-pub fn spawn_remote_client(mut launch: RemoteLaunch) -> io::Result<()> {
+/// The line a remote Client writes on its stdout once it serves its target.
+const REMOTE_CLIENT_STARTED: &str = "yttt-remote-client: started";
+/// The line a remote Client writes when another one already serves its
+/// target; it exits right after.
+const REMOTE_CLIENT_ALREADY_OPEN: &str = "yttt-remote-client: already-open";
+/// How long starting waits for the Client to say whether it serves its
+/// target. A Client still silent then is taken as started.
+const REMOTE_CLIENT_START_WAIT: Duration = Duration::from_secs(20);
+
+/// Why a remote Client did not start.
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteClientStartError {
+    /// A remote Client of this target is still running, perhaps still
+    /// closing its window.
+    #[error("a remote window for this target is already open or still closing")]
+    AlreadyOpen,
+    /// The Client exited before it said it serves its target.
+    #[error("the remote window exited while starting (exit code {code:?})")]
+    Exited { code: Option<i32> },
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+impl RemoteClientStartError {
+    /// The reason in the interface language.
+    pub fn describe(&self, text: UiText) -> String {
+        match self {
+            Self::AlreadyOpen => text.get(UiTextKey::RemoteClientAlreadyOpen).to_string(),
+            Self::Exited { code } => text
+                .get(UiTextKey::RemoteClientExitedWhileStarting)
+                .replace(
+                    "{code}",
+                    &code.map_or_else(|| "?".to_string(), |code| code.to_string()),
+                ),
+            Self::Io(error) => format!("{}: {error}", text.get(UiTextKey::RemoteLaunchFailed)),
+        }
+    }
+}
+
+/// Tells the process that started this remote Client whether it serves its
+/// target. Nothing reads it when the Client was started by hand.
+pub(crate) fn announce_remote_client(started: bool) {
+    let mut out = io::stdout().lock();
+    let line = if started {
+        REMOTE_CLIENT_STARTED
+    } else {
+        REMOTE_CLIENT_ALREADY_OPEN
+    };
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
+}
+
+/// Starts an isolated remote Client, transfers its launch configuration
+/// through stdin, and waits until it says it serves its target. A Client
+/// that exits first, or finds another one serving the target, is an error,
+/// so the caller can say why no window opened.
+pub fn spawn_remote_client(mut launch: RemoteLaunch) -> Result<(), RemoteClientStartError> {
     let payload = serde_json::to_vec(&launch)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     launch.zeroize_secrets();
@@ -353,7 +409,8 @@ pub fn spawn_remote_client(mut launch: RemoteLaunch) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "remote Client launch exceeds the 128 KiB limit",
-        ));
+        )
+        .into());
     }
 
     let executable = std::env::current_exe()?;
@@ -361,17 +418,78 @@ pub fn spawn_remote_client(mut launch: RemoteLaunch) -> io::Result<()> {
     command
         .arg("--remote-client")
         .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
     detach_child(&mut command);
 
     let mut child = command.spawn()?;
     let Some(mut stdin) = child.stdin.take() else {
-        return Err(io::Error::other("remote Client stdin is unavailable"));
+        return Err(io::Error::other("remote Client stdin is unavailable").into());
     };
     stdin.write_all(&payload)?;
     stdin.flush()?;
-    Ok(())
+    // The Client reads its launch to the end.
+    drop(stdin);
+    let Some(stdout) = child.stdout.take() else {
+        return Err(io::Error::other("remote Client stdout is unavailable").into());
+    };
+    let (answer, answered) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("yttt-remote-client-stdout".into())
+        .spawn(move || {
+            let _ = answer.send(read_start_answer(io::BufReader::new(stdout)));
+        })?;
+    match answered.recv_timeout(REMOTE_CLIENT_START_WAIT) {
+        Ok(StartAnswer::Started) => Ok(()),
+        Ok(StartAnswer::AlreadyOpen) => {
+            let _ = child.wait();
+            Err(RemoteClientStartError::AlreadyOpen)
+        }
+        Ok(StartAnswer::Closed) => Err(RemoteClientStartError::Exited {
+            code: child.wait()?.code(),
+        }),
+        // Slow to start is not failed: its own window reports what follows.
+        Err(_) => Ok(()),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StartAnswer {
+    Started,
+    AlreadyOpen,
+    /// The Client closed its stdout, which it does by exiting.
+    Closed,
+}
+
+/// Reads the Client's stdout until it says whether it serves its target,
+/// passing other output on. The answer is returned while the rest of the
+/// output keeps being read on this thread, so the Client never writes into
+/// a closed pipe.
+fn read_start_answer(mut stdout: impl io::BufRead + Send + 'static) -> StartAnswer {
+    let mut line = String::new();
+    let answer = loop {
+        line.clear();
+        match stdout.read_line(&mut line) {
+            Ok(0) | Err(_) => return StartAnswer::Closed,
+            Ok(_) => match line.trim_end() {
+                REMOTE_CLIENT_STARTED => break StartAnswer::Started,
+                REMOTE_CLIENT_ALREADY_OPEN => break StartAnswer::AlreadyOpen,
+                _ => pass_on(line.as_bytes()),
+            },
+        }
+    };
+    std::thread::spawn(move || {
+        let mut buffer = [0; 4096];
+        while let Ok(read @ 1..) = stdout.read(&mut buffer) {
+            pass_on(&buffer[..read]);
+        }
+    });
+    answer
+}
+
+/// Passes the Client's output on to this process's stdout, when it has one.
+fn pass_on(bytes: &[u8]) {
+    let _ = io::stdout().lock().write_all(bytes);
 }
 
 /// Reads the private launch configuration supplied by `spawn_remote_client`.
@@ -405,4 +523,35 @@ fn detach_child(command: &mut Command) {
 
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(test)]
+mod start_answer_tests {
+    use super::*;
+
+    fn answer(output: &str) -> StartAnswer {
+        read_start_answer(io::Cursor::new(output.as_bytes().to_vec()))
+    }
+
+    #[test]
+    fn the_client_says_it_started_after_other_output() {
+        assert_eq!(
+            answer("warming up\nyttt-remote-client: started\nlater output\n"),
+            StartAnswer::Started
+        );
+    }
+
+    #[test]
+    fn a_client_that_finds_its_target_served_says_so() {
+        assert_eq!(
+            answer("yttt-remote-client: already-open\n"),
+            StartAnswer::AlreadyOpen
+        );
+    }
+
+    #[test]
+    fn a_client_that_exits_without_a_word_closed_its_output() {
+        assert_eq!(answer(""), StartAnswer::Closed);
+        assert_eq!(answer("panicked before the window\n"), StartAnswer::Closed);
+    }
 }

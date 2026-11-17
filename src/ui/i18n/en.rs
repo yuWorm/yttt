@@ -1261,6 +1261,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteInvalidPort => "The SSH port must be between 1 and 65535.",
         UiTextKey::RemoteInvalidRoot => "The remote root must be an absolute POSIX path.",
         UiTextKey::RemoteLaunchFailed => "Could not open the remote workspace",
+        UiTextKey::RemoteClientAlreadyOpen => {
+            "A window for this connection is already open or still closing. Try again in a moment."
+        }
+        UiTextKey::RemoteClientExitedWhileStarting => {
+            "The remote window exited while starting (exit code {code}). See client.log for details."
+        }
         UiTextKey::RemoteWrongHostCode => "This connection code belongs to a different Host.",
         UiTextKey::RemoteCredentialStoreFailed => {
             "The OS credential store is unavailable. Nothing was saved in plaintext. Turn off Remember to save only the connection"
