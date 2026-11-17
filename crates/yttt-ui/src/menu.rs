@@ -508,6 +508,9 @@ impl YtttDropdownMenu for Button {
                 .size_full(),
             )
             .on_click(move |_, window, cx| {
+                // The trigger often sits inside a clickable row; opening the
+                // menu must not also activate that row.
+                cx.stop_propagation();
                 let trigger = bounds.get();
                 let position = point(trigger.left(), trigger.bottom() + px(4.));
                 open_menu(position, appearance, &build, window, cx);
