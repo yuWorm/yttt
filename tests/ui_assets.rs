@@ -63,7 +63,7 @@ fn app_assets_include_builtin_agent_icons() {
 
 #[test]
 fn app_assets_include_the_project_panel_tab_icons() {
-    use gpui_kit_assets::{IconName, IconNamed as _};
+    use gpui_kit_assets::IconName;
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path());
     let assets = yttt::ui::app::assets::app_assets(&config_paths);
