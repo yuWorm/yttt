@@ -71,6 +71,29 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The window's own intents in flight are not in this layout yet.
+        if self.workspace_persistence.intents.defer_layout() {
+            return;
+        }
+        self.adopt_newer_host_layout(false, window, cx);
+    }
+
+    /// Replaces the local layout with the Host's even when it is not newer:
+    /// the Host refused an intent the window already shows.
+    pub(super) fn restore_host_workspace_layout(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.adopt_newer_host_layout(true, window, cx);
+    }
+
+    fn adopt_newer_host_layout(
+        &mut self,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let persistence = &self.workspace_persistence;
         if persistence.closing || persistence.mode != WorkspacePersistenceMode::Active {
             return;
@@ -90,7 +113,7 @@ impl WorkbenchView {
         }
         let Some(layout) = runtime
             .workspace_layout(&workspace_id)
-            .filter(|layout| layout.revision > held_revision)
+            .filter(|layout| force || layout.revision > held_revision)
         else {
             return;
         };

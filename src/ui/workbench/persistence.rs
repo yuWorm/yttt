@@ -13,6 +13,7 @@ mod documents_tests;
 mod host_mirror;
 #[cfg(all(test, unix))]
 mod host_mirror_tests;
+mod intents;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -136,6 +137,8 @@ pub(super) struct WorkspacePersistenceState {
     open_in_flight: bool,
     tick_task: Option<Task<()>>,
     host_layout_listener: Option<host_mirror::HostLayoutListener>,
+    /// Layout intents sent to the Host whose answers are still to come.
+    intents: intents::PendingIntents,
     documents: documents::DocumentSyncState,
     /// The window closes once every document edit is on the Host.
     close_requested: bool,
@@ -519,6 +522,7 @@ impl WorkbenchView {
         if self.workspace_persistence.tick_task.is_some() {
             return;
         }
+        self.start_intent_worker(window, cx);
         self.workspace_persistence.tick_task = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -976,9 +980,12 @@ impl WorkbenchView {
         true
     }
 
-    /// Sends a layout intent for the window's Host workspace. `Ok(false)`
-    /// means the window has no Host workspace and edits its own; `Err` means
-    /// the Host did not apply the intent, so the window must not either.
+    /// Sends a layout intent for the window's Host workspace without waiting
+    /// for the Host: the caller shows it at once. `Ok(false)` means the
+    /// window has no Host workspace and edits its own; `Err` means the
+    /// intent cannot be sent now, so the window must not show it. A
+    /// refusal that comes later replaces the window's layout with the
+    /// Host's.
     pub(super) fn publish_workspace_intent(
         &mut self,
         intent: WorkspaceIntent,
@@ -997,31 +1004,15 @@ impl WorkbenchView {
         else {
             return Ok(false);
         };
-        if self.workspace_persistence.mode != WorkspacePersistenceMode::Active {
+        if self.workspace_persistence.mode != WorkspacePersistenceMode::Active
+            || !self.send_workspace_intent(&runtime, workspace_id, intent)
+        {
             return Err(self
                 .ui_text
                 .get(UiTextKey::WorkspaceFlushHostUnavailable)
                 .to_string());
         }
-        match runtime.workspace_request(WorkspaceRequest::Apply {
-            workspace_id: workspace_id.clone(),
-            intent,
-            expected_revision: None,
-        })? {
-            WorkspaceResponse::Applied {
-                workspace_id: applied_workspace_id,
-                revision,
-            } if applied_workspace_id == workspace_id => {
-                // Contiguous: the Host applied the intent to the layout this
-                // window shows. Otherwise another Client's change came first,
-                // and its broadcast replaces the local layout.
-                if self.workspace_persistence.revision.map(|held| held + 1) == Some(revision) {
-                    self.workspace_persistence.revision = Some(revision);
-                }
-                Ok(true)
-            }
-            response => Err(format!("unexpected workspace response: {response:?}")),
-        }
+        Ok(true)
     }
 
     fn set_remote_workspace_restore_failure(&mut self, error: String) {
