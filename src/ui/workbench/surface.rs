@@ -204,14 +204,43 @@ impl WorkbenchView {
             .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
     }
 
+    /// The title the focused terminal of a tab set, unless a person named the tab.
+    fn program_tab_title(
+        &self,
+        project: &crate::model::workspace::OpenedProject,
+        tab_id: &str,
+        cx: &Context<Self>,
+    ) -> Option<String> {
+        let tab = project.layout.tab(tab_id)?;
+        if tab.renamed {
+            return None;
+        }
+        let pane_id = project
+            .tab_state(tab_id)
+            .and_then(|state| state.focused_pane_id.clone())
+            .filter(|pane_id| tab.layout.find_pane(pane_id).is_some())
+            .unwrap_or_else(|| tab.layout.first_pane().id.clone());
+        let key = terminal_pane_key(project.id.as_str(), tab_id, &pane_id);
+        let pane = self.terminal.terminal_panes.get(&key)?.read(cx);
+        pane.program_title()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
     pub(super) fn workbench_tab_items(&self, cx: &Context<Self>) -> Vec<WorkbenchTabItem> {
-        let terminal_items = visible_tab_items(&self.workspace, self.ui_text);
+        let mut terminal_items = visible_tab_items(&self.workspace, self.ui_text);
         let Some(project_id) = self.workspace.selected_project_id() else {
             return Vec::new();
         };
         let Some(project) = self.workspace.project(project_id) else {
             return Vec::new();
         };
+        for item in &mut terminal_items {
+            if let Some(title) = self.program_tab_title(project, &item.id, cx) {
+                item.title = title;
+            }
+        }
         let file_items = self
             .project
             .project_editor_runtime

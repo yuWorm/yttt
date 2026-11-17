@@ -84,6 +84,8 @@ pub fn merge_layouts(
 
         if let Some(title) = &tab_override.title {
             tab.title = title.clone();
+            // A title in a personal patch is one a person chose.
+            tab.renamed = true;
         }
         if let Some(cwd) = &tab_override.cwd {
             tab.cwd = Some(cwd.clone());

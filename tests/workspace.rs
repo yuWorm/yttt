@@ -567,6 +567,35 @@ fn rename_selected_tab_changes_title_without_changing_id() {
 }
 
 #[test]
+fn a_renamed_tab_stays_marked_renamed_across_a_restore() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+        .unwrap();
+    assert!(
+        !workspace
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .tab("dev")
+            .unwrap()
+            .renamed
+    );
+
+    workspace.rename_selected_tab("Main Dev").unwrap();
+
+    let restored = Workspace::restore_persisted_state(workspace.persisted_state()).unwrap();
+    let tab = restored
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .tab("dev")
+        .unwrap();
+    assert!(tab.renamed);
+    assert_eq!(tab.title, "Main Dev");
+}
+
+#[test]
 fn legacy_restoring_pane_reads_as_running() {
     let mut workspace = Workspace::new();
     let project_id = workspace
@@ -638,4 +667,16 @@ fn single_tab_layout() -> yttt::model::layout::ProjectLayout {
     "#,
     )
     .unwrap()
+}
+
+#[test]
+fn the_renamed_mark_is_only_written_when_set() {
+    let mut tab = sample_layout().tabs.remove(0);
+    let json = serde_json::to_value(&tab).unwrap();
+    assert!(json.get("renamed").is_none());
+
+    tab.renamed = true;
+    let json = serde_json::to_string(&tab).unwrap();
+    let read: yttt::model::layout::TabConfig = serde_json::from_str(&json).unwrap();
+    assert!(read.renamed);
 }

@@ -373,6 +373,8 @@ struct StrictTabConfig {
     #[serde(default, skip_serializing_if = "TabStartup::is_lazy")]
     startup: TabStartup,
     layout: StrictLayoutNode,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    renamed: bool,
 }
 
 impl From<StrictTabConfig> for TabConfig {
@@ -383,6 +385,7 @@ impl From<StrictTabConfig> for TabConfig {
             cwd: value.cwd,
             startup: value.startup,
             layout: value.layout.into(),
+            renamed: value.renamed,
         }
     }
 }
@@ -395,6 +398,7 @@ impl From<&TabConfig> for StrictTabConfig {
             cwd: value.cwd.clone(),
             startup: value.startup,
             layout: (&value.layout).into(),
+            renamed: value.renamed,
         }
     }
 }

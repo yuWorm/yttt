@@ -108,6 +108,7 @@ impl DefaultLayoutTemplate {
                 default_tab: Some("shell".to_string()),
             },
             tabs: vec![TabConfig {
+                renamed: false,
                 id: "shell".to_string(),
                 title: "Shell".to_string(),
                 cwd: None,
@@ -124,6 +125,7 @@ impl DefaultLayoutTemplate {
                     default_tab: Some("workspace".to_string()),
                 },
                 tabs: vec![TabConfig {
+                    renamed: false,
                     id: "workspace".to_string(),
                     title: "Workspace".to_string(),
                     cwd: None,
@@ -142,6 +144,7 @@ impl DefaultLayoutTemplate {
                 },
                 tabs: vec![
                     TabConfig {
+                        renamed: false,
                         id: "agent".to_string(),
                         title: agent.display_name().to_string(),
                         cwd: None,
@@ -149,6 +152,7 @@ impl DefaultLayoutTemplate {
                         layout: LayoutNode::Pane(agent_pane(agent)),
                     },
                     TabConfig {
+                        renamed: false,
                         id: "shell".to_string(),
                         title: "Shell".to_string(),
                         cwd: None,

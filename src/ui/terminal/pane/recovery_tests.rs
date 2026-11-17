@@ -218,6 +218,7 @@ fn open_pane_with_command<'a>(
             default_tab: Some("tab".into()),
         },
         tabs: vec![TabConfig {
+            renamed: false,
             id: "tab".into(),
             title: "Tab".into(),
             cwd: None,

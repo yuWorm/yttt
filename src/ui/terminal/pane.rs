@@ -572,6 +572,12 @@ impl TerminalPaneView {
         &self.title
     }
 
+    /// The title the running program set (an OSC 0/2 title or an agent
+    /// session title), if it set one that differs from the configured title.
+    pub fn program_title(&self) -> Option<&str> {
+        (self.title != self.default_title).then_some(self.title.as_str())
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -1133,10 +1139,12 @@ impl TerminalPaneView {
         if self.host_session_epoch != Some(metadata.session_epoch) {
             return;
         }
-        if self.agent_session_title.is_none()
-            && let Some(title) = metadata.title.as_deref()
-        {
-            let title = resolved_terminal_title(&self.default_title, title);
+        if self.agent_session_title.is_none() {
+            // `None` means the program reset its title (or never set one).
+            let title = resolved_terminal_title(
+                &self.default_title,
+                metadata.title.as_deref().unwrap_or_default(),
+            );
             self.set_runtime_title(title, cx);
         }
         if let TerminalProcessState::Exited { code } = metadata.process_state {

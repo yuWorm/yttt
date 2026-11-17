@@ -50,6 +50,14 @@ pub struct TabConfig {
     #[serde(default, skip_serializing_if = "TabStartup::is_lazy")]
     pub startup: TabStartup,
     pub layout: LayoutNode,
+    /// A person named this tab. Until then the tab shows the title its
+    /// focused terminal sets, falling back to `title`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub renamed: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -119,6 +127,14 @@ impl LayoutNode {
                 split.left.validate_pane_ids(tab_id, pane_ids)?;
                 split.right.validate_pane_ids(tab_id, pane_ids)
             }
+        }
+    }
+
+    /// The leftmost (top-most) pane.
+    pub fn first_pane(&self) -> &PaneConfig {
+        match self {
+            Self::Pane(pane) => pane,
+            Self::Split(split) => split.left.first_pane(),
         }
     }
 

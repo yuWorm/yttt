@@ -782,7 +782,9 @@ impl OpenedProject {
     pub(crate) fn rename_tab(&mut self, tab_id: &str, title: &str) -> Result<(), WorkspaceError> {
         let title = normalized_title(title)?;
         let tab_index = self.tab_index(tab_id)?;
-        self.layout.tabs[tab_index].title = title;
+        let tab = &mut self.layout.tabs[tab_index];
+        tab.title = title;
+        tab.renamed = true;
         Ok(())
     }
 
@@ -938,6 +940,7 @@ impl OpenedProject {
 
 pub(crate) fn shell_tab_config(id: String, title: String, command: String) -> TabConfig {
     TabConfig {
+        renamed: false,
         id,
         title,
         cwd: None,
@@ -968,6 +971,7 @@ pub(crate) fn agent_tab_config(
     spawned_by: Option<String>,
 ) -> TabConfig {
     TabConfig {
+        renamed: false,
         id,
         title: title.clone(),
         cwd: None,
