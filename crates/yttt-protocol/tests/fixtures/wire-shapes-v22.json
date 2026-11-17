@@ -1727,6 +1727,7 @@
       "cwd",
       "id",
       "layout",
+      "renamed",
       "startup",
       "title"
     ]
