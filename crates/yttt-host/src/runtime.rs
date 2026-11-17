@@ -9,7 +9,7 @@ use std::{
 
 use parking_lot::Mutex;
 use tokio::sync::{broadcast, watch};
-use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
+use yttt_core::model::ids::{ClientInstanceId, ProjectId, TerminalSessionId};
 use yttt_protocol::{
     HostBlocker, TerminalController, TerminalLease, TerminalPlacement,
     terminal::{
@@ -338,6 +338,21 @@ impl HostRuntime {
                 terminal
                     .local_process_id()
                     .map(|pid| (terminal.session_id().clone(), pid))
+            })
+            .collect()
+    }
+
+    /// Like `local_process_roots`, with each terminal's project.
+    pub(crate) fn local_project_process_roots(&self) -> Vec<(TerminalSessionId, ProjectId, u32)> {
+        self.terminals
+            .lock()
+            .values()
+            .filter(|terminal| !terminal.is_exited())
+            .filter_map(|terminal| {
+                terminal.local_process_id().map(|pid| {
+                    let spec = terminal.spec();
+                    (spec.session_id.clone(), spec.project_id.clone(), pid)
+                })
             })
             .collect()
     }

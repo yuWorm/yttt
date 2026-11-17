@@ -60,3 +60,25 @@ fn app_assets_include_builtin_agent_icons() {
         assert!(asset.is_some(), "missing built-in agent icon asset: {path}");
     }
 }
+
+#[test]
+fn app_assets_include_the_project_panel_tab_icons() {
+    use gpui_kit_assets::{IconName, IconNamed as _};
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path());
+    let assets = yttt::ui::app::assets::app_assets(&config_paths);
+
+    for icon in [
+        IconName::FolderTree,
+        IconName::TextSearch,
+        IconName::GitBranch,
+        IconName::BotMessageSquare,
+        IconName::EthernetPort,
+    ] {
+        let path = icon.path();
+        let asset = assets
+            .load(&path)
+            .unwrap_or_else(|err| panic!("load {path}: {err}"));
+        assert!(asset.is_some(), "missing project panel icon asset: {path}");
+    }
+}

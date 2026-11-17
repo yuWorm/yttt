@@ -59,6 +59,9 @@ mod palette;
 mod performance;
 mod persistence;
 mod project_files;
+mod project_git;
+mod project_ports;
+mod project_search;
 mod relay_account_panel;
 mod remote_access;
 mod remote_access_p2p;
@@ -92,7 +95,10 @@ use state::{
     documents::DocumentLifecycleState,
     overlays::OverlayControllerState,
     palette::PaletteControllerState,
-    project::{ProjectControllerState, ProjectPanelPage, ProjectTreeClipboard},
+    project::{
+        PendingFileReveal, ProjectControllerState, ProjectPanelPage, ProjectPortsPanelState,
+        ProjectSearchKey, ProjectTreeClipboard,
+    },
     settings::{ProjectSettingsSaveDraft, SettingsControllerState, ZedThemeImportDialogState},
     ssh::{
         ConnectionState, ConnectionStatus, HostKeyChallenge, SshConnectionForm,

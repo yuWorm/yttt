@@ -473,6 +473,14 @@
     "Unsupported": [],
     "VersionMismatch": []
   },
+  "FrequentPort": {
+    "": [
+      "last_seen_millis",
+      "listening_seconds",
+      "port",
+      "process_name"
+    ]
+  },
   "HandshakeMessage": {
     "ClientAuthenticate": [],
     "ClientHello": [],
@@ -616,6 +624,15 @@
       "from"
     ],
     "Put": []
+  },
+  "ListeningPort": {
+    "": [
+      "addresses",
+      "pid",
+      "port",
+      "process_name",
+      "session_id"
+    ]
   },
   "MessageChunk": {
     "": [
@@ -828,6 +845,12 @@
     "Copy": [],
     "Cut": []
   },
+  "ProjectPorts": {
+    "": [
+      "frequent",
+      "listening"
+    ]
+  },
   "ProjectRelativePath": {
     "": [
       "segments"
@@ -898,6 +921,10 @@
       "project_id",
       "relative_directory",
       "show_hidden"
+    ],
+    "Search": [
+      "project_id",
+      "query"
     ]
   },
   "ProjectResponse": {
@@ -913,7 +940,8 @@
       "registration_epoch",
       "watch_error"
     ],
-    "Save": []
+    "Save": [],
+    "Search": []
   },
   "ProjectSaveMode": {
     "Check": [],
@@ -922,6 +950,42 @@
   "ProjectSaveResult": {
     "Conflict": [],
     "Saved": []
+  },
+  "ProjectSearchFile": {
+    "": [
+      "lines",
+      "relative_path"
+    ]
+  },
+  "ProjectSearchLine": {
+    "": [
+      "column_offset",
+      "line",
+      "matches",
+      "text"
+    ]
+  },
+  "ProjectSearchQuery": {
+    "": [
+      "case_sensitive",
+      "max_matches",
+      "pattern",
+      "regex",
+      "whole_word"
+    ]
+  },
+  "ProjectSearchRange": {
+    "": [
+      "end",
+      "start"
+    ]
+  },
+  "ProjectSearchResults": {
+    "": [
+      "files",
+      "match_count",
+      "truncated"
+    ]
   },
   "ProjectTokenUsage": {
     "": [
@@ -1258,6 +1322,9 @@
       "sent_millis"
     ],
     "Project": [],
+    "ProjectPorts": [
+      "project_id"
+    ],
     "ReadAgentSnapshots": [
       "acknowledged"
     ],
@@ -1356,6 +1423,7 @@
       "sent_millis"
     ],
     "Project": [],
+    "ProjectPorts": [],
     "RemoteAccess": [],
     "RemoteCommand": [],
     "RemoteFile": [],

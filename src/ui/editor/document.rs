@@ -1347,6 +1347,26 @@ impl ProjectEditorDocument {
         cx.notify();
     }
 
+    /// Moves the cursor of a code document to a 0-based line and UTF-16
+    /// column, scrolling it into view; other documents stay as they are.
+    pub fn reveal_position(
+        &mut self,
+        line: u32,
+        column: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ProjectEditorSurface::Code { input, .. } = &self.surface else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            input.set_cursor_position(Position::new(line, column), window, input_cx);
+        });
+        self.breadcrumb_cursor_line = line as usize;
+        self.breadcrumbs = breadcrumbs_at(&self.symbols, line as usize);
+        cx.notify();
+    }
+
     fn focus_symbol(&mut self, symbol: EditorSymbol, window: &mut Window, cx: &mut Context<Self>) {
         let ProjectEditorSurface::Code { input, .. } = &self.surface else {
             return;

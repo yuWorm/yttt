@@ -691,6 +691,26 @@ impl DesktopHostRuntime {
             })?
     }
 
+    /// The ports the project's terminals listen on; `None` from a Host that
+    /// predates the request.
+    pub fn project_ports(
+        &self,
+        project_id: &crate::model::ids::ProjectId,
+    ) -> Result<Option<yttt_protocol::ports::ProjectPorts>, String> {
+        match self.request_blocking_typed(Request::ProjectPorts {
+            project_id: project_id.clone(),
+        }) {
+            Ok(Response::ProjectPorts(ports)) => Ok(Some(ports)),
+            Ok(_) => Err("Host returned an unexpected ports response".to_string()),
+            Err(ClientCoreError::Protocol(failure))
+                if failure.code == yttt_protocol::FailureCode::Unsupported =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
     pub fn request_blocking(&self, request: Request) -> Result<Response, String> {
         self.request_blocking_typed(request)
             .map_err(|error| error.to_string())

@@ -11,6 +11,8 @@ mod p2p;
 mod pane_launch;
 mod pane_runtime;
 mod project;
+mod project_ports;
+mod project_search;
 mod remote_access;
 pub mod runtime;
 mod ssh_runtime;
@@ -345,6 +347,12 @@ where
         agent_hooks.clone(),
         stop_rx.clone(),
     ));
+    let project_ports = project_ports::HostProjectPorts::load(&bootstrap.state_root);
+    tokio::spawn(project_ports::run(
+        runtime.clone(),
+        project_ports.clone(),
+        stop_rx.clone(),
+    ));
     let mut agent_terminal_events = runtime.subscribe();
     let terminal_agent_hooks = agent_hooks.clone();
     let terminal_runtime = runtime.clone();
@@ -411,6 +419,7 @@ where
         ssh: ssh.clone(),
         agent_hooks: agent_hooks.clone(),
         projects: projects.clone(),
+        project_ports: project_ports.clone(),
         workspaces: workspaces.clone(),
         pane_runtime: pane_runtime.clone(),
         agent_control: agent_control.clone(),
@@ -576,6 +585,7 @@ struct ConnectionContext {
     ssh: Arc<HostSshRuntime>,
     agent_hooks: Arc<HostAgentHookRuntime>,
     projects: Arc<HostProjectRuntime>,
+    project_ports: Arc<project_ports::HostProjectPorts>,
     workspaces: Arc<WorkspaceService>,
     pane_runtime: Arc<pane_runtime::PaneRuntime>,
     agent_control: Arc<agent_control::AgentControl>,
@@ -1257,7 +1267,7 @@ fn standalone_request(request: &Request) -> bool {
         Request::Workspace(
             yttt_protocol::workspace::WorkspaceRequest::AgentSessions { .. }
                 | yttt_protocol::workspace::WorkspaceRequest::OmpSessionExists { .. }
-        )
+        ) | Request::Project(yttt_protocol::project::ProjectRequest::Search { .. })
     )
 }
 
@@ -2693,6 +2703,7 @@ async fn handle_request(
         ssh,
         agent_hooks,
         projects,
+        project_ports,
         runtime,
         lifecycle,
         audit,
@@ -3113,6 +3124,9 @@ async fn handle_request(
                     ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)
                 })
                 .and_then(|result| result.map(Response::Project).map_err(project_failure))
+        }
+        Request::ProjectPorts { project_id } => {
+            Ok(Response::ProjectPorts(project_ports.snapshot(&project_id)))
         }
         Request::ReadAgentSnapshots { acknowledged } => {
             let (snapshots, has_more) = agent_hooks.snapshot_page(&acknowledged);

@@ -25,7 +25,8 @@ use yttt_protocol::{
         ProjectDirectory, ProjectEntryKind as HostEntryKind,
         ProjectEntryMutation as HostEntryMutation, ProjectFileContent, ProjectFileFingerprint,
         ProjectFileState, ProjectGitOperation, ProjectPasteMode as HostPasteMode, ProjectRequest,
-        ProjectResponse, ProjectSaveMode, ProjectSaveResult,
+        ProjectResponse, ProjectSaveMode, ProjectSaveResult, ProjectSearchQuery,
+        ProjectSearchResults,
     },
     ssh::{
         RemoteCommandRequest, RemoteCommandResponse, RemoteDirectory, RemoteEntryMutation,
@@ -233,6 +234,35 @@ fn open_project_view(
 }
 
 impl HostProjectServices {
+    /// `None` from a Host that predates text search.
+    fn search_text(
+        &self,
+        query: ProjectSearchQuery,
+    ) -> Result<Option<ProjectSearchResults>, String> {
+        let request = ProjectRequest::Search {
+            project_id: self.project_id.clone(),
+            query,
+        };
+        let response = match self.send(request.clone()) {
+            Ok(response) => Self::decode(response)?,
+            Err(ClientCoreError::Protocol(failure)) if failure.code == FailureCode::Unsupported => {
+                return Ok(None);
+            }
+            Err(ClientCoreError::Protocol(failure))
+                if failure.code == FailureCode::InvalidRequest =>
+            {
+                return Err(failure.message);
+            }
+            // Registers again and retries.
+            Err(error) if Self::registration_missing(&error) => self.request(request)?,
+            Err(error) => return Err(error.to_string()),
+        };
+        match response {
+            ProjectResponse::Search(results) => Ok(Some(results)),
+            _ => Err("Host returned an unexpected search response".to_string()),
+        }
+    }
+
     fn send(&self, request: ProjectRequest) -> Result<Response, ClientCoreError> {
         self.runtime.request(Request::Project(request))
     }
@@ -526,6 +556,18 @@ impl ProjectServices {
             ProjectBackend::Local(local) => searchable_local_files(&local.root, show_hidden),
             ProjectBackend::Host(_) => searchable_remote_files(self, show_hidden),
             ProjectBackend::Ssh(_) => searchable_remote_files(self, show_hidden),
+        }
+    }
+
+    /// Searches the text of the project's files on its Host; `None` where
+    /// that is not available: SSH projects and Hosts that predate it.
+    pub fn search_text(
+        &self,
+        query: ProjectSearchQuery,
+    ) -> Result<Option<ProjectSearchResults>, String> {
+        match self.backend.as_ref() {
+            ProjectBackend::Host(host) => host.search_text(query),
+            ProjectBackend::Local(_) | ProjectBackend::Ssh(_) => Ok(None),
         }
     }
 

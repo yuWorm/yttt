@@ -257,6 +257,12 @@ pub enum Request {
     ReturnTerminals {
         session_ids: Vec<TerminalSessionId>,
     },
+    /// The TCP ports the project's local terminals listen on now, and those
+    /// they often listened on before. Answered with `ProjectPorts`; a Host
+    /// that predates it answers `Unsupported`.
+    ProjectPorts {
+        project_id: ProjectId,
+    },
 }
 
 /// Whether requests of `kind` (see [`Request::kind`]) are ones a Client
@@ -308,6 +314,7 @@ impl Request {
             Self::SetAgentBoardInterest { .. } => "SetAgentBoardInterest",
             Self::TakeTerminal { .. } => "TakeTerminal",
             Self::ReturnTerminals { .. } => "ReturnTerminals",
+            Self::ProjectPorts { .. } => "ProjectPorts",
         }
     }
 }
@@ -355,6 +362,7 @@ impl Request {
             Self::RemoteFile(request) => Some(request.required_capability()),
             Self::RemoteCommand(request) => Some(request.required_capability()),
             Self::Project(request) => Some(request.required_capability()),
+            Self::ProjectPorts { .. } => Some(Capability::ProjectRead),
             Self::Workspace(request) => Some(match request {
                 WorkspaceRequest::Environment
                 | WorkspaceRequest::List
@@ -416,6 +424,7 @@ impl Request {
             Self::CredentialAnswer { challenge_id, .. } => challenge_id.to_string(),
             Self::RemoteFile(request) => remote_file_resource(request),
             Self::RemoteCommand(request) => request.project_id.to_string(),
+            Self::ProjectPorts { project_id } => project_id.to_string(),
             Self::Workspace(_)
             | Self::ReadDeviceSettings
             | Self::SetLoginStartupConsent { .. }
@@ -465,6 +474,7 @@ fn project_resource(request: &ProjectRequest) -> String {
         | ProjectRequest::ScanDirectory { project_id, .. }
         | ProjectRequest::ReadFile { project_id, .. }
         | ProjectRequest::ReadFileChunk { project_id, .. }
+        | ProjectRequest::Search { project_id, .. }
         | ProjectRequest::SaveFile { project_id, .. }
         | ProjectRequest::CreateEntry { project_id, .. }
         | ProjectRequest::RenameEntry { project_id, .. }
@@ -535,6 +545,7 @@ pub enum Response {
     RemoteAccess(crate::remote_access::RemoteAccessResponse),
     DeviceSettings(crate::remote_access::RemoteAccessSettings),
     TerminalController(TerminalController),
+    ProjectPorts(crate::ports::ProjectPorts),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

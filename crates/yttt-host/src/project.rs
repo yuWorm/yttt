@@ -516,6 +516,17 @@ impl HostProjectRuntime {
                         .collect::<Result<Vec<_>, String>>()?,
                 }))
             }
+            ProjectRequest::Search { project_id, query } => {
+                let root = self.local_root(&project_id)?;
+                crate::project_search::search(&root, &query)
+                    .map(ProjectResponse::Search)
+                    .map_err(|error| {
+                        HostProjectError::with_code(
+                            yttt_protocol::FailureCode::InvalidRequest,
+                            error,
+                        )
+                    })
+            }
             ProjectRequest::ReadFileChunk {
                 project_id,
                 relative_path,

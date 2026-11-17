@@ -687,6 +687,17 @@ impl WorkbenchView {
                 .child(tree.clone())
                 .into_any_element(),
         };
+        self.sync_project_ports_polling(window, cx);
+        // Pages other than Files keep the tree mounted, out of sight, so it
+        // holds its state.
+        let hidden_tree = |tree| {
+            div()
+                .absolute()
+                .size(px(0.0))
+                .overflow_hidden()
+                .invisible()
+                .child(tree)
+        };
         let content = match active_panel_page {
             ProjectPanelPage::Files => div()
                 .debug_selector(|| "project-panel-page-files".to_string())
@@ -694,6 +705,27 @@ impl WorkbenchView {
                 .flex_1()
                 .min_h_0()
                 .child(files_content),
+            ProjectPanelPage::Search => div()
+                .debug_selector(|| "project-panel-page-search".to_string())
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(self.project_search_panel_content(window, cx))
+                .child(hidden_tree(tree)),
+            ProjectPanelPage::Git => div()
+                .debug_selector(|| "project-panel-page-git".to_string())
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(self.project_git_panel_content(cx))
+                .child(hidden_tree(tree)),
+            ProjectPanelPage::Ports => div()
+                .debug_selector(|| "project-panel-page-ports".to_string())
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(self.project_ports_panel_content(theme, ui_style, cx))
+                .child(hidden_tree(tree)),
             ProjectPanelPage::AgentSessions => {
                 let search_input = self.agent_sessions_search_input(window, cx);
                 div()
@@ -701,14 +733,7 @@ impl WorkbenchView {
                     .flex_1()
                     .min_h_0()
                     .child(self.agent_sessions_panel_content(&search_input, theme, ui_style, cx))
-                    .child(
-                        div()
-                            .absolute()
-                            .size(px(0.0))
-                            .overflow_hidden()
-                            .invisible()
-                            .child(tree),
-                    )
+                    .child(hidden_tree(tree))
             }
         };
 
@@ -719,7 +744,7 @@ impl WorkbenchView {
             yttt_icon_button_style(YtttIconButtonKind::SidebarHeader, theme, ui_style);
         let files_tab = yttt_icon_button(
             "project-panel-tab-files",
-            IconName::FolderOpen,
+            gpui_kit_assets::IconName::FolderTree,
             YtttIconButtonKind::SidebarHeader,
             theme,
             ui_style,
@@ -757,7 +782,7 @@ impl WorkbenchView {
             let sessions_refresh_label = self.ui_text.get(UiTextKey::AgentSessionsRefresh);
             yttt_icon_button(
                 "project-panel-tab-agent-sessions",
-                IconName::Bot,
+                gpui_kit_assets::IconName::BotMessageSquare,
                 YtttIconButtonKind::SidebarHeader,
                 theme,
                 ui_style,
@@ -802,24 +827,26 @@ impl WorkbenchView {
                 },
             )
         });
-        let placeholder_tab = |id: &'static str, icon: IconName| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_string())
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(panel_tab_style.size)
-                .text_color(panel_tab_style.text)
-                .child(Icon::new(icon).size(panel_tab_style.icon_size))
-        };
-        let search_tab_placeholder =
-            placeholder_tab("project-panel-tab-search-placeholder", IconName::Search);
-        let git_tab_placeholder =
-            placeholder_tab("project-panel-tab-git-placeholder", IconName::Network);
-        let terminal_tab_placeholder = placeholder_tab(
-            "project-panel-tab-terminal-placeholder",
-            IconName::SquareTerminal,
+        let search_tab = self.project_panel_page_tab(
+            "project-panel-tab-search",
+            gpui_kit_assets::IconName::TextSearch,
+            ProjectPanelPage::Search,
+            UiTextKey::ProjectSearch,
+            cx,
+        );
+        let git_tab = self.project_panel_page_tab(
+            "project-panel-tab-git",
+            gpui_kit_assets::IconName::GitBranch,
+            ProjectPanelPage::Git,
+            UiTextKey::ProjectGit,
+            cx,
+        );
+        let ports_tab = self.project_panel_page_tab(
+            "project-panel-tab-ports",
+            gpui_kit_assets::IconName::EthernetPort,
+            ProjectPanelPage::Ports,
+            UiTextKey::ProjectPorts,
+            cx,
         );
         let panel_tab_strip = div()
             .debug_selector(|| "project-panel-tab-strip".to_string())
@@ -827,10 +854,10 @@ impl WorkbenchView {
             .items_center()
             .gap(ui_style.spacing.xs)
             .child(files_tab)
+            .child(search_tab)
+            .child(git_tab)
             .when_some(agent_sessions_tab, |strip, tab| strip.child(tab))
-            .child(search_tab_placeholder)
-            .child(git_tab_placeholder)
-            .child(terminal_tab_placeholder);
+            .child(ports_tab);
 
         let resize_handle = self.sidebar_resize_handle(SidebarSide::Right, cx);
         Some(
@@ -876,6 +903,55 @@ impl WorkbenchView {
                 .child(content)
                 .child(resize_handle),
         )
+    }
+
+    /// A tab of the project panel that shows `page`.
+    fn project_panel_page_tab(
+        &self,
+        id: &'static str,
+        icon: gpui_kit_assets::IconName,
+        page: ProjectPanelPage,
+        tooltip: UiTextKey,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
+        let style = yttt_icon_button_style(YtttIconButtonKind::SidebarHeader, theme, ui_style);
+        let workbench = cx.weak_entity();
+        let tooltip = self.ui_text.get(tooltip);
+        yttt_icon_button(
+            id,
+            icon,
+            YtttIconButtonKind::SidebarHeader,
+            theme,
+            ui_style,
+            move |_, _, cx| {
+                let _ = workbench.update(cx, |workbench, workbench_cx| {
+                    workbench.activate_project_panel_page(page, workbench_cx);
+                    // A click on Search starts typing a query; switching
+                    // pages from the keyboard keeps the tree focused.
+                    if page == ProjectPanelPage::Search {
+                        workbench.project.pending_project_tree_focus = false;
+                        workbench.project.pending_project_search_focus = true;
+                    }
+                });
+            },
+        )
+        .debug_selector(move || id.to_string())
+        .when(self.project.active_panel_page == page, |this| {
+            this.bg(theme.ghost_element_selected)
+                .text_color(style.active_text)
+        })
+        .tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                tooltip,
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        })
+        .into_any_element()
     }
 
     fn agent_sessions_panel_content(

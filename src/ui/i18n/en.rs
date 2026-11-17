@@ -85,6 +85,37 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::NoTerminalTabs => "No terminal tabs",
         UiTextKey::Projects => "Projects",
         UiTextKey::ProjectFiles => "Files",
+        UiTextKey::ProjectSearch => "Search",
+        UiTextKey::ProjectSearchPlaceholder => "Search in files",
+        UiTextKey::ProjectSearchCaseSensitive => "Match Case",
+        UiTextKey::ProjectSearchWholeWord => "Match Whole Word",
+        UiTextKey::ProjectSearchRegex => "Use Regular Expression",
+        UiTextKey::ProjectSearchSearching => "Searching…",
+        UiTextKey::ProjectSearchNoResults => "No results.",
+        UiTextKey::ProjectSearchSummary => "{matches} results in {files} files",
+        UiTextKey::ProjectSearchTruncated => "more not shown",
+        UiTextKey::ProjectSearchSshUnavailable => "Searching SSH projects is not supported yet.",
+        UiTextKey::ProjectSearchUnsupported => {
+            "This Host cannot search files. Update it to search."
+        }
+        UiTextKey::ProjectGit => "Source Control",
+        UiTextKey::ProjectGitOpenDiff => "Open Diff",
+        UiTextKey::ProjectGitClean => "No changes.",
+        UiTextKey::ProjectGitUnavailable => {
+            "This project is not a Git repository, or its status is still loading."
+        }
+        UiTextKey::ProjectPorts => "Ports",
+        UiTextKey::ProjectPortsListening => "Listening",
+        UiTextKey::ProjectPortsFrequent => "Usually Open",
+        UiTextKey::ProjectPortsEmpty => "No terminal is listening on a port right now.",
+        UiTextKey::ProjectPortsUnsupported => "This Host cannot list ports. Update it to see them.",
+        UiTextKey::ProjectPortsSshUnavailable => "Ports of SSH projects are not detected yet.",
+        UiTextKey::ProjectPortsRemoteHint => {
+            "These ports are on the remote Host; open them there or forward them first."
+        }
+        UiTextKey::ProjectPortsOpenInBrowser => "Open in Browser",
+        UiTextKey::ProjectPortsCopyAddress => "Copy Address",
+        UiTextKey::ProjectPortsCopyPort => "Copy Port",
         UiTextKey::AgentSessions => "Agent Sessions",
         UiTextKey::AgentSessionsRefresh => "Refresh Sessions",
         UiTextKey::AgentSessionsLoading => "Scanning agent sessions…",

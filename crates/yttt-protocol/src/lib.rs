@@ -9,6 +9,7 @@ pub mod handshake;
 pub mod lifecycle;
 pub mod p2p;
 pub mod path;
+pub mod ports;
 pub mod project;
 pub mod remote_access;
 pub mod ssh;

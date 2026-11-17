@@ -1505,6 +1505,7 @@ impl WorkbenchView {
                     .is_some())
         {
             let _ = self.select_work_item(WorkItemId::File(document_id));
+            self.apply_pending_file_reveal(window, cx);
             cx.notify();
             return;
         }
@@ -1655,7 +1656,58 @@ impl WorkbenchView {
             return false;
         }
         self.load_error = None;
+        if request.activate {
+            self.apply_pending_file_reveal(window, cx);
+        }
         true
+    }
+
+    /// Opens a project file with its cursor at a 0-based line and UTF-16
+    /// column.
+    pub(super) fn open_project_file_at(
+        &mut self,
+        reveal: PendingFileReveal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project_id = reveal.project_id.clone();
+        let relative_path = reveal.relative_path.clone();
+        self.project.pending_file_reveal = Some(reveal);
+        self.spawn_project_file_open(project_id, relative_path, window, cx);
+    }
+
+    /// Moves the cursor of the file a pending reveal names, once that file
+    /// has a document; the document lays out first.
+    fn apply_pending_file_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(reveal) = self.project.pending_file_reveal.as_ref() else {
+            return;
+        };
+        let Some(document) = self
+            .project
+            .services
+            .get(&reveal.project_id)
+            .and_then(|services| services.document_path(&reveal.relative_path))
+            .map(|canonical_path| crate::model::editor::DocumentId {
+                project_id: reveal.project_id.clone(),
+                canonical_path,
+            })
+            .and_then(|document_id| {
+                self.project
+                    .project_editor_runtime
+                    .document(&document_id)
+                    .cloned()
+            })
+        else {
+            return;
+        };
+        let Some(reveal) = self.project.pending_file_reveal.take() else {
+            return;
+        };
+        cx.defer_in(window, move |_, window, cx| {
+            document.update(cx, |document, document_cx| {
+                document.reveal_position(reveal.line, reveal.column, window, document_cx);
+            });
+        });
     }
 }
 

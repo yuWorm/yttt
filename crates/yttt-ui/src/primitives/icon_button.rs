@@ -75,7 +75,7 @@ pub fn yttt_icon_button_style(
 
 pub fn yttt_icon_button<H>(
     id: impl Into<ElementId>,
-    icon: IconName,
+    icon: impl Into<Icon>,
     kind: YtttIconButtonKind,
     theme: WorkbenchTheme,
     ui_style: UiStyle,

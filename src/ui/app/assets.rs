@@ -9,6 +9,19 @@ use gpui::{AssetSource, Result, SharedString};
 
 use crate::config::paths::AppConfigPaths;
 
+// Lucide icons the app uses beyond the default component bundle. An icon
+// named with `gpui_kit_assets::IconName` renders blank unless it is listed.
+gpui_kit_assets::icon_assets!(
+    ExtraIcons,
+    [
+        FolderTree,
+        TextSearch,
+        GitBranch,
+        BotMessageSquare,
+        EthernetPort,
+    ]
+);
+
 pub const REQUIRED_COMPONENT_ICON_ASSET_PATHS: &[&str] = &["icons/search.svg"];
 pub(crate) const EXTERNAL_ICON_ASSET_PREFIX: &str = "yttt-icon://";
 pub const BUILTIN_APP_ICON_ASSET_PATH: &str = "app-icon/yttt.png";
@@ -100,12 +113,16 @@ impl AssetSource for YtttAssets {
         if let Some(asset) = builtin_asset(path) {
             return Ok(Some(Cow::Borrowed(asset)));
         }
+        if let Some(asset) = ExtraIcons.load(path)? {
+            return Ok(Some(asset));
+        }
 
         gpui_kit_assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut assets = gpui_kit_assets::Assets.list(path)?;
+        assets.extend(ExtraIcons.list(path)?);
         assets.extend(
             BUILTIN_AGENT_ICON_ASSET_PATHS
                 .iter()

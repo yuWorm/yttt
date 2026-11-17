@@ -506,6 +506,12 @@ pub enum ProjectRequest {
         relative_path: ProjectRelativePath,
         offset: u64,
     },
+    /// Searches the text of the project's files, skipping what Git ignores.
+    /// Answered with `Search`; a Host that predates it answers `Unsupported`.
+    Search {
+        project_id: ProjectId,
+        query: ProjectSearchQuery,
+    },
 }
 
 impl ProjectRequest {
@@ -514,6 +520,7 @@ impl ProjectRequest {
             Self::ScanDirectory { .. }
             | Self::ReadFile { .. }
             | Self::ReadFileChunk { .. }
+            | Self::Search { .. }
             | Self::Observe { .. }
             | Self::Close { .. } => crate::Capability::ProjectRead,
             Self::Git { operation, .. } => match operation.access() {
@@ -546,6 +553,53 @@ pub enum ProjectResponse {
     Deleted,
     Git(ProjectGitOutput),
     FileChunk(ProjectFileChunk),
+    Search(ProjectSearchResults),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSearchQuery {
+    pub pattern: String,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    /// The pattern is a regular expression rather than literal text.
+    pub regex: bool,
+    /// The Host stops after this many matches and marks the results truncated.
+    pub max_matches: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSearchResults {
+    /// Ordered by path.
+    pub files: Vec<ProjectSearchFile>,
+    pub match_count: u32,
+    /// The search stopped early, at the match limit or its time budget.
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSearchFile {
+    pub relative_path: ProjectRelativePath,
+    pub lines: Vec<ProjectSearchLine>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSearchLine {
+    /// 0-based.
+    pub line: u32,
+    /// The line's text without leading whitespace, shortened around the
+    /// first match when long.
+    pub text: String,
+    /// Where `text` starts in the line, in UTF-16 code units, so a match's
+    /// column is `column_offset` plus its position in `text`.
+    pub column_offset: u32,
+    /// Byte ranges of the matches within `text`.
+    pub matches: Vec<ProjectSearchRange>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSearchRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 /// Bounded binary transfer, independent of the editor's UTF-8 and size limits.

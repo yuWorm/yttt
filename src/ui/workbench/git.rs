@@ -67,6 +67,9 @@ pub(super) struct GitDiffPanel {
     pub(super) split_right_horizontal_scroll_handle: ScrollHandle,
     pub(super) unified_content_width: f32,
     pub(super) split_content_width: f32,
+    /// A file to select once the diff loads; when the unstaged diff lacks
+    /// it, the staged diff is tried.
+    pub(super) pending_select_path: Option<String>,
 }
 
 impl WorkbenchView {
@@ -124,9 +127,23 @@ impl WorkbenchView {
             split_right_horizontal_scroll_handle: ScrollHandle::new(),
             unified_content_width: 900.0,
             split_content_width: 700.0,
+            pending_select_path: None,
         });
         self.overlays.pending_git_diff_load = Some((project_id, project_location, generation));
         self.sync_input_owner_state();
+        Ok(())
+    }
+
+    /// Opens the diff panel on one changed file, from whichever of the
+    /// unstaged or staged diffs holds it.
+    pub(super) fn open_git_diff_panel_for_file(
+        &mut self,
+        relative_path: String,
+    ) -> Result<(), WorkbenchError> {
+        self.open_git_diff_panel()?;
+        if let Some(panel) = self.overlays.git_diff_panel.as_mut() {
+            panel.pending_select_path = Some(relative_path);
+        }
         Ok(())
     }
 
@@ -604,8 +621,18 @@ impl WorkbenchView {
                     {
                         return;
                     }
+                    let mut select = None;
+                    let mut try_staged = false;
                     match result {
                         Ok((diff, sidebar_rows)) => {
+                            if let Some(path) = panel.pending_select_path.as_deref() {
+                                select = diff.files.iter().position(|file| file.path() == path);
+                                try_staged =
+                                    select.is_none() && panel.mode == GitDiffMode::Unstaged;
+                                if !try_staged {
+                                    panel.pending_select_path = None;
+                                }
+                            }
                             panel.content = GitDiffPanelContent::Ready(Arc::new(diff));
                             panel.sidebar_rows = Arc::new(sidebar_rows);
                         }
@@ -618,6 +645,11 @@ impl WorkbenchView {
                         }
                     }
                     sync_selected_git_diff(panel);
+                    if try_staged {
+                        root.set_git_diff_mode(GitDiffMode::Staged);
+                    } else if let Some(index) = select {
+                        root.select_git_diff_file(index);
+                    }
                     cx.notify();
                 });
             })
