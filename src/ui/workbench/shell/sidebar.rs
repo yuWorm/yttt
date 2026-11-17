@@ -1010,3 +1010,64 @@ fn compact_path(path: &str) -> String {
         .unwrap_or(path)
         .to_string()
 }
+
+#[cfg(test)]
+mod tooltip_layout_tests {
+    use gpui::{
+        AnyView, Context, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
+        Window, div, px,
+    };
+    use yttt_ui::primitives::tooltip::{TOOLTIP_MAX_HEIGHT, TOOLTIP_MAX_WIDTH, yttt_tooltip};
+
+    struct TooltipHost {
+        tooltip: AnyView,
+    }
+
+    impl Render for TooltipHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size(px(4000.0))
+                .flex()
+                .items_start()
+                .child(self.tooltip.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn a_whole_agent_prompt_does_not_stretch_its_tooltip_across_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(yttt_ui::init);
+        let prompt =
+            "Implement the provider hooks and keep every runtime path covered. ".repeat(200);
+        let (_host, cx) = cx.add_window_view(move |window, cx| {
+            let tooltip = yttt_tooltip(
+                prompt.clone(),
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx);
+            TooltipHost { tooltip }
+        });
+        cx.refresh().unwrap();
+
+        let bounds = cx
+            .debug_bounds("yttt-tooltip-body")
+            .expect("the tooltip body is laid out");
+        let rem = cx.update(|window, _| window.rem_size());
+        assert!(
+            bounds.size.width <= TOOLTIP_MAX_WIDTH.to_pixels(rem),
+            "tooltip width {:?} exceeds its cap",
+            bounds.size.width
+        );
+        assert!(
+            bounds.size.height <= TOOLTIP_MAX_HEIGHT.to_pixels(rem),
+            "tooltip height {:?} exceeds its cap",
+            bounds.size.height
+        );
+        assert!(
+            bounds.size.height > px(20.0),
+            "a long prompt wraps onto several lines instead of being cut to one"
+        );
+    }
+}
